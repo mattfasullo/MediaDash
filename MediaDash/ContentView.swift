@@ -161,6 +161,7 @@ struct ContentView: View {
                         color: currentTheme.buttonColors.file,
                         isPrimary: false,
                         isFocused: focusedButton == .file,
+                        showShortcut: isKeyboardMode,
                         theme: currentTheme
                     ) {
                         attempt(type: .workPicture)
@@ -170,6 +171,7 @@ struct ContentView: View {
                     .onHover { hovering in
                         if hovering {
                             focusedButton = nil // Clear keyboard focus on mouse hover
+                            isKeyboardMode = false
                         }
                         hoverInfo = hovering ?
                             "Files to Work Picture (\(dateFormatter.string(from: wpDate)))" :
@@ -184,6 +186,7 @@ struct ContentView: View {
                         color: currentTheme.buttonColors.prep,
                         isPrimary: false,
                         isFocused: focusedButton == .prep,
+                        showShortcut: isKeyboardMode,
                         theme: currentTheme
                     ) {
                         attempt(type: .prep)
@@ -193,6 +196,7 @@ struct ContentView: View {
                     .onHover { hovering in
                         if hovering {
                             focusedButton = nil // Clear keyboard focus on mouse hover
+                            isKeyboardMode = false
                         }
                         hoverInfo = hovering ?
                             "Files to Session Prep (\(dateFormatter.string(from: prepDate)))" :
@@ -207,6 +211,7 @@ struct ContentView: View {
                         color: currentTheme.buttonColors.both,
                         isPrimary: false,
                         isFocused: focusedButton == .both,
+                        showShortcut: isKeyboardMode,
                         theme: currentTheme
                     ) {
                         attempt(type: .both)
@@ -216,6 +221,7 @@ struct ContentView: View {
                     .onHover { hovering in
                         if hovering {
                             focusedButton = nil // Clear keyboard focus on mouse hover
+                            isKeyboardMode = false
                         }
                         hoverInfo = hovering ?
                             "Processes both Work Picture and Prep" :
@@ -224,10 +230,12 @@ struct ContentView: View {
                     .keyboardShortcut("3", modifiers: .command)
                 }
                 .onKeyPress(.upArrow) {
+                    isKeyboardMode = true
                     moveFocus(direction: -1)
                     return .handled
                 }
                 .onKeyPress(.downArrow) {
+                    isKeyboardMode = true
                     moveFocus(direction: 1)
                     return .handled
                 }
@@ -247,10 +255,17 @@ struct ContentView: View {
                         title: "Docket Lookup",
                         shortcut: "⌘D",
                         isFocused: focusedButton == .docketLookup,
+                        showShortcut: isKeyboardMode,
                         action: { showQuickSearchSheet = true }
                     )
                     .focused($focusedButton, equals: .docketLookup)
                     .focusEffectDisabled()
+                    .onHover { hovering in
+                        if hovering {
+                            focusedButton = nil
+                            isKeyboardMode = false
+                        }
+                    }
                     .keyboardShortcut("d", modifiers: .command)
 
                     FocusableNavButton(
@@ -258,10 +273,17 @@ struct ContentView: View {
                         title: "Search Sessions",
                         shortcut: "⌘F",
                         isFocused: focusedButton == .searchSessions,
+                        showShortcut: isKeyboardMode,
                         action: { showSearchSheet = true }
                     )
                     .focused($focusedButton, equals: .searchSessions)
                     .focusEffectDisabled()
+                    .onHover { hovering in
+                        if hovering {
+                            focusedButton = nil
+                            isKeyboardMode = false
+                        }
+                    }
                     .keyboardShortcut("f", modifiers: .command)
 
                     FocusableNavButton(
@@ -269,10 +291,17 @@ struct ContentView: View {
                         title: "Settings",
                         shortcut: "⌘,",
                         isFocused: focusedButton == .settings,
+                        showShortcut: isKeyboardMode,
                         action: { showSettingsSheet = true }
                     )
                     .focused($focusedButton, equals: .settings)
                     .focusEffectDisabled()
+                    .onHover { hovering in
+                        if hovering {
+                            focusedButton = nil
+                            isKeyboardMode = false
+                        }
+                    }
                     .keyboardShortcut(",", modifiers: .command)
                 }
                 .padding(.bottom, 20)
@@ -410,6 +439,9 @@ struct ContentView: View {
                 .background(isStagingHovered ? Color.gray.opacity(0.05) : Color.clear)
                 .onHover { hovering in
                     isStagingHovered = hovering
+                    if hovering {
+                        isKeyboardMode = false
+                    }
                 }
                 .onTapGesture {
                     manager.pickFiles()
@@ -568,6 +600,11 @@ struct ContentView: View {
             }
         }
         .onKeyPress { press in
+            // Enable keyboard mode on Tab key
+            if press.key == .tab {
+                isKeyboardMode = true
+            }
+
             // Only handle typing when no sheets are open
             guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
                 return .ignored
@@ -579,10 +616,17 @@ struct ContentView: View {
                 if char.isLetter || char.isNumber {
                     initialSearchText = String(char)
                     showQuickSearchSheet = true
+                    isKeyboardMode = true
                     return .handled
                 }
             }
             return .ignored
+        }
+        .onChange(of: focusedButton) { oldValue, newValue in
+            // Enable keyboard mode when focus changes via keyboard
+            if newValue != nil {
+                isKeyboardMode = true
+            }
         }
         .sheet(isPresented: $showQuickSearchSheet) {
             QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager)
@@ -725,6 +769,7 @@ struct FocusableNavButton: View {
     let title: String
     let shortcut: String
     let isFocused: Bool
+    let showShortcut: Bool
     let action: () -> Void
     @State private var isHovered = false
 
@@ -742,9 +787,11 @@ struct FocusableNavButton: View {
 
                 Spacer()
 
-                Text(shortcut)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary.opacity(0.6))
+                if showShortcut {
+                    Text(shortcut)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary.opacity(0.6))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -770,6 +817,7 @@ struct ModernLinkButton: View {
     let icon: String
     let title: String
     let shortcut: String
+    let showShortcut: Bool
     let action: () -> Void
     @State private var isHovered = false
 
@@ -787,9 +835,11 @@ struct ModernLinkButton: View {
 
                 Spacer()
 
-                Text(shortcut)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary.opacity(0.6))
+                if showShortcut {
+                    Text(shortcut)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary.opacity(0.6))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -851,6 +901,7 @@ struct ActionButtonWithShortcut: View {
     let color: Color
     let isPrimary: Bool
     let isFocused: Bool
+    let showShortcut: Bool
     let theme: AppTheme
     let action: () -> Void
     @State private var isHovered = false
@@ -871,13 +922,15 @@ struct ActionButtonWithShortcut: View {
                         .shadow(color: theme.textShadowColor ?? .clear, radius: 1, x: 1, y: 1)
                 }
 
-                Text(shortcut)
-                    .font(theme == .cursed ? .system(size: 9, weight: .heavy, design: .monospaced) : .system(size: isPrimary ? 11 : 10, weight: .medium, design: .monospaced))
-                    .foregroundColor(theme.textColor.opacity(0.7))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.black.opacity(0.2))
-                    .cornerRadius(4)
+                if showShortcut {
+                    Text(shortcut)
+                        .font(theme == .cursed ? .system(size: 9, weight: .heavy, design: .monospaced) : .system(size: isPrimary ? 11 : 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(theme.textColor.opacity(0.7))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.2))
+                        .cornerRadius(4)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, isPrimary ? 16 : 12)
