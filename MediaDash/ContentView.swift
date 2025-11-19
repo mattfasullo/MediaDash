@@ -1132,9 +1132,9 @@ struct SearchView: View {
                                     Button(action: {
                                         // Single click selects
                                         if selectedPath == path {
-                                            // Double click (clicking already selected item) opens in Finder
+                                            // Double click (clicking already selected item) opens folder in Finder
                                             let url = URL(fileURLWithPath: path).deletingLastPathComponent()
-                                            NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: url.path)
+                                            NSWorkspace.shared.open(url)
                                             isPresented = false
                                         } else {
                                             selectedPath = path
@@ -1171,9 +1171,9 @@ struct SearchView: View {
                                 ForEach(section.paths, id: \.self) { path in
                                     Button(action: {
                                         if selectedPath == path {
-                                            // Double click opens in Finder
+                                            // Double click opens folder in Finder
                                             let url = URL(fileURLWithPath: path).deletingLastPathComponent()
-                                            NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: url.path)
+                                            NSWorkspace.shared.open(url)
                                             isPresented = false
                                         } else {
                                             selectedPath = path
@@ -1249,7 +1249,7 @@ struct SearchView: View {
 
                 Spacer()
 
-                Button("Show in Finder") {
+                Button("Open Folder") {
                     openInFinder()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -1379,7 +1379,7 @@ struct SearchView: View {
     private func openInFinder() {
         guard let path = selectedPath else { return }
         let url = URL(fileURLWithPath: path).deletingLastPathComponent()
-        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: url.path)
+        NSWorkspace.shared.open(url)
         isPresented = false
     }
     
