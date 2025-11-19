@@ -13,5 +13,7 @@ struct MediaDashApp: App {
         WindowGroup {
             ContentView()
         }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
     }
 }

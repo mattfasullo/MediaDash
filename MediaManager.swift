@@ -6,7 +6,7 @@ import Combine
 struct AppConfig: Sendable {
     let settings: AppSettings
 
-    init(settings: AppSettings) {
+    nonisolated init(settings: AppSettings) {
         self.settings = settings
     }
 
@@ -34,10 +34,42 @@ struct FileItem: Identifiable, Hashable, Sendable {
     let id = UUID()
     let url: URL
     let name: String
+    let isDirectory: Bool
+    let fileCount: Int // For directories, counts files recursively; for files, always 1
 
     init(url: URL) {
         self.url = url
         self.name = url.lastPathComponent
+
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        self.isDirectory = exists && isDir.boolValue
+
+        if self.isDirectory {
+            self.fileCount = Self.countFilesRecursively(in: url)
+        } else {
+            self.fileCount = 1
+        }
+    }
+
+    private static func countFilesRecursively(in directory: URL) -> Int {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var count = 0
+        for case let fileURL as URL in enumerator {
+            if let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+               let isRegularFile = resourceValues.isRegularFile,
+               isRegularFile {
+                count += 1
+            }
+        }
+        return count
     }
 }
 

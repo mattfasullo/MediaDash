@@ -2,6 +2,264 @@ import Foundation
 import SwiftUI
 import Combine
 
+// MARK: - Business Day Calculator
+
+struct BusinessDayCalculator {
+    // Canadian Federal Holidays (fixed dates)
+    static let fixedHolidays: [(month: Int, day: Int)] = [
+        (1, 1),   // New Year's Day
+        (7, 1),   // Canada Day
+        (12, 25), // Christmas
+        (12, 26)  // Boxing Day
+    ]
+
+    // Calculate next business day with Canadian holiday logic
+    static func nextBusinessDay(from date: Date, skipWeekends: Bool = true, skipHolidays: Bool = true) -> Date {
+        let calendar = Calendar.current
+        var nextDay = calendar.date(byAdding: .day, value: 1, to: date)!
+
+        // Check weekday of next day
+        let weekday = calendar.component(.weekday, from: nextDay)
+
+        // If next day is Saturday (7) or Sunday (1), skip to Monday (only if skipWeekends is enabled)
+        if skipWeekends {
+            if weekday == 7 { // Saturday
+                nextDay = calendar.date(byAdding: .day, value: 2, to: nextDay)!
+            } else if weekday == 1 { // Sunday
+                nextDay = calendar.date(byAdding: .day, value: 1, to: nextDay)!
+            }
+        }
+
+        // Check if next day is a Canadian holiday (only if skipHolidays is enabled)
+        if skipHolidays && isCanadianHoliday(date: nextDay) {
+            // If it's a holiday, check what day of week it is
+            let holidayWeekday = calendar.component(.weekday, from: nextDay)
+
+            // If holiday falls on Thursday, skip Thu, Fri, Sat, Sun, Mon -> choose Tuesday
+            if holidayWeekday == 5 { // Thursday
+                nextDay = calendar.date(byAdding: .day, value: 5, to: nextDay)!
+            }
+            // If holiday falls on Friday, skip Fri, Sat, Sun, Mon -> choose Tuesday
+            else if holidayWeekday == 6 { // Friday
+                nextDay = calendar.date(byAdding: .day, value: 4, to: nextDay)!
+            }
+            // For other weekdays (Mon-Wed), just skip to next business day
+            else {
+                nextDay = calendar.date(byAdding: .day, value: 1, to: nextDay)!
+                // Recursively check again in case next day is also a holiday or weekend
+                return nextBusinessDay(from: calendar.date(byAdding: .day, value: -1, to: nextDay)!, skipWeekends: skipWeekends, skipHolidays: skipHolidays)
+            }
+        }
+
+        return nextDay
+    }
+
+    // Check if a date is a Canadian Federal Holiday
+    static func isCanadianHoliday(date: Date) -> Bool {
+        let calendar = Calendar.current
+        let month = calendar.component(.month, from: date)
+        let day = calendar.component(.day, from: date)
+        let year = calendar.component(.year, from: date)
+        let weekday = calendar.component(.weekday, from: date)
+
+        // Check fixed holidays
+        for holiday in fixedHolidays {
+            if month == holiday.month && day == holiday.day {
+                return true
+            }
+        }
+
+        // Victoria Day (Monday before May 25)
+        if month == 5 {
+            let may25 = calendar.date(from: DateComponents(year: year, month: 5, day: 25))!
+            let may25Weekday = calendar.component(.weekday, from: may25)
+            let daysToMonday = (may25Weekday == 2) ? 0 : (may25Weekday - 2 + 7) % 7
+            let victoriaDay = calendar.date(byAdding: .day, value: -daysToMonday, to: may25)!
+            if calendar.isDate(date, inSameDayAs: victoriaDay) {
+                return true
+            }
+        }
+
+        // Labour Day (first Monday in September)
+        if month == 9 && weekday == 2 {
+            let firstOfMonth = calendar.date(from: DateComponents(year: year, month: 9, day: 1))!
+            let firstWeekday = calendar.component(.weekday, from: firstOfMonth)
+            let daysToFirstMonday = (9 - firstWeekday) % 7
+            let labourDay = calendar.date(byAdding: .day, value: daysToFirstMonday, to: firstOfMonth)!
+            if calendar.isDate(date, inSameDayAs: labourDay) {
+                return true
+            }
+        }
+
+        // Thanksgiving (second Monday in October)
+        if month == 10 && weekday == 2 {
+            let firstOfMonth = calendar.date(from: DateComponents(year: year, month: 10, day: 1))!
+            let firstWeekday = calendar.component(.weekday, from: firstOfMonth)
+            let daysToFirstMonday = (9 - firstWeekday) % 7
+            let secondMonday = calendar.date(byAdding: .day, value: daysToFirstMonday + 7, to: firstOfMonth)!
+            if calendar.isDate(date, inSameDayAs: secondMonday) {
+                return true
+            }
+        }
+
+        // Good Friday and Easter Monday (dynamic, would need more complex calculation)
+        // For now, these would need to be added manually or use a more sophisticated calendar library
+
+        return false
+    }
+}
+
+// MARK: - Docket Source
+
+enum DocketSource: String, Codable {
+    case csv = "CSV File"
+    case server = "Server Path"
+}
+
+// MARK: - App Theme
+
+enum AppTheme: String, Codable, CaseIterable {
+    case modern = "Modern"
+    case windows95 = "Windows 95"
+    case windowsXP = "Windows XP"
+    case macos1996 = "macOS 1996"
+    case retro = "MS-DOS"
+    case cursed = "Cursed"
+
+    var displayName: String {
+        self.rawValue
+    }
+
+    // Theme-specific colors
+    var sidebarBackground: Color {
+        switch self {
+        case .modern:
+            return Color(nsColor: .controlBackgroundColor)
+        case .windows95:
+            return Color(red: 0.75, green: 0.75, blue: 0.75)
+        case .windowsXP:
+            return Color(red: 0.93, green: 0.95, blue: 0.99) // Lighter, more authentic XP blue-white
+        case .macos1996:
+            return Color(red: 0.85, green: 0.85, blue: 0.85) // Platinum
+        case .retro:
+            return Color(red: 0, green: 0, blue: 0.67) // Classic DOS blue
+        case .cursed:
+            return .black // Handled with gradient in view
+        }
+    }
+
+    var titleColor: Color {
+        switch self {
+        case .modern:
+            return .primary
+        case .windows95:
+            return Color(red: 0, green: 0, blue: 0.5) // Navy blue
+        case .windowsXP:
+            return Color(red: 0.12, green: 0.39, blue: 0.73) // Authentic Luna Blue
+        case .macos1996:
+            return .black
+        case .retro:
+            return Color(red: 0, green: 1, blue: 1) // Cyan
+        case .cursed:
+            return .pink
+        }
+    }
+
+    var buttonCornerRadius: CGFloat {
+        switch self {
+        case .modern:
+            return 8
+        case .windows95:
+            return 0
+        case .windowsXP:
+            return 12
+        case .macos1996:
+            return 4
+        case .retro:
+            return 0
+        case .cursed:
+            return 20
+        }
+    }
+
+    var buttonColors: (file: Color, prep: Color, both: Color) {
+        switch self {
+        case .modern:
+            return (
+                Color(red: 0.2, green: 0.4, blue: 0.65),
+                Color(red: 0.45, green: 0.35, blue: 0.55),
+                Color(red: 0.3, green: 0.5, blue: 0.4)
+            )
+        case .windows95:
+            return (
+                Color(red: 0.75, green: 0.75, blue: 0.75),
+                Color(red: 0.75, green: 0.75, blue: 0.75),
+                Color(red: 0.75, green: 0.75, blue: 0.75)
+            )
+        case .windowsXP:
+            return (
+                Color(red: 0.12, green: 0.39, blue: 0.73), // Authentic Luna Blue
+                Color(red: 0.49, green: 0.67, blue: 0.27), // Authentic Luna Green
+                Color(red: 0.93, green: 0.55, blue: 0.18)  // Authentic Luna Orange
+            )
+        case .macos1996:
+            return (
+                Color(red: 0.7, green: 0.7, blue: 0.7),
+                Color(red: 0.7, green: 0.7, blue: 0.7),
+                Color(red: 0.7, green: 0.7, blue: 0.7)
+            )
+        case .retro:
+            return (
+                Color(red: 0, green: 0.67, blue: 0.67),  // Cyan
+                Color(red: 0.85, green: 0.85, blue: 0),  // Darker yellow for readability
+                Color(red: 0, green: 0.8, blue: 0)       // Darker green for readability
+            )
+        case .cursed:
+            return (
+                Color(red: 0.8, green: 0, blue: 0.8),    // Darker Magenta
+                Color(red: 0, green: 0.8, blue: 0),      // Darker Lime
+                Color(red: 0.9, green: 0.4, blue: 0)     // Darker Orange
+            )
+        }
+    }
+
+    var textColor: Color {
+        switch self {
+        case .modern:
+            return .white
+        case .windows95, .macos1996:
+            return .black
+        case .windowsXP:
+            return .white
+        case .retro:
+            return .black
+        case .cursed:
+            return .white // Changed from yellow for better readability
+        }
+    }
+
+    var textShadowColor: Color? {
+        switch self {
+        case .modern:
+            return nil
+        case .windows95:
+            return Color.white.opacity(0.5) // Light shadow for 95 buttons
+        case .windowsXP:
+            return Color.black.opacity(0.3) // Subtle shadow for XP
+        case .macos1996:
+            return Color.white.opacity(0.5) // Light shadow for Mac 1996
+        case .retro:
+            return Color.black.opacity(0.8) // Strong shadow for DOS text
+        case .cursed:
+            return .black // Strong shadow for cursed text
+        }
+    }
+
+    var useCustomFont: Bool {
+        self == .cursed || self == .retro
+    }
+}
+
 // MARK: - Settings Model
 
 struct AppSettings: Codable, Equatable {
@@ -10,6 +268,12 @@ struct AppSettings: Codable, Equatable {
     // Path Settings
     var serverBasePath: String
     var sessionsBasePath: String
+
+    // Docket Lookup Source
+    var docketSource: DocketSource
+
+    // App Theme
+    var appTheme: AppTheme
 
     // Folder Naming
     var workPictureFolderName: String
@@ -37,11 +301,20 @@ struct AppSettings: Codable, Equatable {
     // Search Settings
     var enableFuzzySearch: Bool
 
+    // Date/Business Day Settings
+    var skipWeekends: Bool
+    var skipHolidays: Bool
+
+    // Canadian Holidays (for manual override/additions)
+    var customHolidays: [String] // ISO date strings (yyyy-MM-dd)
+
     static var `default`: AppSettings {
         AppSettings(
             profileName: "Default",
             serverBasePath: "/Volumes/Grayson Assets/GM",
             sessionsBasePath: "/Volumes/Grayson Assets/SESSIONS",
+            docketSource: .csv,
+            appTheme: .modern,
             workPictureFolderName: "WORK PICTURE",
             prepFolderName: "SESSION PREP",
             yearPrefix: "GM_",
@@ -55,7 +328,10 @@ struct AppSettings: Codable, Equatable {
             otherFolderName: "OTHER",
             workPicNumberFormat: "%02d",
             prepFolderFormat: "{docket}_PREP_{date}",
-            enableFuzzySearch: true
+            enableFuzzySearch: true,
+            skipWeekends: true,
+            skipHolidays: true,
+            customHolidays: []
         )
     }
 }

@@ -7,26 +7,94 @@ struct ContentView: View {
     @StateObject var settingsManager = SettingsManager()
     @StateObject var manager: MediaManager
     @State private var selectedDocket: String = ""
-    @State private var wpDate = Date()
-    @State private var prepDate = Date().addingTimeInterval(86400)
     @State private var showNewDocketSheet = false
     @State private var showSearchSheet = false
+    @State private var showQuickSearchSheet = false
     @State private var showSettingsSheet = false
     @State private var showAlert = false
     @State private var alertMessage = ""
     @State private var hoverInfo: String = "Ready."
     @State private var initialSearchText = ""
+    @State private var isStagingAreaVisible = true
     @FocusState private var mainViewFocused: Bool
 
     // Logic for auto-docket selection
     @State private var showDocketSelectionSheet = false
     @State private var pendingJobType: JobType? = nil
 
-    // Focus management for action buttons
+    // Focus management for all navigable buttons
     enum ActionButtonFocus: Hashable {
-        case file, prep, both
+        case file, prep, both, docketLookup, searchSessions, settings
     }
     @FocusState private var focusedButton: ActionButtonFocus?
+
+    // Easter egg: Windows 95 theme
+    @State private var logoClickCount = 0
+
+    // Keyboard mode tracking
+    @State private var isKeyboardMode = false
+
+    // Staging area hover state
+    @State private var isStagingHovered = false
+
+    // Computed property for current theme
+    private var currentTheme: AppTheme {
+        settingsManager.currentSettings.appTheme
+    }
+
+    // Legacy support for theme checks
+    private var isWindows95Theme: Bool {
+        currentTheme == .windows95
+    }
+    private var isWindowsXPTheme: Bool {
+        currentTheme == .windowsXP
+    }
+    private var isMacOS1996Theme: Bool {
+        currentTheme == .macos1996
+    }
+    private var isCursedTheme: Bool {
+        currentTheme == .cursed
+    }
+
+    // Theme-specific text
+    private var themeTitleText: String {
+        switch currentTheme {
+        case .modern: return "MediaDash"
+        case .windows95: return "MediaDash 95"
+        case .windowsXP: return "MediaDash XP"
+        case .macos1996: return "MediaDash Classic"
+        case .retro: return "MEDIADASH.EXE"
+        case .cursed: return "M3D!@D@$H"
+        }
+    }
+
+    private var themeSubtitleText: String {
+        switch currentTheme {
+        case .modern: return "Professional Media Manager"
+        case .windows95: return "Enterprise Edition"
+        case .windowsXP: return "Home Edition"
+        case .macos1996: return "System 7.5.5"
+        case .retro: return "C:\\TOOLS\\MEDIA>"
+        case .cursed: return "💀 EXTREME EDITION 💀"
+        }
+    }
+
+    private var themeTitleFont: Font {
+        switch currentTheme {
+        case .modern:
+            return .system(size: 28, weight: .semibold, design: .rounded)
+        case .windows95:
+            return .system(size: 28, weight: .bold)
+        case .windowsXP:
+            return .system(size: 28, weight: .bold, design: .rounded)
+        case .macos1996:
+            return .system(size: 28, weight: .bold, design: .default)
+        case .retro:
+            return .system(size: 20, weight: .bold, design: .monospaced)
+        case .cursed:
+            return .system(size: 32, weight: .black, design: .monospaced)
+        }
+    }
 
     init() {
         let settings = SettingsManager()
@@ -34,6 +102,24 @@ struct ContentView: View {
         _manager = StateObject(wrappedValue: MediaManager(settingsManager: settings))
     }
     
+    // Computed dates - File is always today, Prep is next business day
+    private var wpDate: Date {
+        Date()
+    }
+
+    private var prepDate: Date {
+        BusinessDayCalculator.nextBusinessDay(
+            from: Date(),
+            skipWeekends: settingsManager.currentSettings.skipWeekends,
+            skipHolidays: settingsManager.currentSettings.skipHolidays
+        )
+    }
+
+    // Computed total file count (includes files in folders)
+    private var totalFileCount: Int {
+        manager.selectedFiles.reduce(0) { $0 + $1.fileCount }
+    }
+
     // Date formatter for better date display
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -45,97 +131,26 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             // MARK: - Sidebar
-            VStack(alignment: .leading, spacing: 20) {
-                // App Title with gradient
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("MediaDash")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [.blue, .purple],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                    Text("Professional Media Manager")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.bottom, 10)
-                
-                // MARK: Project Selection
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("PROJECT")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundColor(.gray)
-                    
-                    HStack {
-                        Menu {
-                            if manager.isScanningDockets {
-                                Button("Populating Dockets...") {}
-                                    .disabled(true)
-                            } else if manager.dockets.isEmpty {
-                                Button("No Dockets Found") {}
-                                    .disabled(true)
-                            } else {
-                                ForEach(manager.dockets, id: \.self) { d in
-                                    Button(d) { selectedDocket = d }
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Text(selectedDocket.isEmpty ? "Select..." : selectedDocket)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                if manager.isScanningDockets {
-                                    ProgressView()
-                                        .scaleEffect(0.5)
-                                        .frame(width: 10, height: 10)
-                                }
+            ZStack(alignment: .topTrailing) {
+                VStack(alignment: .leading, spacing: 20) {
+                    // App Logo (clickable Easter egg)
+                    Image("HeaderLogo")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 60)
+                        .rotationEffect(isCursedTheme ? .degrees(-3) : .degrees(0))
+                        .shadow(color: isCursedTheme ? .cyan : .clear, radius: 5, x: 2, y: 2)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // Easter egg: 10 clicks cycles through themes
+                            logoClickCount += 1
+                            if logoClickCount >= 10 {
+                                cycleTheme()
+                                logoClickCount = 0
                             }
                         }
-                        .menuStyle(BorderedButtonMenuStyle())
-                        
-                        Button(action: { manager.refreshDockets() }) {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .accessibilityLabel("Refresh dockets")
-                        .accessibilityHint("Updates the list of available project dockets")
-                        .keyboardShortcut("r", modifiers: .command)
-                        
-                        Button(action: { showNewDocketSheet = true }) {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityLabel("Create new docket")
-                        .keyboardShortcut("n", modifiers: .command)
-                    }
-                }
-                
-                // MARK: Date Selection
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("DATES")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundColor(.gray)
-                    
-                    HStack {
-                        Text("Work Pic:")
-                        Spacer()
-                        DatePicker("", selection: $wpDate, displayedComponents: .date)
-                            .labelsHidden()
-                            .accessibilityLabel("Work picture date")
-                    }
-                    
-                    HStack {
-                        Text("Prep:")
-                        Spacer()
-                        DatePicker("", selection: $prepDate, displayedComponents: .date)
-                            .labelsHidden()
-                            .accessibilityLabel("Preparation date")
-                    }
-                }
-                
-                Divider().background(Color.gray)
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 10)
                 
                 // MARK: Action Buttons
                 VStack(spacing: 10) {
@@ -143,14 +158,19 @@ struct ContentView: View {
                         title: "FILE",
                         subtitle: "Work Picture",
                         shortcut: "⌘1",
-                        color: .blue.opacity(0.8),
+                        color: currentTheme.buttonColors.file,
                         isPrimary: false,
-                        isFocused: focusedButton == .file
+                        isFocused: focusedButton == .file,
+                        theme: currentTheme
                     ) {
                         attempt(type: .workPicture)
                     }
                     .focused($focusedButton, equals: .file)
+                    .focusEffectDisabled()
                     .onHover { hovering in
+                        if hovering {
+                            focusedButton = nil // Clear keyboard focus on mouse hover
+                        }
                         hoverInfo = hovering ?
                             "Files to Work Picture (\(dateFormatter.string(from: wpDate)))" :
                             "Ready."
@@ -161,14 +181,19 @@ struct ContentView: View {
                         title: "PREP",
                         subtitle: "Session Prep",
                         shortcut: "⌘2",
-                        color: .purple.opacity(0.8),
+                        color: currentTheme.buttonColors.prep,
                         isPrimary: false,
-                        isFocused: focusedButton == .prep
+                        isFocused: focusedButton == .prep,
+                        theme: currentTheme
                     ) {
                         attempt(type: .prep)
                     }
                     .focused($focusedButton, equals: .prep)
+                    .focusEffectDisabled()
                     .onHover { hovering in
+                        if hovering {
+                            focusedButton = nil // Clear keyboard focus on mouse hover
+                        }
                         hoverInfo = hovering ?
                             "Files to Session Prep (\(dateFormatter.string(from: prepDate)))" :
                             "Ready."
@@ -179,14 +204,19 @@ struct ContentView: View {
                         title: "FILE + PREP",
                         subtitle: "Both",
                         shortcut: "⌘3 or ↵",
-                        color: .green.opacity(0.8),
+                        color: currentTheme.buttonColors.both,
                         isPrimary: false,
-                        isFocused: focusedButton == .both
+                        isFocused: focusedButton == .both,
+                        theme: currentTheme
                     ) {
                         attempt(type: .both)
                     }
                     .focused($focusedButton, equals: .both)
+                    .focusEffectDisabled()
                     .onHover { hovering in
+                        if hovering {
+                            focusedButton = nil // Clear keyboard focus on mouse hover
+                        }
                         hoverInfo = hovering ?
                             "Processes both Work Picture and Prep" :
                             "Ready."
@@ -211,32 +241,79 @@ struct ContentView: View {
                 Divider()
 
                 // Bottom actions
-                VStack(spacing: 12) {
-                    ModernLinkButton(icon: "magnifyingglass", title: "Search Sessions", shortcut: "⌘F") {
-                        showSearchSheet = true
-                    }
+                VStack(spacing: 8) {
+                    FocusableNavButton(
+                        icon: "number.circle",
+                        title: "Docket Lookup",
+                        shortcut: "⌘D",
+                        isFocused: focusedButton == .docketLookup,
+                        action: { showQuickSearchSheet = true }
+                    )
+                    .focused($focusedButton, equals: .docketLookup)
+                    .focusEffectDisabled()
+                    .keyboardShortcut("d", modifiers: .command)
+
+                    FocusableNavButton(
+                        icon: "magnifyingglass",
+                        title: "Search Sessions",
+                        shortcut: "⌘F",
+                        isFocused: focusedButton == .searchSessions,
+                        action: { showSearchSheet = true }
+                    )
+                    .focused($focusedButton, equals: .searchSessions)
+                    .focusEffectDisabled()
                     .keyboardShortcut("f", modifiers: .command)
 
-                    ModernLinkButton(icon: "gearshape", title: "Settings", shortcut: "⌘,") {
-                        showSettingsSheet = true
-                    }
+                    FocusableNavButton(
+                        icon: "gearshape",
+                        title: "Settings",
+                        shortcut: "⌘,",
+                        isFocused: focusedButton == .settings,
+                        action: { showSettingsSheet = true }
+                    )
+                    .focused($focusedButton, equals: .settings)
+                    .focusEffectDisabled()
                     .keyboardShortcut(",", modifiers: .command)
                 }
+                .padding(.bottom, 20)
             }
             .padding(20)
             .frame(width: 300)
             .background(
-                LinearGradient(
-                    colors: [Color(nsColor: .windowBackgroundColor), Color(nsColor: .controlBackgroundColor)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                Group {
+                    if isCursedTheme {
+                        LinearGradient(
+                            colors: [.pink, .purple, .orange, .green],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .opacity(0.3)
+                    } else {
+                        currentTheme.sidebarBackground
+                    }
+                }
             )
-            
-            Divider()
-            
-            // MARK: - Main Content Area
-            VStack(alignment: .leading, spacing: 0) {
+
+            // Toggle staging button (top right)
+            Button(action: {
+                isStagingAreaVisible.toggle()
+            }) {
+                Image(systemName: isStagingAreaVisible ? "chevron.right" : "chevron.left")
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .help(isStagingAreaVisible ? "Hide staging (⌘E)" : "Show staging (⌘E)")
+            .keyboardShortcut("e", modifiers: .command)
+            .padding(.top, 8)
+            .padding(.trailing, 16)
+        }
+
+            if isStagingAreaVisible {
+                Divider()
+
+                // MARK: - Main Content Area
+                VStack(alignment: .leading, spacing: 0) {
                 // Header
                 HStack {
                     HStack(spacing: 8) {
@@ -247,7 +324,7 @@ struct ContentView: View {
                             .foregroundColor(.primary)
 
                         if !manager.selectedFiles.isEmpty {
-                            Text("\(manager.selectedFiles.count)")
+                            Text("\(totalFileCount)")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 6)
@@ -272,12 +349,6 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                         .keyboardShortcut("w", modifiers: .command)
                     }
-
-                    Button("Add Files") {
-                        manager.pickFiles()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
@@ -290,28 +361,20 @@ struct ContentView: View {
                         VStack(spacing: 16) {
                             ZStack {
                                 Circle()
-                                    .fill(Color.blue.opacity(0.1))
+                                    .fill(Color.gray.opacity(0.1))
                                     .frame(width: 100, height: 100)
                                 Image(systemName: "doc.on.doc.fill")
                                     .font(.system(size: 40))
-                                    .foregroundStyle(
-                                        LinearGradient(
-                                            colors: [.blue, .purple],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
-                                    )
+                                    .foregroundColor(.secondary)
                             }
 
                             VStack(spacing: 6) {
                                 Text("No files staged")
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundColor(.primary)
-                                Text("Drop files here or click 'Add Files'")
+                                Text("Click to add files or drop them here")
                                     .font(.system(size: 13))
                                     .foregroundColor(.secondary)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary.opacity(0.7))
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -324,8 +387,16 @@ struct ContentView: View {
                                     .frame(width: 16, height: 16)
                                 Text(f.name)
                                 Spacer()
-                                // Show file size if available
-                                if let size = getFileSize(f.url) {
+                                // Show file count for folders, or file size for files
+                                if f.isDirectory {
+                                    Text("\(f.fileCount) file\(f.fileCount == 1 ? "" : "s")")
+                                        .font(.caption)
+                                        .foregroundColor(.blue)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.1))
+                                        .cornerRadius(4)
+                                } else if let size = getFileSize(f.url) {
                                     Text(size)
                                         .font(.caption)
                                         .foregroundColor(.secondary)
@@ -335,11 +406,20 @@ struct ContentView: View {
                         .listStyle(.inset(alternatesRowBackgrounds: true))
                     }
                 }
+                .contentShape(Rectangle())
+                .background(isStagingHovered ? Color.gray.opacity(0.05) : Color.clear)
+                .onHover { hovering in
+                    isStagingHovered = hovering
+                }
+                .onTapGesture {
+                    manager.pickFiles()
+                }
                 .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
                     handleFileDrop(providers: providers)
                     return true
                 }
-                
+                .cursor(.pointingHand)
+
                 // Status Bar
                 HStack {
                     // Left side - Indexing indicator
@@ -348,7 +428,7 @@ struct ContentView: View {
                             ProgressView()
                                 .scaleEffect(0.6)
                                 .frame(width: 12, height: 12)
-                            Text("Indexing sessions...")
+                            Text("Indexing")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.orange)
                         }
@@ -390,10 +470,36 @@ struct ContentView: View {
                 .padding()
                 .background(Color(nsColor: .controlBackgroundColor))
             }
+            }
         }
-        .frame(width: 900, height: 650)
+        .frame(width: isStagingAreaVisible ? 650 : 300, height: 550)
         .focusable()
         .focused($mainViewFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.leftArrow) {
+            moveFocus(direction: -1)
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            moveFocus(direction: 1)
+            return .handled
+        }
+        .onKeyPress(.upArrow) {
+            moveFocus(direction: -1)
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            moveFocus(direction: 1)
+            return .handled
+        }
+        .onKeyPress(.return) {
+            activateFocusedButton()
+            return .handled
+        }
+        .onKeyPress(.space) {
+            activateFocusedButton()
+            return .handled
+        }
         .alert("Missing Information", isPresented: $showAlert) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -421,6 +527,7 @@ struct ContentView: View {
         .sheet(isPresented: $showDocketSelectionSheet) {
             DocketSearchView(
                 manager: manager,
+                settingsManager: settingsManager,
                 isPresented: $showDocketSelectionSheet,
                 selectedDocket: $selectedDocket,
                 onConfirm: {
@@ -455,27 +562,39 @@ struct ContentView: View {
             }
         }
         .onChange(of: manager.selectedFiles.count) { oldValue, newValue in
-            // Auto-focus first button when files are added and docket is selected
-            if newValue > 0 && !selectedDocket.isEmpty && focusedButton == nil {
+            // Auto-focus first button when files are added
+            if newValue > 0 && focusedButton == nil {
                 focusedButton = .file
             }
         }
         .onKeyPress { press in
-            // Only handle typing when search isn't already open
-            guard !showSearchSheet && !showSettingsSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
+            // Only handle typing when no sheets are open
+            guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
                 return .ignored
             }
 
-            // Auto-search when typing in main view
+            // Auto-search when typing in main view - opens quick docket search
             if press.characters.count == 1 {
                 let char = press.characters.first!
                 if char.isLetter || char.isNumber {
                     initialSearchText = String(char)
-                    showSearchSheet = true
+                    showQuickSearchSheet = true
                     return .handled
                 }
             }
             return .ignored
+        }
+        .sheet(isPresented: $showQuickSearchSheet) {
+            QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager)
+        }
+        .onChange(of: showQuickSearchSheet) { oldValue, newValue in
+            if !newValue {
+                // Clear initial search text and refocus when quick search closes
+                initialSearchText = ""
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    focusedButton = .file
+                }
+            }
         }
         .sheet(isPresented: $showSettingsSheet) {
             SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
@@ -485,12 +604,9 @@ struct ContentView: View {
             manager.updateConfig(settings: newValue)
         }
         .onAppear {
-            if let firstDocket = manager.dockets.first {
-                selectedDocket = firstDocket
-            }
-            // Focus main view to receive keyboard events
+            // Auto-focus first action button for keyboard navigation
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                mainViewFocused = true
+                focusedButton = .file
             }
         }
     }
@@ -544,37 +660,39 @@ struct ContentView: View {
     }
     
     private func attempt(type: JobType) {
-        // 1. Validate file selection FIRST
+        // 1. If no files are staged, open file picker
         guard !manager.selectedFiles.isEmpty else {
-            alertMessage = "Please add at least one file to the staging area."
-            showAlert = true
+            manager.pickFiles()
             return
         }
 
-        // 2. Check if docket is selected
-        if selectedDocket.isEmpty {
-            // Store the intended job and show selection sheet
-            pendingJobType = type
-            showDocketSelectionSheet = true
-            return
-        }
-        
-        // 3. If docket exists, run the job immediately
-        manager.runJob(
-            type: type,
-            docket: selectedDocket,
-            wpDate: wpDate,
-            prepDate: prepDate
-        )
+        // 2. Always show docket selection sheet
+        pendingJobType = type
+        showDocketSelectionSheet = true
+    }
+
+    private func cycleTheme() {
+        let allThemes = AppTheme.allCases
+        guard let currentIndex = allThemes.firstIndex(of: currentTheme) else { return }
+        let nextIndex = (currentIndex + 1) % allThemes.count
+        settingsManager.currentSettings.appTheme = allThemes[nextIndex]
+        settingsManager.saveCurrentProfile()
     }
 
     private func moveFocus(direction: Int) {
-        let buttons: [ActionButtonFocus] = [.file, .prep, .both]
+        // Only the three main action buttons
+        let mainButtons: [ActionButtonFocus] = [.file, .prep, .both]
+
+        // If no button is focused, auto-focus the first one when using arrow keys
+        if focusedButton == nil {
+            focusedButton = .file
+            return
+        }
 
         if let current = focusedButton,
-           let currentIndex = buttons.firstIndex(of: current) {
-            let newIndex = (currentIndex + direction + buttons.count) % buttons.count
-            focusedButton = buttons[newIndex]
+           let currentIndex = mainButtons.firstIndex(of: current) {
+            let newIndex = (currentIndex + direction + mainButtons.count) % mainButtons.count
+            focusedButton = mainButtons[newIndex]
         } else {
             focusedButton = .file
         }
@@ -590,6 +708,58 @@ struct ContentView: View {
             attempt(type: .prep)
         case .both:
             attempt(type: .both)
+        case .docketLookup:
+            showQuickSearchSheet = true
+        case .searchSessions:
+            showSearchSheet = true
+        case .settings:
+            showSettingsSheet = true
+        }
+    }
+}
+
+// MARK: - Focusable Nav Button
+
+struct FocusableNavButton: View {
+    let icon: String
+    let title: String
+    let shortcut: String
+    let isFocused: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(isFocused || isHovered ? .blue : .secondary)
+                    .frame(width: 20)
+
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(isFocused || isHovered ? .primary : .secondary)
+
+                Spacer()
+
+                Text(shortcut)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isFocused ? Color.blue.opacity(0.1) : (isHovered ? Color.gray.opacity(0.1) : Color.clear))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isFocused ? Color.blue : Color.clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
         }
     }
 }
@@ -681,6 +851,7 @@ struct ActionButtonWithShortcut: View {
     let color: Color
     let isPrimary: Bool
     let isFocused: Bool
+    let theme: AppTheme
     let action: () -> Void
     @State private var isHovered = false
 
@@ -688,18 +859,21 @@ struct ActionButtonWithShortcut: View {
         Button(action: action) {
             VStack(spacing: isPrimary ? 6 : 4) {
                 Text(title)
-                    .font(.system(size: isPrimary ? 16 : 13, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
+                    .font(buttonTitleFont)
+                    .foregroundColor(theme.textColor)
+                    .shadow(color: theme.textShadowColor ?? .clear, radius: 2, x: 1, y: 1)
+                    .rotationEffect(theme == .cursed ? .degrees(Double.random(in: -5...5)) : .degrees(0))
 
                 if isPrimary {
                     Text(subtitle)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
+                        .font(buttonSubtitleFont)
+                        .foregroundColor(theme.textColor.opacity(0.8))
+                        .shadow(color: theme.textShadowColor ?? .clear, radius: 1, x: 1, y: 1)
                 }
 
                 Text(shortcut)
-                    .font(.system(size: isPrimary ? 11 : 10, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
+                    .font(theme == .cursed ? .system(size: 9, weight: .heavy, design: .monospaced) : .system(size: isPrimary ? 11 : 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(theme.textColor.opacity(0.7))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(Color.black.opacity(0.2))
@@ -708,25 +882,126 @@ struct ActionButtonWithShortcut: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, isPrimary ? 16 : 12)
             .background(
-                LinearGradient(
-                    colors: isHovered || isFocused ? [color, color.opacity(0.8)] : [color.opacity(0.9), color],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                Group {
+                    if theme == .cursed {
+                        LinearGradient(
+                            colors: [color, color.opacity(0.5), .purple, .yellow],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    } else if theme == .windowsXP {
+                        // Authentic Windows XP Luna glossy gradient
+                        LinearGradient(
+                            stops: [
+                                .init(color: Color.white.opacity(0.5), location: 0.0),
+                                .init(color: color.opacity(0.9), location: 0.3),
+                                .init(color: color, location: 0.5),
+                                .init(color: color.opacity(0.8), location: 1.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    } else {
+                        (isHovered || isFocused ? color.opacity(0.9) : color.opacity(0.85))
+                    }
+                }
             )
-            .cornerRadius(10)
+            .cornerRadius(theme.buttonCornerRadius)
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.white, lineWidth: isFocused ? 3 : 0)
+                Group {
+                    if theme == .windows95 || theme == .macos1996 || theme == .retro {
+                        VStack(spacing: 0) {
+                            HStack(spacing: 0) {
+                                Rectangle()
+                                    .fill(Color.white)
+                                    .frame(height: 2)
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity)
+                            HStack(spacing: 0) {
+                                Rectangle()
+                                    .fill(Color.white)
+                                    .frame(width: 2)
+                                Spacer()
+                                Rectangle()
+                                    .fill(Color(white: 0.3))
+                                    .frame(width: 2)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            HStack(spacing: 0) {
+                                Spacer()
+                                Rectangle()
+                                    .fill(Color(white: 0.3))
+                                    .frame(height: 2)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                    } else if theme == .windowsXP {
+                        RoundedRectangle(cornerRadius: theme.buttonCornerRadius)
+                            .strokeBorder(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: Color.white.opacity(0.6), location: 0.0),
+                                        .init(color: color.opacity(0.4), location: 0.5),
+                                        .init(color: color.opacity(0.8), location: 1.0)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 1
+                            )
+                    } else if theme == .cursed {
+                        RoundedRectangle(cornerRadius: theme.buttonCornerRadius)
+                            .strokeBorder(
+                                LinearGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple], startPoint: .leading, endPoint: .trailing),
+                                lineWidth: 3
+                            )
+                    } else {
+                        RoundedRectangle(cornerRadius: theme.buttonCornerRadius)
+                            .strokeBorder(Color.white.opacity(0.3), lineWidth: isFocused ? 2 : 0)
+                    }
+                }
             )
-            .shadow(color: color.opacity(0.4), radius: (isHovered || isFocused) ? 10 : 5, y: (isHovered || isFocused) ? 5 : 3)
-            .scaleEffect((isHovered || isFocused) ? 1.03 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovered)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+            .shadow(
+                color: theme == .cursed ? color.opacity(0.8) : (theme == .windows95 || theme == .macos1996 ? .clear : Color.black.opacity(0.15)),
+                radius: theme == .cursed ? 15 : 3,
+                y: theme == .cursed ? 5 : 1
+            )
+            .scaleEffect((theme == .windows95 || theme == .macos1996) ? 1.0 : (isHovered || isFocused) ? 1.02 : 1.0)
+            .animation(.easeInOut(duration: theme == .cursed ? 0.5 : 0.15), value: isHovered)
+            .animation(.easeInOut(duration: 0.15), value: isFocused)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
             isHovered = hovering
+        }
+    }
+
+    private var buttonTitleFont: Font {
+        switch theme {
+        case .modern:
+            return .system(size: isPrimary ? 16 : 13, weight: .bold, design: .rounded)
+        case .windows95:
+            return .system(size: isPrimary ? 16 : 13, weight: .bold)
+        case .windowsXP:
+            return .system(size: isPrimary ? 17 : 14, weight: .bold, design: .rounded)
+        case .macos1996:
+            return .system(size: isPrimary ? 15 : 12, weight: .bold)
+        case .retro:
+            return .system(size: isPrimary ? 14 : 12, weight: .bold, design: .monospaced)
+        case .cursed:
+            return .system(size: isPrimary ? 18 : 14, weight: .black, design: .monospaced)
+        }
+    }
+
+    private var buttonSubtitleFont: Font {
+        switch theme {
+        case .retro:
+            return .system(size: 9, weight: .bold, design: .monospaced)
+        case .cursed:
+            return .system(size: 9, weight: .heavy)
+        default:
+            return .system(size: 11, weight: .medium)
         }
     }
 }
@@ -738,11 +1013,13 @@ struct NewDocketView: View {
     @Binding var selectedDocket: String
     @ObservedObject var manager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
+    var onDocketCreated: (() -> Void)? = nil
+
     @State private var number = ""
     @State private var jobName = ""
     @State private var showValidationError = false
     @State private var validationMessage = ""
-    
+
     var body: some View {
         VStack(spacing: 20) {
             Text("New Docket")
@@ -811,6 +1088,13 @@ struct NewDocketView: View {
             selectedDocket = docketName
             manager.refreshDockets() // Refresh to show the new docket
             isPresented = false
+
+            // Call the callback if provided
+            if let callback = onDocketCreated {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    callback()
+                }
+            }
         } catch {
             validationMessage = "Failed to create docket folder: \(error.localizedDescription)"
             showValidationError = true
@@ -899,104 +1183,291 @@ struct NoSelectTextField: NSViewRepresentable {
 
 struct DocketSearchView: View {
     @ObservedObject var manager: MediaManager
+    @ObservedObject var settingsManager: SettingsManager
     @Binding var isPresented: Bool
     @Binding var selectedDocket: String
     var onConfirm: () -> Void
-    
+
     @State private var searchText = ""
-    @FocusState private var isSearchFocused: Bool
+    @FocusState private var isSearchFieldFocused: Bool
+    @FocusState private var isListFocused: Bool
     @State private var filteredDockets: [String] = []
+    @State private var selectedPath: String?
+    @State private var showNewDocketSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header / Search
+            // MARK: Search Bar
             HStack {
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                
-                TextField("Search projects...", text: $searchText)
-                   .textFieldStyle(.plain)
-                   .font(.system(size: 18))
-                   .focused($isSearchFocused)
-                   .onChange(of: searchText) { oldValue, newValue in updateSearch() }
-                   .onSubmit {
-                       if let first = filteredDockets.first {
-                           selectDocket(first)
-                       }
-                   }
-                
+                    .foregroundColor(.primary)
+
+                NoSelectTextField(
+                    text: $searchText,
+                    placeholder: "Search dockets...",
+                    isEnabled: true,
+                    onSubmit: {
+                        if let selected = selectedPath {
+                            selectDocket(selected)
+                        } else if let first = filteredDockets.first {
+                            selectDocket(first)
+                        }
+                    },
+                    onTextChange: {
+                        performSearch()
+                    }
+                )
+                .padding(10)
+
                 if !searchText.isEmpty {
-                     Button(action: { searchText = "" }) {
-                         Image(systemName: "xmark.circle.fill")
-                             .foregroundColor(.secondary)
-                     }
-                     .buttonStyle(.plain)
+                    Button(action: { searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
-            
+
             Divider()
-            
-            // List
-            List {
-                if filteredDockets.isEmpty {
-                    Text("No projects found")
-                        .foregroundColor(.secondary)
-                        .padding()
-                } else {
-                    ForEach(filteredDockets, id: \.self) { docket in
+
+            // MARK: Results List
+            ZStack {
+                ScrollViewReader { proxy in
+                    List(selection: $selectedPath) {
+                        // "Create New Docket" option at the top
                         Button(action: {
-                            selectDocket(docket)
+                            showNewDocketSheet = true
                         }) {
                             HStack {
-                                Image(systemName: "folder.fill")
-                                    .foregroundColor(.blue)
-                                Text(docket)
-                                    .font(.system(size: 14))
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Create New Docket")
+                                    .font(.system(size: 14, weight: .semibold))
                                 Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                             .padding(.vertical, 6)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .listRowBackground(Color.green.opacity(0.1))
+
+                        if !filteredDockets.isEmpty {
+                            Section {
+                                ForEach(filteredDockets, id: \.self) { docket in
+                                    Button(action: {
+                                        if selectedPath == docket {
+                                            // Double click - select docket
+                                            selectDocket(docket)
+                                        } else {
+                                            selectedPath = docket
+                                        }
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "folder.fill")
+                                                .foregroundColor(.blue)
+                                            Text(docket)
+                                                .font(.system(size: 14))
+                                            Spacer()
+                                        }
+                                        .padding(.vertical, 6)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .tag(docket)
+                                }
+                            } header: {
+                                HStack {
+                                    VStack {
+                                        Divider()
+                                    }
+                                    Text("Recent Dockets")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 8)
+                                    VStack {
+                                        Divider()
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                                .listRowBackground(Color.clear)
+                            }
+                        }
+
+                        if filteredDockets.isEmpty && !searchText.isEmpty {
+                            VStack(spacing: 8) {
+                                Image(systemName: "folder.badge.questionmark")
+                                    .font(.system(size: 32))
+                                    .foregroundColor(.gray.opacity(0.5))
+                                Text("No dockets found")
+                                    .foregroundColor(.gray)
+                                Text("Try adjusting your search or create a new docket")
+                                    .font(.caption)
+                                    .foregroundColor(.gray.opacity(0.7))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .listRowBackground(Color.clear)
+                        }
+                    }
+                    .listStyle(.sidebar)
+                    .focused($isListFocused)
+                    .onChange(of: selectedPath) { oldValue, newValue in
+                        if let path = newValue {
+                            withAnimation(.easeInOut(duration: 0.08)) {
+                                proxy.scrollTo(path, anchor: .center)
+                            }
+                        }
                     }
                 }
             }
-            .listStyle(.inset)
-            
-            Divider()
-            
-            // Footer
+
+            // MARK: Action Bar
             HStack {
-                Button("Cancel") { isPresented = false }
-                    .keyboardShortcut(.cancelAction)
+                Button("Cancel") {
+                    isPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+
                 Spacer()
+
+                Button("Select Docket") {
+                    if let selected = selectedPath {
+                        selectDocket(selected)
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selectedPath == nil)
             }
             .padding()
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 400, height: 500)
+        .frame(width: 600, height: 500)
         .onAppear {
             filteredDockets = manager.dockets
-            isSearchFocused = true
+            // Auto-select first docket
+            if let first = manager.dockets.first {
+                selectedPath = first
+            }
+            isSearchFieldFocused = true
+        }
+        .sheet(isPresented: $showNewDocketSheet) {
+            NewDocketView(
+                isPresented: $showNewDocketSheet,
+                selectedDocket: $selectedDocket,
+                manager: manager,
+                settingsManager: settingsManager,
+                onDocketCreated: {
+                    // When a new docket is created, close both sheets and run the job
+                    isPresented = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        onConfirm()
+                    }
+                }
+            )
+        }
+        // Native Keyboard Navigation
+        .onKeyPress(.upArrow) {
+            if !filteredDockets.isEmpty {
+                isSearchFieldFocused = false
+                isListFocused = true
+                moveSelection(-1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.downArrow) {
+            if !filteredDockets.isEmpty {
+                isSearchFieldFocused = false
+                isListFocused = true
+                moveSelection(1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.tab) {
+            // Pressing Tab refocuses the search field
+            isSearchFieldFocused = true
+            isListFocused = false
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            // Pressing Escape closes the sheet
+            isPresented = false
+            return .handled
+        }
+        .onKeyPress(.return) {
+            // Enter key selects the docket
+            if isListFocused && selectedPath != nil {
+                if let selected = selectedPath {
+                    selectDocket(selected)
+                }
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.delete) {
+            // Backspace refocuses search field
+            if isListFocused {
+                isSearchFieldFocused = true
+                isListFocused = false
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress { press in
+            // Any letter/character refocuses search field
+            if isListFocused && press.characters.count == 1 {
+                let char = press.characters.first!
+                if char.isLetter || char.isNumber || char.isWhitespace || char.isPunctuation {
+                    isSearchFieldFocused = true
+                    isListFocused = false
+                    return .handled
+                }
+            }
+            return .ignored
         }
     }
-    
-    func updateSearch() {
+
+    // MARK: - Helper Methods
+
+    private func performSearch() {
+        selectedPath = nil
+
         if searchText.isEmpty {
             filteredDockets = manager.dockets
         } else {
             filteredDockets = manager.dockets.filter { $0.localizedCaseInsensitiveContains(searchText) }
         }
+
+        // Auto-select first result
+        if let first = filteredDockets.first {
+            selectedPath = first
+        }
     }
-    
-    func selectDocket(_ docket: String) {
+
+    private func selectDocket(_ docket: String) {
         selectedDocket = docket
         isPresented = false
         // Delay slightly to ensure sheet closes before job runs
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             onConfirm()
+        }
+    }
+
+    private func moveSelection(_ direction: Int) {
+        guard !filteredDockets.isEmpty else { return }
+
+        if let currentPath = selectedPath,
+           let currentIndex = filteredDockets.firstIndex(of: currentPath) {
+            let newIndex = min(max(currentIndex + direction, 0), filteredDockets.count - 1)
+            selectedPath = filteredDockets[newIndex]
+        } else {
+            selectedPath = filteredDockets.first
         }
     }
 }
@@ -1429,6 +1900,689 @@ struct SearchResultRow: View {
             Spacer()
         }
         .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Quick Docket Search (Reference Only)
+
+struct DocketInfo: Identifiable, Hashable {
+    let id = UUID()
+    let number: String
+    let jobName: String
+    let fullName: String
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(fullName)
+    }
+
+    static func == (lhs: DocketInfo, rhs: DocketInfo) -> Bool {
+        lhs.fullName == rhs.fullName
+    }
+}
+
+struct QuickDocketSearchView: View {
+    @Binding var isPresented: Bool
+    let initialText: String
+    @ObservedObject var settingsManager: SettingsManager
+    @StateObject private var metadataManager = DocketMetadataManager()
+
+    @State private var searchText: String
+    @State private var allDockets: [DocketInfo] = []
+    @State private var filteredDockets: [DocketInfo] = []
+    @State private var isScanning = false
+    @State private var selectedDocket: DocketInfo?
+    @FocusState private var isSearchFocused: Bool
+
+    init(isPresented: Binding<Bool>, initialText: String, settingsManager: SettingsManager) {
+        self._isPresented = isPresented
+        self.initialText = initialText
+        self.settingsManager = settingsManager
+        self._searchText = State(initialValue: initialText)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // MARK: Search Bar
+            HStack {
+                Image(systemName: "number.circle")
+                    .foregroundColor(.primary)
+
+                NoSelectTextField(
+                    text: $searchText,
+                    placeholder: "Search docket numbers or job names...",
+                    isEnabled: true,
+                    onSubmit: {},
+                    onTextChange: {
+                        performSearch()
+                    }
+                )
+                .padding(10)
+
+                if !searchText.isEmpty {
+                    Button(action: { searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            Divider()
+
+            // MARK: Results List
+            ZStack {
+                if isScanning {
+                    VStack {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Scanning server for dockets...")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding()
+                } else if allDockets.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 48))
+                            .foregroundColor(.gray.opacity(0.5))
+                        Text("No Docket Data")
+                            .font(.title3)
+                            .fontWeight(.medium)
+                            .foregroundColor(.primary)
+                        if settingsManager.currentSettings.docketSource == .csv {
+                            VStack(spacing: 8) {
+                                Text("Import a CSV file from Settings to populate docket lookup")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 40)
+
+                                Text("CSV must include columns: docket_number, job_name")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 40)
+                            }
+                        } else {
+                            Text("No dockets found on server. Check Sessions path in Settings.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 40)
+                        }
+                    }
+                    .padding()
+                } else if filteredDockets.isEmpty && !searchText.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "questionmark.folder")
+                            .font(.system(size: 32))
+                            .foregroundColor(.gray.opacity(0.5))
+                        Text("No dockets found")
+                            .foregroundColor(.gray)
+                        Text("Try a different search term")
+                            .font(.caption)
+                            .foregroundColor(.gray.opacity(0.7))
+                    }
+                } else {
+                    List {
+                        if !filteredDockets.isEmpty {
+                            Section {
+                                ForEach(filteredDockets) { docket in
+                                    Button(action: {
+                                        selectedDocket = docket
+                                    }) {
+                                        HStack(spacing: 12) {
+                                            // Number badge
+                                            Text(docket.number)
+                                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                                .foregroundColor(.white)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(Color.blue)
+                                                .cornerRadius(6)
+
+                                            // Job name and metadata indicator
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(docket.jobName)
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(.primary)
+
+                                                if metadataManager.hasMetadata(for: docket.fullName) {
+                                                    let meta = metadataManager.getMetadata(forId: docket.fullName)
+                                                    HStack(spacing: 4) {
+                                                        if !meta.client.isEmpty {
+                                                            Text(meta.client)
+                                                                .font(.caption)
+                                                                .foregroundColor(.secondary)
+                                                        }
+                                                        if !meta.agency.isEmpty {
+                                                            Text("•")
+                                                                .font(.caption)
+                                                                .foregroundColor(.secondary)
+                                                            Text(meta.agency)
+                                                                .font(.caption)
+                                                                .foregroundColor(.secondary)
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            Spacer()
+
+                                            // Metadata indicator
+                                            if metadataManager.hasMetadata(for: docket.fullName) {
+                                                Image(systemName: "info.circle.fill")
+                                                    .foregroundColor(.blue)
+                                                    .font(.caption)
+                                            }
+
+                                            // Copy button
+                                            Button(action: {
+                                                NSPasteboard.general.clearContents()
+                                                NSPasteboard.general.setString(docket.fullName, forType: .string)
+                                            }) {
+                                                Image(systemName: "doc.on.doc")
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            .buttonStyle(.plain)
+                                            .help("Copy full name")
+                                        }
+                                        .padding(.vertical, 4)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            } header: {
+                                HStack {
+                                    Text("Results")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Text("\(filteredDockets.count) docket\(filteredDockets.count == 1 ? "" : "s")")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        } else if searchText.isEmpty && !allDockets.isEmpty {
+                            Section {
+                                ForEach(allDockets.prefix(20)) { docket in
+                                    HStack(spacing: 12) {
+                                        Text(docket.number)
+                                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Color.blue)
+                                            .cornerRadius(6)
+
+                                        Text(docket.jobName)
+                                            .font(.system(size: 14))
+
+                                        Spacer()
+
+                                        Button(action: {
+                                            NSPasteboard.general.clearContents()
+                                            NSPasteboard.general.setString(docket.fullName, forType: .string)
+                                        }) {
+                                            Image(systemName: "doc.on.doc")
+                                                .foregroundColor(.secondary)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Copy full name")
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                            } header: {
+                                HStack {
+                                    Text("Recent Dockets")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Text("Showing 20 of \(allDockets.count)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+                    .listStyle(.inset)
+                }
+            }
+
+            // MARK: Info Bar
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Reference only - type to search by number or job name")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Button("Close") {
+                    isPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding()
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
+        .frame(width: 600, height: 500)
+        .onAppear {
+            isSearchFocused = true
+            metadataManager.reloadMetadata()
+            loadDockets()
+        }
+        .onKeyPress(.escape) {
+            isPresented = false
+            return .handled
+        }
+        .sheet(item: $selectedDocket) { docket in
+            DocketMetadataEditorView(
+                docket: docket,
+                isPresented: Binding(
+                    get: { selectedDocket != nil },
+                    set: { if !$0 { selectedDocket = nil } }
+                ),
+                metadataManager: metadataManager
+            )
+        }
+    }
+
+    private func loadDockets() {
+        if settingsManager.currentSettings.docketSource == .csv {
+            loadDocketsFromCSV()
+        } else {
+            scanDocketsFromServer()
+        }
+    }
+
+    private func loadDocketsFromCSV() {
+        // Force reload metadata from CSV
+        metadataManager.reloadMetadata()
+
+        // Load dockets from CSV metadata
+        var dockets: [DocketInfo] = []
+
+        print("Loading dockets from metadata. Total entries: \(metadataManager.metadata.count)")
+
+        for (_, meta) in metadataManager.metadata {
+            dockets.append(DocketInfo(
+                number: meta.docketNumber,
+                jobName: meta.jobName,
+                fullName: meta.id
+            ))
+        }
+
+        print("Loaded \(dockets.count) valid dockets for display")
+
+        // Sort by number (descending)
+        allDockets = dockets.sorted { d1, d2 in
+            // Try to compare as numbers first
+            if let n1 = Int(d1.number.filter { $0.isNumber }),
+               let n2 = Int(d2.number.filter { $0.isNumber }) {
+                if n1 == n2 {
+                    return d1.jobName < d2.jobName
+                }
+                return n1 > n2
+            }
+            // Fallback to string comparison
+            if d1.number == d2.number {
+                return d1.jobName < d2.jobName
+            }
+            return d1.number > d2.number
+        }
+
+        filteredDockets = allDockets
+        performSearch()
+    }
+
+    private func scanDocketsFromServer() {
+        isScanning = true
+
+        Task.detached(priority: .userInitiated) {
+            let config = AppConfig(settings: await settingsManager.currentSettings)
+            let sessionsPath = URL(fileURLWithPath: config.settings.sessionsBasePath)
+            var docketsDict: [String: DocketInfo] = [:]
+
+            // Scan only top-level directories (depth 2) for performance
+            guard let topLevelItems = try? FileManager.default.contentsOfDirectory(
+                at: sessionsPath,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                await MainActor.run {
+                    self.isScanning = false
+                }
+                return
+            }
+
+            // Process each top-level directory
+            for topItem in topLevelItems {
+                guard topItem.hasDirectoryPath else { continue }
+
+                // Check if top-level folder matches docket pattern
+                checkAndAddDocket(folderURL: topItem, to: &docketsDict)
+
+                // Also check immediate subdirectories (depth 2)
+                if let subItems = try? FileManager.default.contentsOfDirectory(
+                    at: topItem,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                ) {
+                    for subItem in subItems {
+                        guard subItem.hasDirectoryPath else { continue }
+                        checkAndAddDocket(folderURL: subItem, to: &docketsDict)
+                    }
+                }
+
+                // Yield to prevent blocking
+                await Task.yield()
+            }
+
+            // Convert to array and sort by number (descending)
+            let dockets = Array(docketsDict.values).sorted { d1, d2 in
+                if let n1 = Int(d1.number.filter { $0.isNumber }),
+                   let n2 = Int(d2.number.filter { $0.isNumber }) {
+                    if n1 == n2 {
+                        return d1.jobName < d2.jobName
+                    }
+                    return n1 > n2
+                }
+                if d1.number == d2.number {
+                    return d1.jobName < d2.jobName
+                }
+                return d1.number > d2.number
+            }
+
+            await MainActor.run {
+                self.allDockets = dockets
+                self.filteredDockets = dockets
+                self.isScanning = false
+                self.performSearch()
+            }
+        }
+    }
+
+    nonisolated private func checkAndAddDocket(folderURL: URL, to dict: inout [String: DocketInfo]) {
+        let folderName = folderURL.lastPathComponent
+
+        // Parse format: "number_jobName"
+        let components = folderName.split(separator: "_", maxSplits: 1)
+        guard components.count >= 2 else { return }
+
+        let firstPart = String(components[0])
+        let docketNumber = extractDocketNumber(from: firstPart)
+        guard !docketNumber.isEmpty else { return }
+
+        // Clean up job name
+        let rawJobName = String(components[1])
+        let cleanedJobName = cleanJobName(rawJobName)
+
+        // Use full name as unique key to avoid duplicates
+        if dict[folderName] == nil {
+            dict[folderName] = DocketInfo(
+                number: docketNumber,
+                jobName: cleanedJobName,
+                fullName: folderName
+            )
+        }
+    }
+
+    nonisolated private func extractDocketNumber(from text: String) -> String {
+        // Match format: 12345 or 12345-US
+        let pattern = #"^(\d+(-[A-Z]{2})?)$"#
+
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(match.range, in: text) {
+            return String(text[range])
+        }
+
+        return ""
+    }
+
+    nonisolated private func cleanJobName(_ name: String) -> String {
+        var cleaned = name
+
+        // Replace underscores with spaces
+        cleaned = cleaned.replacingOccurrences(of: "_", with: " ")
+
+        // Remove common date patterns (including MMMd.yy format like "Nov19.24")
+        let datePatterns = [
+            #"\s+[A-Z][a-z]{2}\d{1,2}\.\d{2}.*$"#, // " Nov19.24" and everything after
+            #"\s+\d{4}.*$"#,           // " 2024" and everything after
+            #"\s+\d{2}\.\d{2}.*$"#,    // " 01.24" and everything after
+            #"\s+[A-Z][a-z]{2}\d{2}.*$"#, // " Jan24" and everything after
+            #"\s+\d{1,2}-\d{1,2}-\d{2,4}.*$"#, // " 1-15-24" and everything after
+            #"\s+\d{1,2}\.\d{1,2}\.\d{2,4}.*$"# // " 11.19.24" and everything after
+        ]
+
+        for pattern in datePatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+                cleaned = regex.stringByReplacingMatches(
+                    in: cleaned,
+                    range: NSRange(cleaned.startIndex..., in: cleaned),
+                    withTemplate: ""
+                )
+            }
+        }
+
+        // Remove common initials at the end (BB, VN, CM, etc.)
+        let initialsPattern = #"\s+[A-Z]{2}$"#
+        if let regex = try? NSRegularExpression(pattern: initialsPattern, options: []) {
+            cleaned = regex.stringByReplacingMatches(
+                in: cleaned,
+                range: NSRange(cleaned.startIndex..., in: cleaned),
+                withTemplate: ""
+            )
+        }
+
+        // Trim whitespace
+        cleaned = cleaned.trimmingCharacters(in: .whitespaces)
+
+        return cleaned
+    }
+
+    private func performSearch() {
+        if searchText.isEmpty {
+            filteredDockets = allDockets
+        } else {
+            let search = searchText.lowercased()
+
+            // Check if search starts with a digit (assume docket number search)
+            if search.first?.isNumber == true {
+                // Exact docket number prefix match
+                filteredDockets = allDockets.filter {
+                    $0.number.lowercased().hasPrefix(search)
+                }
+            } else {
+                // Job name search - split into words and match all words
+                let searchWords = search.split(separator: " ").map { String($0) }
+
+                filteredDockets = allDockets.filter { docket in
+                    let jobNameLower = docket.jobName.lowercased()
+                    let fullNameLower = docket.fullName.lowercased()
+
+                    // Check if ALL search words appear in either jobName or fullName
+                    return searchWords.allSatisfy { word in
+                        jobNameLower.contains(word) || fullNameLower.contains(word)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Docket Metadata Editor
+
+struct DocketMetadataEditorView: View {
+    let docket: DocketInfo
+    @Binding var isPresented: Bool
+    @ObservedObject var metadataManager: DocketMetadataManager
+
+    @State private var metadata: DocketMetadata
+
+    init(docket: DocketInfo, isPresented: Binding<Bool>, metadataManager: DocketMetadataManager) {
+        self.docket = docket
+        self._isPresented = isPresented
+        self.metadataManager = metadataManager
+        self._metadata = State(initialValue: metadataManager.getMetadata(forId: docket.fullName))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Docket Information")
+                        .font(.title2)
+                        .fontWeight(.bold)
+
+                    HStack(spacing: 8) {
+                        Text(docket.number)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.blue)
+                            .cornerRadius(4)
+
+                        Text(docket.jobName)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                Button("Done") {
+                    metadataManager.saveMetadata(metadata)
+                    isPresented = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            Divider()
+
+            // Content
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Job Details Section
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Job Details")
+                            .font(.headline)
+
+                        MetadataField(label: "Client", icon: "building.2", text: $metadata.client)
+                        MetadataField(label: "Agency", icon: "briefcase", text: $metadata.agency)
+                    }
+
+                    Divider()
+
+                    // Production Team Section
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Production Team")
+                            .font(.headline)
+
+                        MetadataField(label: "Producer", icon: "person", text: $metadata.producer)
+                        MetadataField(label: "Agency Producer", icon: "person.badge.key", text: $metadata.agencyProducer)
+                        MetadataField(label: "Director", icon: "video", text: $metadata.director)
+                        MetadataField(label: "Engineer", icon: "waveform", text: $metadata.engineer)
+                        MetadataField(label: "Sound Designer", icon: "music.note", text: $metadata.soundDesigner)
+                    }
+
+                    Divider()
+
+                    // Notes Section
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Notes")
+                            .font(.headline)
+
+                        TextEditor(text: $metadata.notes)
+                            .frame(minHeight: 100)
+                            .font(.system(size: 13))
+                            .padding(8)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .cornerRadius(6)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                            )
+                    }
+
+                    if metadata.lastUpdated > Date.distantPast {
+                        HStack {
+                            Image(systemName: "clock")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Last updated: \(metadata.lastUpdated, style: .relative)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding()
+            }
+
+            Divider()
+
+            // Footer
+            HStack {
+                Button("Clear All") {
+                    metadata = DocketMetadata(docketNumber: docket.number, jobName: docket.jobName)
+                }
+                .foregroundColor(.red)
+
+                Spacer()
+
+                Button("Cancel") {
+                    isPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Save") {
+                    metadataManager.saveMetadata(metadata)
+                    isPresented = false
+                }
+                .keyboardShortcut("s", modifiers: .command)
+            }
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+        }
+        .frame(width: 500, height: 650)
+    }
+}
+
+struct MetadataField: View {
+    let label: String
+    let icon: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                    .frame(width: 16)
+                Text(label)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+            }
+
+            TextField("Enter \(label.lowercased())", text: $text)
+                .textFieldStyle(.roundedBorder)
+        }
     }
 }
 

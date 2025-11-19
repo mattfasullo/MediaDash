@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
@@ -48,6 +49,11 @@ struct SettingsView: View {
                         profileToDelete: $profileToDelete,
                         hasUnsavedChanges: $hasUnsavedChanges
                     )
+
+                    Divider()
+
+                    // Theme Selection
+                    ThemeSelectionSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
 
                     Divider()
 
@@ -185,6 +191,11 @@ struct ProfileSection: View {
 struct PathSettingsSection: View {
     @Binding var settings: AppSettings
     @Binding var hasUnsavedChanges: Bool
+    @State private var showImportSuccess = false
+    @State private var showImportError = false
+    @State private var importMessage = ""
+    @State private var csvStatus = ""
+    @State private var csvExists = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
@@ -216,24 +227,128 @@ struct PathSettingsSection: View {
 
                 Divider()
 
-                // Sessions Base Path
+                // Docket Lookup Source
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Docket Lookup Source")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    Text("Choose where to load docket information from")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Picker("", selection: Binding(
+                        get: { settings.docketSource },
+                        set: {
+                            settings.docketSource = $0
+                            hasUnsavedChanges = true
+                        }
+                    )) {
+                        Text("CSV File").tag(DocketSource.csv)
+                        Text("Server Path (Sessions)").tag(DocketSource.server)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
+                Divider()
+
+                // Sessions Base Path (for server-based docket lookup)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("ProTools Sessions Storage")
                         .font(.subheadline)
                         .fontWeight(.medium)
-                    Text("Where your ProTools sessions are stored for searching")
+                        .foregroundColor(settings.docketSource == .server ? .primary : .secondary)
+                    Text(settings.docketSource == .server ?
+                         "Scan this folder for docket information" :
+                         "Not used when CSV source is selected")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     HStack {
                         TextField("Example: /Volumes/Server/SESSIONS", text: binding(for: \.sessionsBasePath))
                             .textFieldStyle(.roundedBorder)
+                            .disabled(settings.docketSource != .server)
                         Button(action: { browseFolderFor(\.sessionsBasePath) }) {
                             Image(systemName: "folder")
                         }
+                        .disabled(settings.docketSource != .server)
                         .help("Browse for folder")
                     }
                 }
+
+                Divider()
+
+                // Docket Metadata CSV Import
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Docket Metadata")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(settings.docketSource == .csv ? .primary : .secondary)
+                    Text(settings.docketSource == .csv ?
+                         "Import a CSV file with docket metadata (Producer, Director, etc.)" :
+                         "Not used when Server Path is selected")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Button(action: { importCSVFile() }) {
+                            HStack {
+                                Image(systemName: "square.and.arrow.down")
+                                Text("Import CSV File")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(settings.docketSource != .csv)
+                        .help("Select a CSV file to import. It will be copied to ~/Documents/MediaDash/")
+
+                        if showImportSuccess {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                    .font(.caption)
+                                Text(importMessage)
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            }
+                        }
+
+                        if showImportError {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.red)
+                                    .font(.caption)
+                                Text(importMessage)
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
+                        }
+
+                        // CSV Status Display
+                        if csvExists {
+                            HStack(spacing: 4) {
+                                Image(systemName: "doc.text.fill")
+                                    .foregroundColor(.blue)
+                                    .font(.caption)
+                                Text(csvStatus)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.top, 4)
+                        } else if settings.docketSource == .csv {
+                            HStack(spacing: 4) {
+                                Image(systemName: "doc.badge.ellipsis")
+                                    .foregroundColor(.orange)
+                                    .font(.caption)
+                                Text("No CSV file imported yet")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
+                }
             }
+        }
+        .onAppear {
+            checkCSVStatus()
         }
     }
 
@@ -257,6 +372,89 @@ struct PathSettingsSection: View {
         if panel.runModal() == .OK, let url = panel.url {
             settings[keyPath: keyPath] = url.path
             hasUnsavedChanges = true
+        }
+    }
+
+    private func checkCSVStatus() {
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let mediaDashFolder = documentsPath.appendingPathComponent("MediaDash")
+        let destinationURL = mediaDashFolder.appendingPathComponent("docket_metadata.csv")
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            csvExists = true
+            if let content = try? String(contentsOf: destinationURL, encoding: .utf8) {
+                let lineCount = content.components(separatedBy: .newlines).filter { !$0.isEmpty }.count
+                csvStatus = "CSV imported: \(lineCount) rows"
+            } else {
+                csvStatus = "CSV file exists but cannot be read"
+            }
+        } else {
+            csvExists = false
+            csvStatus = ""
+        }
+    }
+
+    private func importCSVFile() {
+        // Reset messages
+        showImportSuccess = false
+        showImportError = false
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.message = "Select CSV file to import"
+
+        if panel.runModal() == .OK, let sourceURL = panel.url {
+            // Define destination
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let mediaDashFolder = documentsPath.appendingPathComponent("MediaDash")
+            let destinationURL = mediaDashFolder.appendingPathComponent("docket_metadata.csv")
+
+            do {
+                // Create MediaDash folder if needed
+                try FileManager.default.createDirectory(at: mediaDashFolder, withIntermediateDirectories: true)
+
+                // Remove existing file if it exists
+                if FileManager.default.fileExists(atPath: destinationURL.path) {
+                    try FileManager.default.removeItem(at: destinationURL)
+                }
+
+                // Copy the file
+                try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+
+                // Verify the file exists and is readable
+                if FileManager.default.fileExists(atPath: destinationURL.path) {
+                    let content = try? String(contentsOf: destinationURL, encoding: .utf8)
+                    let lineCount = content?.components(separatedBy: .newlines).filter { !$0.isEmpty }.count ?? 0
+
+                    print("CSV imported successfully from \(sourceURL.path)")
+                    print("CSV copied to \(destinationURL.path)")
+                    print("CSV file has \(lineCount) lines (including header)")
+
+                    // Show success message
+                    showImportSuccess = true
+                    importMessage = "Imported successfully (\(lineCount) rows)"
+
+                    // Update status
+                    checkCSVStatus()
+
+                    // Auto-hide after 5 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        showImportSuccess = false
+                    }
+                }
+            } catch {
+                print("Error importing CSV: \(error)")
+                showImportError = true
+                importMessage = "Failed to import: \(error.localizedDescription)"
+
+                // Auto-hide after 5 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    showImportError = false
+                }
+            }
         }
     }
 }
@@ -574,6 +772,54 @@ struct AdvancedSettingsSection: View {
                     }
                     .toggleStyle(.switch)
                 }
+
+                Divider()
+
+                // Date/Business Day Options
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Prep Date Calculation")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+
+                    Text("File date is always today. Configure how prep date is calculated:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.bottom, 4)
+
+                    Toggle(isOn: Binding(
+                        get: { settings.skipWeekends },
+                        set: {
+                            settings.skipWeekends = $0
+                            hasUnsavedChanges = true
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Skip Weekends")
+                                .font(.callout)
+                            Text("If next day is Saturday or Sunday, skip to Monday")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+
+                    Toggle(isOn: Binding(
+                        get: { settings.skipHolidays },
+                        set: {
+                            settings.skipHolidays = $0
+                            hasUnsavedChanges = true
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Skip Canadian Holidays")
+                                .font(.callout)
+                            Text("If next day is a holiday on Thu/Fri, skip to Tuesday")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
             }
         }
     }
@@ -586,6 +832,67 @@ struct AdvancedSettingsSection: View {
                 hasUnsavedChanges = true
             }
         )
+    }
+}
+
+// MARK: - Theme Selection Section
+
+struct ThemeSelectionSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Appearance")
+                .font(.headline)
+
+            Text("Choose your preferred visual theme")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Theme")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+
+                Picker("", selection: Binding(
+                    get: { settings.appTheme },
+                    set: {
+                        settings.appTheme = $0
+                        hasUnsavedChanges = true
+                    }
+                )) {
+                    ForEach(AppTheme.allCases, id: \.self) { theme in
+                        Text(theme.displayName).tag(theme)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 200)
+
+                // Theme description
+                Text(themeDescription(for: settings.appTheme))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
+            }
+        }
+    }
+
+    private func themeDescription(for theme: AppTheme) -> String {
+        switch theme {
+        case .modern:
+            return "Clean, professional interface with subtle colors"
+        case .windows95:
+            return "Nostalgic gray interface with beveled buttons"
+        case .windowsXP:
+            return "Blue and green with that classic Fisher-Price look"
+        case .macos1996:
+            return "Platinum appearance with the classic Mac aesthetic"
+        case .retro:
+            return "Classic MS-DOS with cyan text on blue background"
+        case .cursed:
+            return "⚠️ A chaotic assault on good taste and usability"
+        }
     }
 }
 
