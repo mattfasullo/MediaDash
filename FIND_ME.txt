@@ -1,0 +1,4 @@
+This file will help you locate your MediaDash directory!
+
+If you can see this file on your Mac, you've found the right folder.
+Put your MediaDash project files in the same directory as this file.
