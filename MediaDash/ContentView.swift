@@ -1077,7 +1077,7 @@ struct SearchView: View {
                     placeholder: manager.isIndexing ? "Building search index..." : "Search sessions...",
                     isEnabled: !manager.isIndexing,
                     onSubmit: {
-                        openSelectedPath()
+                        openInFinder()
                     },
                     onTextChange: {
                         performSearch()
@@ -1132,8 +1132,10 @@ struct SearchView: View {
                                     Button(action: {
                                         // Single click selects
                                         if selectedPath == path {
-                                            // Double click (clicking already selected item) opens
-                                            openPath(path)
+                                            // Double click (clicking already selected item) opens in Finder
+                                            let url = URL(fileURLWithPath: path).deletingLastPathComponent()
+                                            NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: url.path)
+                                            isPresented = false
                                         } else {
                                             selectedPath = path
                                         }
@@ -1169,7 +1171,10 @@ struct SearchView: View {
                                 ForEach(section.paths, id: \.self) { path in
                                     Button(action: {
                                         if selectedPath == path {
-                                            openPath(path)
+                                            // Double click opens in Finder
+                                            let url = URL(fileURLWithPath: path).deletingLastPathComponent()
+                                            NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: url.path)
+                                            isPresented = false
                                         } else {
                                             selectedPath = path
                                         }
@@ -1241,18 +1246,11 @@ struct SearchView: View {
                     isPresented = false
                 }
                 .keyboardShortcut(.cancelAction)
-                
+
                 Spacer()
-                
-                if selectedPath != nil {
-                    Button("Show in Finder") {
-                        openInFinder()
-                    }
-                    .keyboardShortcut("o", modifiers: .command)
-                }
-                
-                Button("Open") {
-                    openSelectedPath()
+
+                Button("Show in Finder") {
+                    openInFinder()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(selectedPath == nil)
@@ -1302,9 +1300,9 @@ struct SearchView: View {
             return .handled
         }
         .onKeyPress(.return) {
-            // Enter key opens selected item
+            // Enter key opens selected item in Finder
             if isListFocused && selectedPath != nil {
-                openSelectedPath()
+                openInFinder()
                 return .handled
             }
             return .ignored
@@ -1378,20 +1376,10 @@ struct SearchView: View {
         return lastComponent.components(separatedBy: "_").first ?? "Unknown"
     }
     
-    private func openSelectedPath() {
-        guard let path = selectedPath else { return }
-        openPath(path)
-    }
-    
     private func openInFinder() {
         guard let path = selectedPath else { return }
         let url = URL(fileURLWithPath: path).deletingLastPathComponent()
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: url.path)
-        isPresented = false
-    }
-    
-    private func openPath(_ path: String) {
-        NSWorkspace.shared.open(URL(fileURLWithPath: path))
         isPresented = false
     }
     
