@@ -1133,7 +1133,7 @@ struct SearchView: View {
                                         // Single click selects
                                         if selectedPath == path {
                                             // Double click (clicking already selected item) opens folder in Finder
-                                            let url = URL(fileURLWithPath: path).deletingLastPathComponent()
+                                            let url = URL(fileURLWithPath: path)
                                             NSWorkspace.shared.open(url)
                                             isPresented = false
                                         } else {
@@ -1172,7 +1172,7 @@ struct SearchView: View {
                                     Button(action: {
                                         if selectedPath == path {
                                             // Double click opens folder in Finder
-                                            let url = URL(fileURLWithPath: path).deletingLastPathComponent()
+                                            let url = URL(fileURLWithPath: path)
                                             NSWorkspace.shared.open(url)
                                             isPresented = false
                                         } else {
@@ -1378,7 +1378,7 @@ struct SearchView: View {
     
     private func openInFinder() {
         guard let path = selectedPath else { return }
-        let url = URL(fileURLWithPath: path).deletingLastPathComponent()
+        let url = URL(fileURLWithPath: path)
         NSWorkspace.shared.open(url)
         isPresented = false
     }
