@@ -116,6 +116,28 @@ enum DocketSource: String, Codable {
     case server = "Server Path"
 }
 
+// MARK: - Search Settings
+
+enum SearchFolder: String, Codable, CaseIterable {
+    case workPicture = "Work Picture"
+    case mediaPostings = "Media Postings"
+    case sessions = "Pro Tools Sessions"
+
+    var displayName: String {
+        self.rawValue
+    }
+}
+
+enum SearchFolderPreference: String, Codable {
+    case rememberLast = "Remember Last Used"
+    case alwaysUseDefault = "Always Use Default"
+}
+
+enum DefaultQuickSearch: String, Codable {
+    case search = "Search"
+    case jobInfo = "Job Info"
+}
+
 // MARK: - App Theme
 
 enum AppTheme: String, Codable, CaseIterable {
@@ -269,7 +291,7 @@ struct AppSettings: Codable, Equatable {
     var serverBasePath: String
     var sessionsBasePath: String
 
-    // Docket Lookup Source
+    // Job Info Source
     var docketSource: DocketSource
 
     // App Theme
@@ -300,6 +322,10 @@ struct AppSettings: Codable, Equatable {
 
     // Search Settings
     var enableFuzzySearch: Bool
+    var defaultSearchFolder: SearchFolder
+    var searchFolderPreference: SearchFolderPreference
+    var lastUsedSearchFolder: SearchFolder?
+    var defaultQuickSearch: DefaultQuickSearch
 
     // Date/Business Day Settings
     var skipWeekends: Bool
@@ -329,6 +355,10 @@ struct AppSettings: Codable, Equatable {
             workPicNumberFormat: "%02d",
             prepFolderFormat: "{docket}_PREP_{date}",
             enableFuzzySearch: true,
+            defaultSearchFolder: .sessions,
+            searchFolderPreference: .rememberLast,
+            lastUsedSearchFolder: nil,
+            defaultQuickSearch: .search,
             skipWeekends: true,
             skipHolidays: true,
             customHolidays: []

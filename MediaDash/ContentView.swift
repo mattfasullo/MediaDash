@@ -130,9 +130,167 @@ struct ContentView: View {
     
     var body: some View {
         HStack(spacing: 0) {
-            // MARK: - Sidebar
-            ZStack(alignment: .topTrailing) {
-                VStack(alignment: .leading, spacing: 20) {
+            sidebarView
+
+            if isStagingAreaVisible {
+                Divider()
+                stagingAreaView
+            }
+        }
+        .frame(width: isStagingAreaVisible ? 650 : 300, height: 550)
+        .focusable()
+        .focused($mainViewFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.leftArrow) {
+            isKeyboardMode = true
+            moveFocus(direction: -1)
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            isKeyboardMode = true
+            moveFocus(direction: 1)
+            return .handled
+        }
+        .onKeyPress(.upArrow) {
+            isKeyboardMode = true
+            moveFocus(direction: -1)
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            isKeyboardMode = true
+            moveFocus(direction: 1)
+            return .handled
+        }
+        .onKeyPress(.return) {
+            activateFocusedButton()
+            return .handled
+        }
+        .onKeyPress(.space) {
+            activateFocusedButton()
+            return .handled
+        }
+        .alert("Missing Information", isPresented: $showAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(alertMessage)
+        }
+        .alert("Error", isPresented: $manager.showError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let errorMessage = manager.errorMessage {
+                Text(errorMessage)
+            }
+        }
+        .sheet(isPresented: $showNewDocketSheet) {
+            NewDocketView(
+                isPresented: $showNewDocketSheet,
+                selectedDocket: $selectedDocket,
+                manager: manager,
+                settingsManager: settingsManager
+            )
+        }
+        .sheet(isPresented: $showSearchSheet) {
+            SearchView(manager: manager, settingsManager: settingsManager, isPresented: $showSearchSheet, initialText: initialSearchText)
+        }
+        .sheet(isPresented: $showDocketSelectionSheet) {
+            DocketSearchView(
+                manager: manager,
+                settingsManager: settingsManager,
+                isPresented: $showDocketSelectionSheet,
+                selectedDocket: $selectedDocket,
+                onConfirm: {
+                    if let type = pendingJobType {
+                        manager.runJob(
+                            type: type,
+                            docket: selectedDocket,
+                            wpDate: wpDate,
+                            prepDate: prepDate
+                        )
+                        pendingJobType = nil
+                    }
+                }
+            )
+        }
+        .onChange(of: showSearchSheet) { oldValue, newValue in
+            if !newValue {
+                initialSearchText = ""
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    mainViewFocused = true
+                }
+            }
+        }
+        .onChange(of: showSettingsSheet) { oldValue, newValue in
+            if !newValue {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    mainViewFocused = true
+                }
+            }
+        }
+        .onChange(of: manager.selectedFiles.count) { oldValue, newValue in
+            if newValue > 0 && focusedButton == nil {
+                focusedButton = .file
+            }
+        }
+        .onKeyPress { press in
+            if press.key == .tab {
+                isKeyboardMode = true
+            }
+
+            guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
+                return .ignored
+            }
+
+            if press.characters.count == 1 {
+                let char = press.characters.first!
+                if char.isLetter || char.isNumber {
+                    initialSearchText = String(char)
+                    // Open configured default search
+                    if settingsManager.currentSettings.defaultQuickSearch == .search {
+                        showSearchSheet = true
+                    } else {
+                        showQuickSearchSheet = true
+                    }
+                    isKeyboardMode = true
+                    return .handled
+                }
+            }
+            return .ignored
+        }
+        .onChange(of: focusedButton) { oldValue, newValue in
+            if newValue != nil {
+                isKeyboardMode = true
+            }
+        }
+        .sheet(isPresented: $showQuickSearchSheet) {
+            QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager)
+        }
+        .onChange(of: showQuickSearchSheet) { oldValue, newValue in
+            if !newValue {
+                initialSearchText = ""
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    focusedButton = .file
+                }
+            }
+        }
+        .sheet(isPresented: $showSettingsSheet) {
+            SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
+        }
+        .onChange(of: settingsManager.currentSettings) { oldValue, newValue in
+            manager.updateConfig(settings: newValue)
+        }
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                mainViewFocused = true
+                focusedButton = .file
+            }
+        }
+    }
+
+    // MARK: - Sidebar View
+
+    private var sidebarView: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(alignment: .leading, spacing: 20) {
                     // App Logo (clickable Easter egg)
                     Image("HeaderLogo")
                         .resizable()
@@ -155,7 +313,7 @@ struct ContentView: View {
                 // MARK: Action Buttons
                 VStack(spacing: 10) {
                     ActionButtonWithShortcut(
-                        title: "FILE",
+                        title: "File",
                         subtitle: "Work Picture",
                         shortcut: "⌘1",
                         color: currentTheme.buttonColors.file,
@@ -171,6 +329,7 @@ struct ContentView: View {
                     .onHover { hovering in
                         if hovering {
                             focusedButton = nil // Clear keyboard focus on mouse hover
+                            mainViewFocused = true // Keep main view focused for arrow keys
                             isKeyboardMode = false
                         }
                         hoverInfo = hovering ?
@@ -180,7 +339,7 @@ struct ContentView: View {
                     .keyboardShortcut("1", modifiers: .command)
 
                     ActionButtonWithShortcut(
-                        title: "PREP",
+                        title: "Prep",
                         subtitle: "Session Prep",
                         shortcut: "⌘2",
                         color: currentTheme.buttonColors.prep,
@@ -196,6 +355,7 @@ struct ContentView: View {
                     .onHover { hovering in
                         if hovering {
                             focusedButton = nil // Clear keyboard focus on mouse hover
+                            mainViewFocused = true // Keep main view focused for arrow keys
                             isKeyboardMode = false
                         }
                         hoverInfo = hovering ?
@@ -205,9 +365,9 @@ struct ContentView: View {
                     .keyboardShortcut("2", modifiers: .command)
 
                     ActionButtonWithShortcut(
-                        title: "FILE + PREP",
+                        title: "File + Prep",
                         subtitle: "Both",
-                        shortcut: "⌘3 or ↵",
+                        shortcut: "⌘3",
                         color: currentTheme.buttonColors.both,
                         isPrimary: false,
                         isFocused: focusedButton == .both,
@@ -221,6 +381,7 @@ struct ContentView: View {
                     .onHover { hovering in
                         if hovering {
                             focusedButton = nil // Clear keyboard focus on mouse hover
+                            mainViewFocused = true // Keep main view focused for arrow keys
                             isKeyboardMode = false
                         }
                         hoverInfo = hovering ?
@@ -252,7 +413,7 @@ struct ContentView: View {
                 VStack(spacing: 8) {
                     FocusableNavButton(
                         icon: "number.circle",
-                        title: "Docket Lookup",
+                        title: "Job Info",
                         shortcut: "⌘D",
                         isFocused: focusedButton == .docketLookup,
                         showShortcut: isKeyboardMode,
@@ -263,6 +424,7 @@ struct ContentView: View {
                     .onHover { hovering in
                         if hovering {
                             focusedButton = nil
+                            mainViewFocused = true
                             isKeyboardMode = false
                         }
                     }
@@ -270,7 +432,7 @@ struct ContentView: View {
 
                     FocusableNavButton(
                         icon: "magnifyingglass",
-                        title: "Search Sessions",
+                        title: "Search",
                         shortcut: "⌘F",
                         isFocused: focusedButton == .searchSessions,
                         showShortcut: isKeyboardMode,
@@ -281,6 +443,7 @@ struct ContentView: View {
                     .onHover { hovering in
                         if hovering {
                             focusedButton = nil
+                            mainViewFocused = true
                             isKeyboardMode = false
                         }
                     }
@@ -299,6 +462,7 @@ struct ContentView: View {
                     .onHover { hovering in
                         if hovering {
                             focusedButton = nil
+                            mainViewFocused = true
                             isKeyboardMode = false
                         }
                     }
@@ -337,12 +501,12 @@ struct ContentView: View {
             .padding(.top, 8)
             .padding(.trailing, 16)
         }
+    }
 
-            if isStagingAreaVisible {
-                Divider()
+    // MARK: - Staging Area View
 
-                // MARK: - Main Content Area
-                VStack(alignment: .leading, spacing: 0) {
+    private var stagingAreaView: some View {
+        VStack(alignment: .leading, spacing: 0) {
                 // Header
                 HStack {
                     HStack(spacing: 8) {
@@ -450,7 +614,13 @@ struct ContentView: View {
                     handleFileDrop(providers: providers)
                     return true
                 }
-                .cursor(.pointingHand)
+                .onHover { hovering in
+                    if hovering {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
 
                 // Status Bar
                 HStack {
@@ -501,160 +671,9 @@ struct ContentView: View {
                 }
                 .padding()
                 .background(Color(nsColor: .controlBackgroundColor))
-            }
-            }
-        }
-        .frame(width: isStagingAreaVisible ? 650 : 300, height: 550)
-        .focusable()
-        .focused($mainViewFocused)
-        .focusEffectDisabled()
-        .onKeyPress(.leftArrow) {
-            moveFocus(direction: -1)
-            return .handled
-        }
-        .onKeyPress(.rightArrow) {
-            moveFocus(direction: 1)
-            return .handled
-        }
-        .onKeyPress(.upArrow) {
-            moveFocus(direction: -1)
-            return .handled
-        }
-        .onKeyPress(.downArrow) {
-            moveFocus(direction: 1)
-            return .handled
-        }
-        .onKeyPress(.return) {
-            activateFocusedButton()
-            return .handled
-        }
-        .onKeyPress(.space) {
-            activateFocusedButton()
-            return .handled
-        }
-        .alert("Missing Information", isPresented: $showAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(alertMessage)
-        }
-        .alert("Error", isPresented: $manager.showError) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            if let errorMessage = manager.errorMessage {
-                Text(errorMessage)
-            }
-        }
-        .sheet(isPresented: $showNewDocketSheet) {
-            NewDocketView(
-                isPresented: $showNewDocketSheet,
-                selectedDocket: $selectedDocket,
-                manager: manager,
-                settingsManager: settingsManager
-            )
-        }
-        .sheet(isPresented: $showSearchSheet) {
-            SearchView(manager: manager, isPresented: $showSearchSheet, initialText: initialSearchText)
-        }
-        // New Docket Selection Sheet
-        .sheet(isPresented: $showDocketSelectionSheet) {
-            DocketSearchView(
-                manager: manager,
-                settingsManager: settingsManager,
-                isPresented: $showDocketSelectionSheet,
-                selectedDocket: $selectedDocket,
-                onConfirm: {
-                    // Execute pending job once docket is selected
-                    if let type = pendingJobType {
-                        manager.runJob(
-                            type: type,
-                            docket: selectedDocket,
-                            wpDate: wpDate,
-                            prepDate: prepDate
-                        )
-                        pendingJobType = nil
-                    }
-                }
-            )
-        }
-        .onChange(of: showSearchSheet) { oldValue, newValue in
-            if !newValue {
-                // Clear initial search text and refocus main view when search closes
-                initialSearchText = ""
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    mainViewFocused = true
-                }
-            }
-        }
-        .onChange(of: showSettingsSheet) { oldValue, newValue in
-            if !newValue {
-                // Refocus main view when settings closes
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    mainViewFocused = true
-                }
-            }
-        }
-        .onChange(of: manager.selectedFiles.count) { oldValue, newValue in
-            // Auto-focus first button when files are added
-            if newValue > 0 && focusedButton == nil {
-                focusedButton = .file
-            }
-        }
-        .onKeyPress { press in
-            // Enable keyboard mode on Tab key
-            if press.key == .tab {
-                isKeyboardMode = true
-            }
-
-            // Only handle typing when no sheets are open
-            guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
-                return .ignored
-            }
-
-            // Auto-search when typing in main view - opens quick docket search
-            if press.characters.count == 1 {
-                let char = press.characters.first!
-                if char.isLetter || char.isNumber {
-                    initialSearchText = String(char)
-                    showQuickSearchSheet = true
-                    isKeyboardMode = true
-                    return .handled
-                }
-            }
-            return .ignored
-        }
-        .onChange(of: focusedButton) { oldValue, newValue in
-            // Enable keyboard mode when focus changes via keyboard
-            if newValue != nil {
-                isKeyboardMode = true
-            }
-        }
-        .sheet(isPresented: $showQuickSearchSheet) {
-            QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager)
-        }
-        .onChange(of: showQuickSearchSheet) { oldValue, newValue in
-            if !newValue {
-                // Clear initial search text and refocus when quick search closes
-                initialSearchText = ""
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    focusedButton = .file
-                }
-            }
-        }
-        .sheet(isPresented: $showSettingsSheet) {
-            SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
-        }
-        .onChange(of: settingsManager.currentSettings) { oldValue, newValue in
-            // Update manager's config when settings change
-            manager.updateConfig(settings: newValue)
-        }
-        .onAppear {
-            // Auto-focus first action button for keyboard navigation
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                focusedButton = .file
-            }
         }
     }
-    
+
     // MARK: - Helper Methods
     
     private func getIcon(_ url: URL) -> NSImage {
@@ -908,29 +927,36 @@ struct ActionButtonWithShortcut: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: isPrimary ? 6 : 4) {
-                Text(title)
-                    .font(buttonTitleFont)
-                    .foregroundColor(theme.textColor)
-                    .shadow(color: theme.textShadowColor ?? .clear, radius: 2, x: 1, y: 1)
-                    .rotationEffect(theme == .cursed ? .degrees(Double.random(in: -5...5)) : .degrees(0))
+            ZStack {
+                // Main content - centered
+                VStack(spacing: isPrimary ? 6 : 4) {
+                    Text(title)
+                        .font(buttonTitleFont)
+                        .foregroundColor(theme.textColor)
+                        .shadow(color: theme.textShadowColor ?? .clear, radius: 2, x: 1, y: 1)
+                        .rotationEffect(theme == .cursed ? .degrees(Double.random(in: -5...5)) : .degrees(0))
 
-                if isPrimary {
-                    Text(subtitle)
-                        .font(buttonSubtitleFont)
-                        .foregroundColor(theme.textColor.opacity(0.8))
-                        .shadow(color: theme.textShadowColor ?? .clear, radius: 1, x: 1, y: 1)
+                    if isPrimary {
+                        Text(subtitle)
+                            .font(buttonSubtitleFont)
+                            .foregroundColor(theme.textColor.opacity(0.8))
+                            .shadow(color: theme.textShadowColor ?? .clear, radius: 1, x: 1, y: 1)
+                    }
                 }
 
-                if showShortcut {
+                // Shortcut - positioned on the right side
+                HStack {
+                    Spacer()
                     Text(shortcut)
                         .font(theme == .cursed ? .system(size: 9, weight: .heavy, design: .monospaced) : .system(size: isPrimary ? 11 : 10, weight: .medium, design: .monospaced))
-                        .foregroundColor(theme.textColor.opacity(0.7))
+                        .foregroundColor(theme.textColor.opacity(showShortcut ? 0.7 : 0.0))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.2))
+                        .background(Color.black.opacity(showShortcut ? 0.2 : 0.0))
                         .cornerRadius(4)
+                        .opacity(showShortcut ? 1 : 0)
                 }
+                .padding(.trailing, 12)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, isPrimary ? 16 : 12)
@@ -1529,6 +1555,7 @@ struct DocketSearchView: View {
 
 struct SearchView: View {
     @ObservedObject var manager: MediaManager
+    @ObservedObject var settingsManager: SettingsManager
     @Binding var isPresented: Bool
     let initialText: String
     @State private var searchText: String
@@ -1537,16 +1564,30 @@ struct SearchView: View {
     @State private var selectedPath: String?
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
+    @State private var selectedFolder: SearchFolder
     @FocusState private var isSearchFieldFocused: Bool
     @FocusState private var isListFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
+
+    // Cache search results for all folders
+    @State private var cachedResults: [SearchFolder: (exact: [String], fuzzy: [String])] = [:]
 
     // Custom initializer to set searchText immediately
-    init(manager: MediaManager, isPresented: Binding<Bool>, initialText: String) {
+    init(manager: MediaManager, settingsManager: SettingsManager, isPresented: Binding<Bool>, initialText: String) {
         self.manager = manager
+        self.settingsManager = settingsManager
         self._isPresented = isPresented
         self.initialText = initialText
         // Initialize searchText with initialText so it's set before the view appears
         self._searchText = State(initialValue: initialText)
+
+        // Initialize selected folder based on settings
+        let settings = settingsManager.currentSettings
+        if settings.searchFolderPreference == .rememberLast, let lastUsed = settings.lastUsedSearchFolder {
+            self._selectedFolder = State(initialValue: lastUsed)
+        } else {
+            self._selectedFolder = State(initialValue: settings.defaultSearchFolder)
+        }
     }
 
     // MARK: Grouping Helper
@@ -1588,7 +1629,48 @@ struct SearchView: View {
     var groupedFuzzyResults: [YearSection] {
         groupByYear(fuzzyResults)
     }
-    
+
+    private func folderButton(_ folder: SearchFolder) -> some View {
+        let isSelected = selectedFolder == folder
+        return Button(action: {
+            selectedFolder = folder
+            if settingsManager.currentSettings.searchFolderPreference == .rememberLast {
+                settingsManager.currentSettings.lastUsedSearchFolder = folder
+                settingsManager.saveCurrentProfile()
+            }
+            // Switch to cached results (instant) and maintain focus
+            updateDisplayedResults()
+            isSearchFieldFocused = true
+            isListFocused = false
+
+            // Aggressively restore focus with delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                isSearchFieldFocused = true
+                isListFocused = false
+            }
+        }) {
+            Text(folder.displayName)
+                .font(.system(size: 11))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(isSelected ? Color.accentColor : Color.clear)
+                .foregroundColor(isSelected ? .white : .primary)
+                .cornerRadius(4)
+        }
+        .buttonStyle(.plain)
+    }
+
+    var folderSelectorView: some View {
+        HStack(spacing: 4) {
+            ForEach(SearchFolder.allCases, id: \.self) { folder in
+                folderButton(folder)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // MARK: Search Bar
@@ -1599,7 +1681,7 @@ struct SearchView: View {
                 NoSelectTextField(
                     text: $searchText,
                     placeholder: manager.isIndexing ? "Building search index..." : "Search sessions...",
-                    isEnabled: !manager.isIndexing,
+                    isEnabled: true,
                     onSubmit: {
                         openInFinder()
                     },
@@ -1625,7 +1707,36 @@ struct SearchView: View {
             }
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
-            
+
+            // MARK: Status Bar (Indexing Progress)
+            if manager.isIndexing || isSearching {
+                VStack(spacing: 4) {
+                    HStack(spacing: 6) {
+                        if manager.isIndexing {
+                            Text("Indexing: \(manager.indexingFolders.map(\.displayName).sorted().joined(separator: ", "))")
+                                .font(.system(size: 10))
+                                .foregroundColor(.orange)
+                        } else if isSearching {
+                            Text("Searching...")
+                                .font(.system(size: 10))
+                                .foregroundColor(.blue)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+
+                    // Subtle progress bar
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .scaleEffect(y: 0.5)
+                }
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            }
+
+            // MARK: Folder Selector
+            folderSelectorView
+
             Divider()
             
             // MARK: Results List
@@ -1783,15 +1894,53 @@ struct SearchView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(width: 650, height: 500)
-        .onChange(of: manager.isIndexing) { oldValue, newValue in
-            // Auto-focus search field when indexing completes
-            if oldValue && !newValue {
+        .onAppear {
+            // Set initial focus when view appears
+            isSearchFieldFocused = true
+            isListFocused = false
+
+            // Pre-index all folders for instant switching
+            manager.buildAllFolderIndexes()
+
+            // Perform initial search if there's text
+            if !searchText.isEmpty {
+                performSearch()
+            }
+        }
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            // Restore focus when window becomes active
+            if newPhase == .active {
                 isSearchFieldFocused = true
                 isListFocused = false
             }
         }
+        .onChange(of: manager.isIndexing) { oldValue, newValue in
+            // When indexing completes, re-run search if there's text
+            if oldValue && !newValue {
+                isSearchFieldFocused = true
+                isListFocused = false
+
+                // Re-search with existing text if any
+                if !searchText.isEmpty {
+                    performSearch(immediate: true)
+                }
+            }
+        }
         .onDisappear {
             searchTask?.cancel()
+        }
+        // Folder Cycling with Cmd+Arrow - MUST BE FIRST to capture before other handlers
+        .onKeyPress { press in
+            if press.modifiers.contains(.command) {
+                if press.key == .leftArrow {
+                    cycleFolder(direction: -1)
+                    return .handled
+                } else if press.key == .rightArrow {
+                    cycleFolder(direction: 1)
+                    return .handled
+                }
+            }
+            return .ignored
         }
         // Native Keyboard Navigation
         .onKeyPress(.upArrow) {
@@ -1855,36 +2004,67 @@ struct SearchView: View {
     }
     
     // MARK: - Helper Methods
-    
-    private func performSearch() {
+
+    private func performSearch(immediate: Bool = false) {
         // Cancel previous search
         searchTask?.cancel()
 
         selectedPath = nil
 
-        // Debounce search
         searchTask = Task {
-            // Shorter debounce for faster response
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-            guard !Task.isCancelled else { return }
+            // Debounce search only when typing (not when changing folders)
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                guard !Task.isCancelled else { return }
+            }
 
-            // Set searching state after debounce (reduces UI updates)
+            // Set searching state
             await MainActor.run {
                 isSearching = true
             }
 
-            let searchResults = await manager.searchSessions(term: searchText)
+            // Search all folders simultaneously
+            let currentSearchText = searchText
+            async let workPictureResults = manager.searchSessions(term: currentSearchText, folder: .workPicture)
+            async let mediaPostingsResults = manager.searchSessions(term: currentSearchText, folder: .mediaPostings)
+            async let sessionsResults = manager.searchSessions(term: currentSearchText, folder: .sessions)
+
+            let allResults = await (workPictureResults, mediaPostingsResults, sessionsResults)
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
-                exactResults = searchResults.exactMatches
-                fuzzyResults = searchResults.fuzzyMatches
-                isSearching = false
+                // Cache all results
+                cachedResults[.workPicture] = (allResults.0.exactMatches, allResults.0.fuzzyMatches)
+                cachedResults[.mediaPostings] = (allResults.1.exactMatches, allResults.1.fuzzyMatches)
+                cachedResults[.sessions] = (allResults.2.exactMatches, allResults.2.fuzzyMatches)
 
-                // Auto-select first result (prefer exact matches)
-                if let firstResult = searchResults.exactMatches.first ?? searchResults.fuzzyMatches.first {
-                    selectedPath = firstResult
-                }
+                // Display results for currently selected folder
+                updateDisplayedResults()
+                isSearching = false
+            }
+        }
+    }
+
+    private func updateDisplayedResults() {
+        if let cached = cachedResults[selectedFolder] {
+            exactResults = cached.exact
+            fuzzyResults = cached.fuzzy
+
+            // Auto-select first result (prefer exact matches)
+            if let firstResult = cached.exact.first ?? cached.fuzzy.first {
+                selectedPath = firstResult
+            } else {
+                selectedPath = nil
+            }
+        } else {
+            // No cached results for this folder yet
+            exactResults = []
+            fuzzyResults = []
+            selectedPath = nil
+
+            // If there's text to search, trigger a quiet background search
+            if !searchText.isEmpty && !isSearching {
+                performSearch(immediate: true)
             }
         }
     }
@@ -1917,6 +2097,31 @@ struct SearchView: View {
             selectedPath = allResults[newIndex]
         } else {
             selectedPath = allResults.first
+        }
+    }
+
+    private func cycleFolder(direction: Int) {
+        let allFolders = SearchFolder.allCases
+        guard let currentIndex = allFolders.firstIndex(of: selectedFolder) else { return }
+
+        let newIndex = (currentIndex + direction + allFolders.count) % allFolders.count
+        selectedFolder = allFolders[newIndex]
+
+        // Save to settings if remember last is enabled
+        if settingsManager.currentSettings.searchFolderPreference == .rememberLast {
+            settingsManager.currentSettings.lastUsedSearchFolder = selectedFolder
+            settingsManager.saveCurrentProfile()
+        }
+
+        // Switch to cached results (instant) and maintain focus
+        updateDisplayedResults()
+
+        // Aggressively restore focus with delay to ensure it sticks
+        isSearchFieldFocused = true
+        isListFocused = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+            isSearchFieldFocused = true
+            isListFocused = false
         }
     }
 }

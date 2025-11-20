@@ -163,28 +163,70 @@ enum MediaLogic {
         return results
     }
     
-    nonisolated static func buildIndex(config: AppConfig) -> [String] {
-        let base = URL(fileURLWithPath: config.sessionsBasePath)
+    nonisolated static func buildIndex(config: AppConfig, folder: SearchFolder = .sessions) -> [String] {
         var index: [String] = []
         let fm = FileManager.default
-        var isDir: ObjCBool = false
-        if fm.fileExists(atPath: base.path, isDirectory: &isDir) {
-            do {
-                let contents = try fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)
-                let years = contents.filter { $0.lastPathComponent.contains("_PROTOOLS SESSIONS") }
-                for year in years {
-                    if let sessions = try? fm.contentsOfDirectory(at: year, includingPropertiesForKeys: nil) {
-                        for sess in sessions {
-                            if sess.hasDirectoryPath && !sess.lastPathComponent.hasPrefix(".") {
-                                index.append(sess.path)
+
+        switch folder {
+        case .sessions:
+            let base = URL(fileURLWithPath: config.sessionsBasePath)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: base.path, isDirectory: &isDir) {
+                do {
+                    let contents = try fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)
+                    let years = contents.filter { $0.lastPathComponent.contains("_PROTOOLS SESSIONS") }
+                    for year in years {
+                        if let sessions = try? fm.contentsOfDirectory(at: year, includingPropertiesForKeys: nil) {
+                            for sess in sessions {
+                                if sess.hasDirectoryPath && !sess.lastPathComponent.hasPrefix(".") {
+                                    index.append(sess.path)
+                                }
+                            }
+                        }
+                    }
+                } catch {
+                    print("Error building session index: \(error.localizedDescription)")
+                }
+            }
+
+        case .workPicture:
+            // Dynamically find all Work Picture folders across years
+            let baseGM = URL(fileURLWithPath: "/Volumes/Grayson Assets/GM")
+            if let yearFolders = try? fm.contentsOfDirectory(at: baseGM, includingPropertiesForKeys: nil) {
+                for yearFolder in yearFolders where yearFolder.lastPathComponent.hasPrefix("GM_") {
+                    let workPicPath = yearFolder.appendingPathComponent(yearFolder.lastPathComponent.replacingOccurrences(of: "GM_", with: "") + "_WORK PICTURE")
+                    if fm.fileExists(atPath: workPicPath.path) {
+                        if let sessions = try? fm.contentsOfDirectory(at: workPicPath, includingPropertiesForKeys: nil) {
+                            for sess in sessions {
+                                if sess.hasDirectoryPath && !sess.lastPathComponent.hasPrefix(".") {
+                                    index.append(sess.path)
+                                }
                             }
                         }
                     }
                 }
-            } catch {
-                print("Error building session index: \(error.localizedDescription)")
+            }
+
+        case .mediaPostings:
+            let baseMedia = URL(fileURLWithPath: "/Volumes/Grayson Assets/MEDIA/MEDIA POSTINGS")
+            if fm.fileExists(atPath: baseMedia.path) {
+                if let yearFolders = try? fm.contentsOfDirectory(at: baseMedia, includingPropertiesForKeys: nil) {
+                    for yearFolder in yearFolders {
+                        if yearFolder.hasDirectoryPath && !yearFolder.lastPathComponent.hasPrefix(".") {
+                            // Index folders within each year folder
+                            if let sessions = try? fm.contentsOfDirectory(at: yearFolder, includingPropertiesForKeys: nil) {
+                                for sess in sessions {
+                                    if sess.hasDirectoryPath && !sess.lastPathComponent.hasPrefix(".") {
+                                        index.append(sess.path)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
+
         return index
     }
     
@@ -215,12 +257,14 @@ class MediaManager: ObservableObject {
     @Published var isProcessing: Bool = false
     @Published var cancelRequested: Bool = false
     @Published var progress: Double = 0
-    @Published var isIndexing: Bool = false
+    @Published var isIndexing: Bool = false // Computed from indexingFolders
     @Published var isScanningDockets: Bool = false
     @Published var errorMessage: String?
     @Published var showError: Bool = false
+    @Published var indexingFolders: Set<SearchFolder> = [] // Track which folders are being indexed
 
-    private var cachedSessions: [String] = []
+    private var cachedSessions: [String] = [] // Legacy - for backward compatibility
+    private var folderCaches: [SearchFolder: [String]] = [:] // New cache system
     private var finderScript: NSAppleScript?
     private var config: AppConfig
 
@@ -262,30 +306,58 @@ class MediaManager: ObservableObject {
         }
     }
     
-    func buildSessionIndex() {
-        guard !isIndexing else { return }
-        isIndexing = true
+    func buildSessionIndex(folder: SearchFolder = .sessions) {
+        // Skip if this folder is already being indexed or is already cached
+        guard !indexingFolders.contains(folder) && folderCaches[folder] == nil else { return }
+
+        indexingFolders.insert(folder)
+        isIndexing = !indexingFolders.isEmpty
+
         let currentConfig = self.config
         Task.detached(priority: .userInitiated) {
-            let index = MediaLogic.buildIndex(config: currentConfig)
+            let index = MediaLogic.buildIndex(config: currentConfig, folder: folder)
             await MainActor.run {
-                self.cachedSessions = index
-                self.isIndexing = false
+                self.folderCaches[folder] = index
+                // Also update legacy cache if it's sessions folder
+                if folder == .sessions {
+                    self.cachedSessions = index
+                }
+                self.indexingFolders.remove(folder)
+                self.isIndexing = !self.indexingFolders.isEmpty
             }
         }
     }
-    
-    func searchSessions(term: String) async -> SearchResults {
-        if cachedSessions.isEmpty { buildSessionIndex() }
+
+    // Index all folders at once
+    func buildAllFolderIndexes() {
+        for folder in SearchFolder.allCases {
+            buildSessionIndex(folder: folder)
+        }
+    }
+
+    func searchSessions(term: String, folder: SearchFolder = .sessions) async -> SearchResults {
+        // Build index for this folder if not cached
+        if folderCaches[folder] == nil { buildSessionIndex(folder: folder) }
         if term.isEmpty { return SearchResults(exactMatches: [], fuzzyMatches: []) }
 
-        let currentCache = cachedSessions
+        let currentCache = folderCaches[folder] ?? []
         let fuzzyEnabled = config.settings.enableFuzzySearch
         return await Task.detached(priority: .userInitiated) {
             let lower = term.localizedLowercase
+            let searchWords = lower.split(separator: " ").map(String.init)
 
-            // 1. Exact matches (contains) - highest priority
-            let exactMatches = currentCache.filter { $0.lowercased().contains(lower) }
+            // 1. Exact matches - check if all words are present (in any order)
+            let exactMatches = currentCache.filter { path in
+                let pathLower = path.lowercased()
+                // If single word or exact phrase match, use contains
+                if searchWords.count == 1 || pathLower.contains(lower) {
+                    return pathLower.contains(lower)
+                }
+                // For multiple words, check if ALL words are present (in any order)
+                return searchWords.allSatisfy { word in
+                    pathLower.contains(word)
+                }
+            }
 
             // 2. Fuzzy matches - catch typos and spacing differences (if enabled)
             let fuzzyMatches: [String]

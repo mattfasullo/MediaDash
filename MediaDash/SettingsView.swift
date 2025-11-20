@@ -227,12 +227,12 @@ struct PathSettingsSection: View {
 
                 Divider()
 
-                // Docket Lookup Source
+                // Job Info Source
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Docket Lookup Source")
+                    Text("Job Info Source")
                         .font(.subheadline)
                         .fontWeight(.medium)
-                    Text("Choose where to load docket information from")
+                    Text("Choose where to load job information from")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Picker("", selection: Binding(
@@ -771,6 +771,64 @@ struct AdvancedSettingsSection: View {
                         }
                     }
                     .toggleStyle(.switch)
+
+                    // Default Search Folder
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Default Search Folder")
+                            .font(.callout)
+                            .padding(.top, 8)
+                        Picker("", selection: Binding(
+                            get: { settings.defaultSearchFolder },
+                            set: {
+                                settings.defaultSearchFolder = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            ForEach(SearchFolder.allCases, id: \.self) { folder in
+                                Text(folder.displayName).tag(folder)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    // Search Folder Preference
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Folder Selection Behavior")
+                            .font(.callout)
+                            .padding(.top, 8)
+                        Picker("", selection: Binding(
+                            get: { settings.searchFolderPreference },
+                            set: {
+                                settings.searchFolderPreference = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            Text(SearchFolderPreference.rememberLast.rawValue).tag(SearchFolderPreference.rememberLast)
+                            Text(SearchFolderPreference.alwaysUseDefault.rawValue).tag(SearchFolderPreference.alwaysUseDefault)
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    // Default Quick Search
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Quick Search (Typing)")
+                            .font(.callout)
+                            .padding(.top, 8)
+                        Text("What opens when you start typing")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Picker("", selection: Binding(
+                            get: { settings.defaultQuickSearch },
+                            set: {
+                                settings.defaultQuickSearch = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            Text("Search").tag(DefaultQuickSearch.search)
+                            Text("Job Info").tag(DefaultQuickSearch.jobInfo)
+                        }
+                        .pickerStyle(.segmented)
+                    }
                 }
 
                 Divider()
