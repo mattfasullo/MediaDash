@@ -82,6 +82,13 @@ struct SettingsView: View {
 
             // Footer with Save/Reset buttons
             HStack {
+                // Version number
+                if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                    Text("Version \(version)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 Button("Reset to Defaults") {
                     settings = .default
                     hasUnsavedChanges = true
@@ -872,6 +879,32 @@ struct AdvancedSettingsSection: View {
                             Text("Skip Canadian Holidays")
                                 .font(.callout)
                             Text("If next day is a holiday on Thu/Fri, skip to Tuesday")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
+
+                Divider()
+
+                // Workflow Options
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Workflow")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+
+                    Toggle(isOn: Binding(
+                        get: { settings.openPrepFolderWhenDone },
+                        set: {
+                            settings.openPrepFolderWhenDone = $0
+                            hasUnsavedChanges = true
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Open Prep Folder When Done")
+                                .font(.callout)
+                            Text("Automatically opens the prep folder in Finder after prep completes")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
