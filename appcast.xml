@@ -9,14 +9,14 @@
             <description><![CDATA[
                 <p>General feature updates</p>
             ]]></description>
-            <pubDate>Wed, 20 Nov 2024 20:00:00 +0000</pubDate>
+            <pubDate>Thu, 20 Nov 2025 20:09:51 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.1.2/MediaDash.zip"
                 sparkle:version="0.1.2"
                 sparkle:shortVersionString="0.1.2"
-                sparkle:edSignature="wsgE51Ui+SXFUZg/D61CFi4JaZTbdSgbnwNNq+ooksD3HpkfVz+FCIKenGPiaJWMkwVFF/ZBwPIcxHRpMPdcCA=="
-                length="2387154"
+                sparkle:edSignature="sparkle:edSignature="ivvFj7zgyOCma3AVXrL7dfUF9YM+/FwPVPaWgfg3MWhwmFziJ1iq+rfxlyzL2wcy853ZzuXwQcgy5hWixonjBA==" length="2400828""
+                length="2400828"
                 type="application/octet-stream"
             />
         </item>
