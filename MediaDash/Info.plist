@@ -2,17 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>SUAllowsAutomaticUpdates</key>
-	<true/>
-	<key>SUAutomaticallyUpdate</key>
-	<false/>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>mkwmbcnLrJH+vvLx8Y4rs6OfEEU11wSA3b+ea84rZbQ=</string>
-	<key>SUScheduledCheckInterval</key>
-	<integer>86400</integer>
+	<string>https://raw.githubusercontent.com/mattfasullo/MediaDash/refs/heads/claude/connect-local-repo-01CPxkYmhD3wBLCZhFMohevC/appcast.xml?token=GHSAT0AAAAAADPSOP6AM2RDNBL3U5J3C2B22I7PTCQ</string>
 </dict>
 </plist>

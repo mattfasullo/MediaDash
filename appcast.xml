@@ -5,18 +5,18 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
-            <title>Version 0.1.2</title>
+            <title>Version 0.1.3</title>
             <description><![CDATA[
-                <p>General feature updates</p>
+                <p>Added auto-open prep folder setting (enabled by default)</p>
             ]]></description>
-            <pubDate>Thu, 20 Nov 2025 20:09:51 +0000</pubDate>
+            <pubDate>Thu, 20 Nov 2025 20:26:06 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
-                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.1.2/MediaDash.zip"
-                sparkle:version="0.1.2"
-                sparkle:shortVersionString="0.1.2"
-                sparkle:edSignature="sparkle:edSignature="ivvFj7zgyOCma3AVXrL7dfUF9YM+/FwPVPaWgfg3MWhwmFziJ1iq+rfxlyzL2wcy853ZzuXwQcgy5hWixonjBA==" length="2400828""
-                length="2400828"
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.1.3/MediaDash.zip"
+                sparkle:version="0.1.3"
+                sparkle:shortVersionString="0.1.3"
+                sparkle:edSignature="sparkle:edSignature="4winllmU4Z2I8acmWqIRod+MzWbvglChn04jVgn1L7u3zRgPQKkCTaopY6MkAEbhF3S4JCZfItLXzb1XNj2LAQ==" length="2400424""
+                length="2400424"
                 type="application/octet-stream"
             />
         </item>

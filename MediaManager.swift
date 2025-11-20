@@ -793,11 +793,14 @@ class MediaManager: ObservableObject {
                 }
             }
             
+            var prepDestinationFolder: URL? = nil
+
             if type == .prep || type == .both {
                 await MainActor.run { self.statusMessage = "Prepping..." }
                 let dateStr = self.formatDate(prepDate)
                 let folder = "\(docket)_PREP_\(dateStr)"
                 let root = paths.prep.appendingPathComponent(folder)
+                prepDestinationFolder = root
                 do {
                     try fm.createDirectory(at: root, withIntermediateDirectories: true)
                 } catch {
@@ -930,6 +933,7 @@ class MediaManager: ObservableObject {
 
             // Capture failedFiles before entering MainActor context
             let finalFailedFiles = failedFiles
+            let prepFolderToOpen = prepDestinationFolder
 
             let wasCancelled = await self.cancelRequested
 
@@ -943,6 +947,11 @@ class MediaManager: ObservableObject {
                 if finalFailedFiles.isEmpty {
                     self.statusMessage = "Done!"
                     NSSound(named: "Glass")?.play()
+
+                    // Open prep folder if setting is enabled
+                    if let prepFolder = prepFolderToOpen, self.config.settings.openPrepFolderWhenDone {
+                        NSWorkspace.shared.open(prepFolder)
+                    }
                 } else {
                     self.statusMessage = "Completed with \(finalFailedFiles.count) error(s)"
                     self.errorMessage = "Failed to copy these files:\n\(finalFailedFiles.joined(separator: "\n"))"

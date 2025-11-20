@@ -49,8 +49,6 @@ xcodebuild -project "$PROJECT" \
     -configuration Release \
     -archivePath "$RELEASE_DIR/$APP_NAME.xcarchive" \
     archive \
-    CODE_SIGN_IDENTITY="-" \
-    CODE_SIGN_STYLE=Automatic \
     > "$RELEASE_DIR/build.log" 2>&1
 
 if [ $? -ne 0 ]; then
@@ -69,6 +67,8 @@ cat > "$RELEASE_DIR/export_options.plist" <<EOF
     <string>mac-application</string>
     <key>signingStyle</key>
     <string>automatic</string>
+    <key>signingCertificate</key>
+    <string>Apple Development</string>
 </dict>
 </plist>
 EOF
