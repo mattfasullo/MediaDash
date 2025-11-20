@@ -13,7 +13,7 @@ struct MediaDashApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            GatekeeperView()
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)

@@ -337,11 +337,25 @@ struct AppSettings: Codable, Equatable {
     // Prep Workflow Settings
     var openPrepFolderWhenDone: Bool
 
+    // CSV Column Names
+    var csvDocketColumn: String
+    var csvProjectTitleColumn: String
+    var csvClientColumn: String
+    var csvProducerColumn: String
+    var csvStatusColumn: String
+    var csvLicenseTotalColumn: String
+    var csvCurrencyColumn: String
+    var csvAgencyColumn: String
+    var csvAgencyProducerColumn: String
+    var csvMusicTypeColumn: String
+    var csvTrackColumn: String
+    var csvMediaColumn: String
+
     static var `default`: AppSettings {
         AppSettings(
             profileName: "Default",
-            serverBasePath: "/Volumes/Grayson Assets/GM",
-            sessionsBasePath: "/Volumes/Grayson Assets/SESSIONS",
+            serverBasePath: "",
+            sessionsBasePath: "",
             docketSource: .csv,
             appTheme: .modern,
             workPictureFolderName: "WORK PICTURE",
@@ -365,7 +379,19 @@ struct AppSettings: Codable, Equatable {
             skipWeekends: true,
             skipHolidays: true,
             customHolidays: [],
-            openPrepFolderWhenDone: true
+            openPrepFolderWhenDone: true,
+            csvDocketColumn: "Docket",
+            csvProjectTitleColumn: "Licensor/Project Title",
+            csvClientColumn: "Client",
+            csvProducerColumn: "Grayson Producer",
+            csvStatusColumn: "STATUS",
+            csvLicenseTotalColumn: "Music License Totals",
+            csvCurrencyColumn: "Currency",
+            csvAgencyColumn: "Agency",
+            csvAgencyProducerColumn: "Agency Producer / Supervisor",
+            csvMusicTypeColumn: "Music Type",
+            csvTrackColumn: "Track",
+            csvMediaColumn: "Media"
         )
     }
 }
@@ -396,6 +422,12 @@ class SettingsManager: ObservableObject {
             self.availableProfiles = ["Default"]
             saveProfile(settings: .default, name: "Default")
         }
+    }
+
+    // Custom init for workspace profiles
+    init(settings: AppSettings) {
+        self.currentSettings = settings
+        self.availableProfiles = []
     }
 
     func saveCurrentProfile() {

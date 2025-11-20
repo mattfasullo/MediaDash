@@ -4,9 +4,10 @@ import Combine
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @StateObject var settingsManager = SettingsManager()
-    @StateObject var metadataManager = DocketMetadataManager()
-    @StateObject var manager: MediaManager
+    @EnvironmentObject var settingsManager: SettingsManager
+    @EnvironmentObject var metadataManager: DocketMetadataManager
+    @EnvironmentObject var manager: MediaManager
+    @EnvironmentObject var sessionManager: SessionManager
     @State private var selectedDocket: String = ""
     @State private var showNewDocketSheet = false
     @State private var showSearchSheet = false
@@ -99,14 +100,6 @@ struct ContentView: View {
         }
     }
 
-    init() {
-        let settings = SettingsManager()
-        let metadata = DocketMetadataManager()
-        _settingsManager = StateObject(wrappedValue: settings)
-        _metadataManager = StateObject(wrappedValue: metadata)
-        _manager = StateObject(wrappedValue: MediaManager(settingsManager: settings, metadataManager: metadata))
-    }
-    
     // Computed dates - File is always today, Prep is next business day
     private var wpDate: Date {
         Date()
@@ -148,22 +141,22 @@ struct ContentView: View {
         .focusEffectDisabled()
         .onKeyPress(.leftArrow) {
             isKeyboardMode = true
-            moveFocus(direction: -1)
+            moveGridFocus(direction: .left)
             return .handled
         }
         .onKeyPress(.rightArrow) {
             isKeyboardMode = true
-            moveFocus(direction: 1)
+            moveGridFocus(direction: .right)
             return .handled
         }
         .onKeyPress(.upArrow) {
             isKeyboardMode = true
-            moveFocus(direction: -1)
+            moveGridFocus(direction: .up)
             return .handled
         }
         .onKeyPress(.downArrow) {
             isKeyboardMode = true
-            moveFocus(direction: 1)
+            moveGridFocus(direction: .down)
             return .handled
         }
         .onKeyPress(.return) {
@@ -313,6 +306,7 @@ struct ContentView: View {
         }
         .onChange(of: settingsManager.currentSettings) { oldValue, newValue in
             manager.updateConfig(settings: newValue)
+            metadataManager.updateSettings(newValue)
         }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -335,7 +329,7 @@ struct ContentView: View {
 
     private var sidebarView: some View {
         ZStack(alignment: .topTrailing) {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 12) {
                     // App Logo (clickable Easter egg)
                     Image("HeaderLogo")
                         .resizable()
@@ -353,129 +347,141 @@ struct ContentView: View {
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.bottom, 10)
-                
-                // MARK: Action Buttons
-                VStack(spacing: 10) {
-                    ActionButtonWithShortcut(
-                        title: "File",
-                        subtitle: "Work Picture",
-                        shortcut: "⌘1",
-                        color: currentTheme.buttonColors.file,
-                        isPrimary: false,
-                        isFocused: focusedButton == .file,
-                        showShortcut: isCommandKeyHeld,
-                        theme: currentTheme
-                    ) {
-                        attempt(type: .workPicture)
-                    }
-                    .focused($focusedButton, equals: .file)
-                    .focusEffectDisabled()
-                    .onHover { hovering in
-                        if hovering {
-                            focusedButton = nil // Clear keyboard focus on mouse hover
-                            mainViewFocused = true // Keep main view focused for arrow keys
-                            isKeyboardMode = false
-                        }
-                        hoverInfo = hovering ?
-                            "Files to Work Picture (\(dateFormatter.string(from: wpDate)))" :
-                            "Ready."
-                    }
-                    .keyboardShortcut("1", modifiers: .command)
+                        .padding(.bottom, 4)
 
-                    ActionButtonWithShortcut(
-                        title: "Prep",
-                        subtitle: "Session Prep",
-                        shortcut: "⌘2",
-                        color: currentTheme.buttonColors.prep,
-                        isPrimary: false,
-                        isFocused: focusedButton == .prep,
-                        showShortcut: isCommandKeyHeld,
-                        theme: currentTheme
-                    ) {
-                        attempt(type: .prep)
-                    }
-                    .focused($focusedButton, equals: .prep)
-                    .focusEffectDisabled()
-                    .onHover { hovering in
-                        if hovering {
-                            focusedButton = nil // Clear keyboard focus on mouse hover
-                            mainViewFocused = true // Keep main view focused for arrow keys
-                            isKeyboardMode = false
-                        }
-                        hoverInfo = hovering ?
-                            "Files to Session Prep (\(dateFormatter.string(from: prepDate)))" :
-                            "Ready."
-                    }
-                    .keyboardShortcut("2", modifiers: .command)
+                // Workspace Name Display
+                if case .loggedIn(let profile) = sessionManager.authenticationState {
+                    HStack(spacing: 6) {
+                        Image(systemName: profile.name == "Grayson Music" ? "cloud.fill" : "desktopcomputer")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
 
-                    ActionButtonWithShortcut(
-                        title: "File + Prep",
-                        subtitle: "Both",
-                        shortcut: "⌘3",
-                        color: currentTheme.buttonColors.both,
-                        isPrimary: false,
-                        isFocused: focusedButton == .both,
-                        showShortcut: isCommandKeyHeld,
-                        theme: currentTheme
-                    ) {
-                        attempt(type: .both)
+                        Text(profile.name)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.primary)
                     }
-                    .focused($focusedButton, equals: .both)
-                    .focusEffectDisabled()
-                    .onHover { hovering in
-                        if hovering {
-                            focusedButton = nil // Clear keyboard focus on mouse hover
-                            mainViewFocused = true // Keep main view focused for arrow keys
-                            isKeyboardMode = false
-                        }
-                        hoverInfo = hovering ?
-                            "Processes both Work Picture and Prep" :
-                            "Ready."
-                    }
-                    .keyboardShortcut("3", modifiers: .command)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.accentColor.opacity(0.1))
+                    )
+                }
 
-                    ActionButtonWithShortcut(
-                        title: "Convert Video",
-                        subtitle: "ProRes Proxy",
-                        shortcut: "⌘4",
-                        color: Color(red: 0.6, green: 0.3, blue: 0.6),
-                        isPrimary: false,
-                        isFocused: focusedButton == .convert,
-                        showShortcut: isCommandKeyHeld,
-                        theme: currentTheme
-                    ) {
-                        showVideoConverterSheet = true
-                    }
-                    .focused($focusedButton, equals: .convert)
-                    .focusEffectDisabled()
-                    .onHover { hovering in
-                        if hovering {
-                            focusedButton = nil
-                            mainViewFocused = true
-                            isKeyboardMode = false
+                // MARK: Action Buttons Grid
+                VStack(spacing: 8) {
+                    // Row 1: File and Prep
+                    HStack(spacing: 8) {
+                        ActionButtonWithShortcut(
+                            title: "File",
+                            subtitle: "Work Picture",
+                            shortcut: "⌘1",
+                            color: currentTheme.buttonColors.file,
+                            isPrimary: false,
+                            isFocused: focusedButton == .file,
+                            showShortcut: isCommandKeyHeld,
+                            theme: currentTheme
+                        ) {
+                            attempt(type: .workPicture)
                         }
-                        hoverInfo = hovering ?
-                            "Convert videos" :
-                            "Ready."
+                        .focused($focusedButton, equals: .file)
+                        .focusEffectDisabled()
+                        .onHover { hovering in
+                            if hovering {
+                                focusedButton = nil
+                                mainViewFocused = true
+                                isKeyboardMode = false
+                            }
+                            hoverInfo = hovering ?
+                                "Files to Work Picture (\(dateFormatter.string(from: wpDate)))" :
+                                "Ready."
+                        }
+                        .keyboardShortcut("1", modifiers: .command)
+
+                        ActionButtonWithShortcut(
+                            title: "Prep",
+                            subtitle: "Session Prep",
+                            shortcut: "⌘2",
+                            color: currentTheme.buttonColors.prep,
+                            isPrimary: false,
+                            isFocused: focusedButton == .prep,
+                            showShortcut: isCommandKeyHeld,
+                            theme: currentTheme
+                        ) {
+                            attempt(type: .prep)
+                        }
+                        .focused($focusedButton, equals: .prep)
+                        .focusEffectDisabled()
+                        .onHover { hovering in
+                            if hovering {
+                                focusedButton = nil
+                                mainViewFocused = true
+                                isKeyboardMode = false
+                            }
+                            hoverInfo = hovering ?
+                                "Files to Session Prep (\(dateFormatter.string(from: prepDate)))" :
+                                "Ready."
+                        }
+                        .keyboardShortcut("2", modifiers: .command)
                     }
-                    .keyboardShortcut("4", modifiers: .command)
+
+                    // Row 2: Both and Convert
+                    HStack(spacing: 8) {
+                        ActionButtonWithShortcut(
+                            title: "File + Prep",
+                            subtitle: "Both",
+                            shortcut: "⌘3",
+                            color: currentTheme.buttonColors.both,
+                            isPrimary: false,
+                            isFocused: focusedButton == .both,
+                            showShortcut: isCommandKeyHeld,
+                            theme: currentTheme
+                        ) {
+                            attempt(type: .both)
+                        }
+                        .focused($focusedButton, equals: .both)
+                        .focusEffectDisabled()
+                        .onHover { hovering in
+                            if hovering {
+                                focusedButton = nil
+                                mainViewFocused = true
+                                isKeyboardMode = false
+                            }
+                            hoverInfo = hovering ?
+                                "Processes both Work Picture and Prep" :
+                                "Ready."
+                        }
+                        .keyboardShortcut("3", modifiers: .command)
+
+                        ActionButtonWithShortcut(
+                            title: "Convert Video",
+                            subtitle: "ProRes Proxy",
+                            shortcut: "⌘4",
+                            color: Color(red: 0.6, green: 0.3, blue: 0.6),
+                            isPrimary: false,
+                            isFocused: focusedButton == .convert,
+                            showShortcut: isCommandKeyHeld,
+                            theme: currentTheme
+                        ) {
+                            showVideoConverterSheet = true
+                        }
+                        .focused($focusedButton, equals: .convert)
+                        .focusEffectDisabled()
+                        .onHover { hovering in
+                            if hovering {
+                                focusedButton = nil
+                                mainViewFocused = true
+                                isKeyboardMode = false
+                            }
+                            hoverInfo = hovering ?
+                                "Convert videos" :
+                                "Ready."
+                        }
+                        .keyboardShortcut("4", modifiers: .command)
+                    }
                 }
-                .onKeyPress(.upArrow) {
-                    isKeyboardMode = true
-                    moveFocus(direction: -1)
-                    return .handled
-                }
-                .onKeyPress(.downArrow) {
-                    isKeyboardMode = true
-                    moveFocus(direction: 1)
-                    return .handled
-                }
-                .onKeyPress(.return) {
-                    activateFocusedButton()
-                    return .handled
-                }
-                
+
                 Spacer()
 
                 Divider()
@@ -538,10 +544,39 @@ struct ContentView: View {
                         }
                     }
                     .keyboardShortcut(",", modifiers: .command)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    // Log Out Button
+                    Button(action: {
+                        sessionManager.logout()
+                    }) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .font(.system(size: 14))
+                                .foregroundColor(.red)
+                                .frame(width: 18)
+
+                            Text("Log Out")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.red)
+
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.red.opacity(0.1))
+                    )
                 }
-                .padding(.bottom, 20)
+                .padding(.bottom, 12)
             }
-            .padding(20)
+            .padding(16)
             .frame(width: 300)
             .background(
                 Group {
@@ -874,8 +909,80 @@ struct ContentView: View {
         settingsManager.saveCurrentProfile()
     }
 
+    enum GridDirection {
+        case up, down, left, right
+    }
+
+    private func moveGridFocus(direction: GridDirection) {
+        // Grid layout: [file, prep]
+        //              [both, convert]
+        // Then linear: [search, jobInfo, settings]
+
+        // If no button is focused, auto-focus the first one
+        if focusedButton == nil {
+            focusedButton = .file
+            return
+        }
+
+        guard let current = focusedButton else { return }
+
+        switch direction {
+        case .up:
+            switch current {
+            case .file, .prep:
+                focusedButton = .settings  // Wrap to bottom
+            case .both:
+                focusedButton = .file
+            case .convert:
+                focusedButton = .prep
+            case .search:
+                focusedButton = .both  // Return to grid from below
+            case .jobInfo:
+                focusedButton = .search
+            case .settings:
+                focusedButton = .jobInfo
+            }
+
+        case .down:
+            switch current {
+            case .file:
+                focusedButton = .both
+            case .prep:
+                focusedButton = .convert
+            case .both, .convert:
+                focusedButton = .search
+            case .search:
+                focusedButton = .jobInfo
+            case .jobInfo:
+                focusedButton = .settings
+            case .settings:
+                focusedButton = .file  // Wrap to top
+            }
+
+        case .left:
+            switch current {
+            case .prep:
+                focusedButton = .file
+            case .convert:
+                focusedButton = .both
+            default:
+                break  // No left movement from left column or linear items
+            }
+
+        case .right:
+            switch current {
+            case .file:
+                focusedButton = .prep
+            case .both:
+                focusedButton = .convert
+            default:
+                break  // No right movement from right column or linear items
+            }
+        }
+    }
+
     private func moveFocus(direction: Int) {
-        // Only the four main action buttons
+        // Linear navigation fallback
         let mainButtons: [ActionButtonFocus] = [.file, .prep, .both, .convert, .search, .jobInfo, .settings]
 
         // If no button is focused, auto-focus the first one when using arrow keys
@@ -2441,7 +2548,7 @@ struct QuickDocketSearchView: View {
     @Binding var isPresented: Bool
     let initialText: String
     @ObservedObject var settingsManager: SettingsManager
-    @StateObject private var metadataManager = DocketMetadataManager()
+    @StateObject private var metadataManager: DocketMetadataManager
 
     @State private var searchText: String
     @State private var allDockets: [DocketInfo] = []
@@ -2455,6 +2562,7 @@ struct QuickDocketSearchView: View {
         self.initialText = initialText
         self.settingsManager = settingsManager
         self._searchText = State(initialValue: initialText)
+        self._metadataManager = StateObject(wrappedValue: DocketMetadataManager(settings: settingsManager.currentSettings))
     }
 
     var body: some View {
@@ -2516,7 +2624,7 @@ struct QuickDocketSearchView: View {
                                     .multilineTextAlignment(.center)
                                     .padding(.horizontal, 40)
 
-                                Text("CSV must include columns: docket_number, job_name")
+                                Text("Configure CSV column names in Settings")
                                     .font(.caption2)
                                     .foregroundColor(.orange)
                                     .padding(.horizontal, 40)
@@ -3001,20 +3109,23 @@ struct DocketMetadataEditorView: View {
 
                         MetadataField(label: "Client", icon: "building.2", text: $metadata.client)
                         MetadataField(label: "Agency", icon: "briefcase", text: $metadata.agency)
+                        MetadataField(label: "License Total", icon: "dollarsign.circle", text: $metadata.licenseTotal)
+                        MetadataField(label: "Currency", icon: "banknote", text: $metadata.currency)
                     }
 
                     Divider()
 
                     // Production Team Section
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Production Team")
+                        Text("Production Info")
                             .font(.headline)
 
                         MetadataField(label: "Producer", icon: "person", text: $metadata.producer)
                         MetadataField(label: "Agency Producer", icon: "person.badge.key", text: $metadata.agencyProducer)
-                        MetadataField(label: "Director", icon: "video", text: $metadata.director)
-                        MetadataField(label: "Engineer", icon: "waveform", text: $metadata.engineer)
-                        MetadataField(label: "Sound Designer", icon: "music.note", text: $metadata.soundDesigner)
+                        MetadataField(label: "Status", icon: "checkmark.circle", text: $metadata.status)
+                        MetadataField(label: "Music Type", icon: "music.note", text: $metadata.musicType)
+                        MetadataField(label: "Track", icon: "waveform", text: $metadata.track)
+                        MetadataField(label: "Media", icon: "tv", text: $metadata.media)
                     }
 
                     Divider()

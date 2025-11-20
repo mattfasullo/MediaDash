@@ -8,26 +8,32 @@ struct DocketMetadata: Codable, Identifiable {
     var id: String { "\(docketNumber)_\(jobName)" } // Computed ID
     var docketNumber: String
     var jobName: String
-    var producer: String
-    var agencyProducer: String
-    var director: String
-    var engineer: String
-    var soundDesigner: String
-    var agency: String
     var client: String
+    var producer: String
+    var status: String
+    var licenseTotal: String
+    var currency: String
+    var agency: String
+    var agencyProducer: String
+    var musicType: String
+    var track: String
+    var media: String
     var notes: String
     var lastUpdated: Date
 
     init(docketNumber: String, jobName: String = "") {
         self.docketNumber = docketNumber
         self.jobName = jobName
-        self.producer = ""
-        self.agencyProducer = ""
-        self.director = ""
-        self.engineer = ""
-        self.soundDesigner = ""
-        self.agency = ""
         self.client = ""
+        self.producer = ""
+        self.status = ""
+        self.licenseTotal = ""
+        self.currency = ""
+        self.agency = ""
+        self.agencyProducer = ""
+        self.musicType = ""
+        self.track = ""
+        self.media = ""
         self.notes = ""
         self.lastUpdated = Date()
     }
@@ -35,11 +41,17 @@ struct DocketMetadata: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case docketNumber = "docket_number"
         case jobName = "job_name"
+        case client
         case producer
+        case status
+        case licenseTotal = "license_total"
+        case currency
+        case agency
         case agencyProducer = "agency_producer"
-        case director, engineer
-        case soundDesigner = "sound_designer"
-        case agency, client, notes
+        case musicType = "music_type"
+        case track
+        case media
+        case notes
         case lastUpdated = "last_updated"
     }
 }
@@ -49,6 +61,7 @@ struct DocketMetadata: Codable, Identifiable {
 @MainActor
 class DocketMetadataManager: ObservableObject {
     @Published var metadata: [String: DocketMetadata] = [:]
+    private var settings: AppSettings?
 
     private var csvFileURL: URL {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -60,8 +73,14 @@ class DocketMetadataManager: ObservableObject {
         return mediaDashFolder.appendingPathComponent("docket_metadata.csv")
     }
 
-    init() {
+    init(settings: AppSettings? = nil) {
+        self.settings = settings
         loadMetadata()
+    }
+
+    func updateSettings(_ newSettings: AppSettings) {
+        self.settings = newSettings
+        loadMetadata() // Reload with new column mappings
     }
 
     func getMetadata(for docketNumber: String, jobName: String) -> DocketMetadata {
@@ -91,9 +110,8 @@ class DocketMetadataManager: ObservableObject {
     func hasMetadata(for docketName: String) -> Bool {
         guard let meta = metadata[docketName] else { return false }
         return !meta.producer.isEmpty || !meta.agencyProducer.isEmpty ||
-               !meta.director.isEmpty || !meta.engineer.isEmpty ||
-               !meta.soundDesigner.isEmpty || !meta.agency.isEmpty ||
-               !meta.client.isEmpty || !meta.notes.isEmpty
+               !meta.agency.isEmpty || !meta.client.isEmpty ||
+               !meta.status.isEmpty || !meta.notes.isEmpty
     }
 
     func reloadMetadata() {
@@ -127,27 +145,47 @@ class DocketMetadataManager: ObservableObject {
             }
 
             var loadedMetadata: [String: DocketMetadata] = [:]
-            let dateFormatter = ISO8601DateFormatter()
 
             // Parse header to create column map
             let headerFields = parseCSVRow(rows[0])
             var columnMap: [String: Int] = [:]
             for (index, header) in headerFields.enumerated() {
-                columnMap[header.lowercased().trimmingCharacters(in: .whitespaces)] = index
+                // Strip BOM (Byte Order Mark) and whitespace
+                var cleanedHeader = header.trimmingCharacters(in: .whitespaces)
+                if index == 0 && cleanedHeader.hasPrefix("\u{FEFF}") {
+                    cleanedHeader = String(cleanedHeader.dropFirst())
+                }
+                columnMap[cleanedHeader] = index
             }
 
             print("CSV Headers: \(headerFields)")
             print("Column map: \(columnMap)")
 
+            // Get column names from settings or use defaults
+            let docketCol = settings?.csvDocketColumn ?? "Docket"
+            let projectCol = settings?.csvProjectTitleColumn ?? "Licensor/Project Title"
+
+            print("Looking for columns: '\(docketCol)' and '\(projectCol)'")
+            if let numIdx = columnMap[docketCol] {
+                print("Found '\(docketCol)' at index \(numIdx)")
+            } else {
+                print("WARNING: Column '\(docketCol)' not found in CSV!")
+            }
+            if let nameIdx = columnMap[projectCol] {
+                print("Found '\(projectCol)' at index \(nameIdx)")
+            } else {
+                print("WARNING: Column '\(projectCol)' not found in CSV!")
+            }
+
             for row in rows.dropFirst() {
                 let fields = parseCSVRow(row)
 
-                // Get docket number and job name using column map
-                guard let numIdx = columnMap["docket_number"],
-                      let nameIdx = columnMap["job_name"],
+                // Get docket number and project title using configured column names
+                guard let numIdx = columnMap[docketCol],
+                      let nameIdx = columnMap[projectCol],
                       fields.count > numIdx,
                       fields.count > nameIdx else {
-                    print("Skipping row: missing required columns")
+                    print("Skipping row: missing required columns '\(docketCol)' or '\(projectCol)'")
                     continue
                 }
 
@@ -164,33 +202,36 @@ class DocketMetadataManager: ObservableObject {
 
                 var meta = DocketMetadata(docketNumber: docketNumber, jobName: jobName)
 
-                // Map other fields by column name
-                if let idx = columnMap["producer"], fields.count > idx {
-                    meta.producer = fields[idx]
-                }
-                if let idx = columnMap["agency_producer"], fields.count > idx {
-                    meta.agencyProducer = fields[idx]
-                }
-                if let idx = columnMap["director"], fields.count > idx {
-                    meta.director = fields[idx]
-                }
-                if let idx = columnMap["engineer"], fields.count > idx {
-                    meta.engineer = fields[idx]
-                }
-                if let idx = columnMap["sound_designer"], fields.count > idx {
-                    meta.soundDesigner = fields[idx]
-                }
-                if let idx = columnMap["agency"], fields.count > idx {
-                    meta.agency = fields[idx]
-                }
-                if let idx = columnMap["client"], fields.count > idx {
+                // Map other fields using configured column names
+                if let col = settings?.csvClientColumn, let idx = columnMap[col], fields.count > idx {
                     meta.client = fields[idx]
                 }
-                if let idx = columnMap["notes"], fields.count > idx {
-                    meta.notes = fields[idx]
+                if let col = settings?.csvProducerColumn, let idx = columnMap[col], fields.count > idx {
+                    meta.producer = fields[idx]
                 }
-                if let idx = columnMap["last_updated"], fields.count > idx {
-                    meta.lastUpdated = dateFormatter.date(from: fields[idx]) ?? Date()
+                if let col = settings?.csvStatusColumn, let idx = columnMap[col], fields.count > idx {
+                    meta.status = fields[idx]
+                }
+                if let col = settings?.csvLicenseTotalColumn, let idx = columnMap[col], fields.count > idx {
+                    meta.licenseTotal = fields[idx]
+                }
+                if let col = settings?.csvCurrencyColumn, let idx = columnMap[col], fields.count > idx {
+                    meta.currency = fields[idx]
+                }
+                if let col = settings?.csvAgencyColumn, let idx = columnMap[col], fields.count > idx {
+                    meta.agency = fields[idx]
+                }
+                if let col = settings?.csvAgencyProducerColumn, let idx = columnMap[col], fields.count > idx {
+                    meta.agencyProducer = fields[idx]
+                }
+                if let col = settings?.csvMusicTypeColumn, let idx = columnMap[col], fields.count > idx {
+                    meta.musicType = fields[idx]
+                }
+                if let col = settings?.csvTrackColumn, let idx = columnMap[col], fields.count > idx {
+                    meta.track = fields[idx]
+                }
+                if let col = settings?.csvMediaColumn, let idx = columnMap[col], fields.count > idx {
+                    meta.media = fields[idx]
                 }
 
                 loadedMetadata[key] = meta
@@ -213,7 +254,7 @@ class DocketMetadataManager: ObservableObject {
     }
 
     private func persistMetadata() {
-        var csvContent = "docket_number,job_name,producer,agency_producer,director,engineer,sound_designer,agency,client,notes,last_updated\n"
+        var csvContent = "docket_number,job_name,client,producer,status,license_total,currency,agency,agency_producer,music_type,track,media,notes,last_updated\n"
 
         let dateFormatter = ISO8601DateFormatter()
 
@@ -221,13 +262,16 @@ class DocketMetadataManager: ObservableObject {
             let row = [
                 escapeCSVField(meta.docketNumber),
                 escapeCSVField(meta.jobName),
-                escapeCSVField(meta.producer),
-                escapeCSVField(meta.agencyProducer),
-                escapeCSVField(meta.director),
-                escapeCSVField(meta.engineer),
-                escapeCSVField(meta.soundDesigner),
-                escapeCSVField(meta.agency),
                 escapeCSVField(meta.client),
+                escapeCSVField(meta.producer),
+                escapeCSVField(meta.status),
+                escapeCSVField(meta.licenseTotal),
+                escapeCSVField(meta.currency),
+                escapeCSVField(meta.agency),
+                escapeCSVField(meta.agencyProducer),
+                escapeCSVField(meta.musicType),
+                escapeCSVField(meta.track),
+                escapeCSVField(meta.media),
                 escapeCSVField(meta.notes),
                 dateFormatter.string(from: meta.lastUpdated)
             ].joined(separator: ",")
@@ -312,7 +356,12 @@ class DocketMetadataManager: ObservableObject {
         let headerFields = parseCSVRow(rows[0])
         var columnMap: [String: Int] = [:]
         for (index, header) in headerFields.enumerated() {
-            columnMap[header.lowercased().trimmingCharacters(in: .whitespaces)] = index
+            // Strip BOM (Byte Order Mark) and whitespace
+            var cleanedHeader = header.trimmingCharacters(in: .whitespaces)
+            if index == 0 && cleanedHeader.hasPrefix("\u{FEFF}") {
+                cleanedHeader = String(cleanedHeader.dropFirst())
+            }
+            columnMap[cleanedHeader.lowercased()] = index
         }
 
         for row in rows.dropFirst() {
@@ -336,26 +385,35 @@ class DocketMetadataManager: ObservableObject {
             var meta = DocketMetadata(docketNumber: docketNumber, jobName: jobName)
 
             // Map other fields by column name
+            if let idx = columnMap["client"], fields.count > idx {
+                meta.client = fields[idx]
+            }
             if let idx = columnMap["producer"], fields.count > idx {
                 meta.producer = fields[idx]
             }
-            if let idx = columnMap["agency_producer"], fields.count > idx {
-                meta.agencyProducer = fields[idx]
+            if let idx = columnMap["status"], fields.count > idx {
+                meta.status = fields[idx]
             }
-            if let idx = columnMap["director"], fields.count > idx {
-                meta.director = fields[idx]
+            if let idx = columnMap["license_total"], fields.count > idx {
+                meta.licenseTotal = fields[idx]
             }
-            if let idx = columnMap["engineer"], fields.count > idx {
-                meta.engineer = fields[idx]
-            }
-            if let idx = columnMap["sound_designer"], fields.count > idx {
-                meta.soundDesigner = fields[idx]
+            if let idx = columnMap["currency"], fields.count > idx {
+                meta.currency = fields[idx]
             }
             if let idx = columnMap["agency"], fields.count > idx {
                 meta.agency = fields[idx]
             }
-            if let idx = columnMap["client"], fields.count > idx {
-                meta.client = fields[idx]
+            if let idx = columnMap["agency_producer"], fields.count > idx {
+                meta.agencyProducer = fields[idx]
+            }
+            if let idx = columnMap["music_type"], fields.count > idx {
+                meta.musicType = fields[idx]
+            }
+            if let idx = columnMap["track"], fields.count > idx {
+                meta.track = fields[idx]
+            }
+            if let idx = columnMap["media"], fields.count > idx {
+                meta.media = fields[idx]
             }
             if let idx = columnMap["notes"], fields.count > idx {
                 meta.notes = fields[idx]

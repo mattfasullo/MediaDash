@@ -72,6 +72,11 @@ struct SettingsView: View {
 
                     Divider()
 
+                    // CSV Column Mapping
+                    CSVColumnMappingSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+
+                    Divider()
+
                     // Advanced Settings
                     AdvancedSettingsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
                 }
@@ -1053,5 +1058,69 @@ struct NewProfileView: View {
         settingsManager.saveProfile(settings: newSettings, name: name)
         settingsManager.loadProfile(name: name)
         isPresented = false
+    }
+}
+
+// MARK: - CSV Column Mapping Section
+
+struct CSVColumnMappingSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("CSV Column Names")
+                .font(.headline)
+
+            Text("Configure which column names to read from your job database CSV")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Essential Columns")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .padding(.top, 4)
+
+                columnField("Docket:", keyPath: \.csvDocketColumn, placeholder: "Docket")
+                columnField("Project Title:", keyPath: \.csvProjectTitleColumn, placeholder: "Licensor/Project Title")
+                columnField("Client:", keyPath: \.csvClientColumn, placeholder: "Client")
+                columnField("Producer:", keyPath: \.csvProducerColumn, placeholder: "Grayson Producer")
+                columnField("Status:", keyPath: \.csvStatusColumn, placeholder: "STATUS")
+                columnField("License Total:", keyPath: \.csvLicenseTotalColumn, placeholder: "Music License Totals")
+                columnField("Currency:", keyPath: \.csvCurrencyColumn, placeholder: "Currency")
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                Text("Optional Columns")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+
+                columnField("Agency:", keyPath: \.csvAgencyColumn, placeholder: "Agency")
+                columnField("Agency Producer:", keyPath: \.csvAgencyProducerColumn, placeholder: "Agency Producer / Supervisor")
+                columnField("Music Type:", keyPath: \.csvMusicTypeColumn, placeholder: "Music Type")
+                columnField("Track:", keyPath: \.csvTrackColumn, placeholder: "Track")
+                columnField("Media:", keyPath: \.csvMediaColumn, placeholder: "Media")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func columnField(_ label: String, keyPath: WritableKeyPath<AppSettings, String>, placeholder: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+                .frame(width: 120, alignment: .leading)
+            TextField(placeholder, text: Binding(
+                get: { settings[keyPath: keyPath] },
+                set: {
+                    settings[keyPath: keyPath] = $0
+                    hasUnsavedChanges = true
+                }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 250)
+        }
     }
 }

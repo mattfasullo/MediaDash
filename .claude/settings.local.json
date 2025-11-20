@@ -15,7 +15,10 @@
       "Bash(chmod:*)",
       "Bash(./sign_and_release.sh:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(head:*)",
+      "Bash(grep:*)",
+      "Bash(/usr/libexec/PlistBuddy:*)"
     ],
     "deny": [],
     "ask": []
