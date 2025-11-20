@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var showSearchSheet = false
     @State private var showQuickSearchSheet = false
     @State private var showSettingsSheet = false
+    @State private var showVideoConverterSheet = false
     @State private var showAlert = false
     @State private var alertMessage = ""
     @State private var hoverInfo: String = "Ready."
@@ -25,7 +26,7 @@ struct ContentView: View {
 
     // Focus management for all navigable buttons
     enum ActionButtonFocus: Hashable {
-        case file, prep, both, docketLookup, searchSessions, settings
+        case file, prep, both, convert, jobInfo, search, settings
     }
     @FocusState private var focusedButton: ActionButtonFocus?
 
@@ -195,6 +196,20 @@ struct ContentView: View {
                 Text(warning)
             }
         }
+        .alert("Convert Videos to ProRes Proxy?", isPresented: $manager.showConvertVideosPrompt) {
+            Button("Convert", role: .destructive) {
+                Task {
+                    await manager.convertPrepVideos()
+                }
+            }
+            Button("Skip", role: .cancel) {
+                manager.skipPrepVideoConversion()
+            }
+        } message: {
+            if let pending = manager.pendingPrepConversion {
+                Text("Found \(pending.videoFiles.count) video file(s). Convert to ProRes Proxy 16:9 1920x1080?\n\nOriginals will be saved in PICTURE/z_unconverted folder.")
+            }
+        }
         .sheet(isPresented: $showNewDocketSheet) {
             NewDocketView(
                 isPresented: $showNewDocketSheet,
@@ -251,7 +266,7 @@ struct ContentView: View {
                 isKeyboardMode = true
             }
 
-            guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
+            guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showVideoConverterSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
                 return .ignored
             }
 
@@ -293,6 +308,9 @@ struct ContentView: View {
         .sheet(isPresented: $manager.showPrepSummary) {
             PrepSummaryView(summary: manager.prepSummary, isPresented: $manager.showPrepSummary)
         }
+        .sheet(isPresented: $showVideoConverterSheet) {
+            VideoConverterView(manager: manager)
+        }
         .onChange(of: settingsManager.currentSettings) { oldValue, newValue in
             manager.updateConfig(settings: newValue)
         }
@@ -329,7 +347,7 @@ struct ContentView: View {
                         .onTapGesture {
                             // Easter egg: 10 clicks cycles through themes
                             logoClickCount += 1
-                            if logoClickCount >= 10 {
+                            if logoClickCount >= 2 {
                                 cycleTheme()
                                 logoClickCount = 0
                             }
@@ -416,6 +434,32 @@ struct ContentView: View {
                             "Ready."
                     }
                     .keyboardShortcut("3", modifiers: .command)
+
+                    ActionButtonWithShortcut(
+                        title: "Convert Video",
+                        subtitle: "ProRes Proxy",
+                        shortcut: "⌘4",
+                        color: Color(red: 0.6, green: 0.3, blue: 0.6),
+                        isPrimary: false,
+                        isFocused: focusedButton == .convert,
+                        showShortcut: isCommandKeyHeld,
+                        theme: currentTheme
+                    ) {
+                        showVideoConverterSheet = true
+                    }
+                    .focused($focusedButton, equals: .convert)
+                    .focusEffectDisabled()
+                    .onHover { hovering in
+                        if hovering {
+                            focusedButton = nil
+                            mainViewFocused = true
+                            isKeyboardMode = false
+                        }
+                        hoverInfo = hovering ?
+                            "Convert videos" :
+                            "Ready."
+                    }
+                    .keyboardShortcut("4", modifiers: .command)
                 }
                 .onKeyPress(.upArrow) {
                     isKeyboardMode = true
@@ -439,33 +483,14 @@ struct ContentView: View {
                 // Bottom actions
                 VStack(spacing: 8) {
                     FocusableNavButton(
-                        icon: "number.circle",
-                        title: "Job Info",
-                        shortcut: "⌘D",
-                        isFocused: focusedButton == .docketLookup,
-                        showShortcut: isCommandKeyHeld,
-                        action: { showQuickSearchSheet = true }
-                    )
-                    .focused($focusedButton, equals: .docketLookup)
-                    .focusEffectDisabled()
-                    .onHover { hovering in
-                        if hovering {
-                            focusedButton = nil
-                            mainViewFocused = true
-                            isKeyboardMode = false
-                        }
-                    }
-                    .keyboardShortcut("d", modifiers: .command)
-
-                    FocusableNavButton(
                         icon: "magnifyingglass",
                         title: "Search",
                         shortcut: "⌘F",
-                        isFocused: focusedButton == .searchSessions,
+                        isFocused: focusedButton == .search,
                         showShortcut: isCommandKeyHeld,
                         action: { showSearchSheet = true }
                     )
-                    .focused($focusedButton, equals: .searchSessions)
+                    .focused($focusedButton, equals: .search)
                     .focusEffectDisabled()
                     .onHover { hovering in
                         if hovering {
@@ -476,6 +501,25 @@ struct ContentView: View {
                     }
                     .keyboardShortcut("f", modifiers: .command)
 
+                    FocusableNavButton(
+                        icon: "number.circle",
+                        title: "Job Info",
+                        shortcut: "⌘D",
+                        isFocused: focusedButton == .jobInfo,
+                        showShortcut: isCommandKeyHeld,
+                        action: { showQuickSearchSheet = true }
+                    )
+                    .focused($focusedButton, equals: .jobInfo)
+                    .focusEffectDisabled()
+                    .onHover { hovering in
+                        if hovering {
+                            focusedButton = nil
+                            mainViewFocused = true
+                            isKeyboardMode = false
+                        }
+                    }
+                    .keyboardShortcut("d", modifiers: .command)
+                    
                     FocusableNavButton(
                         icon: "gearshape",
                         title: "Settings",
@@ -609,6 +653,12 @@ struct ContentView: View {
                                             .fill(Color.blue.opacity(0.2))
                                             .frame(width: geometry.size.width * progress)
                                     }
+                                } else if let convProgress = manager.conversionProgress[f.id], convProgress > 0 {
+                                    GeometryReader { geometry in
+                                        Rectangle()
+                                            .fill(Color.purple.opacity(0.2))
+                                            .frame(width: geometry.size.width * convProgress)
+                                    }
                                 }
 
                                 // File info
@@ -633,6 +683,19 @@ struct ContentView: View {
                                         case .none:
                                             EmptyView()
                                         }
+                                    } else if let convProgress = manager.conversionProgress[f.id], convProgress > 0, convProgress < 1.0 {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "film")
+                                                .font(.system(size: 10))
+                                            Text("\(Int(convProgress * 100))%")
+                                                .font(.caption)
+                                                .monospacedDigit()
+                                        }
+                                        .foregroundColor(.purple)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.purple.opacity(0.1))
+                                        .cornerRadius(4)
                                     } else if let progress = manager.fileProgress[f.id], progress > 0, progress < 1.0 {
                                         Text("\(Int(progress * 100))%")
                                             .font(.caption)
@@ -664,6 +727,7 @@ struct ContentView: View {
                         .listStyle(.inset(alternatesRowBackgrounds: true))
                         .animation(.easeInOut(duration: 0.3), value: manager.selectedFiles)
                         .animation(.easeInOut(duration: 0.2), value: manager.fileProgress)
+                        .animation(.easeInOut(duration: 0.2), value: manager.conversionProgress)
                         .animation(.easeInOut(duration: 0.3), value: manager.fileCompletionState)
                     }
                 }
@@ -811,8 +875,8 @@ struct ContentView: View {
     }
 
     private func moveFocus(direction: Int) {
-        // Only the three main action buttons
-        let mainButtons: [ActionButtonFocus] = [.file, .prep, .both]
+        // Only the four main action buttons
+        let mainButtons: [ActionButtonFocus] = [.file, .prep, .both, .convert, .search, .jobInfo, .settings]
 
         // If no button is focused, auto-focus the first one when using arrow keys
         if focusedButton == nil {
@@ -839,9 +903,11 @@ struct ContentView: View {
             attempt(type: .prep)
         case .both:
             attempt(type: .both)
-        case .docketLookup:
+        case .convert:
+            showVideoConverterSheet = true
+        case .jobInfo:
             showQuickSearchSheet = true
-        case .searchSessions:
+        case .search:
             showSearchSheet = true
         case .settings:
             showSettingsSheet = true
@@ -1859,12 +1925,6 @@ struct SearchView: View {
                 )
                 .padding(10)
 
-                if manager.isIndexing {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                        .frame(width: 16, height: 16)
-                }
-                
                 if !searchText.isEmpty {
                     Button(action: { searchText = "" }) {
                         Image(systemName: "xmark.circle.fill")
@@ -1875,32 +1935,6 @@ struct SearchView: View {
             }
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
-
-            // MARK: Status Bar (Indexing Progress)
-            if manager.isIndexing || isSearching {
-                VStack(spacing: 4) {
-                    HStack(spacing: 6) {
-                        if manager.isIndexing {
-                            Text("Indexing: \(manager.indexingFolders.map(\.displayName).sorted().joined(separator: ", "))")
-                                .font(.system(size: 10))
-                                .foregroundColor(.orange)
-                        } else if isSearching {
-                            Text("Searching...")
-                                .font(.system(size: 10))
-                                .foregroundColor(.blue)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 4)
-
-                    // Subtle progress bar
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                        .scaleEffect(y: 0.5)
-                }
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-            }
 
             // MARK: Folder Selector
             folderSelectorView
@@ -2008,38 +2042,41 @@ struct SearchView: View {
                 
                 // Loading/Empty States
                 if isSearching {
-                    VStack {
+                    VStack(spacing: 8) {
                         ProgressView()
                             .scaleEffect(0.8)
                         Text("Searching...")
-                            .font(.caption)
                             .foregroundColor(.gray)
+                            .font(.caption)
                     }
+                    .frame(width: 180)
                     .padding()
                     .background(.regularMaterial)
                     .cornerRadius(8)
                 } else if manager.isIndexing && exactResults.isEmpty && fuzzyResults.isEmpty {
-                    VStack {
+                    VStack(spacing: 8) {
                         ProgressView()
                             .scaleEffect(0.8)
                         Text("Building search index...")
-                            .font(.caption)
                             .foregroundColor(.gray)
+                            .font(.caption)
                     }
+                    .frame(width: 180)
                     .padding()
                     .background(.regularMaterial)
                     .cornerRadius(8)
                 } else if exactResults.isEmpty && fuzzyResults.isEmpty && !searchText.isEmpty && !manager.isIndexing {
                     VStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 32))
-                            .foregroundColor(.gray.opacity(0.5))
-                        Text("No sessions found")
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Populating list...")
                             .foregroundColor(.gray)
-                        Text("Try adjusting your search terms")
                             .font(.caption)
-                            .foregroundColor(.gray.opacity(0.7))
                     }
+                    .frame(width: 180)
+                    .padding()
+                    .background(.regularMaterial)
+                    .cornerRadius(8)
                 }
             }
             
@@ -2249,7 +2286,10 @@ struct SearchView: View {
                 // If there's any error, ensure we reset the state
                 await MainActor.run {
                     isSearching = false
-                    print("Search error: \(error.localizedDescription)")
+                    // Ignore cancellation errors (expected when typing quickly)
+                    if !(error is CancellationError) {
+                        print("Search error: \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -2274,6 +2314,9 @@ struct SearchView: View {
                 } else {
                     selectedPath = nil
                 }
+
+                // Set isSearching to false AFTER results are displayed
+                isSearching = false
             } else {
                 // No cached results for this folder yet
                 exactResults = []
@@ -2325,16 +2368,20 @@ struct SearchView: View {
         guard let currentIndex = allFolders.firstIndex(of: selectedFolder) else { return }
 
         let newIndex = (currentIndex + direction + allFolders.count) % allFolders.count
-        selectedFolder = allFolders[newIndex]
 
-        // Save to settings if remember last is enabled
-        if settingsManager.currentSettings.searchFolderPreference == .rememberLast {
-            settingsManager.currentSettings.lastUsedSearchFolder = selectedFolder
-            settingsManager.saveCurrentProfile()
+        // Defer state changes to next run loop to avoid SwiftUI warning
+        DispatchQueue.main.async {
+            self.selectedFolder = allFolders[newIndex]
+
+            // Save to settings if remember last is enabled
+            if self.settingsManager.currentSettings.searchFolderPreference == .rememberLast {
+                self.settingsManager.currentSettings.lastUsedSearchFolder = self.selectedFolder
+                self.settingsManager.saveCurrentProfile()
+            }
+
+            // Switch to cached results (instant)
+            self.updateDisplayedResults()
         }
-
-        // Switch to cached results (instant)
-        updateDisplayedResults()
     }
 }
 

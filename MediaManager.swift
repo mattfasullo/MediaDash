@@ -456,6 +456,10 @@ class MediaManager: ObservableObject {
     @Published var showPrepSummary: Bool = false
     @Published var connectionWarning: String? = nil
     @Published var showConnectionWarning: Bool = false
+    @Published var isConverting: Bool = false
+    @Published var conversionProgress: [UUID: Double] = [:] // Per-file conversion progress
+    @Published var showConvertVideosPrompt: Bool = false
+    @Published var pendingPrepConversion: (root: URL, videoFiles: [(url: URL, sourceId: UUID)], docket: String)?
 
     private var cachedSessions: [String] = [] // Legacy - for backward compatibility
     var folderCaches: [SearchFolder: [String]] = [:] // New cache system - internal for validation
@@ -464,6 +468,7 @@ class MediaManager: ObservableObject {
     private var prepFolderWatcher: DispatchSourceFileSystemObject?
     private var currentPrepFolder: String?
     private var metadataManager: DocketMetadataManager
+    var videoConverter: VideoConverterManager?
 
     init(settingsManager: SettingsManager, metadataManager: DocketMetadataManager) {
         self.config = AppConfig(settings: settingsManager.currentSettings)
@@ -486,6 +491,9 @@ class MediaManager: ObservableObject {
         refreshDockets()
         buildSessionIndex()
         startFinderLoop()
+
+        // Initialize video converter
+        self.videoConverter = VideoConverterManager()
     }
     
     func updateConfig(settings: AppSettings) {
@@ -812,6 +820,27 @@ class MediaManager: ObservableObject {
                     }
                 }
 
+                // Check for video files and ask about conversion
+                let videoExtensions = ["mp4", "mov", "avi", "mxf", "m4v", "prores"]
+                let videoFiles = flats.filter { videoExtensions.contains($0.url.pathExtension.lowercased()) }
+
+                if !videoFiles.isEmpty {
+                    // Store pending conversion info and show prompt
+                    await MainActor.run {
+                        self.pendingPrepConversion = (root: root, videoFiles: videoFiles, docket: docket)
+                        self.showConvertVideosPrompt = true
+                    }
+
+                    // Wait for user response
+                    var waiting = true
+                    while waiting {
+                        waiting = await MainActor.run { self.showConvertVideosPrompt }
+                        if waiting {
+                            try? await Task.sleep(nanoseconds: 100_000_000)
+                        }
+                    }
+                }
+
                 // Initialize progress for all files
                 await MainActor.run {
                     for f in files {
@@ -1060,5 +1089,122 @@ class MediaManager: ObservableObject {
                 self.prepSummary = summary
             }
         }
+    }
+
+    // MARK: - Video Conversion
+
+    /// Start background video conversion
+    func startVideoConversion(aspectRatio: AspectRatio, outputDirectory: URL) async {
+        guard let converter = videoConverter else { return }
+
+        // Get video files from staging area
+        let videoExtensions = ["mp4", "mov", "avi", "mxf", "m4v", "prores"]
+        let videoFiles = selectedFiles.filter { item in
+            !item.isDirectory && videoExtensions.contains(item.url.pathExtension.lowercased())
+        }
+
+        guard !videoFiles.isEmpty else { return }
+
+        // Add files to converter
+        converter.addFiles(
+            urls: videoFiles.map { $0.url },
+            format: .proResProxy,
+            aspectRatio: aspectRatio,
+            outputDirectory: outputDirectory
+        )
+
+        // Start conversion and monitor progress
+        isConverting = true
+
+        // Monitor conversion progress in parallel
+        Task {
+            while isConverting {
+                // Update progress for each job
+                for job in converter.jobs {
+                    // Find matching file item by URL
+                    if let fileItem = selectedFiles.first(where: { $0.url == job.sourceURL }) {
+                        conversionProgress[fileItem.id] = job.progress
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            }
+        }
+
+        // Start the actual conversion
+        await converter.startConversion()
+
+        // Mark conversion as complete
+        isConverting = false
+
+        // Clear progress
+        conversionProgress.removeAll()
+    }
+
+    /// Get video files from staging area
+    func getVideoFiles() -> [FileItem] {
+        let videoExtensions = ["mp4", "mov", "avi", "mxf", "m4v", "prores"]
+        return selectedFiles.filter { item in
+            !item.isDirectory && videoExtensions.contains(item.url.pathExtension.lowercased())
+        }
+    }
+
+    /// Convert videos during prep and move originals to z_unconverted
+    func convertPrepVideos() async {
+        guard let pending = pendingPrepConversion,
+              let converter = videoConverter else {
+            showConvertVideosPrompt = false
+            return
+        }
+
+        let fm = FileManager.default
+        let pictureFolder = pending.root.appendingPathComponent(config.settings.pictureFolderName)
+        let unconvertedFolder = pictureFolder.appendingPathComponent("z_unconverted")
+
+        // Create z_unconverted folder
+        try? fm.createDirectory(at: unconvertedFolder, withIntermediateDirectories: true)
+
+        statusMessage = "Moving originals to z_unconverted..."
+
+        // Move already-copied files to z_unconverted and prepare for conversion
+        for (videoURL, _) in pending.videoFiles {
+            let filename = videoURL.lastPathComponent
+            let picturePath = pictureFolder.appendingPathComponent(filename)
+            let unconvertedPath = unconvertedFolder.appendingPathComponent(filename)
+
+            // If file was already copied to picture folder during prep, move it to z_unconverted
+            if fm.fileExists(atPath: picturePath.path) {
+                // Copy to z_unconverted (keep original)
+                try? fm.copyItem(at: picturePath, to: unconvertedPath)
+                // Remove from PICTURE (will be replaced with converted version)
+                try? fm.removeItem(at: picturePath)
+            } else {
+                // File wasn't copied yet, so copy source to z_unconverted
+                try? fm.copyItem(at: videoURL, to: unconvertedPath)
+            }
+
+            // Add source file to converter to create ProRes version in PICTURE folder
+            converter.addFiles(
+                urls: [videoURL],
+                format: .proResProxy,
+                aspectRatio: .sixteenNine, // Always 16:9 for prep
+                outputDirectory: pictureFolder
+            )
+        }
+
+        statusMessage = "Converting videos to ProRes..."
+
+        // Start conversion
+        showConvertVideosPrompt = false
+        pendingPrepConversion = nil
+
+        await converter.startConversion()
+
+        statusMessage = "Conversion complete"
+    }
+
+    /// Skip video conversion during prep
+    func skipPrepVideoConversion() {
+        showConvertVideosPrompt = false
+        pendingPrepConversion = nil
     }
 }

@@ -404,7 +404,11 @@ class SettingsManager: ObservableObject {
 
         if let encoded = try? JSONEncoder().encode(profiles) {
             userDefaults.set(encoded, forKey: profilesKey)
-            availableProfiles = Array(profiles.keys).sorted()
+            let profileKeys = Array(profiles.keys).sorted()
+            // Defer state update to avoid SwiftUI warning
+            DispatchQueue.main.async {
+                self.availableProfiles = profileKeys
+            }
         }
     }
 
