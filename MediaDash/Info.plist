@@ -2,7 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/mattfasullo/MediaDash/refs/heads/claude/connect-local-repo-01CPxkYmhD3wBLCZhFMohevC/appcast.xml?token=GHSAT0AAAAAADPSOP6AM2RDNBL3U5J3C2B22I7PTCQ</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.3</string>
+	<key>CFBundleVersion</key>
+	<string>0.1.3</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml</string>
 </dict>
 </plist>
