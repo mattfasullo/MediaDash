@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>MediaDash Updates</title>
+        <description>Most recent updates to MediaDash</description>
+        <language>en</language>
+        <item>
+            <title>Version 0.1.2</title>
+            <description><![CDATA[
+                <h2>What's New in 0.1.2</h2>
+                <ul>
+                    <li>Added Sparkle auto-update support</li>
+                    <li>Video converter improvements</li>
+                    <li>Bug fixes and performance improvements</li>
+                </ul>
+            ]]></description>
+            <pubDate>Wed, 20 Nov 2024 14:00:00 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.1.2/MediaDash.zip"
+                sparkle:version="0.1.2"
+                sparkle:shortVersionString="0.1.2"
+                sparkle:edSignature="SIGNATURE_WILL_BE_GENERATED"
+                length="0"
+                type="application/octet-stream"
+            />
+        </item>
+    </channel>
+</rss>

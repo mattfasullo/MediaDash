@@ -334,6 +334,9 @@ struct AppSettings: Codable, Equatable {
     // Canadian Holidays (for manual override/additions)
     var customHolidays: [String] // ISO date strings (yyyy-MM-dd)
 
+    // Prep Workflow Settings
+    var openPrepFolderWhenDone: Bool
+
     static var `default`: AppSettings {
         AppSettings(
             profileName: "Default",
@@ -361,7 +364,8 @@ struct AppSettings: Codable, Equatable {
             defaultQuickSearch: .search,
             skipWeekends: true,
             skipHolidays: true,
-            customHolidays: []
+            customHolidays: [],
+            openPrepFolderWhenDone: true
         )
     }
 }
@@ -404,7 +408,11 @@ class SettingsManager: ObservableObject {
 
         if let encoded = try? JSONEncoder().encode(profiles) {
             userDefaults.set(encoded, forKey: profilesKey)
-            availableProfiles = Array(profiles.keys).sorted()
+            let profileKeys = Array(profiles.keys).sorted()
+            // Defer state update to avoid SwiftUI warning
+            DispatchQueue.main.async {
+                self.availableProfiles = profileKeys
+            }
         }
     }
 

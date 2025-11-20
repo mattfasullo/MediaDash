@@ -8,7 +8,14 @@
       "Bash(hdiutil detach:*)",
       "Bash(mdls:*)",
       "Bash(open:*)",
-      "Bash(log show:*)"
+      "Bash(log show:*)",
+      "Bash(git push:*)",
+      "Bash(gh release create:*)",
+      "Bash(gh auth:*)",
+      "Bash(chmod:*)",
+      "Bash(./sign_and_release.sh:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
