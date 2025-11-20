@@ -6,7 +6,9 @@
       "Bash(hdiutil verify:*)",
       "Bash(hdiutil attach:*)",
       "Bash(hdiutil detach:*)",
-      "Bash(mdls:*)"
+      "Bash(mdls:*)",
+      "Bash(open:*)",
+      "Bash(log show:*)"
     ],
     "deny": [],
     "ask": []

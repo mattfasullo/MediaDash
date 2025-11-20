@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject var settingsManager = SettingsManager()
+    @StateObject var metadataManager = DocketMetadataManager()
     @StateObject var manager: MediaManager
     @State private var selectedDocket: String = ""
     @State private var showNewDocketSheet = false
@@ -33,6 +34,7 @@ struct ContentView: View {
 
     // Keyboard mode tracking
     @State private var isKeyboardMode = false
+    @State private var isCommandKeyHeld = false
 
     // Staging area hover state
     @State private var isStagingHovered = false
@@ -98,8 +100,10 @@ struct ContentView: View {
 
     init() {
         let settings = SettingsManager()
+        let metadata = DocketMetadataManager()
         _settingsManager = StateObject(wrappedValue: settings)
-        _manager = StateObject(wrappedValue: MediaManager(settingsManager: settings))
+        _metadataManager = StateObject(wrappedValue: metadata)
+        _manager = StateObject(wrappedValue: MediaManager(settingsManager: settings, metadataManager: metadata))
     }
     
     // Computed dates - File is always today, Prep is next business day
@@ -181,6 +185,16 @@ struct ContentView: View {
                 Text(errorMessage)
             }
         }
+        .alert("Directory Not Connected", isPresented: $manager.showConnectionWarning) {
+            Button("OK", role: .cancel) {}
+            Button("Open Settings") {
+                showSettingsSheet = true
+            }
+        } message: {
+            if let warning = manager.connectionWarning {
+                Text(warning)
+            }
+        }
         .sheet(isPresented: $showNewDocketSheet) {
             NewDocketView(
                 isPresented: $showNewDocketSheet,
@@ -198,6 +212,7 @@ struct ContentView: View {
                 settingsManager: settingsManager,
                 isPresented: $showDocketSelectionSheet,
                 selectedDocket: $selectedDocket,
+                jobType: pendingJobType ?? .workPicture,
                 onConfirm: {
                     if let type = pendingJobType {
                         manager.runJob(
@@ -275,6 +290,9 @@ struct ContentView: View {
         .sheet(isPresented: $showSettingsSheet) {
             SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
         }
+        .sheet(isPresented: $manager.showPrepSummary) {
+            PrepSummaryView(summary: manager.prepSummary, isPresented: $manager.showPrepSummary)
+        }
         .onChange(of: settingsManager.currentSettings) { oldValue, newValue in
             manager.updateConfig(settings: newValue)
         }
@@ -282,6 +300,15 @@ struct ContentView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 mainViewFocused = true
                 focusedButton = .file
+            }
+
+            // Build search indexes immediately at app startup
+            manager.buildAllFolderIndexes()
+
+            // Monitor Command key state for showing shortcuts
+            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                isCommandKeyHeld = event.modifierFlags.contains(.command)
+                return event
             }
         }
     }
@@ -319,7 +346,7 @@ struct ContentView: View {
                         color: currentTheme.buttonColors.file,
                         isPrimary: false,
                         isFocused: focusedButton == .file,
-                        showShortcut: isKeyboardMode,
+                        showShortcut: isCommandKeyHeld,
                         theme: currentTheme
                     ) {
                         attempt(type: .workPicture)
@@ -345,7 +372,7 @@ struct ContentView: View {
                         color: currentTheme.buttonColors.prep,
                         isPrimary: false,
                         isFocused: focusedButton == .prep,
-                        showShortcut: isKeyboardMode,
+                        showShortcut: isCommandKeyHeld,
                         theme: currentTheme
                     ) {
                         attempt(type: .prep)
@@ -371,7 +398,7 @@ struct ContentView: View {
                         color: currentTheme.buttonColors.both,
                         isPrimary: false,
                         isFocused: focusedButton == .both,
-                        showShortcut: isKeyboardMode,
+                        showShortcut: isCommandKeyHeld,
                         theme: currentTheme
                     ) {
                         attempt(type: .both)
@@ -416,7 +443,7 @@ struct ContentView: View {
                         title: "Job Info",
                         shortcut: "⌘D",
                         isFocused: focusedButton == .docketLookup,
-                        showShortcut: isKeyboardMode,
+                        showShortcut: isCommandKeyHeld,
                         action: { showQuickSearchSheet = true }
                     )
                     .focused($focusedButton, equals: .docketLookup)
@@ -435,7 +462,7 @@ struct ContentView: View {
                         title: "Search",
                         shortcut: "⌘F",
                         isFocused: focusedButton == .searchSessions,
-                        showShortcut: isKeyboardMode,
+                        showShortcut: isCommandKeyHeld,
                         action: { showSearchSheet = true }
                     )
                     .focused($focusedButton, equals: .searchSessions)
@@ -454,7 +481,7 @@ struct ContentView: View {
                         title: "Settings",
                         shortcut: "⌘,",
                         isFocused: focusedButton == .settings,
-                        showShortcut: isKeyboardMode,
+                        showShortcut: isCommandKeyHeld,
                         action: { showSettingsSheet = true }
                     )
                     .focused($focusedButton, equals: .settings)
@@ -574,29 +601,70 @@ struct ContentView: View {
                     } else {
                         // File List
                         List(manager.selectedFiles) { f in
-                            HStack {
-                                Image(nsImage: getIcon(f.url))
-                                    .resizable()
-                                    .frame(width: 16, height: 16)
-                                Text(f.name)
-                                Spacer()
-                                // Show file count for folders, or file size for files
-                                if f.isDirectory {
-                                    Text("\(f.fileCount) file\(f.fileCount == 1 ? "" : "s")")
-                                        .font(.caption)
-                                        .foregroundColor(.blue)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.blue.opacity(0.1))
-                                        .cornerRadius(4)
-                                } else if let size = getFileSize(f.url) {
-                                    Text(size)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                            ZStack(alignment: .leading) {
+                                // Progress bar background
+                                if let progress = manager.fileProgress[f.id], progress > 0 {
+                                    GeometryReader { geometry in
+                                        Rectangle()
+                                            .fill(Color.blue.opacity(0.2))
+                                            .frame(width: geometry.size.width * progress)
+                                    }
+                                }
+
+                                // File info
+                                HStack {
+                                    Image(nsImage: getIcon(f.url))
+                                        .resizable()
+                                        .frame(width: 16, height: 16)
+                                    Text(f.name)
+                                    Spacer()
+
+                                    // Show checkmark, progress, or file info
+                                    if let completionState = manager.fileCompletionState[f.id] {
+                                        switch completionState {
+                                        case .complete:
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(.green)
+                                                .font(.system(size: 16))
+                                        case .workPicDone, .prepDone:
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(.yellow)
+                                                .font(.system(size: 16))
+                                        case .none:
+                                            EmptyView()
+                                        }
+                                    } else if let progress = manager.fileProgress[f.id], progress > 0, progress < 1.0 {
+                                        Text("\(Int(progress * 100))%")
+                                            .font(.caption)
+                                            .monospacedDigit()
+                                            .foregroundColor(.blue)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.blue.opacity(0.1))
+                                            .cornerRadius(4)
+                                    } else {
+                                        // Show file count for folders, or file size for files
+                                        if f.isDirectory {
+                                            Text("\(f.fileCount) file\(f.fileCount == 1 ? "" : "s")")
+                                                .font(.caption)
+                                                .foregroundColor(.blue)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.blue.opacity(0.1))
+                                                .cornerRadius(4)
+                                        } else if let size = getFileSize(f.url) {
+                                            Text(size)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
                                 }
                             }
                         }
                         .listStyle(.inset(alternatesRowBackgrounds: true))
+                        .animation(.easeInOut(duration: 0.3), value: manager.selectedFiles)
+                        .animation(.easeInOut(duration: 0.2), value: manager.fileProgress)
+                        .animation(.easeInOut(duration: 0.3), value: manager.fileCompletionState)
                     }
                 }
                 .contentShape(Rectangle())
@@ -1249,11 +1317,28 @@ struct NoSelectTextField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            // Handle Enter key
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 parent.onSubmit()
                 return true
             }
-            return false
+
+            // Let arrow keys pass through to SwiftUI handlers
+            // This allows navigation and folder cycling to work
+            if commandSelector == #selector(NSResponder.moveUp(_:)) ||
+               commandSelector == #selector(NSResponder.moveDown(_:)) ||
+               commandSelector == #selector(NSResponder.moveLeft(_:)) ||
+               commandSelector == #selector(NSResponder.moveRight(_:)) {
+                return false  // Don't consume, let it bubble up
+            }
+
+            // Let delete/backspace pass through
+            if commandSelector == #selector(NSResponder.deleteBackward(_:)) ||
+               commandSelector == #selector(NSResponder.deleteForward(_:)) {
+                return false  // Don't consume, let it bubble up
+            }
+
+            return false  // Don't consume other commands
         }
     }
 }
@@ -1265,6 +1350,7 @@ struct DocketSearchView: View {
     @ObservedObject var settingsManager: SettingsManager
     @Binding var isPresented: Bool
     @Binding var selectedDocket: String
+    var jobType: JobType = .workPicture
     var onConfirm: () -> Void
 
     @State private var searchText = ""
@@ -1273,6 +1359,9 @@ struct DocketSearchView: View {
     @State private var filteredDockets: [String] = []
     @State private var selectedPath: String?
     @State private var showNewDocketSheet = false
+    @State private var allDockets: [String] = []
+    @State private var showExistingPrepAlert = false
+    @State private var existingPrepFolders: [String] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1427,12 +1516,22 @@ struct DocketSearchView: View {
         }
         .frame(width: 600, height: 500)
         .onAppear {
-            filteredDockets = manager.dockets
-            // Auto-select first docket
-            if let first = manager.dockets.first {
-                selectedPath = first
+            // Scan dockets based on job type
+            Task {
+                let currentConfig = manager.config
+                let dockets = await Task.detached {
+                    MediaLogic.scanDockets(config: currentConfig, jobType: jobType)
+                }.value
+                await MainActor.run {
+                    allDockets = dockets
+                    filteredDockets = dockets
+                    // Auto-select first docket
+                    if let first = dockets.first {
+                        selectedPath = first
+                    }
+                    isSearchFieldFocused = true
+                }
             }
-            isSearchFieldFocused = true
         }
         .sheet(isPresented: $showNewDocketSheet) {
             NewDocketView(
@@ -1510,6 +1609,19 @@ struct DocketSearchView: View {
             }
             return .ignored
         }
+        .alert("Existing Prep Folder Found", isPresented: $showExistingPrepAlert) {
+            Button("Use Existing", action: useExistingPrepFolder)
+            Button("Create New", action: createNewPrepFolder)
+            Button("Cancel", role: .cancel) {
+                showExistingPrepAlert = false
+            }
+        } message: {
+            if existingPrepFolders.count == 1 {
+                Text("A prep folder already exists for this docket:\n\(existingPrepFolders[0])\n\nDo you want to add files to the existing folder or create a new one?")
+            } else {
+                Text("\(existingPrepFolders.count) prep folders exist for this docket. Do you want to add to the most recent one or create a new folder?")
+            }
+        }
     }
 
     // MARK: - Helper Methods
@@ -1518,9 +1630,9 @@ struct DocketSearchView: View {
         selectedPath = nil
 
         if searchText.isEmpty {
-            filteredDockets = manager.dockets
+            filteredDockets = allDockets
         } else {
-            filteredDockets = manager.dockets.filter { $0.localizedCaseInsensitiveContains(searchText) }
+            filteredDockets = allDockets.filter { $0.localizedCaseInsensitiveContains(searchText) }
         }
 
         // Auto-select first result
@@ -1531,8 +1643,61 @@ struct DocketSearchView: View {
 
     private func selectDocket(_ docket: String) {
         selectedDocket = docket
+
+        // For "Both" mode, check if prep folders already exist
+        if jobType == .both {
+            checkForExistingPrepFolders(docket: docket)
+        } else {
+            isPresented = false
+            // Delay slightly to ensure sheet closes before job runs
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                onConfirm()
+            }
+        }
+    }
+
+    private func checkForExistingPrepFolders(docket: String) {
+        Task {
+            let prepPath = manager.config.getPaths().prep
+            let fm = FileManager.default
+
+            var existingFolders: [String] = []
+
+            if let items = try? fm.contentsOfDirectory(at: prepPath, includingPropertiesForKeys: nil) {
+                for item in items {
+                    if item.hasDirectoryPath && item.lastPathComponent.hasPrefix("\(docket)_PREP_") {
+                        existingFolders.append(item.lastPathComponent)
+                    }
+                }
+            }
+
+            await MainActor.run {
+                if !existingFolders.isEmpty {
+                    existingPrepFolders = existingFolders
+                    showExistingPrepAlert = true
+                } else {
+                    isPresented = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        onConfirm()
+                    }
+                }
+            }
+        }
+    }
+
+    private func useExistingPrepFolder() {
+        // For now, just proceed - the runJob will create a new folder anyway
+        // In the future, we could modify runJob to use an existing folder
+        showExistingPrepAlert = false
         isPresented = false
-        // Delay slightly to ensure sheet closes before job runs
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            onConfirm()
+        }
+    }
+
+    private func createNewPrepFolder() {
+        showExistingPrepAlert = false
+        isPresented = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             onConfirm()
         }
@@ -1680,13 +1845,16 @@ struct SearchView: View {
 
                 NoSelectTextField(
                     text: $searchText,
-                    placeholder: manager.isIndexing ? "Building search index..." : "Search sessions...",
+                    placeholder: manager.isIndexing ? "Type to search (indexing in progress)..." : "Search sessions...",
                     isEnabled: true,
                     onSubmit: {
                         openInFinder()
                     },
                     onTextChange: {
-                        performSearch()
+                        // Always allow typing, but defer search until index is ready
+                        Task { @MainActor in
+                            performSearch()
+                        }
                     }
                 )
                 .padding(10)
@@ -1861,7 +2029,7 @@ struct SearchView: View {
                     .padding()
                     .background(.regularMaterial)
                     .cornerRadius(8)
-                } else if exactResults.isEmpty && fuzzyResults.isEmpty && !searchText.isEmpty {
+                } else if exactResults.isEmpty && fuzzyResults.isEmpty && !searchText.isEmpty && !manager.isIndexing {
                     VStack(spacing: 8) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 32))
@@ -1889,6 +2057,7 @@ struct SearchView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(selectedPath == nil)
+
             }
             .padding()
             .background(Color(nsColor: .windowBackgroundColor))
@@ -1899,11 +2068,8 @@ struct SearchView: View {
             isSearchFieldFocused = true
             isListFocused = false
 
-            // Pre-index all folders for instant switching
-            manager.buildAllFolderIndexes()
-
-            // Perform initial search if there's text
-            if !searchText.isEmpty {
+            // Perform initial search if there's text (index was pre-built at app startup)
+            if !searchText.isEmpty && !manager.isIndexing {
                 performSearch()
             }
         }
@@ -1990,81 +2156,135 @@ struct SearchView: View {
             return .ignored
         }
         .onKeyPress { press in
-            // Any letter/character refocuses search field
+            // Any letter/character refocuses search field and adds the character
             if isListFocused && press.characters.count == 1 {
                 let char = press.characters.first!
                 if char.isLetter || char.isNumber || char.isWhitespace || char.isPunctuation {
-                    isSearchFieldFocused = true
-                    isListFocused = false
+                    // Defer state updates to avoid publishing during view updates
+                    Task { @MainActor in
+                        // Append the character to search text
+                        searchText += String(char)
+                        // Refocus search field
+                        isSearchFieldFocused = true
+                        isListFocused = false
+                        // Trigger search with new text
+                        performSearch()
+                    }
                     return .handled
                 }
             }
             return .ignored
         }
     }
-    
+
     // MARK: - Helper Methods
 
     private func performSearch(immediate: Bool = false) {
+        // Don't search if index is still building
+        guard !manager.isIndexing else {
+            return
+        }
+
         // Cancel previous search
         searchTask?.cancel()
 
         selectedPath = nil
 
+        // If search text is empty, clear results immediately
+        if searchText.isEmpty {
+            cachedResults.removeAll()
+            exactResults = []
+            fuzzyResults = []
+            isSearching = false
+            return
+        }
+
+        // Set searching state immediately
+        isSearching = true
+
         searchTask = Task {
-            // Debounce search only when typing (not when changing folders)
-            if !immediate {
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                guard !Task.isCancelled else { return }
-            }
+            do {
+                // Debounce search only when typing (not when changing folders)
+                if !immediate {
+                    try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    guard !Task.isCancelled else {
+                        await MainActor.run { isSearching = false }
+                        return
+                    }
+                }
 
-            // Set searching state
-            await MainActor.run {
-                isSearching = true
-            }
+                // Search all folders simultaneously with error handling
+                let currentSearchText = searchText
 
-            // Search all folders simultaneously
-            let currentSearchText = searchText
-            async let workPictureResults = manager.searchSessions(term: currentSearchText, folder: .workPicture)
-            async let mediaPostingsResults = manager.searchSessions(term: currentSearchText, folder: .mediaPostings)
-            async let sessionsResults = manager.searchSessions(term: currentSearchText, folder: .sessions)
+                // Wrap searches in error handling
+                let workPictureResults = await manager.searchSessions(term: currentSearchText, folder: .workPicture)
+                guard !Task.isCancelled else {
+                    await MainActor.run { isSearching = false }
+                    return
+                }
 
-            let allResults = await (workPictureResults, mediaPostingsResults, sessionsResults)
-            guard !Task.isCancelled else { return }
+                let mediaPostingsResults = await manager.searchSessions(term: currentSearchText, folder: .mediaPostings)
+                guard !Task.isCancelled else {
+                    await MainActor.run { isSearching = false }
+                    return
+                }
 
-            await MainActor.run {
-                // Cache all results
-                cachedResults[.workPicture] = (allResults.0.exactMatches, allResults.0.fuzzyMatches)
-                cachedResults[.mediaPostings] = (allResults.1.exactMatches, allResults.1.fuzzyMatches)
-                cachedResults[.sessions] = (allResults.2.exactMatches, allResults.2.fuzzyMatches)
+                let sessionsResults = await manager.searchSessions(term: currentSearchText, folder: .sessions)
+                guard !Task.isCancelled else {
+                    await MainActor.run { isSearching = false }
+                    return
+                }
 
-                // Display results for currently selected folder
-                updateDisplayedResults()
-                isSearching = false
+                await MainActor.run {
+                    // Cache all results - always update cache even if empty
+                    cachedResults[.workPicture] = (workPictureResults.exactMatches, workPictureResults.fuzzyMatches)
+                    cachedResults[.mediaPostings] = (mediaPostingsResults.exactMatches, mediaPostingsResults.fuzzyMatches)
+                    cachedResults[.sessions] = (sessionsResults.exactMatches, sessionsResults.fuzzyMatches)
+
+                    // Display results for currently selected folder
+                    // isSearching will be set to false inside updateDisplayedResults after results are displayed
+                    updateDisplayedResults()
+                }
+            } catch {
+                // If there's any error, ensure we reset the state
+                await MainActor.run {
+                    isSearching = false
+                    print("Search error: \(error.localizedDescription)")
+                }
             }
         }
     }
 
     private func updateDisplayedResults() {
-        if let cached = cachedResults[selectedFolder] {
-            exactResults = cached.exact
-            fuzzyResults = cached.fuzzy
+        // Validate that indexes are built for this folder
+        if manager.folderCaches[selectedFolder] == nil && !manager.isIndexing {
+            print("Warning: No index for \(selectedFolder.displayName), triggering rebuild")
+            manager.buildSessionIndex(folder: selectedFolder)
+        }
 
-            // Auto-select first result (prefer exact matches)
-            if let firstResult = cached.exact.first ?? cached.fuzzy.first {
-                selectedPath = firstResult
+        // Defer state updates to avoid publishing during view updates
+        Task { @MainActor in
+            if let cached = cachedResults[selectedFolder] {
+                exactResults = cached.exact
+                fuzzyResults = cached.fuzzy
+
+                // Auto-select first result (prefer exact matches)
+                if let firstResult = cached.exact.first ?? cached.fuzzy.first {
+                    selectedPath = firstResult
+                } else {
+                    selectedPath = nil
+                }
             } else {
+                // No cached results for this folder yet
+                exactResults = []
+                fuzzyResults = []
                 selectedPath = nil
-            }
-        } else {
-            // No cached results for this folder yet
-            exactResults = []
-            fuzzyResults = []
-            selectedPath = nil
 
-            // If there's text to search, trigger a quiet background search
-            if !searchText.isEmpty && !isSearching {
-                performSearch(immediate: true)
+                // If there's text to search and we're not already searching, trigger a search
+                if !searchText.isEmpty && !isSearching && !manager.isIndexing {
+                    print("No cached results for \(selectedFolder.displayName), triggering search")
+                    performSearch(immediate: true)
+                }
             }
         }
     }
@@ -2113,16 +2333,8 @@ struct SearchView: View {
             settingsManager.saveCurrentProfile()
         }
 
-        // Switch to cached results (instant) and maintain focus
+        // Switch to cached results (instant)
         updateDisplayedResults()
-
-        // Aggressively restore focus with delay to ensure it sticks
-        isSearchFieldFocused = true
-        isListFocused = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-            isSearchFieldFocused = true
-            isListFocused = false
-        }
     }
 }
 
@@ -2841,6 +3053,77 @@ struct MetadataField: View {
             TextField("Enter \(label.lowercased())", text: $text)
                 .textFieldStyle(.roundedBorder)
         }
+    }
+}
+
+// MARK: - Prep Summary View
+
+struct PrepSummaryView: View {
+    let summary: String
+    @Binding var isPresented: Bool
+    @State private var copied = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Prep Summary")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Spacer()
+                Button("Done") {
+                    isPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            Divider()
+
+            // Summary content
+            ScrollView {
+                Text(summary)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+
+            Divider()
+
+            // Action buttons
+            HStack {
+                if copied {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Copied to clipboard!")
+                            .foregroundColor(.green)
+                    }
+                    .font(.caption)
+                }
+
+                Spacer()
+
+                Button("Copy to Clipboard") {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(summary, forType: .string)
+                    copied = true
+
+                    // Reset copied state after 2 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        copied = false
+                    }
+                }
+                .keyboardShortcut("c", modifiers: .command)
+            }
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+        }
+        .frame(width: 600, height: 500)
     }
 }
 

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import AVFoundation
 
 // --- CONFIGURATION (Strictly Non-Isolated) ---
 struct AppConfig: Sendable {
@@ -28,6 +29,13 @@ enum JobType: String, Sendable, CaseIterable {
     case workPicture = "Work Picture"
     case prep = "Prep"
     case both = "Both"
+}
+
+enum FileCompletionState: Sendable {
+    case none           // Not started
+    case workPicDone    // Work Picture complete (for Both mode)
+    case prepDone       // Prep complete (for Both mode)
+    case complete       // Fully complete
 }
 
 struct FileItem: Identifiable, Hashable, Sendable {
@@ -142,8 +150,10 @@ enum MediaLogic {
         return false
     }
 
-    nonisolated static func scanDockets(config: AppConfig) -> [String] {
-        let base = config.getPaths().workPic
+    nonisolated static func scanDockets(config: AppConfig, jobType: JobType = .workPicture) -> [String] {
+        let paths = config.getPaths()
+        // For Both mode, show Work Picture folders (we'll check for prep folders later)
+        let base = (jobType == .prep) ? paths.prep : paths.workPic
         var results: [String] = []
         do {
             let items = try FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: [.contentModificationDateKey])
@@ -154,7 +164,21 @@ enum MediaLogic {
             }
             for item in sorted {
                 if item.hasDirectoryPath && !item.lastPathComponent.hasPrefix(".") {
-                    results.append(item.lastPathComponent)
+                    // For prep mode, extract just the docket number from folder name
+                    if jobType == .prep {
+                        // Prep folders are named like "12345_PREP_Dec4.24"
+                        // Extract just "12345" part
+                        let folderName = item.lastPathComponent
+                        if let docketNumber = folderName.split(separator: "_").first {
+                            let docketStr = String(docketNumber)
+                            if !results.contains(docketStr) {
+                                results.append(docketStr)
+                            }
+                        }
+                    } else {
+                        // For work picture, just use the folder name (which is the docket number)
+                        results.append(item.lastPathComponent)
+                    }
                 }
             }
         } catch {
@@ -174,7 +198,10 @@ enum MediaLogic {
             if fm.fileExists(atPath: base.path, isDirectory: &isDir) {
                 do {
                     let contents = try fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)
-                    let years = contents.filter { $0.lastPathComponent.contains("_PROTOOLS SESSIONS") }
+                    let years = contents.filter {
+                        $0.lastPathComponent.uppercased().contains("_PROTOOLS SESSIONS") ||
+                        $0.lastPathComponent.uppercased().contains("PROTOOLS")
+                    }
                     for year in years {
                         if let sessions = try? fm.contentsOfDirectory(at: year, includingPropertiesForKeys: nil) {
                             for sess in sessions {
@@ -247,6 +274,167 @@ enum MediaLogic {
         }
         return results
     }
+
+    // MARK: - Prep Summary Generation
+
+    /// Get video duration in seconds
+    nonisolated static func getVideoDuration(_ url: URL) async -> TimeInterval? {
+        let asset = AVAsset(url: url)
+        guard let duration = try? await asset.load(.duration) else { return nil }
+        guard duration.isValid && !duration.isIndefinite else { return nil }
+        return CMTimeGetSeconds(duration)
+    }
+
+    /// Format duration as :SS or M:SS or MM:SS
+    nonisolated static func formatDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = Int(seconds.rounded())
+        let minutes = totalSeconds / 60
+        let secs = totalSeconds % 60
+
+        if minutes == 0 {
+            return String(format: ":%02d", secs)
+        } else if minutes < 60 {
+            return String(format: "%d:%02d", minutes, secs)
+        } else {
+            let hours = minutes / 60
+            let mins = minutes % 60
+            return String(format: "%d:%02d:%02d", hours, mins, secs)
+        }
+    }
+
+    /// Check if filename contains stem keywords
+    nonisolated static func isStemFile(_ filename: String) -> Bool {
+        let stemKeywords = ["vocal", "instrumental", "drum", "percussion", "bass", "guitar",
+                           "piano", "strings", "brass", "synth", "pad", "lead", "stem"]
+        let lowercased = filename.lowercased()
+        return stemKeywords.contains { lowercased.contains($0) }
+    }
+
+    /// Extract track name from stem filename (remove stem keyword suffix)
+    nonisolated static func extractTrackName(_ filename: String) -> String {
+        let stemKeywords = ["vocal", "instrumental", "drum", "percussion", "bass", "guitar",
+                           "piano", "strings", "brass", "synth", "pad", "lead", "stem"]
+        var name = (filename as NSString).deletingPathExtension
+        let lowercased = name.lowercased()
+
+        // Remove stem keywords from the end
+        for keyword in stemKeywords {
+            if lowercased.hasSuffix(keyword) {
+                name = String(name.dropLast(keyword.count)).trimmingCharacters(in: .whitespaces)
+                name = name.trimmingCharacters(in: CharacterSet(charactersIn: "_- "))
+                break
+            }
+        }
+        return name
+    }
+
+    /// Generate prep summary text
+    nonisolated static func generatePrepSummary(docket: String, jobName: String, prepFolderPath: String, config: AppConfig) async -> String {
+        let fm = FileManager.default
+        let prepURL = URL(fileURLWithPath: prepFolderPath)
+        var summary = "\(docket) - \(jobName) Prep\n\n"
+
+        guard fm.fileExists(atPath: prepFolderPath) else {
+            return summary + "Prep folder not found."
+        }
+
+        // PICTURE
+        let picturePath = prepURL.appendingPathComponent(config.settings.pictureFolderName)
+        if fm.fileExists(atPath: picturePath.path) {
+            let videoFiles = (try? fm.contentsOfDirectory(at: picturePath, includingPropertiesForKeys: nil))?.filter {
+                config.settings.pictureExtensions.contains($0.pathExtension.lowercased())
+            } ?? []
+
+            if !videoFiles.isEmpty {
+                var durationGroups: [String: Int] = [:]
+                for video in videoFiles {
+                    if let duration = await getVideoDuration(video) {
+                        let formatted = formatDuration(duration)
+                        durationGroups[formatted, default: 0] += 1
+                    }
+                }
+
+                let durationText = durationGroups.sorted { $0.key < $1.key }
+                    .map { "\($0.value) x \($0.key)" }
+                    .joined(separator: ", ")
+
+                summary += "PICTURE - \(durationText) prepped\n"
+            }
+        }
+
+        // OMF/AAF
+        let aafOmfPath = prepURL.appendingPathComponent(config.settings.aafOmfFolderName)
+        if fm.fileExists(atPath: aafOmfPath.path) {
+            let aafOmfFiles = (try? fm.contentsOfDirectory(at: aafOmfPath, includingPropertiesForKeys: nil))?.filter {
+                config.settings.aafOmfExtensions.contains($0.pathExtension.lowercased())
+            } ?? []
+
+            if !aafOmfFiles.isEmpty {
+                var types: [String] = []
+                if aafOmfFiles.contains(where: { $0.pathExtension.lowercased() == "aaf" }) {
+                    types.append("AAF")
+                }
+                if aafOmfFiles.contains(where: { $0.pathExtension.lowercased() == "omf" }) {
+                    types.append("OMF")
+                }
+                let typeText = types.isEmpty ? "AAF/OMF" : types.joined(separator: "/")
+                summary += "\(typeText) - Tested & prepped\n"
+            }
+        }
+
+        // MUSIC
+        let musicPath = prepURL.appendingPathComponent(config.settings.musicFolderName)
+        if fm.fileExists(atPath: musicPath.path) {
+            let musicFiles = (try? fm.contentsOfDirectory(at: musicPath, includingPropertiesForKeys: nil, options: .skipsHiddenFiles))?.filter {
+                !$0.hasDirectoryPath && config.settings.musicExtensions.contains($0.pathExtension.lowercased())
+            } ?? []
+
+            if !musicFiles.isEmpty {
+                summary += "MUSIC\n"
+                for file in musicFiles.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                    let name = (file.lastPathComponent as NSString).deletingPathExtension
+                    summary += "  - \(name) prepped\n"
+                }
+            }
+
+            // Check for stems folders
+            let folders = (try? fm.contentsOfDirectory(at: musicPath, includingPropertiesForKeys: nil))?.filter {
+                $0.hasDirectoryPath && $0.lastPathComponent.uppercased().contains("STEM")
+            } ?? []
+
+            if !folders.isEmpty {
+                for folder in folders.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                    summary += "  - \(folder.lastPathComponent) prepped\n"
+                }
+            }
+        }
+
+        // SFX
+        let sfxPath = prepURL.appendingPathComponent("SFX")
+        if fm.fileExists(atPath: sfxPath.path) {
+            let ptxFiles = (try? fm.contentsOfDirectory(at: sfxPath, includingPropertiesForKeys: nil))?.filter {
+                $0.pathExtension.lowercased() == "ptx"
+            } ?? []
+
+            if !ptxFiles.isEmpty {
+                summary += "SFX - Prepped (ProTools session found)\n"
+            }
+        }
+
+        // OTHER
+        let otherPath = prepURL.appendingPathComponent(config.settings.otherFolderName)
+        if fm.fileExists(atPath: otherPath.path) {
+            let otherFiles = (try? fm.contentsOfDirectory(at: otherPath, includingPropertiesForKeys: nil))?.filter {
+                !$0.hasDirectoryPath
+            } ?? []
+
+            if !otherFiles.isEmpty {
+                summary += "OTHER - \(otherFiles.count) file(s) prepped\n"
+            }
+        }
+
+        return summary.trimmingCharacters(in: .newlines)
+    }
 }
 
 @MainActor
@@ -257,19 +445,29 @@ class MediaManager: ObservableObject {
     @Published var isProcessing: Bool = false
     @Published var cancelRequested: Bool = false
     @Published var progress: Double = 0
+    @Published var fileProgress: [UUID: Double] = [:] // Per-file progress tracking
+    @Published var fileCompletionState: [UUID: FileCompletionState] = [:] // Per-file completion state
     @Published var isIndexing: Bool = false // Computed from indexingFolders
     @Published var isScanningDockets: Bool = false
     @Published var errorMessage: String?
     @Published var showError: Bool = false
     @Published var indexingFolders: Set<SearchFolder> = [] // Track which folders are being indexed
+    @Published var prepSummary: String = ""
+    @Published var showPrepSummary: Bool = false
+    @Published var connectionWarning: String? = nil
+    @Published var showConnectionWarning: Bool = false
 
     private var cachedSessions: [String] = [] // Legacy - for backward compatibility
-    private var folderCaches: [SearchFolder: [String]] = [:] // New cache system
+    var folderCaches: [SearchFolder: [String]] = [:] // New cache system - internal for validation
     private var finderScript: NSAppleScript?
-    private var config: AppConfig
+    var config: AppConfig // Internal for DocketSearchView access
+    private var prepFolderWatcher: DispatchSourceFileSystemObject?
+    private var currentPrepFolder: String?
+    private var metadataManager: DocketMetadataManager
 
-    init(settingsManager: SettingsManager) {
+    init(settingsManager: SettingsManager, metadataManager: DocketMetadataManager) {
         self.config = AppConfig(settings: settingsManager.currentSettings)
+        self.metadataManager = metadataManager
         let source = """
         tell application "Finder"
             set selectionList to selection
@@ -281,7 +479,10 @@ class MediaManager: ObservableObject {
         end tell
         """
         self.finderScript = NSAppleScript(source: source)
-        
+
+        // Check directory access on startup
+        checkAllDirectoryAccess()
+
         refreshDockets()
         buildSessionIndex()
         startFinderLoop()
@@ -291,6 +492,59 @@ class MediaManager: ObservableObject {
         self.config = AppConfig(settings: settings)
         refreshDockets()
         buildSessionIndex()
+    }
+
+    // MARK: - Directory Connection Checking
+
+    /// Check if required directories are accessible based on operation type
+    func checkDirectoryAccess(for operation: String) -> Bool {
+        let fm = FileManager.default
+        var missingPaths: [String] = []
+
+        // Check server base path for work picture and prep operations
+        if operation.contains("Work Picture") || operation.contains("Prep") || operation.contains("Both") {
+            let serverBase = config.settings.serverBasePath
+            if !fm.fileExists(atPath: serverBase) {
+                missingPaths.append("Server: \(serverBase)")
+            }
+        }
+
+        // Check sessions base path for search operations
+        if operation.contains("Search") || operation.contains("Index") {
+            let sessionsBase = config.settings.sessionsBasePath
+            if !fm.fileExists(atPath: sessionsBase) {
+                missingPaths.append("Sessions: \(sessionsBase)")
+            }
+        }
+
+        if !missingPaths.isEmpty {
+            connectionWarning = "Required directories not connected:\n\n" + missingPaths.joined(separator: "\n") + "\n\nPlease connect to these directories and try again."
+            showConnectionWarning = true
+            return false
+        }
+
+        return true
+    }
+
+    /// Check general directory access (for startup checks)
+    func checkAllDirectoryAccess() {
+        let fm = FileManager.default
+        var warnings: [String] = []
+
+        let serverBase = config.settings.serverBasePath
+        if !fm.fileExists(atPath: serverBase) {
+            warnings.append("• Server path not connected: \(serverBase)")
+        }
+
+        let sessionsBase = config.settings.sessionsBasePath
+        if !fm.fileExists(atPath: sessionsBase) {
+            warnings.append("• Sessions path not connected: \(sessionsBase)")
+        }
+
+        if !warnings.isEmpty {
+            connectionWarning = "Some directories are not connected:\n\n" + warnings.joined(separator: "\n") + "\n\nSome features may not work until these directories are connected.\n\nYou can update paths in Settings if needed."
+            showConnectionWarning = true
+        }
     }
 
     func refreshDockets() {
@@ -324,6 +578,9 @@ class MediaManager: ObservableObject {
                 }
                 self.indexingFolders.remove(folder)
                 self.isIndexing = !self.indexingFolders.isEmpty
+
+                // Log the result for debugging
+                print("\(folder.displayName): Indexed \(index.count) items")
             }
         }
     }
@@ -461,8 +718,16 @@ class MediaManager: ObservableObject {
     
     func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date) {
         if selectedFiles.isEmpty { pickFiles(); return }
+
+        // Check directory access before starting
+        if !checkDirectoryAccess(for: type.rawValue) {
+            return
+        }
+
         cancelRequested = false
         isProcessing = true; progress = 0; statusMessage = "Starting..."
+        fileProgress.removeAll() // Clear any previous progress
+        fileCompletionState.removeAll() // Clear completion states
         let files = selectedFiles
         let currentConfig = self.config
         Task.detached(priority: .userInitiated) {
@@ -494,15 +759,29 @@ class MediaManager: ObservableObject {
                     if shouldCancel {
                         break
                     }
+
+                    // Mark file as starting
+                    await MainActor.run { self.fileProgress[f.id] = 0.0 }
+
                     let dest = destFolder.appendingPathComponent(f.name)
                     if !self.copyItem(from: f.url, to: dest) {
                         failedFiles.append(f.name)
                     }
 
-                    // FIX: Inline update
+                    // Mark file as complete
                     currentStep += 1
                     let p = currentStep / total
-                    await MainActor.run { self.progress = p }
+                    await MainActor.run {
+                        self.fileProgress[f.id] = 1.0
+                        self.progress = p
+
+                        // Update completion state
+                        if type == .both {
+                            self.fileCompletionState[f.id] = .workPicDone
+                        } else {
+                            self.fileCompletionState[f.id] = .complete
+                        }
+                    }
                 }
             }
             
@@ -522,17 +801,37 @@ class MediaManager: ObservableObject {
                     return
                 }
 
-                var flats: [URL] = []
+                // Build map of flat files to their source FileItem
+                var flats: [(url: URL, sourceId: UUID)] = []
+                var fileToFlatCount: [UUID: Int] = [:]
                 for f in files {
-                    flats.append(contentsOf: MediaLogic.getAllFiles(at: f.url))
+                    let flatFiles = MediaLogic.getAllFiles(at: f.url)
+                    fileToFlatCount[f.id] = flatFiles.count
+                    for flatFile in flatFiles {
+                        flats.append((flatFile, f.id))
+                    }
                 }
 
-                for f in flats {
+                // Initialize progress for all files
+                await MainActor.run {
+                    for f in files {
+                        self.fileProgress[f.id] = 0.0
+                    }
+                }
+
+                // Track completion per source file
+                var completedPerFile: [UUID: Int] = [:]
+                for f in files {
+                    completedPerFile[f.id] = 0
+                }
+
+                for (flatFile, sourceId) in flats {
                     let shouldCancel = await MainActor.run { self.cancelRequested }
                     if shouldCancel {
                         break
                     }
-                    let cat = self.getCategory(f, config: currentConfig)
+
+                    let cat = self.getCategory(flatFile, config: currentConfig)
                     let dir = root.appendingPathComponent(cat)
                     do {
                         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -540,14 +839,63 @@ class MediaManager: ObservableObject {
                         print("Error creating category directory \(cat): \(error.localizedDescription)")
                     }
 
-                    if !self.copyItem(from: f, to: dir.appendingPathComponent(f.lastPathComponent)) {
-                        failedFiles.append(f.lastPathComponent)
+                    if !self.copyItem(from: flatFile, to: dir.appendingPathComponent(flatFile.lastPathComponent)) {
+                        failedFiles.append(flatFile.lastPathComponent)
                     }
 
-                    // Update progress for prep files
+                    // Update progress for source file
+                    completedPerFile[sourceId, default: 0] += 1
                     currentStep += 1
                     let p = currentStep / total
-                    await MainActor.run { self.progress = p }
+                    let fileP = Double(completedPerFile[sourceId]!) / Double(fileToFlatCount[sourceId]!)
+
+                    await MainActor.run {
+                        self.fileProgress[sourceId] = fileP
+                        self.progress = p
+
+                        // If this file is complete, update completion state
+                        if fileP >= 1.0 {
+                            if type == .both {
+                                // Check if work picture was already done
+                                if self.fileCompletionState[sourceId] == .workPicDone {
+                                    self.fileCompletionState[sourceId] = .complete
+                                } else {
+                                    self.fileCompletionState[sourceId] = .prepDone
+                                }
+                            } else {
+                                self.fileCompletionState[sourceId] = .complete
+                            }
+                        }
+                    }
+                }
+
+                // Organize stems and generate summary
+                if type == .prep || type == .both {
+                    await MainActor.run { self.statusMessage = "Organizing stems..." }
+                    self.organizeStems(in: root, config: currentConfig)
+
+                    // Get job name for summary
+                    let jobName = await MainActor.run { self.getJobName(for: docket) }
+
+                    await MainActor.run { self.statusMessage = "Generating prep summary..." }
+                    let summary = await MediaLogic.generatePrepSummary(
+                        docket: docket,
+                        jobName: jobName,
+                        prepFolderPath: root.path,
+                        config: currentConfig
+                    )
+
+                    // Save summary to file
+                    let summaryFile = root.appendingPathComponent("\(docket)_Prep_Summary.txt")
+                    try? summary.write(to: summaryFile, atomically: true, encoding: .utf8)
+
+                    // Update UI and setup file watching
+                    await MainActor.run {
+                        self.prepSummary = summary
+                        self.showPrepSummary = true
+                        self.currentPrepFolder = root.path
+                        self.setupPrepFolderWatcher(path: root.path, docket: docket)
+                    }
                 }
             }
 
@@ -609,6 +957,108 @@ class MediaManager: ObservableObject {
         } catch {
             print("Error copying file from \(from.path) to \(to.path): \(error.localizedDescription)")
             return false
+        }
+    }
+
+    // MARK: - Prep Summary Helpers
+
+    /// Organize stem files into dedicated folders
+    nonisolated private func organizeStems(in prepFolder: URL, config: AppConfig) {
+        let fm = FileManager.default
+        let musicFolder = prepFolder.appendingPathComponent(config.settings.musicFolderName)
+
+        guard fm.fileExists(atPath: musicFolder.path) else { return }
+
+        // Get all music files
+        guard let musicFiles = try? fm.contentsOfDirectory(at: musicFolder, includingPropertiesForKeys: nil) else { return }
+
+        let audioFiles = musicFiles.filter {
+            !$0.hasDirectoryPath && config.settings.musicExtensions.contains($0.pathExtension.lowercased())
+        }
+
+        // Group stems by track name
+        var stemGroups: [String: [URL]] = [:]
+
+        for file in audioFiles {
+            if MediaLogic.isStemFile(file.lastPathComponent) {
+                let trackName = MediaLogic.extractTrackName(file.lastPathComponent)
+                stemGroups[trackName, default: []].append(file)
+            }
+        }
+
+        // Move each stem group into its own folder
+        for (trackName, stems) in stemGroups where stems.count > 1 {
+            let stemFolder = musicFolder.appendingPathComponent("\(trackName) STEMS")
+            try? fm.createDirectory(at: stemFolder, withIntermediateDirectories: true)
+
+            for stem in stems {
+                let destination = stemFolder.appendingPathComponent(stem.lastPathComponent)
+                try? fm.moveItem(at: stem, to: destination)
+            }
+        }
+    }
+
+    /// Get job name from docket metadata
+    func getJobName(for docket: String) -> String {
+        // Try to find metadata entry for this docket number
+        for (_, metadata) in metadataManager.metadata {
+            if metadata.docketNumber == docket && !metadata.jobName.isEmpty {
+                return metadata.jobName
+            }
+        }
+        // Fallback to docket number
+        return docket
+    }
+
+    /// Setup file system monitoring for prep folder
+    func setupPrepFolderWatcher(path: String, docket: String) {
+        // Stop existing watcher
+        prepFolderWatcher?.cancel()
+        prepFolderWatcher = nil
+
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .extend, .delete, .rename],
+            queue: DispatchQueue.global(qos: .background)
+        )
+
+        source.setEventHandler { [weak self] in
+            // Regenerate summary when folder changes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                self?.regeneratePrepSummary(path: path, docket: docket)
+            }
+        }
+
+        source.setCancelHandler {
+            close(fd)
+        }
+
+        source.resume()
+        prepFolderWatcher = source
+    }
+
+    /// Regenerate prep summary
+    func regeneratePrepSummary(path: String, docket: String) {
+        Task {
+            let jobName = getJobName(for: docket)
+            let summary = await MediaLogic.generatePrepSummary(
+                docket: docket,
+                jobName: jobName,
+                prepFolderPath: path,
+                config: config
+            )
+
+            // Save updated summary
+            let summaryFile = URL(fileURLWithPath: path).appendingPathComponent("\(docket)_Prep_Summary.txt")
+            try? summary.write(to: summaryFile, atomically: true, encoding: .utf8)
+
+            // Update UI
+            await MainActor.run {
+                self.prepSummary = summary
+            }
         }
     }
 }
