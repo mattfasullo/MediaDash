@@ -14,14 +14,14 @@
                     <li>Improved workspace defaults</li>
                 </ul>
             ]]></description>
-            <pubDate>Fri, 21 Nov 2025 23:20:00 +0000</pubDate>
+            <pubDate>Fri, 21 Nov 2025 23:25:00 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.2/MediaDash.zip"
                 sparkle:version="22"
                 sparkle:shortVersionString="0.2.2"
-                sparkle:edSignature="j8MEb0jp9H1aYad3WuRhovM/lDwnjxUDhVXJhOCm9zCTyBtOqCO+W5VF7sMfeo/t1GlDTf/7W+p05hPXfcMvAQ=="
-                length="2585445"
+                sparkle:edSignature="qxUWE2hbAgvL+J49H2pkFrpEOB23Vf8TMpNzyRgiuZlyY/kKmw+4K/wxv7bDUTUQL3gJNmLbPwqtTr/eibgWAA=="
+                length="2585474"
                 type="application/octet-stream"
             />
         </item>
