@@ -13,10 +13,10 @@
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.1/MediaDash.zip"
-                sparkle:version="0.2.1"
+                sparkle:version="21"
                 sparkle:shortVersionString="0.2.1"
-                sparkle:edSignature="PLACEHOLDER"
-                length="PLACEHOLDER"
+                sparkle:edSignature="NIZ98uxipaJfT+MzdQ2eQW/uBFAFqYNnt/OYEOeD+s15vMvqFq/B5bzzGwDW+8bB9US3Rti0lLLWd3HIXeVGAg=="
+                length="2582853"
                 type="application/octet-stream"
             />
         </item>
