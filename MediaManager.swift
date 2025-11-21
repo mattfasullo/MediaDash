@@ -923,7 +923,11 @@ class MediaManager: ObservableObject {
                 }
                 
                 let dateStr = self.formatDate(prepDate)
-                let folder = "\(docket)_PREP_\(dateStr)"
+                // Use prepFolderFormat setting, replacing {docket} and {date} placeholders
+                let folderFormat = currentConfig.settings.prepFolderFormat
+                let folder = folderFormat
+                    .replacingOccurrences(of: "{docket}", with: docket)
+                    .replacingOccurrences(of: "{date}", with: dateStr)
                 let root = paths.prep.appendingPathComponent(folder)
                 prepDestinationFolder = root
                 
@@ -995,14 +999,28 @@ class MediaManager: ObservableObject {
 
                     let cat = self.getCategory(flatFile, config: currentConfig)
                     let dir = root.appendingPathComponent(cat)
-                    do {
-                        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-                    } catch {
-                        print("Error creating category directory \(cat): \(error.localizedDescription)")
+                    
+                    // Create category directory if it doesn't exist
+                    if !fm.fileExists(atPath: dir.path) {
+                        do {
+                            try fm.createDirectory(at: dir, withIntermediateDirectories: false)
+                        } catch {
+                            print("Error creating category directory \(cat): \(error.localizedDescription)")
+                            failedFiles.append(flatFile.lastPathComponent)
+                            continue
+                        }
                     }
-
-                    if !self.copyItem(from: flatFile, to: dir.appendingPathComponent(flatFile.lastPathComponent)) {
-                        failedFiles.append(flatFile.lastPathComponent)
+                    
+                    let destFile = dir.appendingPathComponent(flatFile.lastPathComponent)
+                    
+                    // Skip if file already exists, otherwise copy it
+                    if fm.fileExists(atPath: destFile.path) {
+                        // File already exists, skip it but don't count as failed
+                        print("Skipping existing file: \(flatFile.lastPathComponent)")
+                    } else {
+                        if !self.copyItem(from: flatFile, to: destFile) {
+                            failedFiles.append(flatFile.lastPathComponent)
+                        }
                     }
 
                     // Update progress for source file

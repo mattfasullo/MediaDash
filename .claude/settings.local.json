@@ -18,7 +18,12 @@
       "Bash(git commit:*)",
       "Bash(head:*)",
       "Bash(grep:*)",
-      "Bash(/usr/libexec/PlistBuddy:*)"
+      "Bash(/usr/libexec/PlistBuddy:*)",
+      "Bash(curl:*)",
+      "Bash(defaults read:*)",
+      "Bash(gh release view:*)",
+      "Bash(killall:*)",
+      "Bash(defaults delete:*)"
     ],
     "deny": [],
     "ask": []

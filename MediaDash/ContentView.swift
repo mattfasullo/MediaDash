@@ -639,6 +639,19 @@ struct ContentView: View {
 
                     Spacer()
 
+                    // Always show Add Files button
+                    Button(action: { manager.pickFiles() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11))
+                            Text("Add Files")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundColor(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut("o", modifiers: .command)
+
                     if !manager.selectedFiles.isEmpty {
                         Button(action: { manager.clearFiles() }) {
                             HStack(spacing: 4) {
@@ -1425,10 +1438,21 @@ struct NewDocketView: View {
         // Create the docket folder on disk
         let config = AppConfig(settings: settingsManager.currentSettings)
         let paths = config.getPaths()
+        
+        // Verify parent directory exists before creating docket folder
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: paths.workPic.path) else {
+            validationMessage = "Work Picture folder path does not exist:\n\(paths.workPic.path)\n\nPlease check your settings and make sure the server is connected."
+            showValidationError = true
+            return
+        }
+        
         let docketFolder = paths.workPic.appendingPathComponent(docketName)
 
+        // Only create the docket folder, not parent directories
+        // Parent directory (paths.workPic) must already exist
         do {
-            try FileManager.default.createDirectory(at: docketFolder, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: docketFolder, withIntermediateDirectories: false)
             selectedDocket = docketName
             manager.refreshDockets() // Refresh to show the new docket
             isPresented = false
@@ -1440,7 +1464,7 @@ struct NewDocketView: View {
                 }
             }
         } catch {
-            validationMessage = "Failed to create docket folder: \(error.localizedDescription)"
+            validationMessage = "Failed to create docket folder: \(error.localizedDescription)\n\nPath: \(docketFolder.path)"
             showValidationError = true
         }
     }
@@ -1862,7 +1886,10 @@ struct DocketSearchView: View {
 
             if let items = try? fm.contentsOfDirectory(at: prepPath, includingPropertiesForKeys: nil) {
                 for item in items {
-                    if item.hasDirectoryPath && item.lastPathComponent.hasPrefix("\(docket)_PREP_") {
+                    // Check if folder matches prep folder format for this docket
+                    // Prep folders typically start with "{docket}_PREP_" or use the configured format
+                    let prepPrefix = "\(docket)_PREP_"
+                    if item.hasDirectoryPath && item.lastPathComponent.hasPrefix(prepPrefix) {
                         existingFolders.append(item.lastPathComponent)
                     }
                 }

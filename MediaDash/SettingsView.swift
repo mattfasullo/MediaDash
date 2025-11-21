@@ -386,6 +386,26 @@ struct PathSettingsSection: View {
             hasUnsavedChanges = true
         }
     }
+    
+    private func browseForFolderName(_ keyPath: WritableKeyPath<AppSettings, String>, basePath: String) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select folder to get its name"
+        
+        // Set initial directory to the base path if it exists
+        if FileManager.default.fileExists(atPath: basePath) {
+            panel.directoryURL = URL(fileURLWithPath: basePath)
+        }
+
+        if panel.runModal() == .OK, let url = panel.url {
+            // Extract just the folder name from the selected path
+            let folderName = url.lastPathComponent
+            settings[keyPath: keyPath] = folderName
+            hasUnsavedChanges = true
+        }
+    }
 
     private func checkCSVStatus() {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -495,8 +515,14 @@ struct FolderNamingSection: View {
                     Text("The main folder name for work pictures (usually \"WORK PICTURE\")")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    TextField("WORK PICTURE", text: binding(for: \.workPictureFolderName))
-                        .textFieldStyle(.roundedBorder)
+                    HStack {
+                        TextField("WORK PICTURE", text: binding(for: \.workPictureFolderName))
+                            .textFieldStyle(.roundedBorder)
+                        Button(action: { browseForFolderName(\.workPictureFolderName, basePath: settings.serverBasePath) }) {
+                            Image(systemName: "folder")
+                        }
+                        .help("Browse to select folder")
+                    }
                 }
 
                 // Prep Folder
@@ -507,8 +533,14 @@ struct FolderNamingSection: View {
                     Text("The main folder name for session prep (usually \"SESSION PREP\")")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    TextField("SESSION PREP", text: binding(for: \.prepFolderName))
-                        .textFieldStyle(.roundedBorder)
+                    HStack {
+                        TextField("SESSION PREP", text: binding(for: \.prepFolderName))
+                            .textFieldStyle(.roundedBorder)
+                        Button(action: { browseForFolderName(\.prepFolderName, basePath: settings.serverBasePath) }) {
+                            Image(systemName: "folder")
+                        }
+                        .help("Browse to select folder")
+                    }
                 }
 
                 Divider()
@@ -566,6 +598,26 @@ struct FolderNamingSection: View {
                 hasUnsavedChanges = true
             }
         )
+    }
+    
+    private func browseForFolderName(_ keyPath: WritableKeyPath<AppSettings, String>, basePath: String) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select folder to get its name"
+        
+        // Set initial directory to the base path if it exists
+        if FileManager.default.fileExists(atPath: basePath) {
+            panel.directoryURL = URL(fileURLWithPath: basePath)
+        }
+
+        if panel.runModal() == .OK, let url = panel.url {
+            // Extract just the folder name from the selected path
+            let folderName = url.lastPathComponent
+            settings[keyPath: keyPath] = folderName
+            hasUnsavedChanges = true
+        }
     }
 }
 

@@ -5,37 +5,25 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
-            <title>Version 0.2.1</title>
+            <title>Version 0.2.2</title>
             <description><![CDATA[
                 <p>Bug fixes and improvements</p>
+                <ul>
+                    <li>Removed "STAGE" from folder names</li>
+                    <li>Added folder path browsing</li>
+                    <li>Improved workspace defaults</li>
+                </ul>
             ]]></description>
-            <pubDate>Fri, 21 Nov 2025 22:30:00 +0000</pubDate>
+            <pubDate>Fri, 21 Nov 2025 23:08:50 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
-                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.1/MediaDash.zip"
-                sparkle:version="21"
-                sparkle:shortVersionString="0.2.1"
-                sparkle:edSignature="NIZ98uxipaJfT+MzdQ2eQW/uBFAFqYNnt/OYEOeD+s15vMvqFq/B5bzzGwDW+8bB9US3Rti0lLLWd3HIXeVGAg=="
-                length="2582853"
-                type="application/octet-stream"
-            />
-        </item>
-        <item>
-            <title>Version 0.2</title>
-            <description><![CDATA[
-                <p>Fixed Work Picture search path issue</p>
-            ]]></description>
-            <pubDate>Fri, 21 Nov 2025 22:30:00 +0000</pubDate>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2/MediaDash.zip"
-                sparkle:version="20"
-                sparkle:shortVersionString="0.2"
-                sparkle:edSignature="Ujef8UChApOaU4j9WUn/NYlfuGWPJV/4AfTv0WxY/eLnBngtFLv9EEgQjpAEGiJDo21SbPZV4BFlVaUt/zuKDw=="
-                length="2571980"
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.2/MediaDash.zip"
+                sparkle:version="22"
+                sparkle:shortVersionString="0.2.2"
+                sparkle:edSignature="fDv1MXBIrKcvkGjTDeje/zJZFFEJnZsL7bLUoF9ZJoXFWsjSZe0Ontb88xgpSlvyYq0fJQIMpmfdf8Z6MUXxAQ=="
+                length="2585444"
                 type="application/octet-stream"
             />
         </item>
     </channel>
 </rss>
-

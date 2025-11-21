@@ -23,8 +23,11 @@ struct WorkspaceProfile: Codable, Identifiable, Equatable {
     static func graysonMusic() -> WorkspaceProfile {
         var settings = AppSettings.default
         settings.sessionsBasePath = "/Volumes/Grayson Assets/SESSIONS"
-        settings.serverBasePath = "/Volumes/Grayson Assets"
-
+        settings.serverBasePath = "/Volumes/Grayson Assets/GM"
+        settings.workPictureFolderName = "WORK PICTURE"
+        settings.prepFolderName = "SESSION PREP"
+        settings.yearPrefix = "GM_"
+        
         return WorkspaceProfile(
             name: "Grayson Music",
             settings: settings
