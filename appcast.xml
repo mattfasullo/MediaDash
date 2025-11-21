@@ -9,7 +9,7 @@
             <description><![CDATA[
                 <p>Bug fixes and improvements</p>
             ]]></description>
-            <pubDate>Fri, 21 Nov 2025 21:20:54 +0000</pubDate>
+            <pubDate>Fri, 21 Nov 2025 22:30:00 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.1/MediaDash.zip"
@@ -25,7 +25,7 @@
             <description><![CDATA[
                 <p>Fixed Work Picture search path issue</p>
             ]]></description>
-            <pubDate>Fri, 21 Nov 2025 21:20:54 +0000</pubDate>
+            <pubDate>Fri, 21 Nov 2025 22:30:00 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2/MediaDash.zip"
