@@ -12,15 +12,16 @@
                     <li>Removed "STAGE" from folder names</li>
                     <li>Added folder path browsing</li>
                     <li>Improved workspace defaults</li>
+                    <li>Fixed Sparkle updater helper signing issue</li>
                 </ul>
             ]]></description>
-            <pubDate>Fri, 21 Nov 2025 23:25:00 +0000</pubDate>
+            <pubDate>Fri, 21 Nov 2025 23:30:00 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.2/MediaDash.zip"
                 sparkle:version="22"
                 sparkle:shortVersionString="0.2.2"
-                sparkle:edSignature="6KFz6q0STxMZHulI6DaabInMauiuI9O6i9g4LJ6pCZI2elXKjso61o1tigsAaNX3cxOzGU7ck0PHpRgIpe2dBw=="
+                sparkle:edSignature="8jAB+YYfZRQVyMO7UlcDVWVKIxbs6XYsOfj5AQcTvi93dotoHEdL6/U696m0KfvcDrTvvigigiQldqgWVBVpBg=="
                 length="2585443"
                 type="application/octet-stream"
             />

@@ -26,10 +26,19 @@ APPCAST_FILE="appcast.xml"
 # Step 1: Get version number
 echo -e "${BLUE}📋 Step 1: Version Information${NC}"
 echo ""
-read -p "Enter new version number (e.g., 0.1.3): " VERSION
+read -p "Enter new version number (e.g., 0.2.3): " VERSION
 if [ -z "$VERSION" ]; then
     echo -e "${RED}❌ Version required${NC}"
     exit 1
+fi
+
+# Get build number (numeric, for Sparkle version comparison)
+read -p "Enter build number (numeric, e.g., 23 for 0.2.3): " BUILD_NUMBER
+if [ -z "$BUILD_NUMBER" ]; then
+    # Auto-generate build number from version if not provided
+    # Convert 0.2.3 -> 23, 0.3.0 -> 30, etc.
+    BUILD_NUMBER=$(echo "$VERSION" | awk -F. '{printf "%d", $1*100 + $2*10 + $3}')
+    echo -e "${YELLOW}⚠️  Auto-generated build number: $BUILD_NUMBER${NC}"
 fi
 
 # Step 2: Get release notes
@@ -54,7 +63,7 @@ mkdir -p "$RELEASE_DIR"
 
 # Update version in project
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PROJECT/../MediaDash/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PROJECT/../MediaDash/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$PROJECT/../MediaDash/Info.plist" 2>/dev/null || true
 
 # Build and archive
 echo "Building..."
@@ -152,7 +161,7 @@ NEW_ITEM="        <item>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url=\"https://github.com/mattfasullo/MediaDash/releases/download/v$VERSION/$APP_NAME.zip\"
-                sparkle:version=\"$VERSION\"
+                sparkle:version=\"$BUILD_NUMBER\"
                 sparkle:shortVersionString=\"$VERSION\"
                 sparkle:edSignature=\"$SIGNATURE\"
                 length=\"$FILE_SIZE\"
@@ -202,6 +211,45 @@ gh release create "v$VERSION" \
     --notes "$GITHUB_NOTES"
 
 echo -e "${GREEN}✅ GitHub release created${NC}"
+
+# Step 10: Verify appcast is accessible
+echo ""
+echo -e "${BLUE}🔍 Step 9: Verifying Appcast${NC}"
+echo "Waiting for GitHub CDN to update (this may take a moment)..."
+
+MAX_RETRIES=12
+RETRY_COUNT=0
+VERIFIED=false
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    sleep 5
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    
+    echo -n "  Attempt $RETRY_COUNT/$MAX_RETRIES: Checking appcast... "
+    
+    # Fetch appcast and check if signature matches
+    FETCHED_SIG=$(curl -s "https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml?t=$(date +%s)" | grep -o 'sparkle:edSignature="[^"]*"' | head -1 | cut -d'"' -f2)
+    
+    if [ "$FETCHED_SIG" = "$SIGNATURE" ]; then
+        echo -e "${GREEN}✅ Verified!${NC}"
+        VERIFIED=true
+        break
+    else
+        if [ -z "$FETCHED_SIG" ]; then
+            echo -e "${YELLOW}⏳ Still waiting for CDN...${NC}"
+        else
+            echo -e "${YELLOW}⏳ CDN cache not updated yet (got different signature)${NC}"
+        fi
+    fi
+done
+
+if [ "$VERIFIED" = false ]; then
+    echo -e "${YELLOW}⚠️  Warning: Could not verify appcast signature after $MAX_RETRIES attempts${NC}"
+    echo -e "${YELLOW}   The appcast may still be cached. It should update within 5-10 minutes.${NC}"
+    echo -e "${YELLOW}   Users can manually check for updates (Cmd+U) once the cache clears.${NC}"
+else
+    echo -e "${GREEN}✅ Appcast verified and ready!${NC}"
+fi
 
 # Cleanup
 echo ""
