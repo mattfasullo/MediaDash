@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.2.1</title>
+            <description><![CDATA[
+                <p>Bug fixes and improvements</p>
+            ]]></description>
+            <pubDate>Fri, 21 Nov 2025 21:20:54 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.1/MediaDash.zip"
+                sparkle:version="0.2.1"
+                sparkle:shortVersionString="0.2.1"
+                sparkle:edSignature="FnMHd9d6kvLYjRYmbkWTE5e8TGMHwdJ3ANV8nrJk/GOBbpgLFYS3D+NK5/cQz45tm2coFLzbayH7V/XUHhYxAw=="
+                length="2582847"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.2</title>
             <description><![CDATA[
                 <p>Fixed Work Picture search path issue</p>

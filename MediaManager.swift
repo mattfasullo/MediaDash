@@ -155,6 +155,17 @@ enum MediaLogic {
         // For Both mode, show Work Picture folders (we'll check for prep folders later)
         let base = (jobType == .prep) ? paths.prep : paths.workPic
         var results: [String] = []
+        
+        // Check if base path exists before trying to scan
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: base.path) else {
+            print("Error scanning dockets: Path does not exist: \(base.path)")
+            print("  Server base path: \(config.settings.serverBasePath)")
+            print("  Year prefix: \(config.settings.yearPrefix)")
+            print("  Work Picture folder name: \(config.settings.workPictureFolderName)")
+            return results
+        }
+        
         do {
             let items = try FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: [.contentModificationDateKey])
             let sorted = items.sorted {
@@ -183,6 +194,10 @@ enum MediaLogic {
             }
         } catch {
             print("Error scanning dockets: \(error.localizedDescription)")
+            print("  Attempted path: \(base.path)")
+            print("  Server base path: \(config.settings.serverBasePath)")
+            print("  Year prefix: \(config.settings.yearPrefix)")
+            print("  Work Picture folder name: \(config.settings.workPictureFolderName)")
         }
         return results
     }
@@ -218,10 +233,15 @@ enum MediaLogic {
 
         case .workPicture:
             // Dynamically find all Work Picture folders across years
-            let baseGM = URL(fileURLWithPath: "/Volumes/Grayson Assets/GM")
-            if let yearFolders = try? fm.contentsOfDirectory(at: baseGM, includingPropertiesForKeys: nil) {
-                for yearFolder in yearFolders where yearFolder.lastPathComponent.hasPrefix("GM_") {
-                    let workPicPath = yearFolder.appendingPathComponent(yearFolder.lastPathComponent.replacingOccurrences(of: "GM_", with: "") + "_WORK PICTURE")
+            let serverBase = URL(fileURLWithPath: config.settings.serverBasePath)
+            let yearPrefix = config.settings.yearPrefix
+            let workPictureFolderName = config.settings.workPictureFolderName
+            
+            if let yearFolders = try? fm.contentsOfDirectory(at: serverBase, includingPropertiesForKeys: nil) {
+                for yearFolder in yearFolders where yearFolder.lastPathComponent.hasPrefix(yearPrefix) {
+                    // Extract year from folder name (e.g., "GM_2024" -> "2024")
+                    let yearString = yearFolder.lastPathComponent.replacingOccurrences(of: yearPrefix, with: "")
+                    let workPicPath = yearFolder.appendingPathComponent("\(yearString)_\(workPictureFolderName)")
                     if fm.fileExists(atPath: workPicPath.path) {
                         if let sessions = try? fm.contentsOfDirectory(at: workPicPath, includingPropertiesForKeys: nil) {
                             for sess in sessions {
@@ -592,11 +612,28 @@ class MediaManager: ObservableObject {
         guard !isScanningDockets else { return }
         isScanningDockets = true
         let currentConfig = self.config
+        
+        // Check if the server path exists before scanning
+        let paths = currentConfig.getPaths()
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: paths.workPic.path) {
+            Task { @MainActor in
+                self.isScanningDockets = false
+                self.dockets = []
+                self.connectionWarning = "Work Picture folder not found:\n\n\(paths.workPic.path)\n\nPlease check your settings:\n• Server Base Path: \(currentConfig.settings.serverBasePath)\n• Year Prefix: \(currentConfig.settings.yearPrefix)\n• Work Picture Folder Name: \(currentConfig.settings.workPictureFolderName)\n\nMake sure the server is connected and the paths are correct in Settings."
+                self.showConnectionWarning = true
+            }
+            return
+        }
+        
         Task.detached {
             let dockets = MediaLogic.scanDockets(config: currentConfig)
             await MainActor.run {
                 self.dockets = dockets
                 self.isScanningDockets = false
+                
+                // If no dockets found and path exists, it might be empty (which is OK)
+                // But if path doesn't exist, we already showed the warning above
             }
         }
     }
@@ -781,18 +818,43 @@ class MediaManager: ObservableObject {
 
             if type == .workPicture || type == .both {
                 await MainActor.run { self.statusMessage = "Filing..." }
-                let dateStr = self.formatDate(wpDate)
-                let base = paths.workPic.appendingPathComponent(docket)
-                let destFolder = self.getNextFolder(base: base, date: dateStr)
-                do {
-                    try fm.createDirectory(at: destFolder, withIntermediateDirectories: true)
-                } catch {
+                
+                // Verify work picture parent directory exists before creating folders
+                guard fm.fileExists(atPath: paths.workPic.path) else {
                     await MainActor.run {
-                        self.errorMessage = "Failed to create work picture folder: \(error.localizedDescription)"
+                        self.errorMessage = "Work Picture folder path does not exist:\n\(paths.workPic.path)\n\nPlease check your settings:\n• Server Base Path: \(currentConfig.settings.serverBasePath)\n• Year Prefix: \(currentConfig.settings.yearPrefix)\n• Work Picture Folder Name: \(currentConfig.settings.workPictureFolderName)\n\nMake sure the server is connected and the paths are correct in Settings."
                         self.showError = true
                         self.isProcessing = false
                     }
                     return
+                }
+                
+                // Verify docket folder exists before creating date subfolders
+                let base = paths.workPic.appendingPathComponent(docket)
+                guard fm.fileExists(atPath: base.path) else {
+                    await MainActor.run {
+                        self.errorMessage = "Docket folder does not exist:\n\(base.path)\n\nPlease create the docket folder first or check that the docket name is correct."
+                        self.showError = true
+                        self.isProcessing = false
+                    }
+                    return
+                }
+                
+                let dateStr = self.formatDate(wpDate)
+                let destFolder = self.getNextFolder(base: base, date: dateStr)
+                
+                // Check if folder already exists, if not create it
+                if !fm.fileExists(atPath: destFolder.path) {
+                    do {
+                        try fm.createDirectory(at: destFolder, withIntermediateDirectories: false)
+                    } catch {
+                        await MainActor.run {
+                            self.errorMessage = "Failed to create work picture folder: \(error.localizedDescription)\n\nPath: \(destFolder.path)"
+                            self.showError = true
+                            self.isProcessing = false
+                        }
+                        return
+                    }
                 }
 
                 for f in files {
@@ -805,8 +867,27 @@ class MediaManager: ObservableObject {
                     await MainActor.run { self.fileProgress[f.id] = 0.0 }
 
                     let dest = destFolder.appendingPathComponent(f.name)
-                    if !self.copyItem(from: f.url, to: dest) {
-                        failedFiles.append(f.name)
+                    
+                    // Skip if file already exists, otherwise copy it
+                    if fm.fileExists(atPath: dest.path) {
+                        // File already exists, skip it but don't count as failed
+                        print("Skipping existing file: \(f.name)")
+                        // Still mark as complete for progress tracking
+                        currentStep += 1
+                        let p = currentStep / total
+                        await MainActor.run {
+                            self.fileProgress[f.id] = 1.0
+                            self.progress = p
+                            if type == .both {
+                                self.fileCompletionState[f.id] = .workPicDone
+                            } else {
+                                self.fileCompletionState[f.id] = .complete
+                            }
+                        }
+                    } else {
+                        if !self.copyItem(from: f.url, to: dest) {
+                            failedFiles.append(f.name)
+                        }
                     }
 
                     // Mark file as complete
@@ -830,19 +911,35 @@ class MediaManager: ObservableObject {
 
             if type == .prep || type == .both {
                 await MainActor.run { self.statusMessage = "Prepping..." }
-                let dateStr = self.formatDate(prepDate)
-                let folder = "\(docket)_PREP_\(dateStr)"
-                let root = paths.prep.appendingPathComponent(folder)
-                prepDestinationFolder = root
-                do {
-                    try fm.createDirectory(at: root, withIntermediateDirectories: true)
-                } catch {
+                
+                // Verify prep parent directory exists before creating folders
+                guard fm.fileExists(atPath: paths.prep.path) else {
                     await MainActor.run {
-                        self.errorMessage = "Failed to create prep folder: \(error.localizedDescription)"
+                        self.errorMessage = "Prep folder path does not exist:\n\(paths.prep.path)\n\nPlease check your settings:\n• Server Base Path: \(currentConfig.settings.serverBasePath)\n• Year Prefix: \(currentConfig.settings.yearPrefix)\n• Prep Folder Name: \(currentConfig.settings.prepFolderName)\n\nMake sure the server is connected and the paths are correct in Settings."
                         self.showError = true
                         self.isProcessing = false
                     }
                     return
+                }
+                
+                let dateStr = self.formatDate(prepDate)
+                let folder = "\(docket)_PREP_\(dateStr)"
+                let root = paths.prep.appendingPathComponent(folder)
+                prepDestinationFolder = root
+                
+                // Check if prep folder already exists, if not create it
+                // If it exists, we'll use the existing folder and skip duplicate files
+                if !fm.fileExists(atPath: root.path) {
+                    do {
+                        try fm.createDirectory(at: root, withIntermediateDirectories: false)
+                    } catch {
+                        await MainActor.run {
+                            self.errorMessage = "Failed to create prep folder: \(error.localizedDescription)\n\nPath: \(root.path)"
+                            self.showError = true
+                            self.isProcessing = false
+                        }
+                        return
+                    }
                 }
 
                 // Build map of flat files to their source FileItem
