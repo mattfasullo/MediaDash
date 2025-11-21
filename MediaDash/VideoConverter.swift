@@ -161,7 +161,7 @@ class VideoConverterManager: ObservableObject {
         NSSound(named: "Glass")?.play()
     }
 
-    // Convert a single job
+    // Convert a single job using FFmpeg
     private func convertJob(at index: Int) async {
         guard index < jobs.count else { return }
 
@@ -169,141 +169,101 @@ class VideoConverterManager: ObservableObject {
         job.status = .converting
         jobs[index] = job
 
-        let asset = AVAsset(url: job.sourceURL)
+        // Build FFmpeg command for ProRes Proxy with 23.976fps
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/ffmpeg")
 
-        // Create export session with ProRes Proxy preset
-        guard let session = AVAssetExportSession(asset: asset, presetName: job.format.presetName) else {
-            job.status = .failed
-            job.error = "Could not create export session"
-            jobs[index] = job
-            return
-        }
+        var arguments = [
+            "-i", job.sourceURL.path,
+            "-c:v", "prores_ks",        // ProRes encoder
+            "-profile:v", "0",           // Profile 0 = ProRes Proxy
+            "-r", "24000/1001",          // 23.976fps
+            "-c:a", "pcm_s16le",         // PCM audio
+        ]
 
-        // Configure export session
-        session.outputURL = job.destinationURL
-        session.outputFileType = .mov
-
-        // Apply aspect ratio conversion if needed
+        // Add aspect ratio filter if needed
         if job.aspectRatio != .original, let targetSize = job.aspectRatio.size {
-            do {
-                let composition = try await createVideoComposition(for: asset, targetSize: targetSize)
-                session.videoComposition = composition
-            } catch {
-                job.status = .failed
-                job.error = "Failed to create video composition: \(error.localizedDescription)"
-                jobs[index] = job
-                return
-            }
+            let width = Int(targetSize.width)
+            let height = Int(targetSize.height)
+            arguments.append(contentsOf: [
+                "-vf", "scale=\(width):\(height):force_original_aspect_ratio=decrease,pad=\(width):\(height):(ow-iw)/2:(oh-ih)/2:black"
+            ])
         }
 
-        // Store session for cancellation
-        exportSessions[job.id] = session
+        arguments.append(contentsOf: [
+            "-y",  // Overwrite output file
+            job.destinationURL.path
+        ])
 
-        // Observe progress
-        await observeProgress(for: job.id, session: session, jobIndex: index)
+        process.arguments = arguments
 
-        // Start export
-        await session.export()
+        // Capture stderr for progress monitoring
+        let pipe = Pipe()
+        process.standardError = pipe
 
-        // Check status
-        switch session.status {
-        case .completed:
-            job.status = .completed
-            job.progress = 1.0
-            jobs[index] = job
+        do {
+            try process.run()
 
-        case .failed, .cancelled:
+            // Monitor progress in background
+            Task {
+                await monitorFFmpegProgress(pipe: pipe, jobIndex: index, jobId: job.id)
+            }
+
+            process.waitUntilExit()
+
+            // Check exit status
+            if process.terminationStatus == 0 {
+                job.status = .completed
+                job.progress = 1.0
+                jobs[index] = job
+            } else {
+                job.status = .failed
+                job.error = "FFmpeg conversion failed with code \(process.terminationStatus)"
+                jobs[index] = job
+
+                // Clean up failed output file
+                try? FileManager.default.removeItem(at: job.destinationURL)
+            }
+        } catch {
             job.status = .failed
-            job.error = session.error?.localizedDescription ?? "Export failed"
+            job.error = "Failed to start FFmpeg: \(error.localizedDescription)"
             jobs[index] = job
-
-            // Clean up failed output file
-            try? FileManager.default.removeItem(at: job.destinationURL)
-
-        default:
-            break
         }
 
         // Clean up
         exportSessions.removeValue(forKey: job.id)
     }
 
-    // Create video composition with letterboxing for aspect ratio conversion
-    private func createVideoComposition(for asset: AVAsset, targetSize: CGSize) async throws -> AVMutableVideoComposition {
-        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
-            throw NSError(domain: "VideoConverter", code: 1, userInfo: [NSLocalizedDescriptionKey: "No video track found"])
-        }
+    // Monitor FFmpeg progress from stderr output
+    private func monitorFFmpegProgress(pipe: Pipe, jobIndex: Int, jobId: UUID) async {
+        let data = pipe.fileHandleForReading
+        var buffer = Data()
 
-        let naturalSize = try await videoTrack.load(.naturalSize)
-        let preferredTransform = try await videoTrack.load(.preferredTransform)
+        while true {
+            let chunk = data.availableData
+            if chunk.isEmpty { break }
 
-        // Apply transform to get actual dimensions
-        let transformedSize = naturalSize.applying(preferredTransform)
-        let videoSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
-
-        // Calculate scale to fit within target size (letterbox, don't crop)
-        let videoAspect = videoSize.width / videoSize.height
-        let targetAspect = targetSize.width / targetSize.height
-
-        var scale: CGFloat
-        if videoAspect > targetAspect {
-            // Video is wider - fit to width
-            scale = targetSize.width / videoSize.width
-        } else {
-            // Video is taller - fit to height
-            scale = targetSize.height / videoSize.height
-        }
-
-        let scaledWidth = videoSize.width * scale
-        let scaledHeight = videoSize.height * scale
-
-        // Center the video
-        let xOffset = (targetSize.width - scaledWidth) / 2
-        let yOffset = (targetSize.height - scaledHeight) / 2
-
-        // Create composition
-        let composition = AVMutableVideoComposition()
-        composition.renderSize = targetSize
-        composition.frameDuration = CMTime(value: 1, timescale: 30) // 30 fps
-
-        // Create instruction
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: try await asset.load(.duration))
-
-        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
-
-        // Apply transformations: scale and center
-        var transform = CGAffineTransform.identity
-        transform = transform.concatenating(preferredTransform)
-        transform = transform.concatenating(CGAffineTransform(scaleX: scale, y: scale))
-        transform = transform.concatenating(CGAffineTransform(translationX: xOffset, y: yOffset))
-
-        layerInstruction.setTransform(transform, at: .zero)
-
-        instruction.layerInstructions = [layerInstruction]
-        composition.instructions = [instruction]
-
-        return composition
-    }
-
-    // Observe export progress
-    private func observeProgress(for jobId: UUID, session: AVAssetExportSession, jobIndex: Int) async {
-        // Use a task instead of Timer to avoid Sendable issues
-        let progressTask = Task {
-            while session.status == .exporting || session.status == .waiting {
-                await MainActor.run {
-                    guard jobIndex < self.jobs.count else { return }
-                    var job = self.jobs[jobIndex]
-                    job.progress = Double(session.progress)
-                    self.jobs[jobIndex] = job
+            buffer.append(chunk)
+            if let output = String(data: buffer, encoding: .utf8) {
+                // Parse duration and time from FFmpeg output
+                // FFmpeg outputs progress like: "time=00:00:05.23"
+                if output.range(of: "time=(\\d+):(\\d+):(\\d+\\.\\d+)", options: .regularExpression) != nil {
+                    // Extract and calculate progress (simplified)
+                    await MainActor.run {
+                        guard jobIndex < self.jobs.count else { return }
+                        var job = self.jobs[jobIndex]
+                        // Increment progress gradually (actual duration parsing would be more accurate)
+                        job.progress = min(0.95, job.progress + 0.05)
+                        self.jobs[jobIndex] = job
+                    }
                 }
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                buffer.removeAll()
             }
-        }
 
-        // Wait for export to complete
-        await progressTask.value
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        }
     }
+
 }
 
 // MARK: - Video Converter View

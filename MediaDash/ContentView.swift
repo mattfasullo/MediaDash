@@ -381,7 +381,8 @@ struct ContentView: View {
                             isPrimary: false,
                             isFocused: focusedButton == .file,
                             showShortcut: isCommandKeyHeld,
-                            theme: currentTheme
+                            theme: currentTheme,
+                            iconName: "folder"
                         ) {
                             attempt(type: .workPicture)
                         }
@@ -407,7 +408,8 @@ struct ContentView: View {
                             isPrimary: false,
                             isFocused: focusedButton == .prep,
                             showShortcut: isCommandKeyHeld,
-                            theme: currentTheme
+                            theme: currentTheme,
+                            iconName: "list.clipboard"
                         ) {
                             attempt(type: .prep)
                         }
@@ -436,7 +438,8 @@ struct ContentView: View {
                             isPrimary: false,
                             isFocused: focusedButton == .both,
                             showShortcut: isCommandKeyHeld,
-                            theme: currentTheme
+                            theme: currentTheme,
+                            iconName: "doc.on.doc"
                         ) {
                             attempt(type: .both)
                         }
@@ -458,11 +461,12 @@ struct ContentView: View {
                             title: "Convert Video",
                             subtitle: "ProRes Proxy",
                             shortcut: "⌘4",
-                            color: Color(red: 0.6, green: 0.3, blue: 0.6),
+                            color: Color(red: 0.50, green: 0.25, blue: 0.25),  // Subtle dark red
                             isPrimary: false,
                             isFocused: focusedButton == .convert,
                             showShortcut: isCommandKeyHeld,
-                            theme: currentTheme
+                            theme: currentTheme,
+                            iconName: "film"
                         ) {
                             showVideoConverterSheet = true
                         }
@@ -1152,6 +1156,22 @@ struct ActionButton: View {
     }
 }
 
+// MARK: - Color Extension for Brightening
+
+extension Color {
+    func brightened(by amount: Double = 0.2) -> Color {
+        let uiColor = NSColor(self)
+        guard let components = uiColor.cgColor.components else { return self }
+
+        let r = min(1.0, (components[0] + amount))
+        let g = min(1.0, (components[1] + amount))
+        let b = min(1.0, (components[2] + amount))
+        let a = components.count > 3 ? components[3] : 1.0
+
+        return Color(red: r, green: g, blue: b, opacity: a)
+    }
+}
+
 // MARK: - Action Button With Keyboard Shortcut
 
 struct ActionButtonWithShortcut: View {
@@ -1163,44 +1183,48 @@ struct ActionButtonWithShortcut: View {
     let isFocused: Bool
     let showShortcut: Bool
     let theme: AppTheme
+    let iconName: String?
     let action: () -> Void
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Main content - centered
-                VStack(spacing: isPrimary ? 6 : 4) {
+                // Translucent background icon
+                if let iconName = iconName {
+                    Image(systemName: iconName)
+                        .font(.system(size: 50, weight: .thin))
+                        .foregroundColor(theme.textColor.opacity(0.08))
+                        .rotationEffect(theme == .cursed ? .degrees(Double.random(in: -15...15)) : .degrees(0))
+                }
+
+                VStack(spacing: 0) {
+                    Spacer()
+
+                    // Main content - centered
                     Text(title)
                         .font(buttonTitleFont)
                         .foregroundColor(theme.textColor)
                         .shadow(color: theme.textShadowColor ?? .clear, radius: 2, x: 1, y: 1)
                         .rotationEffect(theme == .cursed ? .degrees(Double.random(in: -5...5)) : .degrees(0))
 
-                    if isPrimary {
-                        Text(subtitle)
-                            .font(buttonSubtitleFont)
-                            .foregroundColor(theme.textColor.opacity(0.8))
-                            .shadow(color: theme.textShadowColor ?? .clear, radius: 1, x: 1, y: 1)
-                    }
-                }
-
-                // Shortcut - positioned on the right side
-                HStack {
                     Spacer()
+                    Spacer()
+
+                    // Shortcut - positioned in lower third
                     Text(shortcut)
-                        .font(theme == .cursed ? .system(size: 9, weight: .heavy, design: .monospaced) : .system(size: isPrimary ? 11 : 10, weight: .medium, design: .monospaced))
-                        .foregroundColor(theme.textColor.opacity(showShortcut ? 0.7 : 0.0))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
+                        .font(theme == .cursed ? .system(size: 9, weight: .heavy, design: .monospaced) : .system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(theme.textColor.opacity(showShortcut ? 0.6 : 0.0))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
                         .background(Color.black.opacity(showShortcut ? 0.2 : 0.0))
                         .cornerRadius(4)
                         .opacity(showShortcut ? 1 : 0)
+                        .padding(.bottom, 8)
                 }
-                .padding(.trailing, 12)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, isPrimary ? 16 : 12)
+            .padding(.vertical, 10)
             .background(
                 Group {
                     if theme == .cursed {
@@ -1222,7 +1246,7 @@ struct ActionButtonWithShortcut: View {
                             endPoint: .bottom
                         )
                     } else {
-                        (isHovered || isFocused ? color.opacity(0.9) : color.opacity(0.85))
+                        (isHovered || isFocused ? color.brightened(by: 0.15) : color)
                     }
                 }
             )

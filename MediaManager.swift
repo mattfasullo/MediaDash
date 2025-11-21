@@ -287,7 +287,9 @@ enum MediaLogic {
 
     /// Format duration as :SS or M:SS or MM:SS
     nonisolated static func formatDuration(_ seconds: TimeInterval) -> String {
-        let totalSeconds = Int(seconds.rounded())
+        // Round to nearest standard duration
+        let roundedSeconds = roundToStandardDuration(seconds)
+        let totalSeconds = Int(roundedSeconds)
         let minutes = totalSeconds / 60
         let secs = totalSeconds % 60
 
@@ -300,6 +302,37 @@ enum MediaLogic {
             let mins = minutes % 60
             return String(format: "%d:%02d:%02d", hours, mins, secs)
         }
+    }
+
+    /// Round duration to nearest standard value (:06, :15, :20, :30, 1:00, etc.)
+    nonisolated static func roundToStandardDuration(_ seconds: TimeInterval) -> TimeInterval {
+        let standardDurations: [TimeInterval] = [
+            6, 15, 20, 30,      // Under 1 minute
+            60, 90, 120, 150,   // 1:00 to 2:30
+            180, 210, 240, 270, // 3:00 to 4:30
+            300, 330, 360, 390, // 5:00 to 6:30
+            420, 450, 480, 510, // 7:00 to 8:30
+            540, 570, 600       // 9:00 to 10:00
+        ]
+
+        // For durations over 10 minutes, round to nearest 30 seconds
+        if seconds > 600 {
+            return (seconds / 30).rounded() * 30
+        }
+
+        // Find closest standard duration
+        var closestDuration = standardDurations[0]
+        var smallestDiff = abs(seconds - closestDuration)
+
+        for duration in standardDurations {
+            let diff = abs(seconds - duration)
+            if diff < smallestDiff {
+                smallestDiff = diff
+                closestDuration = duration
+            }
+        }
+
+        return closestDuration
     }
 
     /// Check if filename contains stem keywords

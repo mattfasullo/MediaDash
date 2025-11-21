@@ -208,9 +208,9 @@ enum AppTheme: String, Codable, CaseIterable {
         switch self {
         case .modern:
             return (
-                Color(red: 0.2, green: 0.4, blue: 0.65),
-                Color(red: 0.45, green: 0.35, blue: 0.55),
-                Color(red: 0.3, green: 0.5, blue: 0.4)
+                Color(red: 0.25, green: 0.35, blue: 0.50),  // Subtle slate blue
+                Color(red: 0.50, green: 0.40, blue: 0.25),  // Subtle amber/brown
+                Color(red: 0.25, green: 0.45, blue: 0.45)   // Subtle teal
             )
         case .windows95:
             return (
@@ -358,9 +358,9 @@ struct AppSettings: Codable, Equatable {
             sessionsBasePath: "",
             docketSource: .csv,
             appTheme: .modern,
-            workPictureFolderName: "WORK PICTURE",
-            prepFolderName: "SESSION PREP",
-            yearPrefix: "GM_",
+            workPictureFolderName: "STAGE 1",
+            prepFolderName: "STAGE 2",
+            yearPrefix: "",
             dateFormat: "MMMd.yy",
             pictureExtensions: ["mp4", "mov", "avi", "mxf", "prores", "m4v"],
             musicExtensions: ["wav", "mp3", "aiff", "aif", "flac", "m4a", "aac"],
@@ -370,7 +370,7 @@ struct AppSettings: Codable, Equatable {
             aafOmfFolderName: "AAF-OMF",
             otherFolderName: "OTHER",
             workPicNumberFormat: "%02d",
-            prepFolderFormat: "{docket}_PREP_{date}",
+            prepFolderFormat: "{docket}_STAGE2_{date}",
             enableFuzzySearch: true,
             defaultSearchFolder: .sessions,
             searchFolderPreference: .rememberLast,
