@@ -7,8 +7,7 @@
         <item>
             <title>Version 0.2</title>
             <description><![CDATA[
-                <p>Improved UI colors with hover effects, fixed ProRes Proxy video conversion
-   with 23.976fps framerate, and improved prep summary accuracy with proper duration rounding.</p>
+                <p>Fixed Work Picture search path issue</p>
             ]]></description>
             <pubDate>Fri, 21 Nov 2025 21:20:54 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
@@ -16,10 +15,11 @@
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2/MediaDash.zip"
                 sparkle:version="0.2"
                 sparkle:shortVersionString="0.2"
-                sparkle:edSignature="4N+mPaIZfIwIixyar7Tqi1QANuwBU5cE0W30y5opE4u2kT8f3hjvq4m27o/+5/3z+V0nJa/kuarmxbGtLXQeCw=="
-                length="2503734"
+                sparkle:edSignature="eyjzcNzYJ5btK2KbyMyLZfFr95suGnEV55P8ojj7VhgpVXdUxQzS6Ujus3U7KEybFyixhBGgxdMiTOsA+4iHDA=="
+                length="2560186"
                 type="application/octet-stream"
             />
         </item>
     </channel>
 </rss>
+
