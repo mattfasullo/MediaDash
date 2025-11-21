@@ -5,18 +5,19 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
-            <title>Version 0.1.3</title>
+            <title>Version 0.2</title>
             <description><![CDATA[
-                <p>Added auto-open prep folder setting (enabled by default)</p>
+                <p>Improved UI colors with hover effects, fixed ProRes Proxy video conversion
+   with 23.976fps framerate, and improved prep summary accuracy with proper duration rounding.</p>
             ]]></description>
-            <pubDate>Thu, 20 Nov 2025 20:26:06 +0000</pubDate>
+            <pubDate>Fri, 21 Nov 2025 21:20:54 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
-                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.1.3/MediaDash.zip"
-                sparkle:version="0.1.3"
-                sparkle:shortVersionString="0.1.3"
-                sparkle:edSignature="4winllmU4Z2I8acmWqIRod+MzWbvglChn04jVgn1L7u3zRgPQKkCTaopY6MkAEbhF3S4JCZfItLXzb1XNj2LAQ=="
-                length="2400424"
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2/MediaDash.zip"
+                sparkle:version="0.2"
+                sparkle:shortVersionString="0.2"
+                sparkle:edSignature="sparkle:edSignature="4N+mPaIZfIwIixyar7Tqi1QANuwBU5cE0W30y5opE4u2kT8f3hjvq4m27o/+5/3z+V0nJa/kuarmxbGtLXQeCw==" length="2503734""
+                length="2503734"
                 type="application/octet-stream"
             />
         </item>
