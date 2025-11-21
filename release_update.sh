@@ -63,7 +63,6 @@ xcodebuild -project "$PROJECT" \
     -configuration Release \
     -archivePath "$RELEASE_DIR/$APP_NAME.xcarchive" \
     archive \
-    CODE_SIGN_IDENTITY="-" \
     CODE_SIGN_STYLE=Automatic \
     > "$RELEASE_DIR/build.log" 2>&1
 
@@ -87,6 +86,8 @@ cat > "$RELEASE_DIR/export_options.plist" <<EOF
     <true/>
     <key>thinning</key>
     <string>&lt;none&gt;</string>
+    <key>teamID</key>
+    <string>9XPBY59H89</string>
 </dict>
 </plist>
 EOF
