@@ -5,24 +5,18 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
-            <title>Version 0.2.2</title>
+            <title>Version 0.2.3</title>
             <description><![CDATA[
-                <p>Bug fixes and improvements</p>
-                <ul>
-                    <li>Removed "STAGE" from folder names</li>
-                    <li>Added folder path browsing</li>
-                    <li>Improved workspace defaults</li>
-                    <li>Fixed Sparkle updater helper signing issue</li>
-                </ul>
+                <h2>What's New in 0.2.3</h2><ul><li>Fixed video count to exclude z_unconverted folder</li><li>Fixed app hanging/freezing issues with recursion limits and timeouts</li><li>Fixed FFmpeg path detection for Apple Silicon Macs</li><li>Fixed folder numbering in Work Picture filing (properly counts up)</li><li>Removed Finder auto-population feature</li><li>Removed workspace functionality, simplified to single login</li><li>Added automatic settings clearing on app update</li><li>Improved file watcher throttling to prevent excessive updates</li><li>Added timeout protection for video duration detection</li></ul>
             ]]></description>
-            <pubDate>Fri, 21 Nov 2025 23:30:00 +0000</pubDate>
+            <pubDate>Sat, 22 Nov 2025 00:40:24 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
-                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.2/MediaDash.zip"
-                sparkle:version="22"
-                sparkle:shortVersionString="0.2.2"
-                sparkle:edSignature="8jAB+YYfZRQVyMO7UlcDVWVKIxbs6XYsOfj5AQcTvi93dotoHEdL6/U696m0KfvcDrTvvigigiQldqgWVBVpBg=="
-                length="2610214"
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.3/MediaDash.zip"
+                sparkle:version="23"
+                sparkle:shortVersionString="0.2.3"
+                sparkle:edSignature="2PMLRrVY4XTRbVOYk7qkDaraBd4ptW+tzsvwXPvFp9e0LVnDD/1w5/2Xa1gruXoPZdcNSBrQtCq/yP8JhJxZDA=="
+                length="2547388"
                 type="application/octet-stream"
             />
         </item>
