@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.3</title>
+            <description><![CDATA[
+                <h2>What's New in 0.3</h2><ul><li>Added OMF/AAF media checker feature</li><li>Improved Asana integration with OAuth service</li><li>Enhanced UI components and settings</li><li>Bug fixes and performance improvements</li></ul>
+            ]]></description>
+            <pubDate>Mon, 24 Nov 2025 20:24:30 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.3/MediaDash.zip"
+                sparkle:version="30"
+                sparkle:shortVersionString="0.3"
+                sparkle:edSignature="Ucr5DgMhHUfkEU497qAaKNrhcxy7T3s1hieAhgf9hx/rupNNb8krnUjU2ouNjWU/j7vA+2+5aSHmqrsP1nW7DA=="
+                length="3067417"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.2.3</title>
             <description><![CDATA[
                 <h2>What's New in 0.2.3</h2><ul><li>Fixed video count to exclude z_unconverted folder</li><li>Fixed app hanging/freezing issues with recursion limits and timeouts</li><li>Fixed FFmpeg path detection for Apple Silicon Macs</li><li>Fixed folder numbering in Work Picture filing (properly counts up)</li><li>Removed Finder auto-population feature</li><li>Removed workspace functionality, simplified to single login</li><li>Added automatic settings clearing on app update</li><li>Improved file watcher throttling to prevent excessive updates</li><li>Added timeout protection for video duration detection</li></ul>
