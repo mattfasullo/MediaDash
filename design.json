@@ -1,0 +1,764 @@
+{
+  "designSystem": {
+    "name": "Retro Desktop OS Design System",
+    "version": "1.0.0",
+    "description": "A nostalgic design system inspired by early computer operating systems, featuring clean lines, bold colors, and a window-based interface aesthetic.",
+    
+    "designPhilosophy": {
+      "corePrinciples": [
+        "Nostalgic yet functional - evoke early computing memories while maintaining usability",
+        "Window-centric interface - everything lives in distinct, draggable windows",
+        "Bold color differentiation - use color to clearly distinguish UI elements and hierarchy",
+        "Flat with subtle depth - primarily flat design with minimal shadows for window layering",
+        "Thick, defined borders - clear visual boundaries between elements",
+        "Rounded corners - soft, approachable geometry throughout",
+        "Desktop metaphor - icons, folders, and desktop-like organization",
+        "Clear visual hierarchy - use size, color, and position to guide attention"
+      ],
+      "aesthetic": "Retro early computer OS (circa 1990s-2000s) with modern usability",
+      "mood": "Playful, nostalgic, organized, functional, approachable"
+    },
+    
+    "colorSystem": {
+      "palette": {
+        "primary": {
+          "beige": {
+            "description": "Main window background and primary surface color",
+            "hex": "#F5F5DC",
+            "rgb": [245, 245, 220],
+            "usage": "Window backgrounds, dialog boxes, main content areas"
+          },
+          "beigeDark": {
+            "description": "Darker beige for depth and contrast",
+            "hex": "#E8E8D0",
+            "rgb": [232, 232, 208],
+            "usage": "Alternating rows, subtle backgrounds"
+          }
+        },
+        "accent": {
+          "orange": {
+            "description": "Warm orange for primary actions and highlights",
+            "hex": "#FF8C42",
+            "rgb": [255, 140, 66],
+            "usage": "Title bars, primary buttons, play buttons, send buttons"
+          },
+          "blue": {
+            "description": "Classic blue for information and navigation",
+            "hex": "#4A90E2",
+            "rgb": [74, 144, 226],
+            "usage": "Title bars, links, information dialogs, navigation elements"
+          },
+          "yellow": {
+            "description": "Bright yellow for search and attention",
+            "hex": "#FFD700",
+            "rgb": [255, 215, 0],
+            "usage": "Search bars, input fields, warning states, media player backgrounds"
+          },
+          "pink": {
+            "description": "Soft pink for special elements",
+            "hex": "#FFB6C1",
+            "rgb": [255, 182, 193],
+            "usage": "Chat bubbles, special badges, accent elements"
+          },
+          "purple": {
+            "description": "Purple for premium or special features",
+            "hex": "#9370DB",
+            "rgb": [147, 112, 219],
+            "usage": "Pro badges, premium features, gradients"
+          },
+          "redOrange": {
+            "description": "Red-orange for media controls",
+            "hex": "#FF6347",
+            "rgb": [255, 99, 71],
+            "usage": "Play buttons, heart icons, active states"
+          }
+        },
+        "neutral": {
+          "darkGray": {
+            "description": "Main background color",
+            "hex": "#2C2C2C",
+            "rgb": [44, 44, 44],
+            "usage": "Desktop background, app background"
+          },
+          "gray": {
+            "description": "Secondary gray for disabled states",
+            "hex": "#808080",
+            "rgb": [128, 128, 128],
+            "usage": "Trash icons, disabled elements, secondary text"
+          },
+          "white": {
+            "description": "Pure white for text and icons",
+            "hex": "#FFFFFF",
+            "rgb": [255, 255, 255],
+            "usage": "Text on colored backgrounds, icons, highlights"
+          },
+          "black": {
+            "description": "Pure black for text and borders",
+            "hex": "#000000",
+            "rgb": [0, 0, 0],
+            "usage": "Primary text, thick borders, outlines"
+          }
+        },
+        "semantic": {
+          "error": {
+            "hex": "#DC143C",
+            "rgb": [220, 20, 60],
+            "usage": "Error dialogs, error icons, destructive actions"
+          },
+          "success": {
+            "hex": "#32CD32",
+            "rgb": [50, 205, 50],
+            "usage": "Success messages, checkmarks, positive feedback"
+          },
+          "warning": {
+            "hex": "#FFA500",
+            "rgb": [255, 165, 0],
+            "usage": "Warning dialogs, caution states"
+          },
+          "info": {
+            "hex": "#4A90E2",
+            "rgb": [74, 144, 226],
+            "usage": "Information dialogs, informational messages"
+          }
+        }
+      },
+      "titleBarColors": {
+        "blue": "Used for standard windows, file explorers, information dialogs",
+        "orange": "Used for browser windows, video players, media interfaces",
+        "yellow": "Used for login dialogs, search interfaces, input-focused windows",
+        "beige": "Default window color when no specific purpose"
+      },
+      "gradients": {
+        "proBadge": {
+          "description": "Diagonal gradient for premium badges",
+          "colors": ["#FFB6C1", "#9370DB"],
+          "direction": "diagonal top-left to bottom-right",
+          "usage": "Pro badges, premium feature indicators"
+        }
+      }
+    },
+    
+    "typography": {
+      "fontFamily": {
+        "primary": "System sans-serif font (SF Pro on macOS, system default elsewhere)",
+        "monospace": "Monospaced font for code, timecode, technical data",
+        "description": "Simple, readable sans-serif fonts. Avoid decorative or script fonts."
+      },
+      "fontSizes": {
+        "xxs": { "size": 8, "usage": "Tiny labels, timestamps" },
+        "xs": { "size": 9, "usage": "Small labels, captions, timecode" },
+        "sm": { "size": 10, "usage": "Secondary text, track labels" },
+        "base": { "size": 12, "usage": "Body text, default text size" },
+        "md": { "size": 14, "usage": "Slightly emphasized text" },
+        "lg": { "size": 16, "usage": "Subheadings, button text" },
+        "xl": { "size": 18, "usage": "Headings, window titles" },
+        "xxl": { "size": 24, "usage": "Large headings, prominent text" }
+      },
+      "fontWeights": {
+        "regular": "400 - Default body text",
+        "medium": "500 - Emphasized text, labels",
+        "semibold": "600 - Headings, important labels",
+        "bold": "700 - Window titles, prominent headings"
+      },
+      "lineHeight": {
+        "tight": 1.2,
+        "normal": 1.5,
+        "relaxed": 1.8
+      },
+      "textColors": {
+        "primary": "Black (#000000) on light backgrounds, White (#FFFFFF) on dark backgrounds",
+        "secondary": "Gray (#808080) for less important text",
+        "onAccent": "White (#FFFFFF) on colored backgrounds (orange, blue, yellow, etc.)"
+      }
+    },
+    
+    "spacing": {
+      "scale": {
+        "xs": 2,
+        "sm": 4,
+        "md": 8,
+        "lg": 12,
+        "xl": 16,
+        "2xl": 20,
+        "3xl": 24,
+        "4xl": 32,
+        "5xl": 40,
+        "6xl": 48,
+        "7xl": 64
+      },
+      "guidelines": {
+        "windowPadding": "16px - Standard padding inside windows",
+        "elementSpacing": "8-12px - Space between related elements",
+        "sectionSpacing": "20-24px - Space between major sections",
+        "iconSpacing": "4-8px - Space between icons and text",
+        "buttonPadding": "8px vertical, 16px horizontal - Standard button padding",
+        "inputPadding": "8px vertical, 12px horizontal - Text input padding"
+      }
+    },
+    
+    "borders": {
+      "width": {
+        "thin": 1,
+        "medium": 2,
+        "thick": 3,
+        "description": "Use thick borders (3px) for window edges and major separations, medium (2px) for buttons and interactive elements, thin (1px) for subtle dividers"
+      },
+      "radius": {
+        "none": 0,
+        "sm": 4,
+        "md": 8,
+        "lg": 12,
+        "xl": 16,
+        "full": 9999,
+        "description": "Rounded corners throughout. Windows use medium radius (8px), buttons use small-medium (4-8px), icons can be fully rounded"
+      },
+      "color": {
+        "default": "Black or dark gray for primary borders",
+        "accent": "Use accent colors for focused/active borders",
+        "subtle": "Light gray for subtle separations"
+      }
+    },
+    
+    "shadows": {
+      "window": {
+        "description": "Subtle shadow to give windows depth and separation from background",
+        "offset": { "x": 0, "y": 4 },
+        "blur": 8,
+        "spread": 0,
+        "color": "rgba(0, 0, 0, 0.2)",
+        "usage": "All windows, dialog boxes"
+      },
+      "button": {
+        "description": "Minimal shadow for button depth",
+        "offset": { "x": 0, "y": 2 },
+        "blur": 4,
+        "spread": 0,
+        "color": "rgba(0, 0, 0, 0.15)"
+      },
+      "icon": {
+        "description": "Very subtle shadow for icon depth",
+        "offset": { "x": 0, "y": 1 },
+        "blur": 2,
+        "spread": 0,
+        "color": "rgba(0, 0, 0, 0.1)"
+      }
+    },
+    
+    "components": {
+      "window": {
+        "description": "Primary container for all content. Draggable, resizable windows with colored title bars.",
+        "structure": {
+          "titleBar": {
+            "height": "30-32px",
+            "background": "Colored based on window type (blue, orange, yellow, beige)",
+            "textColor": "White",
+            "fontSize": "14-16px",
+            "fontWeight": "Bold",
+            "padding": "8px horizontal",
+            "controls": {
+              "minimize": "O or _ symbol",
+              "maximize": "Square or _ symbol",
+              "close": "X symbol",
+              "size": "16-20px",
+              "spacing": "4px between controls",
+              "position": "Right side of title bar"
+            }
+          },
+          "content": {
+            "background": "Beige (#F5F5DC)",
+            "padding": "16px",
+            "borderRadius": "0 (rounded only on window edges)"
+          },
+          "border": {
+            "width": "3px",
+            "color": "Black or dark gray",
+            "radius": "8px"
+          }
+        },
+        "types": {
+          "standard": {
+            "titleBarColor": "Blue",
+            "usage": "File explorers, standard dialogs, information windows"
+          },
+          "media": {
+            "titleBarColor": "Orange",
+            "usage": "Video players, browser windows, media interfaces"
+          },
+          "input": {
+            "titleBarColor": "Yellow",
+            "usage": "Login dialogs, search windows, input-focused interfaces"
+          },
+          "default": {
+            "titleBarColor": "Beige",
+            "usage": "Generic windows without specific purpose"
+          }
+        }
+      },
+      
+      "dialog": {
+        "description": "Modal dialog boxes for user interaction",
+        "structure": {
+          "size": "Small to medium (300-500px width)",
+          "background": "Beige",
+          "titleBar": {
+            "height": "28-30px",
+            "background": "Semantic color (orange for errors, blue for info, yellow for input)",
+            "textColor": "White",
+            "fontWeight": "Bold"
+          },
+          "content": {
+            "padding": "20px",
+            "spacing": "16px between elements"
+          },
+          "actions": {
+            "position": "Bottom right or bottom center",
+            "spacing": "8px between buttons",
+            "alignment": "Right-aligned"
+          }
+        },
+        "types": {
+          "error": {
+            "titleBarColor": "Orange",
+            "icon": "Large red X icon",
+            "iconSize": "32-40px",
+            "iconColor": "Red (#DC143C)"
+          },
+          "information": {
+            "titleBarColor": "Blue",
+            "icon": "Info icon (optional)",
+            "iconSize": "24-32px"
+          },
+          "login": {
+            "titleBarColor": "Yellow",
+            "inputFields": "Two fields: Login (text) and Password (masked dots)"
+          }
+        }
+      },
+      
+      "button": {
+        "description": "Interactive buttons with clear visual states",
+        "sizes": {
+          "sm": { "padding": "6px 12px", "fontSize": "12px", "height": "28px" },
+          "md": { "padding": "8px 16px", "fontSize": "14px", "height": "32px" },
+          "lg": { "padding": "12px 24px", "fontSize": "16px", "height": "40px" }
+        },
+        "styles": {
+          "primary": {
+            "background": "Orange or Blue (accent color)",
+            "textColor": "White",
+            "border": "2px black",
+            "borderRadius": "4-6px",
+            "hover": "Slightly darker background",
+            "active": "Even darker, pressed appearance"
+          },
+          "secondary": {
+            "background": "Beige or light gray",
+            "textColor": "Black",
+            "border": "2px black",
+            "borderRadius": "4-6px"
+          },
+          "text": {
+            "background": "Transparent",
+            "textColor": "Black or accent color",
+            "border": "None",
+            "hover": "Underline or background highlight"
+          }
+        },
+        "states": {
+          "default": "Normal appearance",
+          "hover": "Slightly darker or highlighted",
+          "active": "Pressed appearance (darker, slight inset)",
+          "disabled": "Grayed out, reduced opacity (50%)",
+          "focused": "Thick border or outline"
+        }
+      },
+      
+      "input": {
+        "description": "Text input fields and search bars",
+        "textField": {
+          "background": "White or light beige",
+          "border": "2px black or dark gray",
+          "borderRadius": "4px",
+          "padding": "8px 12px",
+          "fontSize": "14px",
+          "height": "32-36px",
+          "focus": {
+            "borderColor": "Accent color (blue or orange)",
+            "borderWidth": "3px",
+            "outline": "None (border handles focus)"
+          },
+          "placeholder": {
+            "color": "Gray (#808080)",
+            "style": "Italic"
+          }
+        },
+        "searchBar": {
+          "background": "Yellow (#FFD700)",
+          "border": "2px black",
+          "borderRadius": "6px",
+          "padding": "12px 16px",
+          "icon": {
+            "position": "Left side",
+            "type": "Magnifying glass",
+            "size": "16-20px",
+            "color": "Black or dark gray"
+          },
+          "cursor": {
+            "color": "Black",
+            "blink": "Visible blinking cursor"
+          }
+        },
+        "passwordField": {
+          "background": "White",
+          "border": "2px black",
+          "display": "Masked with dots (•••••)",
+          "other": "Same as textField"
+        }
+      },
+      
+      "icon": {
+        "description": "Desktop icons and system icons",
+        "desktopIcon": {
+          "size": "48-64px",
+          "spacing": "8-12px between icons",
+          "label": {
+            "position": "Below icon",
+            "fontSize": "10-12px",
+            "color": "Black",
+            "background": "Transparent or white with shadow for readability",
+            "maxWidth": "64px",
+            "textAlign": "Center"
+          },
+          "style": {
+            "border": "None or very subtle",
+            "shadow": "Subtle shadow for depth",
+            "hover": "Slight scale (1.05x) or highlight"
+          }
+        },
+        "systemIcon": {
+          "size": "16-24px for inline icons",
+          "color": "Matches context (black on light, white on dark)",
+          "style": "Simple, outlined or filled"
+        },
+        "types": {
+          "folder": "Yellow folder icon, may have document peeking out",
+          "document": "White document with horizontal lines",
+          "photo": "Beige square with smiling face or image preview",
+          "computer": "Light blue monitor with face or screen",
+          "email": "Pink envelope with document",
+          "internet": "Blue globe with grid lines",
+          "notes": "Beige notepad with spiral binding",
+          "disk": "Blue compact disc",
+          "files": "Blue floppy disk",
+          "trash": "Gray trash can"
+        }
+      },
+      
+      "progressBar": {
+        "description": "Progress indicators for downloads and media playback",
+        "structure": {
+          "background": "Light gray or beige",
+          "height": "8-12px",
+          "border": "1-2px black",
+          "borderRadius": "4px",
+          "fill": {
+            "color": "Orange segments or solid orange",
+            "height": "100%",
+            "borderRadius": "Matches container"
+          }
+        },
+        "types": {
+          "determinate": {
+            "description": "Shows specific progress percentage",
+            "fill": "Solid orange fill proportional to progress"
+          },
+          "indeterminate": {
+            "description": "Shows activity without specific progress",
+            "fill": "Animated segments or pulsing"
+          },
+          "media": {
+            "description": "Media playback progress",
+            "scrubber": {
+              "type": "Circular handle",
+              "size": "12-16px",
+              "color": "Black or dark gray",
+              "position": "On top of progress bar"
+            }
+          }
+        }
+      },
+      
+      "scrollbar": {
+        "description": "Window scrollbars",
+        "vertical": {
+          "width": "12-16px",
+          "position": "Right edge of window",
+          "track": {
+            "background": "Light gray or beige",
+            "border": "1px black on left edge"
+          },
+          "thumb": {
+            "background": "Gray or darker beige",
+            "border": "1px black",
+            "minHeight": "20px",
+            "hover": "Slightly darker"
+          }
+        },
+        "horizontal": {
+          "height": "12-16px",
+          "position": "Bottom edge of window",
+          "track": "Same as vertical",
+          "thumb": "Same as vertical"
+        }
+      },
+      
+      "mediaControls": {
+        "description": "Video and audio playback controls",
+        "playButton": {
+          "shape": "Triangle pointing right",
+          "size": "32-40px",
+          "color": "Red-orange (#FF6347)",
+          "background": "Transparent or light background",
+          "border": "2px black (optional)"
+        },
+        "navigation": {
+          "previous": "<< symbol, 16-20px",
+          "next": ">> symbol, 16-20px",
+          "color": "Black or accent color"
+        },
+        "heartIcon": {
+          "size": "20-24px",
+          "color": "Red or red-orange",
+          "position": "Right side of controls"
+        },
+        "layout": {
+          "horizontal": "Controls arranged left to right",
+          "spacing": "12-16px between controls",
+          "alignment": "Center-aligned"
+        }
+      },
+      
+      "chat": {
+        "description": "Group chat interface",
+        "window": {
+          "titleBar": "Yellow",
+          "background": "Beige"
+        },
+        "messages": {
+          "bubble": {
+            "colors": ["Pink", "Blue", "Yellow"],
+            "borderRadius": "12-16px",
+            "padding": "8-12px",
+            "spacing": "8px between messages",
+            "maxWidth": "70% of container"
+          },
+          "avatar": {
+            "size": "32-40px",
+            "shape": "Circle",
+            "content": "Emoji or simple icon"
+          }
+        },
+        "input": {
+          "background": "White",
+          "border": "2px black",
+          "borderRadius": "4px",
+          "position": "Bottom of chat",
+          "button": {
+            "background": "Orange",
+            "text": "Send",
+            "position": "Right of input"
+          }
+        }
+      },
+      
+      "badge": {
+        "description": "Special badges and labels",
+        "proBadge": {
+          "background": "Diagonal gradient (pink to purple)",
+          "textColor": "White",
+          "fontSize": "12-14px",
+          "fontWeight": "Bold",
+          "padding": "4px 12px",
+          "borderRadius": "4px",
+          "position": "Top-left corner",
+          "rotation": "Diagonal (top-left to bottom-right)"
+        }
+      },
+      
+      "track": {
+        "description": "Timeline track for media editing",
+        "height": "50px",
+        "background": {
+          "even": "Beige",
+          "odd": "Light beige (alternating)"
+        },
+        "label": {
+          "width": "60px",
+          "fontSize": "10px",
+          "color": "Secondary gray",
+          "padding": "4px"
+        },
+        "clip": {
+          "background": "Blue with opacity (0.7)",
+          "borderRadius": "4px",
+          "height": "40px",
+          "border": "1px darker blue (optional)",
+          "text": {
+            "color": "White",
+            "fontSize": "9px",
+            "padding": "4px horizontal",
+            "lineLimit": 1
+          }
+        }
+      },
+      
+      "ruler": {
+        "description": "Timecode ruler for timeline",
+        "height": "30px",
+        "background": "Control background color",
+        "ticks": {
+          "major": {
+            "height": "10px",
+            "width": "1px",
+            "color": "Primary text color"
+          },
+          "labels": {
+            "fontSize": "9px",
+            "font": "Monospaced",
+            "color": "Secondary",
+            "position": "Below tick"
+          }
+        }
+      }
+    },
+    
+    "layout": {
+      "desktop": {
+        "description": "Desktop-like organization with icons and windows",
+        "background": "Dark gray (#2C2C2C)",
+        "iconLayout": {
+          "arrangement": "Vertical on left side, horizontal on top-right",
+          "spacing": "8-12px between icons",
+          "alignment": "Left-aligned labels below icons"
+        }
+      },
+      "windowManagement": {
+        "overlapping": "Windows can overlap, with shadows showing depth",
+        "zIndex": "Active window on top, others below",
+        "dragging": "Windows are draggable by title bar",
+        "resizing": "Windows are resizable (if applicable)"
+      },
+      "grid": {
+        "fileExplorer": {
+          "itemSize": "64-80px (icon + label)",
+          "spacing": "12-16px",
+          "alignment": "Grid layout, left-to-right, top-to-bottom"
+        }
+      }
+    },
+    
+    "interactions": {
+      "hover": {
+        "description": "Subtle visual feedback on hover",
+        "effects": {
+          "button": "Slightly darker background, slight scale (1.02x)",
+          "icon": "Slight scale (1.05x), highlight border",
+          "link": "Underline or color change"
+        }
+      },
+      "active": {
+        "description": "Pressed/clicked state",
+        "effects": {
+          "button": "Darker background, slight inset appearance",
+          "icon": "Slight scale down (0.98x)"
+        }
+      },
+      "focus": {
+        "description": "Keyboard focus indication",
+        "effects": {
+          "input": "Thick border (3px) in accent color",
+          "button": "Thick outline or border",
+          "default": "Visible focus ring"
+        }
+      },
+      "transitions": {
+        "duration": "150-200ms",
+        "easing": "Ease-in-out",
+        "properties": ["background-color", "border-color", "transform", "opacity"]
+      }
+    },
+    
+    "accessibility": {
+      "contrast": {
+        "minimum": "WCAG AA compliant",
+        "textOnBackground": "Black on beige/white, white on colored backgrounds",
+        "focusIndicators": "High contrast, clearly visible"
+      },
+      "keyboard": {
+        "navigation": "Full keyboard support for all interactive elements",
+        "shortcuts": "Standard OS shortcuts (Cmd+W to close, etc.)",
+        "focusManagement": "Logical tab order, visible focus indicators"
+      },
+      "screenReaders": {
+        "labels": "All interactive elements have accessible labels",
+        "descriptions": "Complex components have descriptions"
+      }
+    },
+    
+    "implementationNotes": {
+      "swiftui": {
+        "colors": "Use Color(hex:) extension or NSColor for custom colors",
+        "windows": "Use WindowGroup or NSWindow for native window management",
+        "shadows": "Use .shadow() modifier with specified values",
+        "borders": "Use .overlay() with Rectangle or .border() modifier",
+        "roundedCorners": "Use .cornerRadius() or .clipShape(RoundedRectangle())"
+      },
+      "consistency": {
+        "spacing": "Use consistent spacing scale throughout",
+        "colors": "Reference color palette, avoid ad-hoc colors",
+        "typography": "Use defined font sizes and weights",
+        "components": "Reuse component styles, avoid one-off designs"
+      },
+      "performance": {
+        "shadows": "Use sparingly, prefer borders for definition",
+        "animations": "Keep transitions subtle and performant",
+        "rendering": "Optimize for smooth window dragging and resizing"
+      }
+    },
+    
+    "examples": {
+      "windowExample": {
+        "description": "Standard window with blue title bar",
+        "structure": [
+          "Title bar: 30px height, blue background, white text, window controls on right",
+          "Content area: Beige background, 16px padding, black 3px border, 8px corner radius",
+          "Shadow: 0,4 offset, 8px blur, 20% black opacity"
+        ]
+      },
+      "buttonExample": {
+        "description": "Primary orange button",
+        "structure": [
+          "Background: Orange (#FF8C42)",
+          "Text: White, 14px, medium weight",
+          "Border: 2px black",
+          "Padding: 8px vertical, 16px horizontal",
+          "Border radius: 4px",
+          "Hover: Slightly darker orange",
+          "Active: Pressed appearance"
+        ]
+      },
+      "searchBarExample": {
+        "description": "Yellow search bar with magnifying glass",
+        "structure": [
+          "Background: Yellow (#FFD700)",
+          "Border: 2px black, 6px radius",
+          "Padding: 12px vertical, 16px horizontal",
+          "Icon: Magnifying glass on left, 16-20px",
+          "Placeholder: 'Search...' in gray, italic",
+          "Cursor: Blinking black cursor"
+        ]
+      }
+    }
+  }
+}
+

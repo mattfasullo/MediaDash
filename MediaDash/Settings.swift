@@ -111,9 +111,14 @@ struct BusinessDayCalculator {
 
 // MARK: - Docket Source
 
-enum DocketSource: String, Codable {
+enum DocketSource: String, Codable, CaseIterable {
+    case asana = "Asana"
     case csv = "CSV File"
     case server = "Server Path"
+    
+    var displayName: String {
+        self.rawValue
+    }
 }
 
 // MARK: - Search Settings
@@ -142,11 +147,7 @@ enum DefaultQuickSearch: String, Codable {
 
 enum AppTheme: String, Codable, CaseIterable {
     case modern = "Modern"
-    case windows95 = "Windows 95"
-    case windowsXP = "Windows XP"
-    case macos1996 = "macOS 1996"
-    case retro = "MS-DOS"
-    case cursed = "Cursed"
+    case retroDesktop = "Retro Desktop (Beta)"
 
     var displayName: String {
         self.rawValue
@@ -157,16 +158,8 @@ enum AppTheme: String, Codable, CaseIterable {
         switch self {
         case .modern:
             return Color(nsColor: .controlBackgroundColor)
-        case .windows95:
-            return Color(red: 0.75, green: 0.75, blue: 0.75)
-        case .windowsXP:
-            return Color(red: 0.93, green: 0.95, blue: 0.99) // Lighter, more authentic XP blue-white
-        case .macos1996:
-            return Color(red: 0.85, green: 0.85, blue: 0.85) // Platinum
-        case .retro:
-            return Color(red: 0, green: 0, blue: 0.67) // Classic DOS blue
-        case .cursed:
-            return .black // Handled with gradient in view
+        case .retroDesktop:
+            return Color(red: 0.173, green: 0.173, blue: 0.173) // Dark gray #2C2C2C
         }
     }
 
@@ -174,16 +167,8 @@ enum AppTheme: String, Codable, CaseIterable {
         switch self {
         case .modern:
             return .primary
-        case .windows95:
-            return Color(red: 0, green: 0, blue: 0.5) // Navy blue
-        case .windowsXP:
-            return Color(red: 0.12, green: 0.39, blue: 0.73) // Authentic Luna Blue
-        case .macos1996:
-            return .black
-        case .retro:
-            return Color(red: 0, green: 1, blue: 1) // Cyan
-        case .cursed:
-            return .pink
+        case .retroDesktop:
+            return .white
         }
     }
 
@@ -191,16 +176,8 @@ enum AppTheme: String, Codable, CaseIterable {
         switch self {
         case .modern:
             return 8
-        case .windows95:
-            return 0
-        case .windowsXP:
-            return 12
-        case .macos1996:
-            return 4
-        case .retro:
-            return 0
-        case .cursed:
-            return 20
+        case .retroDesktop:
+            return 6
         }
     }
 
@@ -212,35 +189,11 @@ enum AppTheme: String, Codable, CaseIterable {
                 Color(red: 0.50, green: 0.40, blue: 0.25),  // Subtle amber/brown
                 Color(red: 0.25, green: 0.45, blue: 0.45)   // Subtle teal
             )
-        case .windows95:
+        case .retroDesktop:
             return (
-                Color(red: 0.75, green: 0.75, blue: 0.75),
-                Color(red: 0.75, green: 0.75, blue: 0.75),
-                Color(red: 0.75, green: 0.75, blue: 0.75)
-            )
-        case .windowsXP:
-            return (
-                Color(red: 0.12, green: 0.39, blue: 0.73), // Authentic Luna Blue
-                Color(red: 0.49, green: 0.67, blue: 0.27), // Authentic Luna Green
-                Color(red: 0.93, green: 0.55, blue: 0.18)  // Authentic Luna Orange
-            )
-        case .macos1996:
-            return (
-                Color(red: 0.7, green: 0.7, blue: 0.7),
-                Color(red: 0.7, green: 0.7, blue: 0.7),
-                Color(red: 0.7, green: 0.7, blue: 0.7)
-            )
-        case .retro:
-            return (
-                Color(red: 0, green: 0.67, blue: 0.67),  // Cyan
-                Color(red: 0.85, green: 0.85, blue: 0),  // Darker yellow for readability
-                Color(red: 0, green: 0.8, blue: 0)       // Darker green for readability
-            )
-        case .cursed:
-            return (
-                Color(red: 0.8, green: 0, blue: 0.8),    // Darker Magenta
-                Color(red: 0, green: 0.8, blue: 0),      // Darker Lime
-                Color(red: 0.9, green: 0.4, blue: 0)     // Darker Orange
+                Color(red: 0.29, green: 0.565, blue: 0.886), // Blue #4A90E2
+                Color(red: 1.0, green: 0.549, blue: 0.259),  // Orange #FF8C42
+                Color(red: 0.29, green: 0.565, blue: 0.886)   // Blue #4A90E2
             )
         }
     }
@@ -249,14 +202,8 @@ enum AppTheme: String, Codable, CaseIterable {
         switch self {
         case .modern:
             return .white
-        case .windows95, .macos1996:
-            return .black
-        case .windowsXP:
+        case .retroDesktop:
             return .white
-        case .retro:
-            return .black
-        case .cursed:
-            return .white // Changed from yellow for better readability
         }
     }
 
@@ -264,21 +211,54 @@ enum AppTheme: String, Codable, CaseIterable {
         switch self {
         case .modern:
             return nil
-        case .windows95:
-            return Color.white.opacity(0.5) // Light shadow for 95 buttons
-        case .windowsXP:
-            return Color.black.opacity(0.3) // Subtle shadow for XP
-        case .macos1996:
-            return Color.white.opacity(0.5) // Light shadow for Mac 1996
-        case .retro:
-            return Color.black.opacity(0.8) // Strong shadow for DOS text
-        case .cursed:
-            return .black // Strong shadow for cursed text
+        case .retroDesktop:
+            return nil
         }
     }
 
     var useCustomFont: Bool {
-        self == .cursed || self == .retro
+        false
+    }
+    
+    // Retro Desktop specific colors from design.json
+    var retroBeige: Color {
+        Color(red: 0.961, green: 0.961, blue: 0.863) // #F5F5DC
+    }
+    
+    var retroBeigeDark: Color {
+        Color(red: 0.910, green: 0.910, blue: 0.816) // #E8E8D0
+    }
+    
+    var retroOrange: Color {
+        Color(red: 1.0, green: 0.549, blue: 0.259) // #FF8C42
+    }
+    
+    var retroBlue: Color {
+        Color(red: 0.29, green: 0.565, blue: 0.886) // #4A90E2
+    }
+    
+    var retroYellow: Color {
+        Color(red: 1.0, green: 0.843, blue: 0.0) // #FFD700
+    }
+    
+    var retroPink: Color {
+        Color(red: 1.0, green: 0.714, blue: 0.757) // #FFB6C1
+    }
+    
+    var retroPurple: Color {
+        Color(red: 0.576, green: 0.439, blue: 0.859) // #9370DB
+    }
+    
+    var retroRedOrange: Color {
+        Color(red: 1.0, green: 0.388, blue: 0.278) // #FF6347
+    }
+    
+    var retroDarkGray: Color {
+        Color(red: 0.173, green: 0.173, blue: 0.173) // #2C2C2C
+    }
+    
+    var retroGray: Color {
+        Color(red: 0.502, green: 0.502, blue: 0.502) // #808080
     }
 }
 
@@ -350,6 +330,14 @@ struct AppSettings: Codable, Equatable {
     var csvMusicTypeColumn: String
     var csvTrackColumn: String
     var csvMediaColumn: String
+    
+    // Asana Integration (only used when docketSource == .asana)
+    var asanaWorkspaceID: String?
+    var asanaProjectID: String?
+    var asanaClientID: String? // Stored in Keychain, not in settings
+    var asanaClientSecret: String? // Stored in Keychain, not in settings
+    var asanaDocketField: String? // Custom field name for docket number (if using custom fields)
+    var asanaJobNameField: String? // Custom field name for job name (if using custom fields)
 
     static var `default`: AppSettings {
         AppSettings(
@@ -391,7 +379,13 @@ struct AppSettings: Codable, Equatable {
             csvAgencyProducerColumn: "Agency Producer / Supervisor",
             csvMusicTypeColumn: "Music Type",
             csvTrackColumn: "Track",
-            csvMediaColumn: "Media"
+            csvMediaColumn: "Media",
+            asanaWorkspaceID: nil,
+            asanaProjectID: nil,
+            asanaClientID: nil,
+            asanaClientSecret: nil,
+            asanaDocketField: nil,
+            asanaJobNameField: nil
         )
     }
 }

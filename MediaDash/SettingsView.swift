@@ -1,6 +1,58 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Settings Card
+
+struct SettingsCard<Content: View>: View {
+    let content: Content
+    
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content
+        }
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(12)
+    }
+}
+
+// MARK: - Hoverable Icon Button
+
+struct HoverableIconButton: View {
+    let icon: String
+    let action: () -> Void
+    let helpText: String?
+    @State private var isHovered = false
+    
+    init(icon: String, action: @escaping () -> Void, helpText: String? = nil) {
+        self.icon = icon
+        self.action = action
+        self.helpText = helpText
+    }
+    
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .foregroundColor(isHovered ? .primary : .secondary)
+                .scaleEffect(isHovered ? 1.15 : 1.0)
+                .padding(4)
+                .background(isHovered ? Color.gray.opacity(0.15) : Color.clear)
+                .cornerRadius(4)
+        }
+        .buttonStyle(.plain)
+        .help(helpText ?? "")
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
     @Binding var isPresented: Bool
@@ -10,11 +62,132 @@ struct SettingsView: View {
     @State private var showDeleteAlert = false
     @State private var profileToDelete: String?
     @State private var hasUnsavedChanges = false
+    @StateObject private var oauthService = OAuthService()
+    @State private var isConnecting = false
+    @State private var connectionError: String?
+    @State private var showAdvancedSettings = false
+    @State private var showManualCodeEntry = false
+    @State private var manualAuthCode = ""
+    @State private var manualAuthURL: URL?
+    @State private var manualAuthState = ""
 
     init(settingsManager: SettingsManager, isPresented: Binding<Bool>) {
         self.settingsManager = settingsManager
         self._isPresented = isPresented
         self._settings = State(initialValue: settingsManager.currentSettings)
+    }
+    
+    private func connectToAsana() {
+        guard let clientId = KeychainService.retrieve(key: "asana_client_id"),
+              let clientSecret = KeychainService.retrieve(key: "asana_client_secret"),
+              !clientId.isEmpty, !clientSecret.isEmpty else {
+            connectionError = "Please enter Client ID and Client Secret"
+            return
+        }
+        
+        isConnecting = true
+        connectionError = nil
+        
+        Task {
+            do {
+                // Try localhost first
+                let token = try await oauthService.authenticateAsana(
+                    clientId: clientId,
+                    clientSecret: clientSecret,
+                    useOutOfBand: false
+                )
+                
+                // Store the access token
+                oauthService.storeToken(token.accessToken, for: "asana")
+                
+                await MainActor.run {
+                    isConnecting = false
+                    print("Asana OAuth successful! Token stored.")
+                }
+            } catch OAuthError.manualCodeRequired(let state, let authURL) {
+                // Fall back to manual code entry
+                await MainActor.run {
+                    isConnecting = false
+                    manualAuthState = state
+                    manualAuthURL = authURL
+                    showManualCodeEntry = true
+                    // Open browser
+                    NSWorkspace.shared.open(authURL)
+                }
+            } catch {
+                await MainActor.run {
+                    isConnecting = false
+                    // Check if it's a redirect URI error
+                    if error.localizedDescription.contains("redirect_uri") {
+                        connectionError = "Redirect URI error. Please add 'http://localhost:8080/callback' to your Asana app's redirect URLs, or use manual code entry."
+                        // Offer to try out-of-band flow
+                        Task {
+                            do {
+                                let token = try await oauthService.authenticateAsana(
+                                    clientId: clientId,
+                                    clientSecret: clientSecret,
+                                    useOutOfBand: true
+                                )
+                                oauthService.storeToken(token.accessToken, for: "asana")
+                                await MainActor.run {
+                                    isConnecting = false
+                                    print("Asana OAuth successful! Token stored.")
+                                }
+                            } catch OAuthError.manualCodeRequired(let state, let authURL) {
+                                await MainActor.run {
+                                    manualAuthState = state
+                                    manualAuthURL = authURL
+                                    showManualCodeEntry = true
+                                    NSWorkspace.shared.open(authURL)
+                                }
+                            } catch {
+                                await MainActor.run {
+                                    connectionError = error.localizedDescription
+                                }
+                            }
+                        }
+                    } else {
+                        connectionError = error.localizedDescription
+                    }
+                    print("Asana OAuth failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func submitManualCode() {
+        guard !manualAuthCode.isEmpty,
+              let clientId = KeychainService.retrieve(key: "asana_client_id"),
+              let clientSecret = KeychainService.retrieve(key: "asana_client_secret") else {
+            return
+        }
+        
+        isConnecting = true
+        connectionError = nil
+        
+        Task {
+            do {
+                let token = try await oauthService.exchangeCodeForTokenManually(
+                    code: manualAuthCode.trimmingCharacters(in: .whitespaces),
+                    clientId: clientId,
+                    clientSecret: clientSecret
+                )
+                
+                oauthService.storeToken(token.accessToken, for: "asana")
+                
+                await MainActor.run {
+                    isConnecting = false
+                    showManualCodeEntry = false
+                    manualAuthCode = ""
+                    print("Asana OAuth successful! Token stored.")
+                }
+            } catch {
+                await MainActor.run {
+                    isConnecting = false
+                    connectionError = error.localizedDescription
+                }
+            }
+        }
     }
 
     var body: some View {
@@ -22,24 +195,28 @@ struct SettingsView: View {
             // Header
             HStack {
                 Text("Settings")
-                    .font(.title2)
-                    .fontWeight(.bold)
+                    .font(.system(size: 22, weight: .semibold))
 
                 Spacer()
 
-                Button("Close") {
+                Button(action: {
                     isPresented = false
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 18))
                 }
+                .buttonStyle(.plain)
+                .help("Close Settings")
                 .keyboardShortcut(.cancelAction)
             }
-            .padding()
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
             .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
 
             // Content
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 24) {
                     // Profile Management
                     ProfileSection(
                         settings: $settings,
@@ -50,76 +227,110 @@ struct SettingsView: View {
                         hasUnsavedChanges: $hasUnsavedChanges
                     )
 
-                    Divider()
-
                     // Theme Selection
                     ThemeSelectionSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
 
-                    Divider()
-
                     // Path Settings
-                    PathSettingsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                    PathSettingsSection(
+                        settings: $settings,
+                        hasUnsavedChanges: $hasUnsavedChanges
+                    )
+                    
+                    // Asana Integration (only shown when Asana is selected)
+                    if settings.docketSource == .asana {
+                        AsanaIntegrationSection(
+                            settings: $settings,
+                            hasUnsavedChanges: $hasUnsavedChanges,
+                            oauthService: oauthService,
+                            isConnecting: $isConnecting,
+                            connectionError: $connectionError
+                        )
+                    }
 
-                    Divider()
+                    // Advanced Settings Toggle
+                    SettingsCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Image(systemName: "gearshape.2")
+                                    .foregroundColor(.secondary)
+                                    .font(.system(size: 16))
+                                Text("Advanced Settings")
+                                    .font(.system(size: 16, weight: .medium))
+                                Spacer()
+                                Toggle("", isOn: $showAdvancedSettings)
+                                    .labelsHidden()
+                            }
+                            Text("Show technical and customization options")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
 
-                    // Folder Naming
-                    FolderNamingSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                    if showAdvancedSettings {
+                        // Folder Naming
+                        FolderNamingSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
 
-                    Divider()
+                        // File Categories
+                        FileCategoriesSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
 
-                    // File Categories
-                    FileCategoriesSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                        // CSV Column Mapping (only shown when CSV is selected)
+                        if settings.docketSource == .csv {
+                            CSVColumnMappingSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                        }
 
-                    Divider()
-
-                    // CSV Column Mapping
-                    CSVColumnMappingSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
-
-                    Divider()
-
-                    // Advanced Settings
-                    AdvancedSettingsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                        // Advanced Settings
+                        AdvancedSettingsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                    }
                 }
-                .padding()
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
             }
-
-            Divider()
 
             // Footer with Save/Reset buttons
-            HStack {
-                // Version number
-                if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                    Text("Version \(version)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+            VStack(spacing: 0) {
+                Divider()
+                HStack {
+                    // Version number
+                    if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                        Text("Version \(version)")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
 
-                Button("Reset to Defaults") {
-                    settings = .default
-                    hasUnsavedChanges = true
-                }
+                    Spacer()
 
-                Spacer()
+                    if hasUnsavedChanges {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Color.orange)
+                                .frame(width: 6, height: 6)
+                            Text("Unsaved changes")
+                                .font(.system(size: 12))
+                                .foregroundColor(.orange)
+                        }
+                    }
 
-                if hasUnsavedChanges {
-                    Text("Unsaved changes")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                }
+                    Button("Reset to Defaults") {
+                        settings = .default
+                        hasUnsavedChanges = true
+                    }
+                    .buttonStyle(.bordered)
 
-                Button("Save") {
-                    settingsManager.currentSettings = settings
-                    settingsManager.saveCurrentProfile()
-                    hasUnsavedChanges = false
+                    Button("Save") {
+                        settingsManager.currentSettings = settings
+                        settingsManager.saveCurrentProfile()
+                        hasUnsavedChanges = false
+                    }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!hasUnsavedChanges)
                 }
-                .keyboardShortcut("s", modifiers: .command)
-                .buttonStyle(.borderedProminent)
-                .disabled(!hasUnsavedChanges)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+                .background(Color(nsColor: .controlBackgroundColor))
             }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
         }
-        .frame(width: 700, height: 600)
+        .frame(width: 720, height: 650)
         .sheet(isPresented: $showNewProfileSheet) {
             NewProfileView(
                 settingsManager: settingsManager,
@@ -153,47 +364,67 @@ struct ProfileSection: View {
     @Binding var hasUnsavedChanges: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Profile")
-                .font(.headline)
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Image(systemName: "person.circle")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("Profile")
+                        .font(.system(size: 18, weight: .semibold))
+                }
 
-            HStack {
-                Menu {
-                    ForEach(settingsManager.availableProfiles, id: \.self) { profile in
-                        Button(profile) {
-                            settingsManager.loadProfile(name: profile)
-                            settings = settingsManager.currentSettings
-                            hasUnsavedChanges = false
+                HStack(spacing: 12) {
+                    Menu {
+                        ForEach(settingsManager.availableProfiles, id: \.self) { profile in
+                            Button(profile) {
+                                settingsManager.loadProfile(name: profile)
+                                settings = settingsManager.currentSettings
+                                hasUnsavedChanges = false
+                            }
                         }
+                    } label: {
+                        HStack {
+                            Text(settings.profileName)
+                                .foregroundColor(.primary)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .cornerRadius(6)
                     }
-                } label: {
-                    HStack {
-                        Text(settings.profileName)
-                        Image(systemName: "chevron.down")
-                    }
-                    .frame(width: 200, alignment: .leading)
-                }
-                .menuStyle(BorderedButtonMenuStyle())
+                    .menuStyle(.borderlessButton)
 
-                Button(action: { showNewProfileSheet = true }) {
-                    Image(systemName: "plus")
-                }
-                .help("New Profile")
-
-                if settings.profileName != "Default" {
-                    Button(action: {
-                        profileToDelete = settings.profileName
-                        showDeleteAlert = true
-                    }) {
-                        Image(systemName: "trash")
+                    Button(action: { showNewProfileSheet = true }) {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.blue)
+                            .font(.system(size: 20))
                     }
-                    .help("Delete Profile")
+                    .buttonStyle(.plain)
+                    .help("New Profile")
+
+                    if settings.profileName != "Default" {
+                        Button(action: {
+                            profileToDelete = settings.profileName
+                            showDeleteAlert = true
+                        }) {
+                            Image(systemName: "trash.circle.fill")
+                                .foregroundColor(.red)
+                                .font(.system(size: 20))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Delete Profile")
+                    }
                 }
+
+                Text("Save different configurations for different workflows")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
             }
-
-            Text("Save different configurations for different workflows")
-                .font(.caption)
-                .foregroundColor(.secondary)
         }
     }
 }
@@ -210,99 +441,129 @@ struct PathSettingsSection: View {
     @State private var csvExists = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("Storage Locations")
-                .font(.headline)
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Image(systemName: "folder")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("Storage Locations")
+                        .font(.system(size: 18, weight: .semibold))
+                }
 
-            Text("Tell MediaDash where your files are stored")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                Text("Tell MediaDash where your files are stored")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
 
-            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 20) {
                 // Server Base Path
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Work Picture & Prep Storage")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                        .font(.system(size: 14, weight: .medium))
                     Text("Where dockets and prep folders are stored")
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                    HStack {
+                    HStack(spacing: 8) {
                         TextField("Example: /Volumes/Server/GM", text: binding(for: \.serverBasePath))
                             .textFieldStyle(.roundedBorder)
                         Button(action: { browseFolderFor(\.serverBasePath) }) {
                             Image(systemName: "folder")
+                                .foregroundColor(.blue)
                         }
+                        .buttonStyle(.bordered)
                         .help("Browse for folder")
                     }
                 }
 
                 Divider()
+                    .padding(.vertical, 4)
 
                 // Job Info Source
-                VStack(alignment: .leading, spacing: 4) {
+                // TEMPORARILY DISABLED FOR ASANA DEBUGGING - Only Asana is available
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Job Info Source")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    Text("Choose where to load job information from")
-                        .font(.caption)
+                        .font(.system(size: 14, weight: .medium))
+                    Text("Currently using Asana only (CSV and Server disabled for debugging)")
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
+                    // Force Asana selection
+                    HStack {
+                        Text("Asana")
+                            .foregroundColor(.primary)
+                            .font(.system(size: 13))
+                        Spacer()
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.system(size: 14))
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color.green.opacity(0.1))
+                    .cornerRadius(6)
+                    // Hidden picker that always returns Asana
                     Picker("", selection: Binding(
-                        get: { settings.docketSource },
-                        set: {
-                            settings.docketSource = $0
-                            hasUnsavedChanges = true
-                        }
+                        get: { DocketSource.asana },
+                        set: { _ in }
                     )) {
-                        Text("CSV File").tag(DocketSource.csv)
-                        Text("Server Path (Sessions)").tag(DocketSource.server)
+                        Text("Asana").tag(DocketSource.asana)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
+                    .hidden()
+                    .frame(height: 0)
                 }
-
-                Divider()
-
-                // Sessions Base Path (for server-based docket lookup)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("ProTools Sessions Storage")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(settings.docketSource == .server ? .primary : .secondary)
-                    Text(settings.docketSource == .server ?
-                         "Scan this folder for docket information" :
-                         "Not used when CSV source is selected")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    HStack {
-                        TextField("Example: /Volumes/Server/SESSIONS", text: binding(for: \.sessionsBasePath))
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(settings.docketSource != .server)
-                        Button(action: { browseFolderFor(\.sessionsBasePath) }) {
-                            Image(systemName: "folder")
-                        }
-                        .disabled(settings.docketSource != .server)
-                        .help("Browse for folder")
+                .onAppear {
+                    // Force Asana selection on appear
+                    if settings.docketSource != .asana {
+                        settings.docketSource = .asana
+                        hasUnsavedChanges = true
                     }
                 }
 
-                Divider()
 
-                // Docket Metadata CSV Import
-                VStack(alignment: .leading, spacing: 4) {
+                // Sessions Base Path (only shown when Server is selected)
+                if settings.docketSource == .server {
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("ProTools Sessions Storage")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("Scan this folder for docket information")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            TextField("Example: /Volumes/Server/SESSIONS", text: binding(for: \.sessionsBasePath))
+                                .textFieldStyle(.roundedBorder)
+                            Button(action: { browseFolderFor(\.sessionsBasePath) }) {
+                                Image(systemName: "folder")
+                                    .foregroundColor(.blue)
+                            }
+                            .buttonStyle(.bordered)
+                            .help("Browse for folder")
+                        }
+                    }
+                }
+
+                // Docket Metadata CSV Import (only shown when CSV is selected)
+                if settings.docketSource == .csv {
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    // Docket Metadata CSV Import
+                    VStack(alignment: .leading, spacing: 8) {
                     Text("Docket Metadata")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(settings.docketSource == .csv ? .primary : .secondary)
                     Text(settings.docketSource == .csv ?
                          "Import a CSV file with docket metadata (Producer, Director, etc.)" :
                          "Not used when Server Path is selected")
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
 
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
                         Button(action: { importCSVFile() }) {
-                            HStack {
+                            HStack(spacing: 6) {
                                 Image(systemName: "square.and.arrow.down")
                                 Text("Import CSV File")
                             }
@@ -312,50 +573,54 @@ struct PathSettingsSection: View {
                         .help("Select a CSV file to import. It will be copied to ~/Documents/MediaDash/")
 
                         if showImportSuccess {
-                            HStack(spacing: 4) {
+                            HStack(spacing: 6) {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.green)
-                                    .font(.caption)
+                                    .font(.system(size: 12))
                                 Text(importMessage)
-                                    .font(.caption)
+                                    .font(.system(size: 12))
                                     .foregroundColor(.green)
                             }
+                            .padding(.top, 4)
                         }
 
                         if showImportError {
-                            HStack(spacing: 4) {
+                            HStack(spacing: 6) {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundColor(.red)
-                                    .font(.caption)
+                                    .font(.system(size: 12))
                                 Text(importMessage)
-                                    .font(.caption)
+                                    .font(.system(size: 12))
                                     .foregroundColor(.red)
                             }
+                            .padding(.top, 4)
                         }
 
                         // CSV Status Display
                         if csvExists {
-                            HStack(spacing: 4) {
+                            HStack(spacing: 6) {
                                 Image(systemName: "doc.text.fill")
                                     .foregroundColor(.blue)
-                                    .font(.caption)
+                                    .font(.system(size: 12))
                                 Text(csvStatus)
-                                    .font(.caption)
+                                    .font(.system(size: 12))
                                     .foregroundColor(.secondary)
                             }
                             .padding(.top, 4)
                         } else if settings.docketSource == .csv {
-                            HStack(spacing: 4) {
+                            HStack(spacing: 6) {
                                 Image(systemName: "doc.badge.ellipsis")
                                     .foregroundColor(.orange)
-                                    .font(.caption)
+                                    .font(.system(size: 12))
                                 Text("No CSV file imported yet")
-                                    .font(.caption)
+                                    .font(.system(size: 12))
                                     .foregroundColor(.orange)
                             }
                             .padding(.top, 4)
                         }
                     }
+                    }
+                }
                 }
             }
         }
@@ -386,7 +651,7 @@ struct PathSettingsSection: View {
             hasUnsavedChanges = true
         }
     }
-    
+
     private func browseForFolderName(_ keyPath: WritableKeyPath<AppSettings, String>, basePath: String) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -491,6 +756,362 @@ struct PathSettingsSection: View {
     }
 }
 
+// MARK: - Asana Integration Section
+
+struct AsanaIntegrationSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+    @StateObject var oauthService: OAuthService
+    @Binding var isConnecting: Bool
+    @Binding var connectionError: String?
+    
+    @State private var clientID: String = ""
+    @State private var clientSecret: String = ""
+    @State private var showManualCodeEntry = false
+    @State private var manualAuthCode = ""
+    @State private var manualAuthURL: URL?
+    @State private var manualAuthState = ""
+    
+    private func connectToAsana() {
+        guard !clientID.isEmpty, !clientSecret.isEmpty else {
+            connectionError = "Please enter Client ID and Client Secret"
+            return
+        }
+        
+        isConnecting = true
+        connectionError = nil
+        
+        Task {
+            do {
+                // Try localhost first
+                let token = try await oauthService.authenticateAsana(
+                    clientId: clientID,
+                    clientSecret: clientSecret,
+                    useOutOfBand: false
+                )
+                
+                // Store the access token
+                oauthService.storeToken(token.accessToken, for: "asana")
+                
+                await MainActor.run {
+                    isConnecting = false
+                    print("Asana OAuth successful! Token stored.")
+                }
+            } catch OAuthError.manualCodeRequired(let state, let authURL) {
+                // Fall back to manual code entry
+                await MainActor.run {
+                    isConnecting = false
+                    manualAuthState = state
+                    manualAuthURL = authURL
+                    showManualCodeEntry = true
+                    // Open browser
+                    NSWorkspace.shared.open(authURL)
+                }
+            } catch {
+                await MainActor.run {
+                    isConnecting = false
+                    // Check if it's a redirect URI error
+                    if error.localizedDescription.contains("redirect_uri") {
+                        connectionError = "Redirect URI error. Trying manual code entry..."
+                        // Try out-of-band flow
+                        Task {
+                            do {
+                                let token = try await oauthService.authenticateAsana(
+                                    clientId: clientID,
+                                    clientSecret: clientSecret,
+                                    useOutOfBand: true
+                                )
+                                oauthService.storeToken(token.accessToken, for: "asana")
+                                await MainActor.run {
+                                    isConnecting = false
+                                    print("Asana OAuth successful! Token stored.")
+                                }
+                            } catch OAuthError.manualCodeRequired(let state, let authURL) {
+                                await MainActor.run {
+                                    manualAuthState = state
+                                    manualAuthURL = authURL
+                                    showManualCodeEntry = true
+                                    NSWorkspace.shared.open(authURL)
+                                }
+                            } catch {
+                                await MainActor.run {
+                                    connectionError = error.localizedDescription
+                                }
+                            }
+                        }
+                    } else {
+                        connectionError = error.localizedDescription
+                    }
+                    print("Asana OAuth failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func submitManualCode() {
+        guard !manualAuthCode.isEmpty else {
+            return
+        }
+        
+        isConnecting = true
+        connectionError = nil
+        
+        Task {
+            do {
+                let token = try await oauthService.exchangeCodeForTokenManually(
+                    code: manualAuthCode.trimmingCharacters(in: .whitespaces),
+                    clientId: clientID,
+                    clientSecret: clientSecret
+                )
+                
+                oauthService.storeToken(token.accessToken, for: "asana")
+                
+                await MainActor.run {
+                    isConnecting = false
+                    showManualCodeEntry = false
+                    manualAuthCode = ""
+                    print("Asana OAuth successful! Token stored.")
+                }
+            } catch {
+                await MainActor.run {
+                    isConnecting = false
+                    connectionError = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Image(systemName: "link")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("Asana Integration")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+                
+                Text("Fetch dockets and job names from Asana")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                
+                VStack(alignment: .leading, spacing: 16) {
+                // Note: This section only shows when docketSource == .asana
+                // The toggle is removed since selection is handled by the picker
+                VStack(alignment: .leading, spacing: 8) {
+                        // OAuth2 Client Credentials
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("OAuth2 Credentials")
+                                .font(.system(size: 14, weight: .medium))
+                            
+                                // Client ID
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Client ID")
+                                        .font(.system(size: 12))
+                                    TextField("Enter Client ID", text: $clientID)
+                                        .textFieldStyle(.roundedBorder)
+                                        .onChange(of: clientID) { oldValue, newValue in
+                                            if !newValue.isEmpty {
+                                                _ = KeychainService.store(key: "asana_client_id", value: newValue)
+                                            } else {
+                                                KeychainService.delete(key: "asana_client_id")
+                                            }
+                                            hasUnsavedChanges = true
+                                        }
+                                }
+                                
+                                // Client Secret
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Client Secret")
+                                        .font(.system(size: 12))
+                                    SecureField("Enter Client Secret", text: $clientSecret)
+                                        .textFieldStyle(.roundedBorder)
+                                        .onChange(of: clientSecret) { oldValue, newValue in
+                                            if !newValue.isEmpty {
+                                                _ = KeychainService.store(key: "asana_client_secret", value: newValue)
+                                            } else {
+                                                KeychainService.delete(key: "asana_client_secret")
+                                            }
+                                            hasUnsavedChanges = true
+                                        }
+                                }
+                            
+                            // Connect Button
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 12) {
+                                    if isConnecting {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                        Text("Connecting...")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.secondary)
+                                    } else {
+                                        Button("Connect to Asana") {
+                                            connectToAsana()
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(clientID.isEmpty || clientSecret.isEmpty)
+                                    }
+                                    
+                                    // Show connection status
+                                    if let token = KeychainService.retrieve(key: "asana_access_token"), !token.isEmpty {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(.green)
+                                                .font(.system(size: 14))
+                                            Text("Connected")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(.green)
+                                        }
+                                    }
+                                }
+                                
+                                if let error = connectionError {
+                                    Text(error)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.red)
+                                        .padding(.top, 4)
+                                }
+                            }
+                            
+                            Text("Get credentials from: https://app.asana.com/0/my-apps")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            
+                            Text("Note: Add 'http://localhost:8080/callback' as a redirect URL in Asana, or uncheck 'native app' to enable redirect URLs.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                        }
+                        
+                        // Manual Code Entry (shown when redirect fails)
+                        if showManualCodeEntry {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Divider()
+                                    .padding(.vertical, 4)
+                                
+                                Text("Manual Authorization Code")
+                                    .font(.system(size: 12, weight: .medium))
+                                
+                                Text("Copy the authorization code from your browser and paste it here:")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                
+                                HStack(spacing: 8) {
+                                    TextField("Enter authorization code", text: $manualAuthCode)
+                                        .textFieldStyle(.roundedBorder)
+                                    
+                                    Button("Submit") {
+                                        submitManualCode()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(manualAuthCode.isEmpty || isConnecting)
+                                    
+                                    Button("Cancel") {
+                                        showManualCodeEntry = false
+                                        manualAuthCode = ""
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                                
+                                if let url = manualAuthURL {
+                                    Button(action: {
+                                        NSWorkspace.shared.open(url)
+                                    }) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "safari")
+                                            Text("Open Authorization Page")
+                                        }
+                                        .font(.system(size: 12))
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            .padding(12)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(8)
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        // Workspace ID
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Workspace ID (optional)")
+                                .font(.system(size: 12, weight: .medium))
+                            TextField("Leave empty to search all workspaces", text: Binding(
+                                get: { settings.asanaWorkspaceID ?? "" },
+                                set: {
+                                    settings.asanaWorkspaceID = $0.isEmpty ? nil : $0
+                                    hasUnsavedChanges = true
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+                        
+                        // Project ID
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Project ID (optional)")
+                                .font(.system(size: 12, weight: .medium))
+                            TextField("Leave empty to search all projects", text: Binding(
+                                get: { settings.asanaProjectID ?? "" },
+                                set: {
+                                    settings.asanaProjectID = $0.isEmpty ? nil : $0
+                                    hasUnsavedChanges = true
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        // Custom Fields (optional)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Custom Fields (optional)")
+                                .font(.system(size: 12, weight: .medium))
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Docket Field Name")
+                                        .font(.system(size: 11))
+                                    TextField("e.g., Docket Number", text: Binding(
+                                        get: { settings.asanaDocketField ?? "" },
+                                        set: {
+                                            settings.asanaDocketField = $0.isEmpty ? nil : $0
+                                            hasUnsavedChanges = true
+                                        }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                }
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Job Name Field Name")
+                                        .font(.system(size: 11))
+                                    TextField("e.g., Job Name", text: Binding(
+                                        get: { settings.asanaJobNameField ?? "" },
+                                        set: {
+                                            settings.asanaJobNameField = $0.isEmpty ? nil : $0
+                                            hasUnsavedChanges = true
+                                        }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                }
+                            }
+                            Text("If not specified, will parse from task names (e.g., '12345_Job Name')")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            // Load existing values from Keychain when view appears
+            clientID = KeychainService.retrieve(key: "asana_client_id") ?? ""
+            clientSecret = KeychainService.retrieve(key: "asana_client_secret") ?? ""
+        }
+    }
+}
+
 // MARK: - Folder Naming Section
 
 struct FolderNamingSection: View {
@@ -498,92 +1119,100 @@ struct FolderNamingSection: View {
     @Binding var hasUnsavedChanges: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("Folder Organization")
-                .font(.headline)
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Image(systemName: "folder.badge.gear")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("Folder Organization")
+                        .font(.system(size: 18, weight: .semibold))
+                }
 
-            Text("Customize how folders are named and organized")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                Text("Customize how folders are named and organized")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
 
-            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
                 // Work Picture Folder
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Work Picture Folder")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                        .font(.system(size: 14, weight: .medium))
                     Text("The main folder name for work pictures (usually \"WORK PICTURE\")")
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                    HStack {
+                    HStack(spacing: 8) {
                         TextField("WORK PICTURE", text: binding(for: \.workPictureFolderName))
                             .textFieldStyle(.roundedBorder)
                         Button(action: { browseForFolderName(\.workPictureFolderName, basePath: settings.serverBasePath) }) {
                             Image(systemName: "folder")
+                                .foregroundColor(.blue)
                         }
+                        .buttonStyle(.bordered)
                         .help("Browse to select folder")
                     }
                 }
 
                 // Prep Folder
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Prep Folder")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                        .font(.system(size: 14, weight: .medium))
                     Text("The main folder name for session prep (usually \"SESSION PREP\")")
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                    HStack {
+                    HStack(spacing: 8) {
                         TextField("SESSION PREP", text: binding(for: \.prepFolderName))
                             .textFieldStyle(.roundedBorder)
                         Button(action: { browseForFolderName(\.prepFolderName, basePath: settings.serverBasePath) }) {
                             Image(systemName: "folder")
+                                .foregroundColor(.blue)
                         }
+                        .buttonStyle(.bordered)
                         .help("Browse to select folder")
                     }
                 }
 
                 Divider()
+                    .padding(.vertical, 4)
 
                 // Year Prefix
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Year Folder Prefix")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                        .font(.system(size: 14, weight: .medium))
                     Text("Prefix added to year folders (like \"GM_2025\")")
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                    HStack {
+                    HStack(spacing: 8) {
                         TextField("GM_", text: binding(for: \.yearPrefix))
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 100)
                         Text("→ Creates folders like: \(settings.yearPrefix)\(Calendar.current.component(.year, from: Date()))")
-                            .font(.caption)
+                            .font(.system(size: 12))
                             .foregroundColor(.blue)
                     }
                 }
 
                 // Date Format
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Date Format")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                        .font(.system(size: 14, weight: .medium))
                     Text("How dates appear in folder names")
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                    HStack {
+                    HStack(spacing: 8) {
                         TextField("MMMd.yy", text: binding(for: \.dateFormat))
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 120)
                         Text("→ Today would be: \(exampleDate)")
-                            .font(.caption)
+                            .font(.system(size: 12))
                             .foregroundColor(.blue)
                     }
                 }
             }
         }
+        }
     }
-
+    
     private var exampleDate: String {
         let formatter = DateFormatter()
         formatter.dateFormat = settings.dateFormat
@@ -628,58 +1257,65 @@ struct FileCategoriesSection: View {
     @Binding var hasUnsavedChanges: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("File Organization")
-                .font(.headline)
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Image(systemName: "doc.on.doc")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("File Organization")
+                        .font(.system(size: 18, weight: .semibold))
+                }
 
-            Text("MediaDash automatically sorts files into folders based on their type")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                Text("MediaDash automatically sorts files into folders based on their type")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
 
-            VStack(alignment: .leading, spacing: 10) {
-                CategoryRow(
-                    icon: "photo",
-                    title: "Video Files",
-                    folderName: binding(for: \.pictureFolderName),
-                    extensions: bindingArray(for: \.pictureExtensions),
-                    description: "Files like .mp4, .mov, .avi",
-                    hasUnsavedChanges: $hasUnsavedChanges
-                )
+                VStack(alignment: .leading, spacing: 12) {
+                    CategoryRow(
+                        icon: "photo",
+                        title: "Video Files",
+                        folderName: binding(for: \.pictureFolderName),
+                        extensions: bindingArray(for: \.pictureExtensions),
+                        description: "Files like .mp4, .mov, .avi",
+                        hasUnsavedChanges: $hasUnsavedChanges
+                    )
 
-                CategoryRow(
-                    icon: "music.note",
-                    title: "Audio Files",
-                    folderName: binding(for: \.musicFolderName),
-                    extensions: bindingArray(for: \.musicExtensions),
-                    description: "Files like .wav, .mp3, .aiff",
-                    hasUnsavedChanges: $hasUnsavedChanges
-                )
+                    CategoryRow(
+                        icon: "music.note",
+                        title: "Audio Files",
+                        folderName: binding(for: \.musicFolderName),
+                        extensions: bindingArray(for: \.musicExtensions),
+                        description: "Files like .wav, .mp3, .aiff",
+                        hasUnsavedChanges: $hasUnsavedChanges
+                    )
 
-                CategoryRow(
-                    icon: "doc",
-                    title: "Project Files",
-                    folderName: binding(for: \.aafOmfFolderName),
-                    extensions: bindingArray(for: \.aafOmfExtensions),
-                    description: "ProTools files like .aaf, .omf",
-                    hasUnsavedChanges: $hasUnsavedChanges
-                )
+                    CategoryRow(
+                        icon: "doc",
+                        title: "Project Files",
+                        folderName: binding(for: \.aafOmfFolderName),
+                        extensions: bindingArray(for: \.aafOmfExtensions),
+                        description: "ProTools files like .aaf, .omf",
+                        hasUnsavedChanges: $hasUnsavedChanges
+                    )
 
-                Divider()
+                    Divider()
+                        .padding(.vertical, 4)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Everything Else")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    Text("Files that don't match any category go here")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    HStack {
-                        Image(systemName: "folder")
-                            .foregroundColor(.gray)
-                            .frame(width: 20)
-                        TextField("OTHER", text: binding(for: \.otherFolderName))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 150)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Everything Else")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("Files that don't match any category go here")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder")
+                                .foregroundColor(.gray)
+                                .frame(width: 20)
+                            TextField("OTHER", text: binding(for: \.otherFolderName))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 150)
+                        }
                     }
                 }
             }
@@ -716,44 +1352,43 @@ struct CategoryRow: View {
     @Binding var hasUnsavedChanges: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: icon)
                     .foregroundColor(.blue)
                     .frame(width: 20)
+                    .font(.system(size: 16))
                 Text(title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+                    .font(.system(size: 14, weight: .medium))
             }
 
             Text(description)
-                .font(.caption)
+                .font(.system(size: 12))
                 .foregroundColor(.secondary)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Folder Name:")
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                        .frame(width: 90, alignment: .leading)
+                        .frame(width: 100, alignment: .leading)
                     TextField("PICTURE", text: $folderName)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 130)
+                        .frame(width: 150)
                 }
 
                 HStack {
                     Text("File Types:")
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                        .frame(width: 90, alignment: .leading)
+                        .frame(width: 100, alignment: .leading)
                     TextField("mp4, mov, avi", text: $extensions)
                         .textFieldStyle(.roundedBorder)
                 }
             }
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 12)
-        .background(Color.gray.opacity(0.05))
+        .padding(12)
+        .background(Color.gray.opacity(0.08))
         .cornerRadius(8)
     }
 }
@@ -765,208 +1400,214 @@ struct AdvancedSettingsSection: View {
     @Binding var hasUnsavedChanges: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("Advanced Options")
-                .font(.headline)
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Image(systemName: "slider.horizontal.3")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("Advanced Options")
+                        .font(.system(size: 18, weight: .semibold))
+                }
 
-            Text("Fine-tune how MediaDash creates folders and searches")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                Text("Fine-tune how MediaDash creates folders and searches")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
 
-            VStack(alignment: .leading, spacing: 12) {
-                // Folder Templates
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Folder Naming Templates")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    Text("Customize how MediaDash names new folders")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
+                VStack(alignment: .leading, spacing: 16) {
+                    // Folder Templates
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Prep Folders:")
-                                .font(.caption)
-                                .frame(width: 120, alignment: .leading)
-                            TextField("{docket}_PREP_{date}", text: binding(for: \.prepFolderFormat))
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 200)
-                            Text("{docket} and {date} will be replaced")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
-
-                        HStack {
-                            Text("Work Picture:")
-                                .font(.caption)
-                                .frame(width: 120, alignment: .leading)
-                            TextField("%02d", text: binding(for: \.workPicNumberFormat))
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 80)
-                            Text("Creates: 01, 02, 03...")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-
-                Divider()
-
-                // Search Options
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Search Behavior")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-
-                    Toggle(isOn: Binding(
-                        get: { settings.enableFuzzySearch },
-                        set: {
-                            settings.enableFuzzySearch = $0
-                            hasUnsavedChanges = true
-                        }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Smart Search")
-                                .font(.callout)
-                            Text("Finds results even with typos and spacing differences")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .toggleStyle(.switch)
-
-                    // Default Search Folder
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Default Search Folder")
-                            .font(.callout)
-                            .padding(.top, 8)
-                        Picker("", selection: Binding(
-                            get: { settings.defaultSearchFolder },
-                            set: {
-                                settings.defaultSearchFolder = $0
-                                hasUnsavedChanges = true
-                            }
-                        )) {
-                            ForEach(SearchFolder.allCases, id: \.self) { folder in
-                                Text(folder.displayName).tag(folder)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                    }
-
-                    // Search Folder Preference
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Folder Selection Behavior")
-                            .font(.callout)
-                            .padding(.top, 8)
-                        Picker("", selection: Binding(
-                            get: { settings.searchFolderPreference },
-                            set: {
-                                settings.searchFolderPreference = $0
-                                hasUnsavedChanges = true
-                            }
-                        )) {
-                            Text(SearchFolderPreference.rememberLast.rawValue).tag(SearchFolderPreference.rememberLast)
-                            Text(SearchFolderPreference.alwaysUseDefault.rawValue).tag(SearchFolderPreference.alwaysUseDefault)
-                        }
-                        .pickerStyle(.segmented)
-                    }
-
-                    // Default Quick Search
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Quick Search (Typing)")
-                            .font(.callout)
-                            .padding(.top, 8)
-                        Text("What opens when you start typing")
-                            .font(.caption)
+                        Text("Folder Naming Templates")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("Customize how MediaDash names new folders")
+                            .font(.system(size: 12))
                             .foregroundColor(.secondary)
-                        Picker("", selection: Binding(
-                            get: { settings.defaultQuickSearch },
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Text("Prep Folders:")
+                                    .font(.system(size: 12))
+                                    .frame(width: 120, alignment: .leading)
+                                TextField("{docket}_PREP_{date}", text: binding(for: \.prepFolderFormat))
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 200)
+                                Text("{docket} and {date} will be replaced")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.blue)
+                            }
+
+                            HStack(spacing: 8) {
+                                Text("Work Picture:")
+                                    .font(.system(size: 12))
+                                    .frame(width: 120, alignment: .leading)
+                                TextField("%02d", text: binding(for: \.workPicNumberFormat))
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 80)
+                                Text("Creates: 01, 02, 03...")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    // Search Options
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Search Behavior")
+                            .font(.system(size: 14, weight: .medium))
+
+                        Toggle(isOn: Binding(
+                            get: { settings.enableFuzzySearch },
                             set: {
-                                settings.defaultQuickSearch = $0
+                                settings.enableFuzzySearch = $0
                                 hasUnsavedChanges = true
                             }
                         )) {
-                            Text("Search").tag(DefaultQuickSearch.search)
-                            Text("Job Info").tag(DefaultQuickSearch.jobInfo)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Smart Search")
+                                    .font(.system(size: 13))
+                                Text("Finds results even with typos and spacing differences")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
                         }
-                        .pickerStyle(.segmented)
-                    }
-                }
+                        .toggleStyle(.switch)
 
-                Divider()
-
-                // Date/Business Day Options
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Prep Date Calculation")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-
-                    Text("File date is always today. Configure how prep date is calculated:")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.bottom, 4)
-
-                    Toggle(isOn: Binding(
-                        get: { settings.skipWeekends },
-                        set: {
-                            settings.skipWeekends = $0
-                            hasUnsavedChanges = true
+                        // Default Search Folder
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Default Search Folder")
+                                .font(.system(size: 13))
+                                .padding(.top, 4)
+                            Picker("", selection: Binding(
+                                get: { settings.defaultSearchFolder },
+                                set: {
+                                    settings.defaultSearchFolder = $0
+                                    hasUnsavedChanges = true
+                                }
+                            )) {
+                                ForEach(SearchFolder.allCases, id: \.self) { folder in
+                                    Text(folder.displayName).tag(folder)
+                                }
+                            }
+                            .pickerStyle(.segmented)
                         }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Skip Weekends")
-                                .font(.callout)
-                            Text("If next day is Saturday or Sunday, skip to Monday")
-                                .font(.caption)
+
+                        // Search Folder Preference
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Folder Selection Behavior")
+                                .font(.system(size: 13))
+                                .padding(.top, 4)
+                            Picker("", selection: Binding(
+                                get: { settings.searchFolderPreference },
+                                set: {
+                                    settings.searchFolderPreference = $0
+                                    hasUnsavedChanges = true
+                                }
+                            )) {
+                                Text(SearchFolderPreference.rememberLast.rawValue).tag(SearchFolderPreference.rememberLast)
+                                Text(SearchFolderPreference.alwaysUseDefault.rawValue).tag(SearchFolderPreference.alwaysUseDefault)
+                            }
+                            .pickerStyle(.segmented)
+                        }
+
+                        // Default Quick Search
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Quick Search (Typing)")
+                                .font(.system(size: 13))
+                                .padding(.top, 4)
+                            Text("What opens when you start typing")
+                                .font(.system(size: 12))
                                 .foregroundColor(.secondary)
+                            Picker("", selection: Binding(
+                                get: { settings.defaultQuickSearch },
+                                set: {
+                                    settings.defaultQuickSearch = $0
+                                    hasUnsavedChanges = true
+                                }
+                            )) {
+                                Text("Search").tag(DefaultQuickSearch.search)
+                                Text("Job Info").tag(DefaultQuickSearch.jobInfo)
+                            }
+                            .pickerStyle(.segmented)
                         }
                     }
-                    .toggleStyle(.switch)
 
-                    Toggle(isOn: Binding(
-                        get: { settings.skipHolidays },
-                        set: {
-                            settings.skipHolidays = $0
-                            hasUnsavedChanges = true
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    // Date/Business Day Options
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Prep Date Calculation")
+                            .font(.system(size: 14, weight: .medium))
+
+                        Text("File date is always today. Configure how prep date is calculated:")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .padding(.bottom, 4)
+
+                        Toggle(isOn: Binding(
+                            get: { settings.skipWeekends },
+                            set: {
+                                settings.skipWeekends = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Skip Weekends")
+                                    .font(.system(size: 13))
+                                Text("If next day is Saturday or Sunday, skip to Monday")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
                         }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Skip Canadian Holidays")
-                                .font(.callout)
-                            Text("If next day is a holiday on Thu/Fri, skip to Tuesday")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                        .toggleStyle(.switch)
+
+                        Toggle(isOn: Binding(
+                            get: { settings.skipHolidays },
+                            set: {
+                                settings.skipHolidays = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Skip Canadian Holidays")
+                                    .font(.system(size: 13))
+                                Text("If next day is a holiday on Thu/Fri, skip to Tuesday")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
                         }
+                        .toggleStyle(.switch)
                     }
-                    .toggleStyle(.switch)
-                }
 
-                Divider()
+                    Divider()
+                        .padding(.vertical, 4)
 
-                // Workflow Options
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Workflow")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                    // Workflow Options
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Workflow")
+                            .font(.system(size: 14, weight: .medium))
 
-                    Toggle(isOn: Binding(
-                        get: { settings.openPrepFolderWhenDone },
-                        set: {
-                            settings.openPrepFolderWhenDone = $0
-                            hasUnsavedChanges = true
+                        Toggle(isOn: Binding(
+                            get: { settings.openPrepFolderWhenDone },
+                            set: {
+                                settings.openPrepFolderWhenDone = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Open Prep Folder When Done")
+                                    .font(.system(size: 13))
+                                Text("Automatically opens the prep folder in Finder after prep completes")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
                         }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Open Prep Folder When Done")
-                                .font(.callout)
-                            Text("Automatically opens the prep folder in Finder after prep completes")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
+                        .toggleStyle(.switch)
                     }
-                    .toggleStyle(.switch)
                 }
             }
         }
@@ -990,38 +1631,44 @@ struct ThemeSelectionSection: View {
     @Binding var hasUnsavedChanges: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("Appearance")
-                .font(.headline)
-
-            Text("Choose your preferred visual theme")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Theme")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                Picker("", selection: Binding(
-                    get: { settings.appTheme },
-                    set: {
-                        settings.appTheme = $0
-                        hasUnsavedChanges = true
-                    }
-                )) {
-                    ForEach(AppTheme.allCases, id: \.self) { theme in
-                        Text(theme.displayName).tag(theme)
-                    }
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Image(systemName: "paintbrush")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("Appearance")
+                        .font(.system(size: 18, weight: .semibold))
                 }
-                .pickerStyle(.menu)
-                .frame(width: 200)
 
-                // Theme description
-                Text(themeDescription(for: settings.appTheme))
-                    .font(.caption)
+                Text("Choose your preferred visual theme")
+                    .font(.system(size: 12))
                     .foregroundColor(.secondary)
-                    .padding(.top, 4)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Theme")
+                        .font(.system(size: 14, weight: .medium))
+
+                    Picker("", selection: Binding(
+                        get: { settings.appTheme },
+                        set: {
+                            settings.appTheme = $0
+                            hasUnsavedChanges = true
+                        }
+                    )) {
+                        ForEach(AppTheme.allCases, id: \.self) { theme in
+                            Text(theme.displayName).tag(theme)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 250)
+
+                    // Theme description
+                    Text(themeDescription(for: settings.appTheme))
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .padding(.top, 2)
+                }
             }
         }
     }
@@ -1030,16 +1677,8 @@ struct ThemeSelectionSection: View {
         switch theme {
         case .modern:
             return "Clean, professional interface with subtle colors"
-        case .windows95:
-            return "Nostalgic gray interface with beveled buttons"
-        case .windowsXP:
-            return "Blue and green with that classic Fisher-Price look"
-        case .macos1996:
-            return "Platinum appearance with the classic Mac aesthetic"
-        case .retro:
-            return "Classic MS-DOS with cyan text on blue background"
-        case .cursed:
-            return "⚠️ A chaotic assault on good taste and usability"
+        case .retroDesktop:
+            return "Nostalgic retro desktop OS aesthetic with bold colors and window-based interface (Beta)"
         }
     }
 }
@@ -1120,50 +1759,55 @@ struct CSVColumnMappingSection: View {
     @Binding var hasUnsavedChanges: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("CSV Column Names")
-                .font(.headline)
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Image(systemName: "tablecells")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("CSV Column Names")
+                        .font(.system(size: 18, weight: .semibold))
+                }
 
-            Text("Configure which column names to read from your job database CSV")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                Text("Configure which column names to read from your job database CSV")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Essential Columns")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .padding(.top, 4)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Essential Columns")
+                        .font(.system(size: 14, weight: .medium))
+                        .padding(.top, 4)
 
-                columnField("Docket:", keyPath: \.csvDocketColumn, placeholder: "Docket")
-                columnField("Project Title:", keyPath: \.csvProjectTitleColumn, placeholder: "Licensor/Project Title")
-                columnField("Client:", keyPath: \.csvClientColumn, placeholder: "Client")
-                columnField("Producer:", keyPath: \.csvProducerColumn, placeholder: "Grayson Producer")
-                columnField("Status:", keyPath: \.csvStatusColumn, placeholder: "STATUS")
-                columnField("License Total:", keyPath: \.csvLicenseTotalColumn, placeholder: "Music License Totals")
-                columnField("Currency:", keyPath: \.csvCurrencyColumn, placeholder: "Currency")
+                    columnField("Docket:", keyPath: \.csvDocketColumn, placeholder: "Docket")
+                    columnField("Project Title:", keyPath: \.csvProjectTitleColumn, placeholder: "Licensor/Project Title")
+                    columnField("Client:", keyPath: \.csvClientColumn, placeholder: "Client")
+                    columnField("Producer:", keyPath: \.csvProducerColumn, placeholder: "Grayson Producer")
+                    columnField("Status:", keyPath: \.csvStatusColumn, placeholder: "STATUS")
+                    columnField("License Total:", keyPath: \.csvLicenseTotalColumn, placeholder: "Music License Totals")
+                    columnField("Currency:", keyPath: \.csvCurrencyColumn, placeholder: "Currency")
 
-                Divider()
-                    .padding(.vertical, 4)
+                    Divider()
+                        .padding(.vertical, 4)
 
-                Text("Optional Columns")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+                    Text("Optional Columns")
+                        .font(.system(size: 14, weight: .medium))
 
-                columnField("Agency:", keyPath: \.csvAgencyColumn, placeholder: "Agency")
-                columnField("Agency Producer:", keyPath: \.csvAgencyProducerColumn, placeholder: "Agency Producer / Supervisor")
-                columnField("Music Type:", keyPath: \.csvMusicTypeColumn, placeholder: "Music Type")
-                columnField("Track:", keyPath: \.csvTrackColumn, placeholder: "Track")
-                columnField("Media:", keyPath: \.csvMediaColumn, placeholder: "Media")
+                    columnField("Agency:", keyPath: \.csvAgencyColumn, placeholder: "Agency")
+                    columnField("Agency Producer:", keyPath: \.csvAgencyProducerColumn, placeholder: "Agency Producer / Supervisor")
+                    columnField("Music Type:", keyPath: \.csvMusicTypeColumn, placeholder: "Music Type")
+                    columnField("Track:", keyPath: \.csvTrackColumn, placeholder: "Track")
+                    columnField("Media:", keyPath: \.csvMediaColumn, placeholder: "Media")
+                }
             }
         }
     }
 
     @ViewBuilder
     private func columnField(_ label: String, keyPath: WritableKeyPath<AppSettings, String>, placeholder: String) -> some View {
-        HStack {
+        HStack(spacing: 12) {
             Text(label)
-                .font(.caption)
-                .frame(width: 120, alignment: .leading)
+                .font(.system(size: 12))
+                .frame(width: 130, alignment: .leading)
             TextField(placeholder, text: Binding(
                 get: { settings[keyPath: keyPath] },
                 set: {
@@ -1172,7 +1816,7 @@ struct CSVColumnMappingSection: View {
                 }
             ))
             .textFieldStyle(.roundedBorder)
-            .frame(width: 250)
+            .frame(width: 280)
         }
     }
 }
