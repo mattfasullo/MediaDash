@@ -49,6 +49,13 @@ class MediaClip:
     external_path: Optional[str] = None
     is_valid: bool = True
     error_message: Optional[str] = None
+    # Timeline information (for AAF files)
+    track_index: int = 0
+    timeline_start: float = 0.0
+    timeline_end: float = 0.0
+    # Name matching validation
+    name_matches_file: Optional[bool] = None
+    expected_filename: Optional[str] = None
 
 
 @dataclass
@@ -61,6 +68,12 @@ class ValidationReport:
     valid_clips: int
     missing_clip_details: List[MediaClip]
     file_path: str
+    timeline_clips: Optional[List[MediaClip]] = None  # Clips with timeline information
+    total_duration: float = 0.0  # Total timeline duration in seconds
+    
+    def __post_init__(self):
+        if self.timeline_clips is None:
+            self.timeline_clips = []
 
 
 # ============================================================================
@@ -450,10 +463,26 @@ def _parse_omf_file(file_path: str) -> List[MediaClip]:
     clips: List[MediaClip] = []
     omf_dir = os.path.dirname(os.path.abspath(file_path))
     
+    _debug_print(f"DEBUG: Starting OMF file parsing: {file_path}", verbose_only=True)
+    
+    # Check file size first - reject files that are too large
+    try:
+        file_size = os.path.getsize(file_path)
+        file_size_mb = file_size / (1024 * 1024)
+        _debug_print(f"DEBUG: OMF file size: {file_size_mb:.1f}MB", verbose_only=True)
+        
+        MAX_OMF_SIZE = 200 * 1024 * 1024  # 200MB hard limit
+        if file_size > MAX_OMF_SIZE:
+            _debug_print(f"DEBUG: ERROR: OMF file is too large ({file_size_mb:.1f}MB). Maximum size is {MAX_OMF_SIZE / (1024*1024):.0f}MB.", verbose_only=True)
+            raise ValueError(f"OMF file is too large ({file_size_mb:.1f}MB). Maximum size is {MAX_OMF_SIZE / (1024*1024):.0f}MB.")
+    except OSError as e:
+        _debug_print(f"DEBUG: Could not get file size: {e}", verbose_only=True)
+    
     try:
         with open(file_path, 'rb') as f:
             # Read and verify OMF header
             header = f.read(4)
+            _debug_print(f"DEBUG: OMF header bytes: {header.hex()}", verbose_only=True)
             
             # OMF files can have different header formats
             # Check for common OMF identifiers
@@ -463,17 +492,24 @@ def _parse_omf_file(file_path: str) -> List[MediaClip]:
                 # Some OMF files start with version info
                 version_check = f.read(8)
                 f.seek(0)
-                
+                _debug_print(f"DEBUG: Header doesn't match standard OMF format, attempting to parse anyway", verbose_only=True)
                 # If it doesn't look like OMF, try to parse anyway
                 # (some OMF files have different headers)
                 pass
+            else:
+                _debug_print(f"DEBUG: OMF header recognized", verbose_only=True)
             
             f.seek(0)
             
             # OMF files are structured as chunks
             # We'll search for file path strings and essence references
+            _debug_print(f"DEBUG: Extracting file paths from OMF file...", verbose_only=True)
             file_paths = _extract_omf_file_paths(f, omf_dir)
+            _debug_print(f"DEBUG: Found {len(file_paths)} file path(s)", verbose_only=True)
+            
+            _debug_print(f"DEBUG: Extracting essence references from OMF file...", verbose_only=True)
             essence_refs = _extract_omf_essence_references(f)
+            _debug_print(f"DEBUG: Found {len(essence_refs)} essence reference(s)", verbose_only=True)
             
             # Combine file paths and essence references into clips
             clip_counter = 1
@@ -488,6 +524,8 @@ def _parse_omf_file(file_path: str) -> List[MediaClip]:
                     audio_extensions = ['.wav', '.aif', '.aiff', '.mp3', '.m4a', '.caf', '.sd2']
                     file_ext = os.path.splitext(file_path_str)[1].lower()
                     
+                    _debug_print(f"DEBUG: Processing file path: {file_path_str} (ext: {file_ext})", verbose_only=True)
+                    
                     # Include if it's an audio extension, or if we can't determine
                     if file_ext in audio_extensions or not file_ext:
                         clip_name = os.path.basename(file_path_str) or f"Audio Clip {clip_counter}"
@@ -499,7 +537,10 @@ def _parse_omf_file(file_path: str) -> List[MediaClip]:
                             external_path=file_path_str
                         )
                         clips.append(clip)
+                        _debug_print(f"DEBUG: Added clip: {clip_name}", verbose_only=True)
                         clip_counter += 1
+                    else:
+                        _debug_print(f"DEBUG: Skipped file path (not audio extension): {file_path_str}", verbose_only=True)
             
             # Process essence references (may be embedded or external)
             for essence_ref in essence_refs:
@@ -515,16 +556,25 @@ def _parse_omf_file(file_path: str) -> List[MediaClip]:
                         external_path=essence_ref['path'] if not essence_ref.get('embedded') else None
                     )
                     clips.append(clip)
+                    _debug_print(f"DEBUG: Added essence clip: {clip_name}", verbose_only=True)
                     clip_counter += 1
             
             # If we didn't find any clips, try a more aggressive search
             if not clips:
+                _debug_print(f"DEBUG: No clips found with standard parsing, trying aggressive parse...", verbose_only=True)
                 f.seek(0)
                 clips = _aggressive_omf_parse(f, omf_dir, file_path)
+                _debug_print(f"DEBUG: Aggressive parse found {len(clips)} clip(s)", verbose_only=True)
+            else:
+                _debug_print(f"DEBUG: Standard parsing found {len(clips)} clip(s)", verbose_only=True)
     
     except Exception as e:
+        _debug_print(f"DEBUG: Error parsing OMF file: {str(e)}", verbose_only=True)
+        import traceback
+        _debug_print(f"DEBUG: Traceback: {traceback.format_exc()}", verbose_only=True)
         raise ValueError(f"Error parsing OMF file: {str(e)}")
     
+    _debug_print(f"DEBUG: OMF parsing complete. Total clips: {len(clips)}", verbose_only=True)
     return clips
 
 
@@ -544,9 +594,51 @@ def _extract_omf_file_paths(file_handle, base_dir: str) -> List[str]:
     file_handle.seek(0)
     
     try:
-        # Read the entire file (for small-medium files)
-        # For very large files, we might need to chunk this
-        data = file_handle.read()
+        # Check file size first - limit to 100MB to avoid hanging on huge files
+        file_handle.seek(0, 2)  # Seek to end
+        file_size = file_handle.tell()
+        file_handle.seek(0)
+        
+        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+        if file_size > MAX_FILE_SIZE:
+            _debug_print(f"DEBUG: OMF file is {file_size / (1024*1024):.1f}MB, limiting search to first 50MB", verbose_only=True)
+            # For large files, only read first 50MB (paths are usually near the beginning)
+            data = file_handle.read(50 * 1024 * 1024)
+        else:
+            # Read the entire file (for small-medium files)
+            data = file_handle.read()
+        
+        _debug_print(f"DEBUG: Read {len(data) / (1024*1024):.1f}MB of OMF file for path extraction", verbose_only=True)
+        
+        def _is_valid_path_string(s: str) -> bool:
+            """Check if a string looks like a valid file path (not binary data)."""
+            if not s or len(s) < 4:
+                return False
+            
+            # Must be mostly printable ASCII characters (allow some non-ASCII for international paths)
+            # Count printable characters
+            printable_count = sum(1 for c in s if c.isprintable() or c in '\n\r\t')
+            if printable_count < len(s) * 0.7:  # At least 70% printable
+                return False
+            
+            # Must not contain too many control characters (except common ones like \n, \r, \t)
+            control_chars = sum(1 for c in s if ord(c) < 32 and c not in '\n\r\t')
+            if control_chars > len(s) * 0.1:  # No more than 10% control chars
+                return False
+            
+            # Must have a reasonable filename structure
+            # Filename should contain mostly alphanumeric, spaces, hyphens, underscores, dots
+            filename = os.path.basename(s)
+            valid_filename_chars = sum(1 for c in filename if c.isalnum() or c in ' .-_()[]')
+            if valid_filename_chars < len(filename) * 0.6:  # At least 60% valid filename chars
+                return False
+            
+            # Extension should be reasonable (1-10 chars, alphanumeric)
+            ext = os.path.splitext(filename)[1]
+            if ext and (len(ext) > 10 or not all(c.isalnum() for c in ext[1:])):
+                return False
+            
+            return True
         
         # Method 1: Look for strings that look like file paths with audio extensions
         # This is more specific and reduces false positives
@@ -570,28 +662,34 @@ def _extract_omf_file_paths(file_handle, base_dir: str) -> List[str]:
                         path_str = path_bytes.decode(encoding).strip()
                         
                         # Validate it looks like a path
-                        if len(path_str) > 4 and (os.path.sep in path_str or '\\' in path_str or '/' in path_str):
-                            # Clean up the path
-                            path_str = path_str.rstrip('\x00').strip()
-                            
-                            # Resolve relative paths
-                            if not os.path.isabs(path_str):
-                                # Try relative to OMF file location
-                                resolved = os.path.join(base_dir, path_str)
+                        if not (len(path_str) > 4 and (os.path.sep in path_str or '\\' in path_str or '/' in path_str)):
+                            continue
+                        
+                        # Strict validation: must look like a real path, not binary data
+                        if not _is_valid_path_string(path_str):
+                            continue
+                        
+                        # Clean up the path
+                        path_str = path_str.rstrip('\x00').strip()
+                        
+                        # Resolve relative paths
+                        if not os.path.isabs(path_str):
+                            # Try relative to OMF file location
+                            resolved = os.path.join(base_dir, path_str)
+                            if os.path.exists(resolved):
+                                file_paths.append(os.path.normpath(resolved))
+                            else:
+                                # Also try with normalized path
+                                normalized = os.path.normpath(path_str)
+                                resolved = os.path.join(base_dir, normalized)
                                 if os.path.exists(resolved):
                                     file_paths.append(os.path.normpath(resolved))
                                 else:
-                                    # Also try with normalized path
-                                    normalized = os.path.normpath(path_str)
-                                    resolved = os.path.join(base_dir, normalized)
-                                    if os.path.exists(resolved):
-                                        file_paths.append(os.path.normpath(resolved))
-                                    else:
-                                        # Keep original relative path for validation
-                                        file_paths.append(os.path.normpath(path_str))
-                            else:
-                                file_paths.append(os.path.normpath(path_str))
-                            break
+                                    # Keep original relative path for validation
+                                    file_paths.append(os.path.normpath(path_str))
+                        else:
+                            file_paths.append(os.path.normpath(path_str))
+                        break
                     except (UnicodeDecodeError, UnicodeError):
                         continue
         
@@ -616,46 +714,65 @@ def _extract_omf_file_paths(file_handle, base_dir: str) -> List[str]:
                         path_str = path_bytes.decode(encoding).rstrip('\x00').strip()
                         
                         # Only include if it has a file extension (more likely to be a media file)
-                        if len(path_str) > 4 and '.' in path_str:
-                            ext = os.path.splitext(path_str)[1].lower()
-                            # Prefer audio extensions, but include others too
-                            if ext in ['.wav', '.aif', '.aiff', '.mp3', '.m4a', '.caf', '.sd2'] or len(ext) > 0:
-                                if not os.path.isabs(path_str):
-                                    resolved = os.path.join(base_dir, path_str)
-                                    if os.path.exists(resolved):
-                                        file_paths.append(os.path.normpath(resolved))
-                                    else:
-                                        file_paths.append(os.path.normpath(path_str))
+                        if not (len(path_str) > 4 and '.' in path_str):
+                            continue
+                        
+                        # Strict validation: must look like a real path, not binary data
+                        if not _is_valid_path_string(path_str):
+                            continue
+                        
+                        ext = os.path.splitext(path_str)[1].lower()
+                        # Prefer audio extensions, but include others too
+                        if ext in ['.wav', '.aif', '.aiff', '.mp3', '.m4a', '.caf', '.sd2'] or len(ext) > 0:
+                            if not os.path.isabs(path_str):
+                                resolved = os.path.join(base_dir, path_str)
+                                if os.path.exists(resolved):
+                                    file_paths.append(os.path.normpath(resolved))
                                 else:
                                     file_paths.append(os.path.normpath(path_str))
-                                break
+                            else:
+                                file_paths.append(os.path.normpath(path_str))
+                            break
                     except (UnicodeDecodeError, UnicodeError):
                         continue
         
         # Method 3: Look for null-terminated strings that might be paths
         # This is more conservative - only include strings with file extensions
+        # Limit chunk processing for large files
         chunks = data.split(b'\x00')
+        max_chunks = 100000  # Limit to prevent excessive processing
+        if len(chunks) > max_chunks:
+            _debug_print(f"DEBUG: Limiting null-byte chunk processing to first {max_chunks} chunks", verbose_only=True)
+            chunks = chunks[:max_chunks]
+        
         for chunk in chunks:
             if 10 <= len(chunk) <= 260:  # Reasonable path length (Windows MAX_PATH is 260)
                 for encoding in ['utf-8', 'latin-1', 'mac-roman']:
                     try:
                         candidate = chunk.decode(encoding).strip()
+                        
                         # Must have path separator and file extension
-                        if (('\\' in candidate or '/' in candidate) and 
-                            '.' in candidate and 
-                            len(os.path.splitext(candidate)[1]) > 0):
-                            ext = os.path.splitext(candidate)[1].lower()
-                            # Prefer audio extensions
-                            if ext in ['.wav', '.aif', '.aiff', '.mp3', '.m4a', '.caf', '.sd2']:
-                                if not os.path.isabs(candidate):
-                                    resolved = os.path.join(base_dir, candidate)
-                                    if os.path.exists(resolved):
-                                        file_paths.append(os.path.normpath(resolved))
-                                    else:
-                                        file_paths.append(os.path.normpath(candidate))
+                        if not (('\\' in candidate or '/' in candidate) and 
+                                '.' in candidate and 
+                                len(os.path.splitext(candidate)[1]) > 0):
+                            continue
+                        
+                        # Strict validation: must look like a real path, not binary data
+                        if not _is_valid_path_string(candidate):
+                            continue
+                        
+                        ext = os.path.splitext(candidate)[1].lower()
+                        # Prefer audio extensions
+                        if ext in ['.wav', '.aif', '.aiff', '.mp3', '.m4a', '.caf', '.sd2']:
+                            if not os.path.isabs(candidate):
+                                resolved = os.path.join(base_dir, candidate)
+                                if os.path.exists(resolved):
+                                    file_paths.append(os.path.normpath(resolved))
                                 else:
                                     file_paths.append(os.path.normpath(candidate))
-                                break
+                            else:
+                                file_paths.append(os.path.normpath(candidate))
+                            break
                     except (UnicodeDecodeError, UnicodeError):
                         continue
     
@@ -707,8 +824,20 @@ def _aggressive_omf_parse(file_handle, base_dir: str, omf_file_path: str) -> Lis
     clips = []
     
     try:
+        # Check file size first - limit to avoid hanging
+        file_handle.seek(0, 2)  # Seek to end
+        file_size = file_handle.tell()
         file_handle.seek(0)
-        data = file_handle.read()
+        
+        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+        if file_size > MAX_FILE_SIZE:
+            _debug_print(f"DEBUG: OMF file is {file_size / (1024*1024):.1f}MB, limiting aggressive search to first 50MB", verbose_only=True)
+            # For large files, only read first 50MB
+            data = file_handle.read(50 * 1024 * 1024)
+        else:
+            data = file_handle.read()
+        
+        _debug_print(f"DEBUG: Aggressive parse reading {len(data) / (1024*1024):.1f}MB", verbose_only=True)
         
         # Look for any strings that might be file references
         # This is a fallback method when standard parsing doesn't work
@@ -716,12 +845,17 @@ def _aggressive_omf_parse(file_handle, base_dir: str, omf_file_path: str) -> Lis
         # Search for common audio file patterns in the binary data
         
         # Look for file extensions in the data
+        # Limit the search to avoid hanging on files with lots of matches
         audio_ext_pattern = rb'[^\x00]{1,200}\.(wav|aif|aiff|mp3|m4a|caf|sd2|WAV|AIF|AIFF|MP3|M4A|CAF|SD2)(\x00|[\x20-\x7E]{0,10})'
         
         matches = re.finditer(audio_ext_pattern, data)
         clip_counter = 1
+        max_clips = 1000  # Limit to prevent excessive processing
         
         for match in matches:
+            if clip_counter > max_clips:
+                _debug_print(f"DEBUG: Reached maximum clip limit ({max_clips}), stopping aggressive parse", verbose_only=True)
+                break
             try:
                 # Extract the potential file path
                 match_bytes = match.group(0)
@@ -839,6 +973,14 @@ def validate_omf_aaf_media(file_path: str) -> ValidationReport:
     valid_count = sum(1 for clip in all_clips if clip.is_valid)
     missing_clips_count = len(missing_clips)
     
+    # Extract timeline information
+    timeline_clips: List[MediaClip] = []
+    total_duration = 0.0
+    if file_type == 'aaf':
+        timeline_clips, total_duration = _extract_timeline_clips_from_aaf(file_path, all_clips)
+    elif file_type == 'omf':
+        timeline_clips, total_duration = _extract_timeline_clips_from_omf(file_path, all_clips)
+    
     # Create and return validation report
     report = ValidationReport(
         total_clips=len(all_clips),
@@ -847,10 +989,379 @@ def validate_omf_aaf_media(file_path: str) -> ValidationReport:
         missing_clips=missing_clips_count,
         valid_clips=valid_count,
         missing_clip_details=missing_clips,
-        file_path=file_path
+        file_path=file_path,
+        timeline_clips=timeline_clips,
+        total_duration=total_duration
     )
     
     return report
+
+
+def _extract_timeline_clips_from_aaf(file_path: str, validation_clips: List[MediaClip]) -> Tuple[List[MediaClip], float]:
+    """
+    Extracts timeline information from an AAF file.
+    
+    Args:
+        file_path: Path to the AAF file
+        validation_clips: List of clips from validation (for name matching)
+        
+    Returns:
+        Tuple of (timeline_clips, total_duration)
+    """
+    if not AAF_SUPPORT:
+        return [], 0.0
+    
+    timeline_clips: List[MediaClip] = []
+    processed_timeline_sources: Set[str] = set()
+    total_duration = 0.0
+    
+    # Create a map of validation clips by clip_id for name matching
+    validation_clip_map: Dict[str, MediaClip] = {}
+    for clip in validation_clips:
+        if clip.clip_id:
+            validation_clip_map[clip.clip_id] = clip
+    
+    try:
+        with aaf2.open(file_path, 'r') as f:
+            # Get all top-level compositions (timelines)
+            compositions = list(f.content.toplevel())
+            
+            for comp_idx, composition in enumerate(compositions):
+                try:
+                    # Get edit rate for time conversion
+                    edit_rate = 48000.0  # Default to 48kHz
+                    try:
+                        if hasattr(composition, 'edit_rate'):
+                            edit_rate = float(composition.edit_rate)
+                    except Exception:
+                        pass
+                    
+                    # Get timeline slots (tracks)
+                    if hasattr(composition, 'slots'):
+                        slots = list(composition.slots) if hasattr(composition.slots, '__iter__') else []
+                        track_index = 0
+                        
+                        for slot_idx, slot in enumerate(slots):
+                            if hasattr(slot, 'segment') and slot.segment:
+                                segment = slot.segment
+                                
+                                # Get slot position on timeline
+                                slot_position = 0.0
+                                try:
+                                    if hasattr(slot, 'start'):
+                                        slot_position = float(getattr(slot, 'start', 0))
+                                except Exception:
+                                    pass
+                                
+                                timeline_position = slot_position / edit_rate
+                                
+                                # Extract clips from this track
+                                _extract_timeline_clips_from_segment(
+                                    segment, timeline_clips, processed_timeline_sources,
+                                    file_path, track_index, timeline_position, edit_rate,
+                                    validation_clip_map, depth=0
+                                )
+                                
+                                track_index += 1
+                                
+                                # Update total duration
+                                try:
+                                    if hasattr(slot, 'length'):
+                                        slot_length = float(getattr(slot, 'length', 0))
+                                        slot_end = (slot_position + slot_length) / edit_rate
+                                        total_duration = max(total_duration, slot_end)
+                                except Exception:
+                                    pass
+                except Exception as e:
+                    _debug_print(f"DEBUG: Error extracting timeline from composition {comp_idx}: {e}", verbose_only=True)
+                    continue
+    except Exception as e:
+        _debug_print(f"DEBUG: Error extracting timeline clips: {e}", verbose_only=True)
+        return [], 0.0
+    
+    return timeline_clips, total_duration
+
+
+def _extract_timeline_clips_from_segment(
+    segment, timeline_clips: List[MediaClip], processed_sources: Set[str],
+    aaf_file_path: str, track_index: int, timeline_position: float, edit_rate: float,
+    validation_clip_map: Dict[str, MediaClip], depth: int = 0
+):
+    """Recursively extracts timeline clips from AAF segments."""
+    MAX_DEPTH = 20
+    if depth > MAX_DEPTH:
+        return
+    
+    try:
+        segment_type = type(segment).__name__
+        
+        # Check if this is a SourceClip with a MOB
+        if hasattr(segment, 'mob') and segment.mob is not None:
+            source_mob = segment.mob
+            source_id = str(getattr(source_mob, 'mob_id', id(source_mob)))
+            
+            # Allow same clip to appear multiple times on timeline
+            # (don't check processed_sources for timeline extraction)
+            
+            # Find matching validation clip first (it may have better name info)
+            matched_clip = validation_clip_map.get(source_id)
+            
+            # Get clip name - source_mob.name typically contains the actual file name
+            clip_name = None
+            try:
+                # Try MOB name first (this usually has the file name in Pro Tools exports)
+                if hasattr(source_mob, 'name') and source_mob.name:
+                    mob_name = str(source_mob.name).strip()
+                    # Use MOB name if it's not a generic name
+                    if mob_name.lower() not in ['sourceclip', 'unnamed', '']:
+                        clip_name = mob_name
+                        # Remove extension for cleaner display
+                        clip_name = os.path.splitext(clip_name)[0]
+                
+                # Fallback: Try segment name
+                if not clip_name and hasattr(segment, 'name') and segment.name:
+                    seg_name = str(segment.name).strip()
+                    if seg_name.lower() not in ['sourceclip', 'unnamed', '']:
+                        clip_name = seg_name
+                
+                # Fallback: Try descriptor name
+                if not clip_name and hasattr(source_mob, 'descriptor'):
+                    desc = source_mob.descriptor
+                    if hasattr(desc, 'name') and desc.name:
+                        desc_name = str(desc.name).strip()
+                        if desc_name.lower() not in ['sourceclip', 'unnamed', '']:
+                            clip_name = desc_name
+                
+                # Fallback: Try name from matched validation clip
+                if not clip_name and matched_clip and matched_clip.name:
+                    val_name = str(matched_clip.name).strip()
+                    if val_name.lower() not in ['sourceclip', 'unnamed', '']:
+                        clip_name = val_name
+                
+                # Fallback: Try to get file name from locator
+                if not clip_name and hasattr(source_mob, 'descriptor'):
+                    desc = source_mob.descriptor
+                    if hasattr(desc, 'locator') and desc.locator:
+                        locator = desc.locator
+                        file_path = None
+                        if hasattr(locator, 'path'):
+                            file_path = str(locator.path)
+                        elif hasattr(locator, 'url_string'):
+                            url = str(locator.url_string)
+                            if url.startswith('file://'):
+                                file_path = url[7:]
+                            elif not url.startswith('http'):
+                                file_path = url
+                        
+                        if file_path:
+                            filename = os.path.basename(file_path)
+                            if filename and filename.lower() not in ['sourceclip', 'unnamed', '']:
+                                clip_name = os.path.splitext(filename)[0]  # Remove extension
+                
+                # Final fallback: Use filename from matched clip if available
+                if not clip_name and matched_clip and matched_clip.external_path:
+                    filename = os.path.basename(matched_clip.external_path)
+                    clip_name = os.path.splitext(filename)[0]
+                
+                # Last resort: Generate a name
+                if not clip_name:
+                    clip_name = f"Clip_{len(timeline_clips) + 1}"
+                
+                _debug_print(f"DEBUG: Clip name extraction - segment.name={getattr(segment, 'name', None)}, source_mob.name={getattr(source_mob, 'name', None)}, final clip_name={clip_name}", verbose_only=True)
+            except Exception as e:
+                _debug_print(f"DEBUG: Error extracting clip name: {e}", verbose_only=True)
+                clip_name = f"Clip_{len(timeline_clips) + 1}"
+            
+            # Get segment timing
+            segment_start = 0.0
+            segment_length = 0.0
+            try:
+                if hasattr(segment, 'start'):
+                    segment_start = float(getattr(segment, 'start', 0))
+                if hasattr(segment, 'length'):
+                    segment_length = float(getattr(segment, 'length', 0))
+            except Exception:
+                pass
+            
+            # Calculate timeline positions
+            # The clip's position is: slot position + clip's position within sequence
+            clip_start = timeline_position + (segment_start / edit_rate)
+            clip_length = segment_length / edit_rate if segment_length > 0 else 0.0
+            clip_end = clip_start + clip_length
+            
+            _debug_print(f"DEBUG: Timeline clip: {clip_name} at {clip_start:.3f}s-{clip_end:.3f}s (track {track_index}, segment_start={segment_start}, timeline_pos={timeline_position:.3f})", verbose_only=True)
+            
+            # Name matching logic
+            name_matches = None
+            expected_filename = None
+            
+            if matched_clip:
+                # Check if clip name matches file name
+                if matched_clip.external_path:
+                    expected_filename = os.path.basename(matched_clip.external_path)
+                    # Normalize names for comparison (remove extensions, case-insensitive)
+                    clip_name_base = os.path.splitext(clip_name)[0].lower().strip()
+                    expected_base = os.path.splitext(expected_filename)[0].lower().strip()
+                    name_matches = clip_name_base == expected_base
+                elif matched_clip.is_embedded:
+                    # For embedded clips, we can't verify name matching easily
+                    name_matches = None
+            
+            # Create timeline clip
+            timeline_clip = MediaClip(
+                name=clip_name,
+                clip_id=source_id,
+                is_embedded=matched_clip.is_embedded if matched_clip else False,
+                external_path=matched_clip.external_path if matched_clip else None,
+                is_valid=matched_clip.is_valid if matched_clip else True,
+                track_index=track_index,
+                timeline_start=clip_start,
+                timeline_end=clip_end,
+                name_matches_file=name_matches,
+                expected_filename=expected_filename
+            )
+            timeline_clips.append(timeline_clip)
+            
+            # Update timeline position for next clip
+            if segment_length > 0:
+                timeline_position += segment_length / edit_rate
+        
+        # Recursively process nested segments (Sequences contain components)
+        if hasattr(segment, 'components'):
+            comp_list = list(segment.components) if hasattr(segment.components, '__iter__') else []
+            for comp in comp_list:
+                # Get component's position within the sequence
+                comp_start = 0.0
+                try:
+                    if hasattr(comp, 'start'):
+                        comp_start = float(getattr(comp, 'start', 0))
+                except Exception:
+                    pass
+                
+                # Position within sequence: base position + component's start offset
+                # When the component (SourceClip) is processed, it will add its own start (which should be 0
+                # for clips in sequences, as their position is determined by comp_start here)
+                comp_timeline_pos = timeline_position + (comp_start / edit_rate)
+                
+                _extract_timeline_clips_from_segment(
+                    comp, timeline_clips, processed_sources,
+                    aaf_file_path, track_index, comp_timeline_pos, edit_rate,
+                    validation_clip_map, depth + 1
+                )
+        
+        # Also check segments (for OperationGroups)
+        if hasattr(segment, 'segments'):
+            seg_list = list(segment.segments) if hasattr(segment.segments, '__iter__') else []
+            for seg in seg_list:
+                _extract_timeline_clips_from_segment(
+                    seg, timeline_clips, processed_sources,
+                    aaf_file_path, track_index, timeline_position, edit_rate,
+                    validation_clip_map, depth + 1
+                )
+    except Exception:
+        pass
+
+
+def _extract_timeline_clips_from_omf(file_path: str, validation_clips: List[MediaClip]) -> Tuple[List[MediaClip], float]:
+    """
+    Extracts timeline information from an OMF file.
+    
+    Note: OMF files use a binary chunk structure which is more complex to parse
+    than AAF files. This function attempts to extract timeline information by:
+    1. Creating a simplified timeline based on the order of clips found
+    2. Assigning clips to tracks sequentially
+    3. Matching clips to validation results for name matching
+    
+    Args:
+        file_path: Path to the OMF file
+        validation_clips: List of clips from validation (for name matching)
+        
+    Returns:
+        Tuple of (timeline_clips, total_duration)
+    """
+    timeline_clips: List[MediaClip] = []
+    total_duration = 0.0
+    
+    # Create a map of validation clips by clip_id for matching
+    validation_clip_map: Dict[str, MediaClip] = {}
+    for clip in validation_clips:
+        if clip.clip_id:
+            validation_clip_map[clip.clip_id] = clip
+    
+    try:
+        # OMF files have a binary chunk structure which is complex to parse fully
+        # For now, we'll create a simplified timeline based on the validation clips
+        # This assigns clips to tracks sequentially and estimates timing
+        
+        track_index = 0
+        current_time = 0.0
+        clips_per_track = 10  # Approximate clips per track
+        
+        for i, clip in enumerate(validation_clips):
+            # Assign to track (distribute across multiple tracks)
+            track = i // clips_per_track
+            
+            # Estimate duration (default to 5 seconds if unknown)
+            estimated_duration = 5.0
+            
+            # Try to get actual file duration if it's an external file
+            if clip.external_path and os.path.exists(clip.external_path):
+                try:
+                    # Try to get file size and estimate duration
+                    # This is rough - actual duration would require parsing audio headers
+                    file_size = os.path.getsize(clip.external_path)
+                    # Rough estimate: assume 16-bit, 2-channel, 48kHz WAV
+                    # bytes_per_second = 48000 * 2 * 2 = 192000
+                    bytes_per_second = 192000
+                    estimated_duration = max(1.0, file_size / bytes_per_second)
+                except Exception:
+                    pass
+            
+            clip_start = current_time
+            clip_end = clip_start + estimated_duration
+            
+            # Check name matching
+            name_matches = None
+            expected_filename = None
+            if clip.external_path:
+                expected_filename = os.path.basename(clip.external_path)
+                clip_name_base = os.path.splitext(clip.name)[0].lower().strip()
+                expected_base = os.path.splitext(expected_filename)[0].lower().strip()
+                name_matches = clip_name_base == expected_base
+            
+            # Create timeline clip
+            timeline_clip = MediaClip(
+                name=clip.name,
+                clip_id=clip.clip_id or f"omf_timeline_{i}",
+                is_embedded=clip.is_embedded,
+                external_path=clip.external_path,
+                is_valid=clip.is_valid,
+                track_index=track,
+                timeline_start=clip_start,
+                timeline_end=clip_end,
+                name_matches_file=name_matches,
+                expected_filename=expected_filename
+            )
+            timeline_clips.append(timeline_clip)
+            
+            # Advance time (clips on same track are sequential)
+            if (i + 1) % clips_per_track == 0:
+                current_time = 0.0  # Reset for next track
+            else:
+                current_time = clip_end
+            
+            total_duration = max(total_duration, clip_end)
+        
+        # If we found clips, ensure we have a reasonable total duration
+        if timeline_clips and total_duration == 0.0:
+            # Estimate based on number of clips
+            total_duration = len(timeline_clips) * 5.0
+            
+    except Exception as e:
+        _debug_print(f"DEBUG: Error extracting timeline from OMF: {e}", verbose_only=True)
+        return [], 0.0
+    
+    return timeline_clips, total_duration
 
 
 # ============================================================================
@@ -859,143 +1370,143 @@ def validate_omf_aaf_media(file_path: str) -> ValidationReport:
 # Date archived: 2024-12-19
 # ============================================================================
 # def _extract_playback_clips_from_aaf(file_path: str) -> List[PlaybackClip]:
-    """
-    Extracts playback-ready clips from an AAF file with timeline information.
-    Efficient version: Skips validation parser, extracts timeline directly.
-    
-    Args:
-        file_path: Path to the AAF file
-        
-    Returns:
-        List[PlaybackClip]: List of clips ready for playback with timeline data
-    """
-    import sys
-    if not AAF_SUPPORT:
-        print("DEBUG: AAF support not available", file=sys.stderr, flush=True)
-        return []
-    
-    playback_clips: List[PlaybackClip] = []
-    processed_sources: Set[str] = set()
-    
-    try:
-        msg = f"DEBUG: ===== STARTING PLAYBACK CLIP EXTRACTION FOR {file_path} ====="
-        print(msg, file=sys.stderr, flush=True)
-        if _DEBUG_FILE:
-            _DEBUG_FILE.write(msg + "\n")
-            _DEBUG_FILE.flush()
-        
-        # Check if file exists and is accessible
-        if not os.path.exists(file_path):
-            msg = f"DEBUG: ERROR: File does not exist: {file_path}"
-            print(msg, file=sys.stderr, flush=True)
-            if _DEBUG_FILE:
-                _DEBUG_FILE.write(msg + "\n")
-                _DEBUG_FILE.flush()
-            return []
-        
-        if not os.path.isfile(file_path):
-            msg = f"DEBUG: ERROR: Path is not a file: {file_path}"
-            print(msg, file=sys.stderr, flush=True)
-            if _DEBUG_FILE:
-                _DEBUG_FILE.write(msg + "\n")
-                _DEBUG_FILE.flush()
-            return []
-        
-        # Check file size (if 0, might be a placeholder)
-        try:
-            file_size = os.path.getsize(file_path)
-            msg = f"DEBUG: File size: {file_size} bytes"
-            print(msg, file=sys.stderr, flush=True)
-            if _DEBUG_FILE:
-                _DEBUG_FILE.write(msg + "\n")
-                _DEBUG_FILE.flush()
-            if file_size == 0:
-                msg = "DEBUG: WARNING: File size is 0 bytes - file may not be fully synced (if in cloud storage)"
-                print(msg, file=sys.stderr, flush=True)
-                if _DEBUG_FILE:
-                    _DEBUG_FILE.write(msg + "\n")
-                    _DEBUG_FILE.flush()
-        except Exception as e:
-            msg = f"DEBUG: Could not check file size: {e}"
-            print(msg, file=sys.stderr, flush=True)
-            if _DEBUG_FILE:
-                _DEBUG_FILE.write(msg + "\n")
-                _DEBUG_FILE.flush()
-        
-        _debug_print("DEBUG: Extracting timeline clips from AAF file", verbose_only=True)
-        
-        try:
-            with aaf2.open(file_path, 'r') as f:
-                # Get all compositions (timelines) - skip validation parser
-                compositions = []
-                try:
-                    if hasattr(f.content, 'compositions'):
-                        compositions = list(f.content.compositions) if hasattr(f.content.compositions, '__iter__') else []
-                    elif hasattr(f.content, 'toplevel'):
-                        toplevel = list(f.content.toplevel()) if hasattr(f.content.toplevel, '__call__') else []
-                        compositions = [item for item in toplevel if hasattr(item, 'slots')]
-                except Exception as e:
-                    _debug_print(f"DEBUG: Error getting compositions: {str(e)}", verbose_only=True)
-                    return []
-                
-                if not compositions:
-                    _debug_print("DEBUG: No compositions found", verbose_only=True)
-                    return []
-                
-                _debug_print(f"DEBUG: Found {len(compositions)} composition(s)", verbose_only=True)
-                
-                # Process each composition to extract timeline clips
-                for comp_idx, composition in enumerate(compositions):
-                    try:
-                        _extract_timeline_from_composition_simple(composition, playback_clips, processed_sources, file_path, comp_idx)
-                    except Exception as e:
-                        _debug_print(f"DEBUG: Error processing composition {comp_idx}: {e}", verbose_only=True)
-                        continue
-        except TimeoutError as e:
-            import sys
-            msg = f"DEBUG: ERROR: Timeout opening AAF file. This may happen if the file is in cloud storage and not fully synced locally. File: {file_path}"
-            print(msg, file=sys.stderr, flush=True)
-            if _DEBUG_FILE:
-                _DEBUG_FILE.write(msg + "\n")
-                _DEBUG_FILE.write(f"DEBUG: TimeoutError details: {str(e)}\n")
-                _DEBUG_FILE.flush()
-            _debug_print(f"DEBUG: TimeoutError: {str(e)}", verbose_only=True)
-            return []
-        except OSError as e:
-            import sys
-            if e.errno == 60:  # Operation timed out
-                msg = f"DEBUG: ERROR: Operation timed out opening AAF file. This may happen if the file is in cloud storage (e.g., Google Drive) and not fully synced locally. File: {file_path}"
-                print(msg, file=sys.stderr, flush=True)
-                if _DEBUG_FILE:
-                    _DEBUG_FILE.write(msg + "\n")
-                    _DEBUG_FILE.write(f"DEBUG: OSError details: {str(e)}\n")
-                    _DEBUG_FILE.flush()
-                _debug_print(f"DEBUG: OSError (timeout): {str(e)}", verbose_only=True)
-                return []
-            else:
-                raise  # Re-raise if it's a different OSError
-        
-        import sys
-        msg = f"DEBUG: ===== FINISHED PLAYBACK CLIP EXTRACTION: Found {len(playback_clips)} clips ====="
-        print(msg, file=sys.stderr, flush=True)
-        if _DEBUG_FILE:
-            _DEBUG_FILE.write(msg + "\n")
-            _DEBUG_FILE.flush()
-        _debug_print(f"DEBUG: Returning {len(playback_clips)} playback clips", verbose_only=True)
-    
-    except Exception as e:
-        import sys
-        msg = f"DEBUG: ===== ERROR IN PLAYBACK CLIP EXTRACTION: {str(e)} ====="
-        print(msg, file=sys.stderr, flush=True)
-        if _DEBUG_FILE:
-            _DEBUG_FILE.write(msg + "\n")
-            _DEBUG_FILE.flush()
-        _debug_print(f"DEBUG: Error extracting clips: {str(e)}", verbose_only=True)
-        import traceback
-        print(f"DEBUG: Traceback: {traceback.format_exc()}", file=sys.stderr, flush=True)
-        _debug_print(f"DEBUG: Traceback: {traceback.format_exc()}", verbose_only=True)
-    
-    return playback_clips
+#     """
+#     Extracts playback-ready clips from an AAF file with timeline information.
+#     Efficient version: Skips validation parser, extracts timeline directly.
+#     
+#     Args:
+#         file_path: Path to the AAF file
+#         
+#     Returns:
+#         List[PlaybackClip]: List of clips ready for playback with timeline data
+#     """
+#     import sys
+#     if not AAF_SUPPORT:
+#         print("DEBUG: AAF support not available", file=sys.stderr, flush=True)
+#         return []
+#     
+#     playback_clips: List[PlaybackClip] = []
+#     processed_sources: Set[str] = set()
+#     
+#     try:
+#         msg = f"DEBUG: ===== STARTING PLAYBACK CLIP EXTRACTION FOR {file_path} ====="
+#         print(msg, file=sys.stderr, flush=True)
+#         if _DEBUG_FILE:
+#             _DEBUG_FILE.write(msg + "\n")
+#             _DEBUG_FILE.flush()
+#         
+#         # Check if file exists and is accessible
+#         if not os.path.exists(file_path):
+#             msg = f"DEBUG: ERROR: File does not exist: {file_path}"
+#             print(msg, file=sys.stderr, flush=True)
+#             if _DEBUG_FILE:
+#                 _DEBUG_FILE.write(msg + "\n")
+#                 _DEBUG_FILE.flush()
+#             return []
+#         
+#         if not os.path.isfile(file_path):
+#             msg = f"DEBUG: ERROR: Path is not a file: {file_path}"
+#             print(msg, file=sys.stderr, flush=True)
+#             if _DEBUG_FILE:
+#                 _DEBUG_FILE.write(msg + "\n")
+#                 _DEBUG_FILE.flush()
+#             return []
+#         
+#         # Check file size (if 0, might be a placeholder)
+#         try:
+#             file_size = os.path.getsize(file_path)
+#             msg = f"DEBUG: File size: {file_size} bytes"
+#             print(msg, file=sys.stderr, flush=True)
+#             if _DEBUG_FILE:
+#                 _DEBUG_FILE.write(msg + "\n")
+#                 _DEBUG_FILE.flush()
+#             if file_size == 0:
+#                 msg = "DEBUG: WARNING: File size is 0 bytes - file may not be fully synced (if in cloud storage)"
+#                 print(msg, file=sys.stderr, flush=True)
+#                 if _DEBUG_FILE:
+#                     _DEBUG_FILE.write(msg + "\n")
+#                     _DEBUG_FILE.flush()
+#         except Exception as e:
+#             msg = f"DEBUG: Could not check file size: {e}"
+#             print(msg, file=sys.stderr, flush=True)
+#             if _DEBUG_FILE:
+#                 _DEBUG_FILE.write(msg + "\n")
+#                 _DEBUG_FILE.flush()
+#         
+#         _debug_print("DEBUG: Extracting timeline clips from AAF file", verbose_only=True)
+#         
+#         try:
+#             with aaf2.open(file_path, 'r') as f:
+#                 # Get all compositions (timelines) - skip validation parser
+#                 compositions = []
+#                 try:
+#                     if hasattr(f.content, 'compositions'):
+#                         compositions = list(f.content.compositions) if hasattr(f.content.compositions, '__iter__') else []
+#                     elif hasattr(f.content, 'toplevel'):
+#                         toplevel = list(f.content.toplevel()) if hasattr(f.content.toplevel, '__call__') else []
+#                         compositions = [item for item in toplevel if hasattr(item, 'slots')]
+#                 except Exception as e:
+#                     _debug_print(f"DEBUG: Error getting compositions: {str(e)}", verbose_only=True)
+#                     return []
+#                 
+#                 if not compositions:
+#                     _debug_print("DEBUG: No compositions found", verbose_only=True)
+#                     return []
+#                 
+#                 _debug_print(f"DEBUG: Found {len(compositions)} composition(s)", verbose_only=True)
+#                 
+#                 # Process each composition to extract timeline clips
+#                 for comp_idx, composition in enumerate(compositions):
+#                     try:
+#                         _extract_timeline_from_composition_simple(composition, playback_clips, processed_sources, file_path, comp_idx)
+#                     except Exception as e:
+#                         _debug_print(f"DEBUG: Error processing composition {comp_idx}: {e}", verbose_only=True)
+#                         continue
+#         except TimeoutError as e:
+#             import sys
+#             msg = f"DEBUG: ERROR: Timeout opening AAF file. This may happen if the file is in cloud storage and not fully synced locally. File: {file_path}"
+#             print(msg, file=sys.stderr, flush=True)
+#             if _DEBUG_FILE:
+#                 _DEBUG_FILE.write(msg + "\n")
+#                 _DEBUG_FILE.write(f"DEBUG: TimeoutError details: {str(e)}\n")
+#                 _DEBUG_FILE.flush()
+#             _debug_print(f"DEBUG: TimeoutError: {str(e)}", verbose_only=True)
+#             return []
+#         except OSError as e:
+#             import sys
+#             if e.errno == 60:  # Operation timed out
+#                 msg = f"DEBUG: ERROR: Operation timed out opening AAF file. This may happen if the file is in cloud storage (e.g., Google Drive) and not fully synced locally. File: {file_path}"
+#                 print(msg, file=sys.stderr, flush=True)
+#                 if _DEBUG_FILE:
+#                     _DEBUG_FILE.write(msg + "\n")
+#                     _DEBUG_FILE.write(f"DEBUG: OSError details: {str(e)}\n")
+#                     _DEBUG_FILE.flush()
+#                 _debug_print(f"DEBUG: OSError (timeout): {str(e)}", verbose_only=True)
+#                 return []
+#             else:
+#                 raise  # Re-raise if it's a different OSError
+#         
+#         import sys
+#         msg = f"DEBUG: ===== FINISHED PLAYBACK CLIP EXTRACTION: Found {len(playback_clips)} clips ====="
+#         print(msg, file=sys.stderr, flush=True)
+#         if _DEBUG_FILE:
+#             _DEBUG_FILE.write(msg + "\n")
+#             _DEBUG_FILE.flush()
+#         _debug_print(f"DEBUG: Returning {len(playback_clips)} playback clips", verbose_only=True)
+#     
+#     except Exception as e:
+#         import sys
+#         msg = f"DEBUG: ===== ERROR IN PLAYBACK CLIP EXTRACTION: {str(e)} ====="
+#         print(msg, file=sys.stderr, flush=True)
+#         if _DEBUG_FILE:
+#             _DEBUG_FILE.write(msg + "\n")
+#             _DEBUG_FILE.flush()
+#         _debug_print(f"DEBUG: Error extracting clips: {str(e)}", verbose_only=True)
+#         import traceback
+#         print(f"DEBUG: Traceback: {traceback.format_exc()}", file=sys.stderr, flush=True)
+#         _debug_print(f"DEBUG: Traceback: {traceback.format_exc()}", verbose_only=True)
+#     
+#     return playback_clips
 
 
 # ARCHIVED: Helper function for playback extraction
@@ -1005,188 +1516,188 @@ def validate_omf_aaf_media(file_path: str) -> ValidationReport:
 #     Just extracts clips from timeline and checks if they're embedded.
 #     """
 #     try:
-        # Get edit rate for time conversion
-        edit_rate = 48000.0  # Default
-        try:
-            if hasattr(composition, 'edit_rate'):
-                edit_rate = float(composition.edit_rate)
-        except Exception:
-            pass
-        
-        # Get timeline slots (tracks)
-        if not hasattr(composition, 'slots'):
-            return
-        
-        slots = list(composition.slots) if hasattr(composition.slots, '__iter__') else []
-        track_index = 0
-        timeline_position = 0.0
-        
-        for slot_idx, slot in enumerate(slots):
-            if not hasattr(slot, 'segment') or not slot.segment:
-                continue
-            
-            segment = slot.segment
-            slot_start = 0.0
-            try:
-                if hasattr(slot, 'start'):
-                    slot_start = float(getattr(slot, 'start', 0))
-            except Exception:
-                pass
-            
-            timeline_position = slot_start / edit_rate
-            
-            # Extract clips from this track segment (simplified recursion)
-            _extract_clips_from_segment_simple(segment, playback_clips, processed_sources, 
-                                              aaf_file_path, track_index, timeline_position, edit_rate, depth=0)
-            track_index += 1
-    
-    except Exception as e:
-        _debug_print(f"DEBUG: Error in timeline extraction: {e}", verbose_only=True)
+#         # Get edit rate for time conversion
+#         edit_rate = 48000.0  # Default
+#         try:
+#             if hasattr(composition, 'edit_rate'):
+#                 edit_rate = float(composition.edit_rate)
+#         except Exception:
+#             pass
+#         
+#         # Get timeline slots (tracks)
+#         if not hasattr(composition, 'slots'):
+#             return
+#         
+#         slots = list(composition.slots) if hasattr(composition.slots, '__iter__') else []
+#         track_index = 0
+#         timeline_position = 0.0
+#         
+#         for slot_idx, slot in enumerate(slots):
+#             if not hasattr(slot, 'segment') or not slot.segment:
+#                 continue
+#             
+#             segment = slot.segment
+#             slot_start = 0.0
+#             try:
+#                 if hasattr(slot, 'start'):
+#                     slot_start = float(getattr(slot, 'start', 0))
+#             except Exception:
+#                 pass
+#             
+#             timeline_position = slot_start / edit_rate
+#             
+#             # Extract clips from this track segment (simplified recursion)
+#             _extract_clips_from_segment_simple(segment, playback_clips, processed_sources, 
+#                                               aaf_file_path, track_index, timeline_position, edit_rate, depth=0)
+#             track_index += 1
+#     
+#     except Exception as e:
+#         _debug_print(f"DEBUG: Error in timeline extraction: {e}", verbose_only=True)
 
 
 # ARCHIVED: Helper function for playback extraction
-def _extract_clips_from_segment_simple(segment, playback_clips, processed_sources, aaf_file_path, track_index, timeline_position, edit_rate, depth=0):
-    """ARCHIVED: Disabled due to aaf2 library limitations"""
-    return
-    # Original implementation commented out - see git history
-    # MAX_DEPTH = 10  # Increased slightly but still limited
-    # if depth > MAX_DEPTH:
-    #     return
-    
-    try:
+# def _extract_clips_from_segment_simple(segment, playback_clips, processed_sources, aaf_file_path, track_index, timeline_position, edit_rate, depth=0):
+#     """ARCHIVED: Disabled due to aaf2 library limitations"""
+#     return
+#     # Original implementation commented out - see git history
+#     # MAX_DEPTH = 10  # Increased slightly but still limited
+#     # if depth > MAX_DEPTH:
+#     #     return
+#     
+#     try:
         # Check if this segment is a SourceClip
-        if hasattr(segment, 'mob') and segment.mob is not None:
-            source_mob = segment.mob
-            source_id = str(getattr(source_mob, 'mob_id', id(source_mob)))
+        # if hasattr(segment, 'mob') and segment.mob is not None:
+            # source_mob = segment.mob
+            # source_id = str(getattr(source_mob, 'mob_id', id(source_mob)))
             
-            if source_id in processed_sources:
-                return
+            # if source_id in processed_sources:
+                # return
             
             # Follow MOB chain to find Essence MOB and check if embedded
-            essence_mob = _find_essence_mob_from_composition_mob(source_mob)
-            check_mob = essence_mob if essence_mob else source_mob
+            # essence_mob = _find_essence_mob_from_composition_mob(source_mob)
+            # check_mob = essence_mob if essence_mob else source_mob
             
             # Check if embedded
-            is_embedded = False
-            external_path = None
-            try:
-                if hasattr(check_mob, 'descriptor'):
-                    descriptor = check_mob.descriptor
+            # is_embedded = False
+            # external_path = None
+            # try:
+                # if hasattr(check_mob, 'descriptor'):
+                    # descriptor = check_mob.descriptor
                     # Check for external locator first
-                    if hasattr(descriptor, 'locator') and descriptor.locator:
-                        locator = descriptor.locator
-                        if hasattr(locator, 'path'):
-                            external_path = str(locator.path)
-                        elif hasattr(locator, 'url_string'):
-                            url = str(locator.url_string)
-                            if url.startswith('file://'):
-                                external_path = url[7:]
-                            elif not url.startswith('http'):
-                                external_path = url
+                    # if hasattr(descriptor, 'locator') and descriptor.locator:
+                        # locator = descriptor.locator
+                        # if hasattr(locator, 'path'):
+                            # external_path = str(locator.path)
+                        # elif hasattr(locator, 'url_string'):
+                            # url = str(locator.url_string)
+                            # if url.startswith('file://'):
+                                # external_path = url[7:]
+                            # elif not url.startswith('http'):
+                                # external_path = url
                     
                     # If no external path, check for embedded essence
-                    if not external_path:
-                        if hasattr(descriptor, 'essence') or hasattr(descriptor, 'essence_data'):
-                            is_embedded = True
+                    # if not external_path:
+                        # if hasattr(descriptor, 'essence') or hasattr(descriptor, 'essence_data'):
+                            # is_embedded = True
                 
-                if not is_embedded and not external_path:
-                    if hasattr(check_mob, 'essence'):
-                        is_embedded = True
-            except Exception:
-                pass
+                # if not is_embedded and not external_path:
+                    # if hasattr(check_mob, 'essence'):
+                        # is_embedded = True
+            # except Exception:
+                # pass
             
             # Only process embedded clips (no external path)
-            if is_embedded and not external_path:
+            # if is_embedded and not external_path:
                 # FINAL VERIFICATION: Always double-check the MOB for external locators
-                import sys
-                msg = f"DEBUG: [_extract_clips_from_segment_simple] Running final verification for clip (source_id={source_id})"
-                print(msg, file=sys.stderr, flush=True)
-                if _DEBUG_FILE:
-                    _DEBUG_FILE.write(msg + "\n")
-                    _DEBUG_FILE.flush()
-                is_embedded = _verify_essence_mob_is_embedded(essence_mob, source_mob)
-                if not is_embedded:
-                    msg = f"DEBUG: [_extract_clips_from_segment_simple] REJECTED clip (source_id={source_id}): Final verification failed - MOB has external locator"
-                    print(msg, file=sys.stderr, flush=True)
-                    if _DEBUG_FILE:
-                        _DEBUG_FILE.write(msg + "\n")
-                        _DEBUG_FILE.flush()
+                # import sys
+                # msg = f"DEBUG: [_extract_clips_from_segment_simple] Running final verification for clip (source_id={source_id})"
+                # print(msg, file=sys.stderr, flush=True)
+                # if _DEBUG_FILE:
+                    # _DEBUG_FILE.write(msg + "\n")
+                    # _DEBUG_FILE.flush()
+                # is_embedded = _verify_essence_mob_is_embedded(essence_mob, source_mob)
+                # if not is_embedded:
+                    # msg = f"DEBUG: [_extract_clips_from_segment_simple] REJECTED clip (source_id={source_id}): Final verification failed - MOB has external locator"
+                    # print(msg, file=sys.stderr, flush=True)
+                    # if _DEBUG_FILE:
+                        # _DEBUG_FILE.write(msg + "\n")
+                        # _DEBUG_FILE.flush()
                 
-                if is_embedded:
-                    clip_name = getattr(segment, 'name', None) or getattr(source_mob, 'name', 'Unnamed Clip')
-                    if not clip_name:
-                        clip_name = f"Clip_{len(playback_clips) + 1}"
+                # if is_embedded:
+                    # clip_name = getattr(segment, 'name', None) or getattr(source_mob, 'name', 'Unnamed Clip')
+                    # if not clip_name:
+                        # clip_name = f"Clip_{len(playback_clips) + 1}"
                     
-                    segment_start = 0.0
-                    segment_length = 0.0
-                    try:
-                        if hasattr(segment, 'start'):
-                            segment_start = float(getattr(segment, 'start', 0))
-                        if hasattr(segment, 'length'):
-                            segment_length = float(getattr(segment, 'length', 0))
-                    except Exception:
-                        pass
+                    # segment_start = 0.0
+                    # segment_length = 0.0
+                    # try:
+                        # if hasattr(segment, 'start'):
+                            # segment_start = float(getattr(segment, 'start', 0))
+                        # if hasattr(segment, 'length'):
+                            # segment_length = float(getattr(segment, 'length', 0))
+                    # except Exception:
+                        # pass
                     
-                    clip_start = timeline_position
-                    source_start = segment_start / edit_rate
-                    clip_length = segment_length / edit_rate if segment_length > 0 else 0.0
+                    # clip_start = timeline_position
+                    # source_start = segment_start / edit_rate
+                    # clip_length = segment_length / edit_rate if segment_length > 0 else 0.0
                     
                     # Use essence MOB ID if found, otherwise use source MOB ID
-                    essence_id = str(getattr(essence_mob, 'mob_id', id(essence_mob))) if essence_mob else source_id
-                    embedded_path = f"EMBEDDED:{aaf_file_path}:{essence_id}"
+                    # essence_id = str(getattr(essence_mob, 'mob_id', id(essence_mob))) if essence_mob else source_id
+                    # embedded_path = f"EMBEDDED:{aaf_file_path}:{essence_id}"
                     
-                    msg = f"DEBUG: [_extract_clips_from_segment_simple] ADDING clip '{clip_name}' (source_id={source_id}, essence_id={essence_id})"
-                    print(msg, file=sys.stderr, flush=True)
-                    if _DEBUG_FILE:
-                        _DEBUG_FILE.write(msg + "\n")
-                        _DEBUG_FILE.flush()
+                    # msg = f"DEBUG: [_extract_clips_from_segment_simple] ADDING clip '{clip_name}' (source_id={source_id}, essence_id={essence_id})"
+                    # print(msg, file=sys.stderr, flush=True)
+                    # if _DEBUG_FILE:
+                        # _DEBUG_FILE.write(msg + "\n")
+                        # _DEBUG_FILE.flush()
                     
-                    playback_clip = PlaybackClip(
-                        name=clip_name,
-                        file_path=embedded_path,
-                        start_time=source_start,
-                        duration=clip_length,
-                        track_index=track_index,
-                        timeline_start=clip_start,
-                        timeline_end=clip_start + clip_length,
-                        source_in=source_start,
-                        source_out=source_start + clip_length
-                    )
-                    playback_clips.append(playback_clip)
-                    processed_sources.add(source_id)
-                    if essence_mob:
-                        processed_sources.add(essence_id)
+                    # playback_clip = PlaybackClip(
+                        # name=clip_name,
+                        # file_path=embedded_path,
+                        # start_time=source_start,
+                        # duration=clip_length,
+                        # track_index=track_index,
+                        # timeline_start=clip_start,
+                        # timeline_end=clip_start + clip_length,
+                        # source_in=source_start,
+                        # source_out=source_start + clip_length
+                    # )
+                    # playback_clips.append(playback_clip)
+                    # processed_sources.add(source_id)
+                    # if essence_mob:
+                        # processed_sources.add(essence_id)
                     
-                    if segment_length > 0:
-                        timeline_position += segment_length / edit_rate
+                    # if segment_length > 0:
+                        # timeline_position += segment_length / edit_rate
         
         # Handle OperationGroups - simplified recursion
-        if hasattr(segment, 'segments'):
-            segments = list(segment.segments) if hasattr(segment.segments, '__iter__') else []
-            for seg in segments:
-                _extract_clips_from_segment_simple(seg, playback_clips, processed_sources,
-                                                  aaf_file_path, track_index, timeline_position, edit_rate, depth + 1)
+        # if hasattr(segment, 'segments'):
+            # segments = list(segment.segments) if hasattr(segment.segments, '__iter__') else []
+            # for seg in segments:
+                # _extract_clips_from_segment_simple(seg, playback_clips, processed_sources,
+                                                  # aaf_file_path, track_index, timeline_position, edit_rate, depth + 1)
         
         # Handle components - simplified recursion
-        if hasattr(segment, 'components'):
-            components = list(segment.components) if hasattr(segment.components, '__iter__') else []
-            current_pos = timeline_position
-            for component in components:
-                comp_length = 0.0
-                try:
-                    if hasattr(component, 'length'):
-                        comp_length = float(getattr(component, 'length', 0)) / edit_rate
-                except Exception:
-                    pass
+        # if hasattr(segment, 'components'):
+            # components = list(segment.components) if hasattr(segment.components, '__iter__') else []
+            # current_pos = timeline_position
+            # for component in components:
+                # comp_length = 0.0
+                # try:
+                    # if hasattr(component, 'length'):
+                        # comp_length = float(getattr(component, 'length', 0)) / edit_rate
+                # except Exception:
+                    # pass
                 
-                _extract_clips_from_segment_simple(component, playback_clips, processed_sources,
-                                                  aaf_file_path, track_index, current_pos, edit_rate, depth + 1)
+                # _extract_clips_from_segment_simple(component, playback_clips, processed_sources,
+                                                  # aaf_file_path, track_index, current_pos, edit_rate, depth + 1)
                 
-                if comp_length > 0:
-                    current_pos += comp_length
+                # if comp_length > 0:
+                    # current_pos += comp_length
     
-    except Exception as e:
-        _debug_print(f"DEBUG: Error in segment extraction: {e}", verbose_only=True)
+    # except Exception as e:
+        # _debug_print(f"DEBUG: Error in segment extraction: {e}", verbose_only=True)
 
 
 # ARCHIVED: Helper function for playback extraction (but also used by validation, so keep it)
@@ -1679,18 +2190,18 @@ def _extract_clips_from_track(segment, playback_clips, processed_sources, aaf_fi
                 _debug_print(f"{indent}DEBUG: [{slot_idx}/T{track_index}] Clip source: start={source_start:.3f}s, length={source_length:.3f}s", verbose_only=True)
                 
                 embedded_path = f"EMBEDDED:{aaf_file_path}:{source_id}"
-                playback_clip = PlaybackClip(
-                    name=clip_name,
-                    file_path=embedded_path,
-                    start_time=source_start,
-                    duration=source_length,
-                    track_index=track_index,
-                    timeline_start=clip_start,
-                    timeline_end=clip_start + clip_length,
-                    source_in=source_start,
-                    source_out=source_start + source_length
-                )
-                playback_clips.append(playback_clip)
+                # playback_clip = PlaybackClip(
+                    # name=clip_name,
+                    # file_path=embedded_path,
+                    # start_time=source_start,
+                    # duration=source_length,
+                    # track_index=track_index,
+                    # timeline_start=clip_start,
+                    # timeline_end=clip_start + clip_length,
+                    # source_in=source_start,
+                    # source_out=source_start + source_length
+                # )
+                # playback_clips.append(playback_clip)
                 _debug_print(f"{indent}DEBUG: [{slot_idx}/T{track_index}] Added clip: {clip_name} at track {track_index}, timeline {clip_start:.3f}-{clip_start + clip_length:.3f}s", verbose_only=True)
                 
                 # Update timeline position for next clip (if sequential)
@@ -1810,18 +2321,18 @@ def _extract_clips_from_track(segment, playback_clips, processed_sources, aaf_fi
                             
                             embedded_id = essence_id if essence_id else source_id
                             embedded_path = f"EMBEDDED:{aaf_file_path}:{embedded_id}"
-                            playback_clip = PlaybackClip(
-                                name=clip_name,
-                                file_path=embedded_path,
-                                start_time=source_start,
-                                duration=clip_length,
-                                track_index=track_index,
-                                timeline_start=clip_start,
-                                timeline_end=clip_start + clip_length,
-                                source_in=source_start,
-                                source_out=source_start + clip_length
-                            )
-                            playback_clips.append(playback_clip)
+                            # playback_clip = PlaybackClip(
+                                # name=clip_name,
+                                # file_path=embedded_path,
+                                # start_time=source_start,
+                                # duration=clip_length,
+                                # track_index=track_index,
+                                # timeline_start=clip_start,
+                                # timeline_end=clip_start + clip_length,
+                                # source_in=source_start,
+                                # source_out=source_start + clip_length
+                            # )
+                            # playback_clips.append(playback_clip)
                             processed_sources.add(source_id)
                             if essence_id:
                                 processed_sources.add(essence_id)
@@ -2069,18 +2580,18 @@ def _extract_clips_from_track(segment, playback_clips, processed_sources, aaf_fi
                                         # Use essence_id for embedded path if we found it, otherwise use source_id
                                         embedded_id = essence_id if essence_id else source_id
                                         embedded_path = f"EMBEDDED:{aaf_file_path}:{embedded_id}"
-                                        playback_clip = PlaybackClip(
-                                            name=clip_name,
-                                            file_path=embedded_path,
-                                            start_time=source_start,
-                                            duration=source_length,
-                                            track_index=track_index,
-                                            timeline_start=clip_start,
-                                            timeline_end=clip_start + clip_length,
-                                            source_in=source_start,
-                                            source_out=source_start + source_length
-                                        )
-                                        playback_clips.append(playback_clip)
+                                        # playback_clip = PlaybackClip(
+                                            # name=clip_name,
+                                            # file_path=embedded_path,
+                                            # start_time=source_start,
+                                            # duration=source_length,
+                                            # track_index=track_index,
+                                            # timeline_start=clip_start,
+                                            # timeline_end=clip_start + clip_length,
+                                            # source_in=source_start,
+                                            # source_out=source_start + source_length
+                                        # )
+                                        # playback_clips.append(playback_clip)
                                         processed_sources.add(source_id)  # Track by composition MOB to avoid duplicates
                                         if essence_id:
                                             processed_sources.add(essence_id)  # Also track by essence MOB
@@ -2204,18 +2715,18 @@ def _extract_clips_from_track(segment, playback_clips, processed_sources, aaf_fi
                                             # Use essence_id for embedded path if we found it
                                             embedded_id = essence_id if essence_id else source_id
                                             embedded_path = f"EMBEDDED:{aaf_file_path}:{embedded_id}"
-                                            playback_clip = PlaybackClip(
-                                                name=clip_name,
-                                                file_path=embedded_path,
-                                                start_time=source_start,
-                                                duration=clip_length,
-                                                track_index=track_index,
-                                                timeline_start=clip_start,
-                                                timeline_end=clip_start + clip_length,
-                                                source_in=source_start,
-                                                source_out=source_start + clip_length
-                                            )
-                                            playback_clips.append(playback_clip)
+                                            # playback_clip = PlaybackClip(
+                                                # name=clip_name,
+                                                # file_path=embedded_path,
+                                                # start_time=source_start,
+                                                # duration=clip_length,
+                                                # track_index=track_index,
+                                                # timeline_start=clip_start,
+                                                # timeline_end=clip_start + clip_length,
+                                                # source_in=source_start,
+                                                # source_out=source_start + clip_length
+                                            # )
+                                            # playback_clips.append(playback_clip)
                                             _debug_print(f"{indent}DEBUG: [{slot_idx}/T{track_index}] Added clip from OperationGroup slot: {clip_name} at track {track_index}, timeline {clip_start:.3f}-{clip_start + clip_length:.3f}s", verbose_only=True)
                                             
                                             if segment_length > 0:
@@ -2354,18 +2865,18 @@ def _extract_clips_from_track(segment, playback_clips, processed_sources, aaf_fi
                                     # Use essence_id for embedded path if we found it
                                     embedded_id = essence_id if essence_id else source_id
                                     embedded_path = f"EMBEDDED:{aaf_file_path}:{embedded_id}"
-                                    playback_clip = PlaybackClip(
-                                        name=clip_name,
-                                        file_path=embedded_path,
-                                        start_time=source_start,
-                                        duration=source_length,
-                                        track_index=track_index,
-                                        timeline_start=clip_start,
-                                        timeline_end=clip_start + clip_length,
-                                        source_in=source_start,
-                                        source_out=source_start + source_length
-                                    )
-                                    playback_clips.append(playback_clip)
+                                    # playback_clip = PlaybackClip(
+                                        # name=clip_name,
+                                        # file_path=embedded_path,
+                                        # start_time=source_start,
+                                        # duration=source_length,
+                                        # track_index=track_index,
+                                        # timeline_start=clip_start,
+                                        # timeline_end=clip_start + clip_length,
+                                        # source_in=source_start,
+                                        # source_out=source_start + source_length
+                                    # )
+                                    # playback_clips.append(playback_clip)
                                     processed_sources.add(source_id)
                                     _debug_print(f"{indent}DEBUG: [{slot_idx}/T{track_index}] Added clip: {clip_name} at track {track_index}, timeline {clip_start:.3f}-{clip_start + clip_length:.3f}s", verbose_only=True)
                                     
@@ -2448,18 +2959,18 @@ def _extract_clips_from_track(segment, playback_clips, processed_sources, aaf_fi
                                         # Use essence_id for embedded path if we found it
                                         embedded_id = essence_id if essence_id else source_id
                                         embedded_path = f"EMBEDDED:{aaf_file_path}:{embedded_id}"
-                                        playback_clip = PlaybackClip(
-                                            name=clip_name,
-                                            file_path=embedded_path,
-                                            start_time=source_start,
-                                            duration=clip_length,
-                                            track_index=track_index,
-                                            timeline_start=clip_start,
-                                            timeline_end=clip_start + clip_length,
-                                            source_in=source_start,
-                                            source_out=source_start + clip_length
-                                        )
-                                        playback_clips.append(playback_clip)
+                                        # playback_clip = PlaybackClip(
+                                            # name=clip_name,
+                                            # file_path=embedded_path,
+                                            # start_time=source_start,
+                                            # duration=clip_length,
+                                            # track_index=track_index,
+                                            # timeline_start=clip_start,
+                                            # timeline_end=clip_start + clip_length,
+                                            # source_in=source_start,
+                                            # source_out=source_start + clip_length
+                                        # )
+                                        # playback_clips.append(playback_clip)
                                         _debug_print(f"{indent}DEBUG: [{slot_idx}/T{track_index}] Added clip from OperationGroup slot: {clip_name} at track {track_index}, timeline {clip_start:.3f}-{clip_start + clip_length:.3f}s", verbose_only=True)
                                         
                                         if segment_length > 0:
@@ -2494,131 +3005,131 @@ def _extract_clips_from_track(segment, playback_clips, processed_sources, aaf_fi
         _debug_print(f"{indent}DEBUG: [{slot_idx}/T{track_index}] Traceback: {traceback.format_exc()}", verbose_only=True)
 
 
-def _extract_playback_from_segment(segment, playback_clips: List[PlaybackClip], processed_sources: Set[str], aaf_file_path: str):
-    """
-    Extracts playback information from an AAF segment.
-    Uses the same logic as validation to find clips, then filters for playback.
+# def _extract_playback_from_segment(segment, playback_clips: List[PlaybackClip], processed_sources: Set[str], aaf_file_path: str):
+    # """
+    # Extracts playback information from an AAF segment.
+    # Uses the same logic as validation to find clips, then filters for playback.
     
-    Args:
-        segment: AAF segment object
-        playback_clips: List to append found clips to
-        processed_sources: Set of processed source IDs to avoid duplicates
-        aaf_file_path: Path to the AAF file (for resolving relative paths)
-    """
-    try:
+    # Args:
+        # segment: AAF segment object
+        # playback_clips: List to append found clips to
+        # processed_sources: Set of processed source IDs to avoid duplicates
+        # aaf_file_path: Path to the AAF file (for resolving relative paths)
+    # """
+    # try:
         # Check if this is a SourceClip with a MOB
-        if hasattr(segment, 'mob') and segment.mob is not None:
-            source_mob = segment.mob
-            source_id = str(getattr(source_mob, 'mob_id', id(source_mob)))
+        # if hasattr(segment, 'mob') and segment.mob is not None:
+            # source_mob = segment.mob
+            # source_id = str(getattr(source_mob, 'mob_id', id(source_mob)))
             
-            if source_id in processed_sources:
-                return
-            processed_sources.add(source_id)
+            # if source_id in processed_sources:
+                # return
+            # processed_sources.add(source_id)
             
             # Get clip name
-            clip_name = getattr(segment, 'name', None) or getattr(source_mob, 'name', 'Unnamed Clip')
-            if not clip_name:
-                clip_name = f"Clip_{len(playback_clips) + 1}"
+            # clip_name = getattr(segment, 'name', None) or getattr(source_mob, 'name', 'Unnamed Clip')
+            # if not clip_name:
+                # clip_name = f"Clip_{len(playback_clips) + 1}"
             
             # Extract file path - use same logic as validation
-            external_path = None
-            is_embedded = False
+            # external_path = None
+            # is_embedded = False
             
-            try:
-                if hasattr(source_mob, 'descriptor'):
-                    descriptor = source_mob.descriptor
+            # try:
+                # if hasattr(source_mob, 'descriptor'):
+                    # descriptor = source_mob.descriptor
                     
-                    if hasattr(descriptor, 'locator'):
-                        locator = descriptor.locator
-                        if locator:
-                            if hasattr(locator, 'path'):
-                                external_path = str(locator.path)
-                            elif hasattr(locator, 'url_string'):
-                                url = str(locator.url_string)
-                                if url.startswith('file://'):
-                                    external_path = url[7:]
-                                elif not url.startswith('http'):
-                                    external_path = url
+                    # if hasattr(descriptor, 'locator'):
+                        # locator = descriptor.locator
+                        # if locator:
+                            # if hasattr(locator, 'path'):
+                                # external_path = str(locator.path)
+                            # elif hasattr(locator, 'url_string'):
+                                # url = str(locator.url_string)
+                                # if url.startswith('file://'):
+                                    # external_path = url[7:]
+                                # elif not url.startswith('http'):
+                                    # external_path = url
                     
-                    if hasattr(descriptor, 'essence') or hasattr(descriptor, 'essence_data'):
-                        is_embedded = True
+                    # if hasattr(descriptor, 'essence') or hasattr(descriptor, 'essence_data'):
+                        # is_embedded = True
                 
                 # Alternative: Check for essence mobs
-                if not external_path and not is_embedded:
-                    if hasattr(source_mob, 'essence'):
-                        is_embedded = True
+                # if not external_path and not is_embedded:
+                    # if hasattr(source_mob, 'essence'):
+                        # is_embedded = True
                 
                 # Also check for file locators in the mob itself (same as validation)
-                if not external_path:
-                    for slot in getattr(source_mob, 'slots', []):
-                        if hasattr(slot, 'segment'):
-                            seg = slot.segment
-                            if hasattr(seg, 'mob') and seg.mob:
-                                mob = seg.mob
-                                if hasattr(mob, 'descriptor'):
-                                    desc = mob.descriptor
-                                    if hasattr(desc, 'locator'):
-                                        loc = desc.locator
-                                        if loc and hasattr(loc, 'path'):
-                                            external_path = str(loc.path)
-                                            break
-                                        elif loc and hasattr(loc, 'url_string'):
-                                            url = str(loc.url_string)
-                                            if url.startswith('file://'):
-                                                external_path = url[7:]
-                                                break
-                                            elif not url.startswith('http'):
-                                                external_path = url
-                                                break
-            except Exception:
-                pass
+                # if not external_path:
+                    # for slot in getattr(source_mob, 'slots', []):
+                        # if hasattr(slot, 'segment'):
+                            # seg = slot.segment
+                            # if hasattr(seg, 'mob') and seg.mob:
+                                # mob = seg.mob
+                                # if hasattr(mob, 'descriptor'):
+                                    # desc = mob.descriptor
+                                    # if hasattr(desc, 'locator'):
+                                        # loc = desc.locator
+                                        # if loc and hasattr(loc, 'path'):
+                                            # external_path = str(loc.path)
+                                            # break
+                                        # elif loc and hasattr(loc, 'url_string'):
+                                            # url = str(loc.url_string)
+                                            # if url.startswith('file://'):
+                                                # external_path = url[7:]
+                                                # break
+                                            # elif not url.startswith('http'):
+                                                # external_path = url
+                                                # break
+            # except Exception:
+                # pass
             
             # Resolve relative paths
-            if external_path:
-                if not os.path.isabs(external_path):
-                    aaf_dir = os.path.dirname(os.path.abspath(aaf_file_path))
-                    external_path = os.path.join(aaf_dir, external_path)
-                external_path = os.path.normpath(external_path)
+            # if external_path:
+                # if not os.path.isabs(external_path):
+                    # aaf_dir = os.path.dirname(os.path.abspath(aaf_file_path))
+                    # external_path = os.path.join(aaf_dir, external_path)
+                # external_path = os.path.normpath(external_path)
             
             # Extract timing information if available
-            start_time = 0.0
-            duration = 0.0
+            # start_time = 0.0
+            # duration = 0.0
             
-            try:
+            # try:
                 # Try to get start/end times from segment
-                if hasattr(segment, 'start'):
-                    start_time = float(getattr(segment, 'start', 0))
-                if hasattr(segment, 'length'):
-                    duration = float(getattr(segment, 'length', 0))
+                # if hasattr(segment, 'start'):
+                    # start_time = float(getattr(segment, 'start', 0))
+                # if hasattr(segment, 'length'):
+                    # duration = float(getattr(segment, 'length', 0))
                 # Convert from edit units to seconds if needed (simplified)
                 # In real AAF files, this would require sample rate conversion
-            except Exception:
-                pass
+            # except Exception:
+                # pass
             
             # ONLY add embedded clips - external clips mean the file is broken
-            if is_embedded and not external_path:
+            # if is_embedded and not external_path:
                 # For embedded clips, use special path format
-                embedded_path = f"EMBEDDED:{aaf_file_path}:{source_id}"
-                playback_clip = PlaybackClip(
-                    name=clip_name,
-                    file_path=embedded_path,
-                    start_time=start_time,
-                    duration=duration
-                )
-                playback_clips.append(playback_clip)
+                # embedded_path = f"EMBEDDED:{aaf_file_path}:{source_id}"
+                # playback_clip = PlaybackClip(
+                    # name=clip_name,
+                    # file_path=embedded_path,
+                    # start_time=start_time,
+                    # duration=duration
+                # )
+                # playback_clips.append(playback_clip)
         
         # Recursively process slots/segments
-        if hasattr(segment, 'slots'):
-            for slot in segment.slots:
-                if hasattr(slot, 'segment') and slot.segment:
-                    _extract_playback_from_segment(slot.segment, playback_clips, processed_sources, aaf_file_path)
+        # if hasattr(segment, 'slots'):
+            # for slot in segment.slots:
+                # if hasattr(slot, 'segment') and slot.segment:
+                    # _extract_playback_from_segment(slot.segment, playback_clips, processed_sources, aaf_file_path)
         
-        if hasattr(segment, 'components'):
-            for component in segment.components:
-                _extract_playback_from_segment(component, playback_clips, processed_sources, aaf_file_path)
+        # if hasattr(segment, 'components'):
+            # for component in segment.components:
+                # _extract_playback_from_segment(component, playback_clips, processed_sources, aaf_file_path)
     
-    except Exception:
-        pass
+    # except Exception:
+        # pass
 # ============================================================================
 # END ARCHIVED: _extract_playback_from_segment
 # ============================================================================
@@ -2647,13 +3158,13 @@ def _extract_playback_from_segment(segment, playback_clips: List[PlaybackClip], 
         if clip.is_embedded:
             # For embedded clips, use special path format
             embedded_path = f"EMBEDDED:{file_path}:{clip.clip_id or clip.name}"
-            playback_clip = PlaybackClip(
-                name=clip.name,
-                file_path=embedded_path,
-                start_time=0.0,
-                duration=0.0
-            )
-            playback_clips.append(playback_clip)
+            # playback_clip = PlaybackClip(
+                # name=clip.name,
+                # file_path=embedded_path,
+                # start_time=0.0,
+                # duration=0.0
+            # )
+            # playback_clips.append(playback_clip)
     
     return playback_clips
 # ============================================================================
@@ -3483,7 +3994,21 @@ if __name__ == "__main__":
         if True:  # Always use normal validation mode now
             # Normal validation mode
             report = validate_omf_aaf_media(file_path)
-            print(format_report(report))
+            
+            # Output JSON for Swift app
+            output = {
+                "total_clips": report.total_clips,
+                "embedded_clips": report.embedded_clips,
+                "linked_clips": report.linked_clips,
+                "missing_clips": report.missing_clips,
+                "valid_clips": report.valid_clips,
+                "file_path": report.file_path,
+                "total_duration": report.total_duration,
+                "missing_clip_details": [asdict(clip) for clip in report.missing_clip_details],
+                "timeline_clips": [asdict(clip) for clip in report.timeline_clips]
+            }
+            json_output = json.dumps(output, indent=2)
+            print(json_output, flush=True)
             
             # Exit with error code if there are missing clips
             if report.missing_clips > 0:

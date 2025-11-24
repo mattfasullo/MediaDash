@@ -11,6 +11,7 @@ import Sparkle
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var updaterController: SPUStandardUpdaterController!
+    private var quitEventMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize Sparkle updater
@@ -19,6 +20,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        
+        // Set up global CMD+Q handler that works even when sheets/modals are open
+        setupGlobalQuitHandler()
         
         // Configure all existing windows immediately
         DispatchQueue.main.async {
@@ -47,6 +51,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if let window = notification.object as? NSWindow {
                 self.configureWindow(window)
             }
+        }
+    }
+    
+    private func setupGlobalQuitHandler() {
+        // Monitor local events to catch CMD+Q even when sheets/modals are open
+        // This intercepts the key event before SwiftUI can block it
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Check for CMD+Q
+            if event.modifierFlags.contains(.command) && 
+               event.charactersIgnoringModifiers?.lowercased() == "q" {
+                // Force quit immediately
+                NSApplication.shared.terminate(nil)
+                return nil // Consume the event so it doesn't propagate
+            }
+            return event
+        }
+    }
+    
+    func applicationWillTerminate(_ notification: Notification) {
+        // Clean up event monitor
+        if let monitor = quitEventMonitor {
+            NSEvent.removeMonitor(monitor)
         }
     }
     

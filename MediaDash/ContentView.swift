@@ -8,6 +8,7 @@ struct ContentView: View {
     @EnvironmentObject var metadataManager: DocketMetadataManager
     @EnvironmentObject var manager: MediaManager
     @EnvironmentObject var sessionManager: SessionManager
+    @StateObject private var cacheManager = AsanaCacheManager()
     @State private var selectedDocket: String = ""
     @State private var showNewDocketSheet = false
     @State private var showSearchSheet = false
@@ -40,46 +41,25 @@ struct ContentView: View {
 
     // Staging area hover state
     @State private var isStagingHovered = false
+    @State private var isStagingPressed = false
 
     // Computed property for current theme
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
     }
 
-    // Legacy support for theme checks
-    private var isWindows95Theme: Bool {
-        currentTheme == .windows95
-    }
-    private var isWindowsXPTheme: Bool {
-        currentTheme == .windowsXP
-    }
-    private var isMacOS1996Theme: Bool {
-        currentTheme == .macos1996
-    }
-    private var isCursedTheme: Bool {
-        currentTheme == .cursed
-    }
-
     // Theme-specific text
     private var themeTitleText: String {
         switch currentTheme {
         case .modern: return "MediaDash"
-        case .windows95: return "MediaDash 95"
-        case .windowsXP: return "MediaDash XP"
-        case .macos1996: return "MediaDash Classic"
-        case .retro: return "MEDIADASH.EXE"
-        case .cursed: return "M3D!@D@$H"
+        case .retroDesktop: return "MEDIADASH.EXE"
         }
     }
 
     private var themeSubtitleText: String {
         switch currentTheme {
         case .modern: return "Professional Media Manager"
-        case .windows95: return "Enterprise Edition"
-        case .windowsXP: return "Home Edition"
-        case .macos1996: return "System 7.5.5"
-        case .retro: return "C:\\TOOLS\\MEDIA>"
-        case .cursed: return "💀 EXTREME EDITION 💀"
+        case .retroDesktop: return "C:\\TOOLS\\MEDIA>"
         }
     }
 
@@ -87,16 +67,8 @@ struct ContentView: View {
         switch currentTheme {
         case .modern:
             return .system(size: 28, weight: .semibold, design: .rounded)
-        case .windows95:
-            return .system(size: 28, weight: .bold)
-        case .windowsXP:
-            return .system(size: 28, weight: .bold, design: .rounded)
-        case .macos1996:
-            return .system(size: 28, weight: .bold, design: .default)
-        case .retro:
+        case .retroDesktop:
             return .system(size: 20, weight: .bold, design: .monospaced)
-        case .cursed:
-            return .system(size: 32, weight: .black, design: .monospaced)
         }
     }
 
@@ -285,7 +257,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showQuickSearchSheet) {
-            QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager)
+            QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager, cacheManager: cacheManager)
         }
         .onChange(of: showQuickSearchSheet) { oldValue, newValue in
             if !newValue {
@@ -341,8 +313,8 @@ struct ContentView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(height: 60)
-                        .rotationEffect(isCursedTheme ? .degrees(-3) : .degrees(0))
-                        .shadow(color: isCursedTheme ? .cyan : .clear, radius: 5, x: 2, y: 2)
+                        .rotationEffect(.degrees(0))
+                        .shadow(color: .clear, radius: 5, x: 2, y: 2)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             // Easter egg: 10 clicks cycles through themes
@@ -588,20 +560,7 @@ struct ContentView: View {
             }
             .padding(16)
             .frame(width: 300)
-            .background(
-                Group {
-                    if isCursedTheme {
-                        LinearGradient(
-                            colors: [.pink, .purple, .orange, .green],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .opacity(0.3)
-                    } else {
-                        currentTheme.sidebarBackground
-                    }
-                }
-            )
+            .background(currentTheme.sidebarBackground)
 
             // Toggle staging button (top right)
             Button(action: {
@@ -689,12 +648,15 @@ struct ContentView: View {
                         VStack(spacing: 16) {
                             ZStack {
                                 Circle()
-                                    .fill(Color.gray.opacity(0.1))
+                                    .fill(isStagingPressed ? Color.blue.opacity(0.2) : (isStagingHovered ? Color.gray.opacity(0.15) : Color.gray.opacity(0.1)))
                                     .frame(width: 100, height: 100)
                                 Image(systemName: "doc.on.doc.fill")
                                     .font(.system(size: 40))
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(isStagingPressed ? .blue : .secondary)
                             }
+                            .scaleEffect(isStagingPressed ? 0.95 : (isStagingHovered ? 1.05 : 1.0))
+                            .animation(.easeInOut(duration: 0.15), value: isStagingPressed)
+                            .animation(.easeInOut(duration: 0.15), value: isStagingHovered)
 
                             VStack(spacing: 6) {
                                 Text("No files staged")
@@ -702,7 +664,7 @@ struct ContentView: View {
                                     .foregroundColor(.primary)
                                 Text("Click to add files or drop them here")
                                     .font(.system(size: 13))
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(isStagingPressed ? .blue : .secondary)
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -835,16 +797,37 @@ struct ContentView: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .background(isStagingHovered ? Color.gray.opacity(0.05) : Color.clear)
+                .background(
+                    Group {
+                        if isStagingPressed {
+                            Color.blue.opacity(0.15)
+                        } else if isStagingHovered {
+                            Color.gray.opacity(0.05)
+                        } else {
+                            Color.clear
+                        }
+                    }
+                )
+                .scaleEffect(isStagingPressed ? 0.998 : 1.0)
+                .animation(.easeInOut(duration: 0.1), value: isStagingPressed)
                 .onHover { hovering in
                     isStagingHovered = hovering
                     if hovering {
                         isKeyboardMode = false
                     }
                 }
-                .onTapGesture {
-                    manager.pickFiles()
-                }
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            if !isStagingPressed {
+                                isStagingPressed = true
+                            }
+                        }
+                        .onEnded { _ in
+                            isStagingPressed = false
+                            manager.pickFiles()
+                        }
+                )
                 .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
                     handleFileDrop(providers: providers)
                     return true
@@ -1309,7 +1292,7 @@ struct ActionButtonWithShortcut: View {
                     Image(systemName: iconName)
                         .font(.system(size: 50, weight: .thin))
                         .foregroundColor(theme.textColor.opacity(0.08))
-                        .rotationEffect(theme == .cursed ? .degrees(Double.random(in: -15...15)) : .degrees(0))
+                        .rotationEffect(.degrees(0))
                 }
 
                 VStack(spacing: 0) {
@@ -1320,14 +1303,16 @@ struct ActionButtonWithShortcut: View {
                         .font(buttonTitleFont)
                         .foregroundColor(theme.textColor)
                         .shadow(color: theme.textShadowColor ?? .clear, radius: 2, x: 1, y: 1)
-                        .rotationEffect(theme == .cursed ? .degrees(Double.random(in: -5...5)) : .degrees(0))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .rotationEffect(.degrees(0))
 
                     Spacer()
                     Spacer()
 
                     // Shortcut - positioned in lower third
                     Text(shortcut)
-                        .font(theme == .cursed ? .system(size: 9, weight: .heavy, design: .monospaced) : .system(size: 10, weight: .medium, design: .monospaced))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(theme.textColor.opacity(showShortcut ? 0.6 : 0.0))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -1336,38 +1321,17 @@ struct ActionButtonWithShortcut: View {
                         .opacity(showShortcut ? 1 : 0)
                         .padding(.bottom, 8)
                 }
+                .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .background(
-                Group {
-                    if theme == .cursed {
-                        LinearGradient(
-                            colors: [color, color.opacity(0.5), .purple, .yellow],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    } else if theme == .windowsXP {
-                        // Authentic Windows XP Luna glossy gradient
-                        LinearGradient(
-                            stops: [
-                                .init(color: Color.white.opacity(0.5), location: 0.0),
-                                .init(color: color.opacity(0.9), location: 0.3),
-                                .init(color: color, location: 0.5),
-                                .init(color: color.opacity(0.8), location: 1.0)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    } else {
-                        (isHovered || isFocused ? color.brightened(by: 0.15) : color)
-                    }
-                }
+                (isHovered || isFocused ? color.brightened(by: 0.15) : color)
             )
             .cornerRadius(theme.buttonCornerRadius)
             .overlay(
                 Group {
-                    if theme == .windows95 || theme == .macos1996 || theme == .retro {
+                    if theme == .retroDesktop {
                         VStack(spacing: 0) {
                             HStack(spacing: 0) {
                                 Rectangle()
@@ -1394,26 +1358,6 @@ struct ActionButtonWithShortcut: View {
                             }
                             .frame(maxWidth: .infinity)
                         }
-                    } else if theme == .windowsXP {
-                        RoundedRectangle(cornerRadius: theme.buttonCornerRadius)
-                            .strokeBorder(
-                                LinearGradient(
-                                    stops: [
-                                        .init(color: Color.white.opacity(0.6), location: 0.0),
-                                        .init(color: color.opacity(0.4), location: 0.5),
-                                        .init(color: color.opacity(0.8), location: 1.0)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                ),
-                                lineWidth: 1
-                            )
-                    } else if theme == .cursed {
-                        RoundedRectangle(cornerRadius: theme.buttonCornerRadius)
-                            .strokeBorder(
-                                LinearGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple], startPoint: .leading, endPoint: .trailing),
-                                lineWidth: 3
-                            )
                     } else {
                         RoundedRectangle(cornerRadius: theme.buttonCornerRadius)
                             .strokeBorder(Color.white.opacity(0.3), lineWidth: isFocused ? 2 : 0)
@@ -1421,12 +1365,12 @@ struct ActionButtonWithShortcut: View {
                 }
             )
             .shadow(
-                color: theme == .cursed ? color.opacity(0.8) : (theme == .windows95 || theme == .macos1996 ? .clear : Color.black.opacity(0.15)),
-                radius: theme == .cursed ? 15 : 3,
-                y: theme == .cursed ? 5 : 1
+                color: theme == .retroDesktop ? .clear : Color.black.opacity(0.15),
+                radius: 3,
+                y: 1
             )
-            .scaleEffect((theme == .windows95 || theme == .macos1996) ? 1.0 : (isHovered || isFocused) ? 1.02 : 1.0)
-            .animation(.easeInOut(duration: theme == .cursed ? 0.5 : 0.15), value: isHovered)
+            .scaleEffect((isHovered || isFocused) ? 1.02 : 1.0)
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
             .animation(.easeInOut(duration: 0.15), value: isFocused)
         }
         .buttonStyle(.plain)
@@ -1439,26 +1383,16 @@ struct ActionButtonWithShortcut: View {
         switch theme {
         case .modern:
             return .system(size: isPrimary ? 16 : 13, weight: .bold, design: .rounded)
-        case .windows95:
-            return .system(size: isPrimary ? 16 : 13, weight: .bold)
-        case .windowsXP:
-            return .system(size: isPrimary ? 17 : 14, weight: .bold, design: .rounded)
-        case .macos1996:
-            return .system(size: isPrimary ? 15 : 12, weight: .bold)
-        case .retro:
+        case .retroDesktop:
             return .system(size: isPrimary ? 14 : 12, weight: .bold, design: .monospaced)
-        case .cursed:
-            return .system(size: isPrimary ? 18 : 14, weight: .black, design: .monospaced)
         }
     }
 
     private var buttonSubtitleFont: Font {
         switch theme {
-        case .retro:
+        case .retroDesktop:
             return .system(size: 9, weight: .bold, design: .monospaced)
-        case .cursed:
-            return .system(size: 9, weight: .heavy)
-        default:
+        case .modern:
             return .system(size: 11, weight: .medium)
         }
     }
@@ -2681,11 +2615,18 @@ struct SearchResultRow: View {
 
 // MARK: - Quick Docket Search (Reference Only)
 
-struct DocketInfo: Identifiable, Hashable {
-    let id = UUID()
+struct DocketInfo: Identifiable, Hashable, Codable {
+    let id: UUID
     let number: String
     let jobName: String
     let fullName: String
+    
+    nonisolated init(id: UUID = UUID(), number: String, jobName: String, fullName: String) {
+        self.id = id
+        self.number = number
+        self.jobName = jobName
+        self.fullName = fullName
+    }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(fullName)
@@ -2700,6 +2641,7 @@ struct QuickDocketSearchView: View {
     @Binding var isPresented: Bool
     let initialText: String
     @ObservedObject var settingsManager: SettingsManager
+    @ObservedObject var cacheManager: AsanaCacheManager
     @StateObject private var metadataManager: DocketMetadataManager
 
     @State private var searchText: String
@@ -2707,12 +2649,15 @@ struct QuickDocketSearchView: View {
     @State private var filteredDockets: [DocketInfo] = []
     @State private var isScanning = false
     @State private var selectedDocket: DocketInfo?
+    @State private var asanaError: String?
     @FocusState private var isSearchFocused: Bool
+    @State private var searchTask: Task<Void, Never>?
 
-    init(isPresented: Binding<Bool>, initialText: String, settingsManager: SettingsManager) {
+    init(isPresented: Binding<Bool>, initialText: String, settingsManager: SettingsManager, cacheManager: AsanaCacheManager) {
         self._isPresented = isPresented
         self.initialText = initialText
         self.settingsManager = settingsManager
+        self.cacheManager = cacheManager
         self._searchText = State(initialValue: initialText)
         self._metadataManager = StateObject(wrappedValue: DocketMetadataManager(settings: settingsManager.currentSettings))
     }
@@ -2728,7 +2673,9 @@ struct QuickDocketSearchView: View {
                     text: $searchText,
                     placeholder: "Search docket numbers or job names...",
                     isEnabled: true,
-                    onSubmit: {},
+                    onSubmit: {
+                        performSearch()
+                    },
                     onTextChange: {
                         performSearch()
                     }
@@ -2748,15 +2695,41 @@ struct QuickDocketSearchView: View {
 
             Divider()
 
+            // MARK: Sync Status Banner (non-blocking)
+            if cacheManager.isSyncing {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    Text("Syncing with Asana...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if let lastSync = cacheManager.lastSyncDate {
+                        Text("Last sync: \(lastSync, style: .relative)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            }
+
             // MARK: Results List
             ZStack {
                 if isScanning {
                     VStack {
                         ProgressView()
                             .scaleEffect(0.8)
+                        if settingsManager.currentSettings.docketSource == .asana {
+                            Text("Searching cache...")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        } else {
                         Text("Scanning server for dockets...")
                             .font(.caption)
                             .foregroundColor(.gray)
+                        }
                     }
                     .padding()
                 } else if allDockets.isEmpty {
@@ -2764,21 +2737,41 @@ struct QuickDocketSearchView: View {
                         Image(systemName: "doc.text.magnifyingglass")
                             .font(.system(size: 48))
                             .foregroundColor(.gray.opacity(0.5))
+                        
+                        if settingsManager.currentSettings.docketSource == .asana {
+                            if searchText.isEmpty {
+                                Text("Type to search Asana...")
+                                    .font(.title3)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.primary)
+                                Text("Search by docket number or job name")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Text("No Results")
+                                    .font(.title3)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.primary)
+                                Text("No dockets found matching '\(searchText)'")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
                         Text("No Docket Data")
                             .font(.title3)
                             .fontWeight(.medium)
                             .foregroundColor(.primary)
-                        if settingsManager.currentSettings.docketSource == .csv {
+                        }
+                        
+                        if let error = asanaError {
                             VStack(spacing: 8) {
-                                Text("Import a CSV file from Settings to populate docket lookup")
+                                Text("Asana Error:")
                                     .font(.caption)
+                                    .foregroundColor(.red)
+                                Text(error)
+                                    .font(.caption2)
                                     .foregroundColor(.secondary)
                                     .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 40)
-
-                                Text("Configure CSV column names in Settings")
-                                    .font(.caption2)
-                                    .foregroundColor(.orange)
                                     .padding(.horizontal, 40)
                             }
                         } else {
@@ -2954,7 +2947,65 @@ struct QuickDocketSearchView: View {
         .onAppear {
             isSearchFocused = true
             metadataManager.reloadMetadata()
+            
+            let settings = settingsManager.currentSettings
+            
+            // Only load dockets on appear if NOT using Asana (Asana uses cache)
+            if settings.docketSource != .asana {
             loadDockets()
+            } else {
+                // For Asana: Load existing cache immediately for instant search
+                let cachedDockets = cacheManager.loadCachedDockets()
+                if !cachedDockets.isEmpty {
+                    allDockets = cachedDockets
+                    filteredDockets = cachedDockets
+                    print("📦 [CACHE] Loaded \(cachedDockets.count) dockets from cache")
+                } else {
+                    print("📦 [CACHE] Cache is empty - waiting for sync...")
+                }
+                
+                // Sync cache in background if needed (stale or missing)
+                if cacheManager.shouldSync() {
+                    print("🔵 [QuickSearch] Cache is stale or missing, syncing with Asana in background...")
+                    Task {
+                        do {
+                            try await cacheManager.syncWithAsana(
+                                workspaceID: settings.asanaWorkspaceID,
+                                projectID: settings.asanaProjectID,
+                                docketField: settings.asanaDocketField,
+                                jobNameField: settings.asanaJobNameField
+                            )
+                            print("🟢 [QuickSearch] Cache sync complete")
+                            
+                            // Update results with fresh cache after sync
+                            await MainActor.run {
+                                let freshDockets = cacheManager.loadCachedDockets()
+                                if !freshDockets.isEmpty {
+                                    allDockets = freshDockets
+                                    // Re-apply current search filter if there's search text
+                                    if !searchText.isEmpty {
+                                        filteredDockets = cacheManager.searchCachedDockets(query: searchText)
+                                    } else {
+                                        filteredDockets = freshDockets
+                                    }
+                                    print("🟢 [QuickSearch] Updated results with fresh cache (\(freshDockets.count) dockets)")
+                                }
+                            }
+                        } catch {
+                            print("🔴 [QuickSearch] Cache sync failed: \(error.localizedDescription)")
+                            await MainActor.run {
+                                asanaError = "Failed to sync with Asana: \(error.localizedDescription)"
+                            }
+                        }
+                    }
+                } else {
+                    print("🟢 [QuickSearch] Cache is fresh, no sync needed")
+                }
+            }
+        }
+        .onDisappear {
+            // Cancel any pending search
+            searchTask?.cancel()
         }
         .onKeyPress(.escape) {
             isPresented = false
@@ -2973,11 +3024,52 @@ struct QuickDocketSearchView: View {
     }
 
     private func loadDockets() {
-        if settingsManager.currentSettings.docketSource == .csv {
-            loadDocketsFromCSV()
-        } else {
-            scanDocketsFromServer()
+        print("🔵 [ContentView] loadDockets() called")
+        var settings = settingsManager.currentSettings
+        print("🔵 [ContentView] Docket source: \(settings.docketSource)")
+        
+        // TEMPORARILY DISABLED FOR ASANA DEBUGGING - Force Asana
+        if settings.docketSource != .asana {
+            print("⚠️ [ContentView] WARNING: Docket source is \(settings.docketSource), forcing to Asana for debugging")
+            settings.docketSource = .asana
+            settingsManager.currentSettings = settings
+            settingsManager.saveCurrentProfile()
         }
+        
+        // TEMPORARILY DISABLED FOR ASANA DEBUGGING - Only Asana is used
+        // Use the selected docket source (mutually exclusive)
+        switch settings.docketSource {
+        case .asana:
+            print("🔵 [ContentView] Using Asana source (cache-based)")
+            // Asana now uses cache - sync happens in onAppear of QuickDocketSearchView
+            // Just load from cache if available
+            let cachedDockets = cacheManager.loadCachedDockets()
+            if !cachedDockets.isEmpty {
+                allDockets = cachedDockets
+                filteredDockets = cachedDockets
+                print("🟢 [ContentView] Loaded \(cachedDockets.count) dockets from cache")
+        } else {
+                print("🔵 [ContentView] Cache is empty, will sync on search view appear")
+            }
+            isScanning = false
+        case .csv:
+            // TEMPORARILY DISABLED
+            asanaError = "CSV integration temporarily disabled for Asana debugging"
+            isScanning = false
+            // loadDocketsFromCSV()
+        case .server:
+            // TEMPORARILY DISABLED
+            asanaError = "Server integration temporarily disabled for Asana debugging"
+            isScanning = false
+            // scanDocketsFromServer()
+        }
+    }
+    
+    private func loadDocketsFromAsana() {
+        // This function is no longer used - Asana now uses cache
+        // Cache sync happens in onAppear of QuickDocketSearchView
+        print("🔵 [Asana] loadDocketsFromAsana() called but Asana now uses cache")
+        isScanning = false
     }
 
     private func loadDocketsFromCSV() {
@@ -3104,11 +3196,13 @@ struct QuickDocketSearchView: View {
 
         // Use full name as unique key to avoid duplicates
         if dict[folderName] == nil {
-            dict[folderName] = DocketInfo(
+            // Create DocketInfo - struct initialization doesn't require MainActor
+            let docket = DocketInfo(
                 number: docketNumber,
                 jobName: cleanedJobName,
                 fullName: folderName
             )
+            dict[folderName] = docket
         }
     }
 
@@ -3168,9 +3262,34 @@ struct QuickDocketSearchView: View {
     }
 
     private func performSearch() {
+        let settings = settingsManager.currentSettings
+        
+        // Cancel previous search task
+        searchTask?.cancel()
+        
         if searchText.isEmpty {
-            filteredDockets = allDockets
+            // Clear results when search is empty
+            allDockets = []
+            filteredDockets = []
+            isScanning = false
+            return
+        }
+        
+        // If using Asana, search on-demand with debouncing
+        if settings.docketSource == .asana {
+            // Debounce: wait 500ms after user stops typing
+            searchTask = Task {
+                try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+                
+                // Check if task was cancelled or search text changed
+                guard !Task.isCancelled else { return }
+                
+                await MainActor.run {
+                    searchAsana(query: searchText)
+                }
+            }
         } else {
+            // For CSV/Server: filter existing results
             let search = searchText.lowercased()
 
             // Check if search starts with a digit (assume docket number search)
@@ -3194,6 +3313,37 @@ struct QuickDocketSearchView: View {
                 }
             }
         }
+    }
+    
+    private func searchAsana(query: String) {
+        // Cancel any previous search
+        searchTask?.cancel()
+        
+        guard !query.isEmpty else {
+            print("🔵 [QuickSearch] Query is empty, clearing results")
+            allDockets = []
+            filteredDockets = []
+            isScanning = false
+            return
+        }
+        
+        // Require at least 3 characters
+        guard query.count >= 3 else {
+            print("🔵 [QuickSearch] Query too short (\(query.count) chars), clearing results")
+            allDockets = []
+            filteredDockets = []
+            isScanning = false
+            return
+        }
+        
+        isScanning = false // No loading needed - cache is instant!
+        asanaError = nil
+        
+        // Search local cache - instant results!
+        let results = cacheManager.searchCachedDockets(query: query)
+        
+        allDockets = results
+        filteredDockets = results
     }
 }
 

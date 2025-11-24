@@ -111,9 +111,14 @@ struct BusinessDayCalculator {
 
 // MARK: - Docket Source
 
-enum DocketSource: String, Codable {
+enum DocketSource: String, Codable, CaseIterable {
+    case asana = "Asana"
     case csv = "CSV File"
     case server = "Server Path"
+    
+    var displayName: String {
+        self.rawValue
+    }
 }
 
 // MARK: - Search Settings
@@ -325,6 +330,14 @@ struct AppSettings: Codable, Equatable {
     var csvMusicTypeColumn: String
     var csvTrackColumn: String
     var csvMediaColumn: String
+    
+    // Asana Integration (only used when docketSource == .asana)
+    var asanaWorkspaceID: String?
+    var asanaProjectID: String?
+    var asanaClientID: String? // Stored in Keychain, not in settings
+    var asanaClientSecret: String? // Stored in Keychain, not in settings
+    var asanaDocketField: String? // Custom field name for docket number (if using custom fields)
+    var asanaJobNameField: String? // Custom field name for job name (if using custom fields)
 
     static var `default`: AppSettings {
         AppSettings(
@@ -366,7 +379,13 @@ struct AppSettings: Codable, Equatable {
             csvAgencyProducerColumn: "Agency Producer / Supervisor",
             csvMusicTypeColumn: "Music Type",
             csvTrackColumn: "Track",
-            csvMediaColumn: "Media"
+            csvMediaColumn: "Media",
+            asanaWorkspaceID: nil,
+            asanaProjectID: nil,
+            asanaClientID: nil,
+            asanaClientSecret: nil,
+            asanaDocketField: nil,
+            asanaJobNameField: nil
         )
     }
 }

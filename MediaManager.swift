@@ -385,7 +385,7 @@ enum MediaLogic {
     nonisolated static func generatePrepSummary(docket: String, jobName: String, prepFolderPath: String, config: AppConfig) async -> String {
         let fm = FileManager.default
         let prepURL = URL(fileURLWithPath: prepFolderPath)
-        var summary = "\(docket) - \(jobName) Prep\n\n"
+        var summary = "\(docket) - \(jobName)\n\n"
 
         guard fm.fileExists(atPath: prepFolderPath) else {
             return summary + "Prep folder not found."
@@ -394,8 +394,13 @@ enum MediaLogic {
         // PICTURE
         let picturePath = prepURL.appendingPathComponent(config.settings.pictureFolderName)
         if fm.fileExists(atPath: picturePath.path) {
+            // Exclude z_unconverted folder and its contents from video count
+            let unconvertedPath = picturePath.appendingPathComponent("z_unconverted")
             let videoFiles = (try? fm.contentsOfDirectory(at: picturePath, includingPropertiesForKeys: nil))?.filter {
-                config.settings.pictureExtensions.contains($0.pathExtension.lowercased())
+                // Exclude directories (like z_unconverted) and files in z_unconverted
+                !$0.hasDirectoryPath && 
+                config.settings.pictureExtensions.contains($0.pathExtension.lowercased()) &&
+                !$0.path.hasPrefix(unconvertedPath.path)
             } ?? []
 
             if !videoFiles.isEmpty {
@@ -962,6 +967,7 @@ class MediaManager: ObservableObject {
                 // Check for video files and ask about conversion
                 let videoExtensions = ["mp4", "mov", "avi", "mxf", "m4v", "prores"]
                 let videoFiles = flats.filter { videoExtensions.contains($0.url.pathExtension.lowercased()) }
+                var willConvertVideos = false
 
                 if !videoFiles.isEmpty {
                     // Store pending conversion info and show prompt
@@ -978,6 +984,9 @@ class MediaManager: ObservableObject {
                             try? await Task.sleep(nanoseconds: 100_000_000)
                         }
                     }
+                    
+                    // Check if user chose to convert (converter will be set up if yes)
+                    willConvertVideos = await MainActor.run { self.pendingPrepConversion != nil }
                 }
 
                 // Initialize progress for all files
@@ -997,6 +1006,13 @@ class MediaManager: ObservableObject {
                     let shouldCancel = await MainActor.run { self.cancelRequested }
                     if shouldCancel {
                         break
+                    }
+
+                    // Skip video files if we're converting them - they'll go to z_unconverted instead
+                    let isVideoFile = videoExtensions.contains(flatFile.pathExtension.lowercased())
+                    if isVideoFile && willConvertVideos {
+                        // Skip copying video files - they'll be handled by convertPrepVideos
+                        continue
                     }
 
                     let cat = self.getCategory(flatFile, config: currentConfig)
@@ -1118,11 +1134,40 @@ class MediaManager: ObservableObject {
     nonisolated private func getNextFolder(base: URL, date: String) -> URL {
         let fm = FileManager.default
         var p = 1
-        if let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) {
-            let matches = items.filter { $0.lastPathComponent.hasSuffix(date) }
-            let nums = matches.compactMap { Int($0.lastPathComponent.split(separator: "_").first ?? "") }
-            if let max = nums.max() { p = max + 1 }
+        
+        // Get all items in the base directory
+        guard let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: [.isDirectoryKey]) else {
+            return base.appendingPathComponent(String(format: "%02d_%@", p, date))
         }
+        
+        // Filter for directories that match the date pattern: NN_date
+        let matchingFolders = items.filter { item in
+            // Only check directories
+            guard let isDirectory = try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory,
+                  isDirectory == true else {
+                return false
+            }
+            let name = item.lastPathComponent
+            // Must end with the date (format: "01_date" or "1_date")
+            return name.hasSuffix("_\(date)")
+        }
+        
+        // Extract numbers from folder names (format: "01_date" -> 1)
+        let nums = matchingFolders.compactMap { item -> Int? in
+            let name = item.lastPathComponent
+            // Extract the number prefix before the underscore
+            if let underscoreIndex = name.firstIndex(of: "_") {
+                let prefix = String(name[..<underscoreIndex])
+                return Int(prefix)
+            }
+            return nil
+        }
+        
+        // Find the highest number and increment
+        if let max = nums.max(), max >= 1 {
+            p = max + 1
+        }
+        
         return base.appendingPathComponent(String(format: "%02d_%@", p, date))
     }
     
@@ -1324,29 +1369,30 @@ class MediaManager: ObservableObject {
 
         statusMessage = "Moving originals to z_unconverted..."
 
-        // Move already-copied files to z_unconverted and prepare for conversion
+        // Copy video files directly to z_unconverted (they should have been skipped during prep)
         for (videoURL, _) in pending.videoFiles {
             let filename = videoURL.lastPathComponent
-            let picturePath = pictureFolder.appendingPathComponent(filename)
             let unconvertedPath = unconvertedFolder.appendingPathComponent(filename)
 
-            // If file was already copied to picture folder during prep, move it to z_unconverted
-            if fm.fileExists(atPath: picturePath.path) {
-                // Copy to z_unconverted (keep original)
-                try? fm.copyItem(at: picturePath, to: unconvertedPath)
-                // Remove from PICTURE (will be replaced with converted version)
-                try? fm.removeItem(at: picturePath)
-            } else {
-                // File wasn't copied yet, so copy source to z_unconverted
+            // Copy source directly to z_unconverted (should not be in picture folder)
+            if !fm.fileExists(atPath: unconvertedPath.path) {
                 try? fm.copyItem(at: videoURL, to: unconvertedPath)
+            }
+            
+            // If file somehow ended up in picture folder, remove it
+            let picturePath = pictureFolder.appendingPathComponent(filename)
+            if fm.fileExists(atPath: picturePath.path) {
+                try? fm.removeItem(at: picturePath)
             }
 
             // Add source file to converter to create ProRes version in PICTURE folder
+            // For prep: Always 1920x1080, ProRes Proxy, 23.976fps, keep original filename
             converter.addFiles(
                 urls: [videoURL],
                 format: .proResProxy,
-                aspectRatio: .sixteenNine, // Always 16:9 for prep
-                outputDirectory: pictureFolder
+                aspectRatio: .sixteenNine, // Always 16:9 (1920x1080) for prep
+                outputDirectory: pictureFolder,
+                keepOriginalName: true // Keep original filename during prep
             )
         }
 

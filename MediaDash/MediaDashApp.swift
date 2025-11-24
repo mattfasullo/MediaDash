@@ -24,6 +24,14 @@ struct MediaDashApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
         .commands {
+            // Override quit command to always work
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit MediaDash") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut("q", modifiers: .command)
+            }
+            
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView()
             }
