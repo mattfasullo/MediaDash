@@ -37,10 +37,10 @@ echo -e "${BLUE}🧹 Cleaning...${NC}"
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
-# Update version
+# Update version (syncs Info.plist and Xcode project)
 echo -e "${BLUE}📝 Updating version...${NC}"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "MediaDash/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "MediaDash/Info.plist" 2>/dev/null || true
+BUILD_NUMBER=$(echo "$VERSION" | awk -F. '{printf "%d", $1*100 + $2*10 + $3}')
+./sync_version.sh "$VERSION" "$BUILD_NUMBER"
 
 # Build
 echo -e "${BLUE}🔨 Building...${NC}"
@@ -67,8 +67,8 @@ cat > "$RELEASE_DIR/export_options.plist" <<EOF
     <string>mac-application</string>
     <key>signingStyle</key>
     <string>automatic</string>
-    <key>signingCertificate</key>
-    <string>Apple Development</string>
+    <key>teamID</key>
+    <string>9XPBY59H89</string>
 </dict>
 </plist>
 EOF

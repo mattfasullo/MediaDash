@@ -61,9 +61,8 @@ echo "This may take a few minutes..."
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
-# Update version in project
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PROJECT/../MediaDash/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$PROJECT/../MediaDash/Info.plist" 2>/dev/null || true
+# Update version in project (syncs Info.plist and Xcode project)
+./sync_version.sh "$VERSION" "$BUILD_NUMBER"
 
 # Build and archive
 echo "Building..."
@@ -97,6 +96,8 @@ cat > "$RELEASE_DIR/export_options.plist" <<EOF
     <string>&lt;none&gt;</string>
     <key>teamID</key>
     <string>9XPBY59H89</string>
+    <key>signingCertificate</key>
+    <string>Developer ID Application</string>
 </dict>
 </plist>
 EOF
