@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct GatekeeperView: View {
     @StateObject private var sessionManager = SessionManager()
@@ -14,6 +15,18 @@ struct GatekeeperView: View {
                     sessionManager: sessionManager,
                     profile: profile
                 )
+            }
+        }
+        .onAppear {
+            // Ensure window is configured when view appears
+            DispatchQueue.main.async {
+                if let window = NSApplication.shared.windows.first {
+                    window.titlebarAppearsTransparent = true
+                    window.titleVisibility = .hidden
+                    window.styleMask.insert(.fullSizeContentView)
+                    window.toolbar = nil
+                    window.invalidateShadow()
+                }
             }
         }
     }

@@ -1,6 +1,39 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Hoverable Icon Button
+
+struct HoverableIconButton: View {
+    let icon: String
+    let action: () -> Void
+    let helpText: String?
+    @State private var isHovered = false
+    
+    init(icon: String, action: @escaping () -> Void, helpText: String? = nil) {
+        self.icon = icon
+        self.action = action
+        self.helpText = helpText
+    }
+    
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .foregroundColor(isHovered ? .primary : .secondary)
+                .scaleEffect(isHovered ? 1.15 : 1.0)
+                .padding(4)
+                .background(isHovered ? Color.gray.opacity(0.15) : Color.clear)
+                .cornerRadius(4)
+        }
+        .buttonStyle(.plain)
+        .help(helpText ?? "")
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
     @Binding var isPresented: Bool
@@ -27,8 +60,15 @@ struct SettingsView: View {
 
                 Spacer()
 
-                Button("Close") {
+                HoverableButton(action: {
                     isPresented = false
+                }) { isHovered in
+                    Text("Close")
+                        .foregroundColor(isHovered ? .primary : .secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(isHovered ? Color.gray.opacity(0.15) : Color.clear)
+                        .cornerRadius(6)
                 }
                 .keyboardShortcut(.cancelAction)
             }
@@ -175,19 +215,13 @@ struct ProfileSection: View {
                 }
                 .menuStyle(BorderedButtonMenuStyle())
 
-                Button(action: { showNewProfileSheet = true }) {
-                    Image(systemName: "plus")
-                }
-                .help("New Profile")
+                HoverableIconButton(icon: "plus", action: { showNewProfileSheet = true }, helpText: "New Profile")
 
                 if settings.profileName != "Default" {
-                    Button(action: {
+                    HoverableIconButton(icon: "trash", action: {
                         profileToDelete = settings.profileName
                         showDeleteAlert = true
-                    }) {
-                        Image(systemName: "trash")
-                    }
-                    .help("Delete Profile")
+                    }, helpText: "Delete Profile")
                 }
             }
 
@@ -230,10 +264,7 @@ struct PathSettingsSection: View {
                     HStack {
                         TextField("Example: /Volumes/Server/GM", text: binding(for: \.serverBasePath))
                             .textFieldStyle(.roundedBorder)
-                        Button(action: { browseFolderFor(\.serverBasePath) }) {
-                            Image(systemName: "folder")
-                        }
-                        .help("Browse for folder")
+                        HoverableIconButton(icon: "folder", action: { browseFolderFor(\.serverBasePath) }, helpText: "Browse for folder")
                     }
                 }
 
@@ -278,11 +309,8 @@ struct PathSettingsSection: View {
                         TextField("Example: /Volumes/Server/SESSIONS", text: binding(for: \.sessionsBasePath))
                             .textFieldStyle(.roundedBorder)
                             .disabled(settings.docketSource != .server)
-                        Button(action: { browseFolderFor(\.sessionsBasePath) }) {
-                            Image(systemName: "folder")
-                        }
-                        .disabled(settings.docketSource != .server)
-                        .help("Browse for folder")
+                        HoverableIconButton(icon: "folder", action: { browseFolderFor(\.sessionsBasePath) }, helpText: "Browse for folder")
+                            .disabled(settings.docketSource != .server)
                     }
                 }
 
@@ -386,7 +414,7 @@ struct PathSettingsSection: View {
             hasUnsavedChanges = true
         }
     }
-    
+
     private func browseForFolderName(_ keyPath: WritableKeyPath<AppSettings, String>, basePath: String) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -516,12 +544,9 @@ struct FolderNamingSection: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     HStack {
-                        TextField("WORK PICTURE", text: binding(for: \.workPictureFolderName))
-                            .textFieldStyle(.roundedBorder)
-                        Button(action: { browseForFolderName(\.workPictureFolderName, basePath: settings.serverBasePath) }) {
-                            Image(systemName: "folder")
-                        }
-                        .help("Browse to select folder")
+                    TextField("WORK PICTURE", text: binding(for: \.workPictureFolderName))
+                        .textFieldStyle(.roundedBorder)
+                        HoverableIconButton(icon: "folder", action: { browseForFolderName(\.workPictureFolderName, basePath: settings.serverBasePath) }, helpText: "Browse to select folder")
                     }
                 }
 
@@ -534,12 +559,9 @@ struct FolderNamingSection: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     HStack {
-                        TextField("SESSION PREP", text: binding(for: \.prepFolderName))
-                            .textFieldStyle(.roundedBorder)
-                        Button(action: { browseForFolderName(\.prepFolderName, basePath: settings.serverBasePath) }) {
-                            Image(systemName: "folder")
-                        }
-                        .help("Browse to select folder")
+                    TextField("SESSION PREP", text: binding(for: \.prepFolderName))
+                        .textFieldStyle(.roundedBorder)
+                        HoverableIconButton(icon: "folder", action: { browseForFolderName(\.prepFolderName, basePath: settings.serverBasePath) }, helpText: "Browse to select folder")
                     }
                 }
 
@@ -1030,16 +1052,8 @@ struct ThemeSelectionSection: View {
         switch theme {
         case .modern:
             return "Clean, professional interface with subtle colors"
-        case .windows95:
-            return "Nostalgic gray interface with beveled buttons"
-        case .windowsXP:
-            return "Blue and green with that classic Fisher-Price look"
-        case .macos1996:
-            return "Platinum appearance with the classic Mac aesthetic"
-        case .retro:
-            return "Classic MS-DOS with cyan text on blue background"
-        case .cursed:
-            return "⚠️ A chaotic assault on good taste and usability"
+        case .retroDesktop:
+            return "Nostalgic retro desktop OS aesthetic with bold colors and window-based interface (Beta)"
         }
     }
 }

@@ -49,13 +49,6 @@ class MediaClip:
     external_path: Optional[str] = None
     is_valid: bool = True
     error_message: Optional[str] = None
-    # Timeline information (for visualization)
-    track_index: int = 0
-    timeline_start: float = 0.0  # Start position in timeline (seconds)
-    timeline_end: float = 0.0    # End position in timeline (seconds)
-    # Name matching validation
-    name_matches_file: Optional[bool] = None  # True if clip name matches filename
-    expected_filename: Optional[str] = None    # What filename should be (for display)
 
 
 @dataclass
@@ -68,14 +61,6 @@ class ValidationReport:
     valid_clips: int
     missing_clip_details: List[MediaClip]
     file_path: str
-    # Timeline information
-    timeline_clips: List[MediaClip] = None  # Clips with timeline positions
-    total_duration: float = 0.0  # Total timeline duration in seconds
-    
-    def __post_init__(self):
-        # Ensure timeline_clips is a list, not None
-        if self.timeline_clips is None:
-            self.timeline_clips = []
 
 
 # ============================================================================
@@ -182,12 +167,9 @@ def _parse_aaf_file(file_path: str) -> List[MediaClip]:
                 pass
             
             if compositions:
-                # Process each composition with timeline information
+                # Process each composition
                 for i, composition in enumerate(compositions):
-                    # Extract timeline information from composition
-                    _extract_timeline_clips_from_composition(composition, clips, processed_sources, file_path, comp_index=i)
-                    
-                    # Also do the standard extraction (fallback)
+                    # Recursively process all segments in the composition
                     _extract_clips_from_segment(composition, clips, processed_sources, file_path, depth=0)
             
             # If still no clips found, try a more aggressive approach
@@ -270,164 +252,6 @@ def _parse_aaf_file(file_path: str) -> List[MediaClip]:
         raise ValueError(f"Error parsing AAF file: {str(e)}")
     
     return clips
-
-
-def _extract_timeline_clips_from_composition(composition, clips: List[MediaClip], processed_sources: Set[str], aaf_file_path: str, comp_index: int = 0):
-    """
-    Extracts clips from AAF composition with timeline positions and track indices.
-    This provides timeline visualization data.
-    """
-    try:
-        # Get edit rate for time conversion
-        edit_rate = 48000.0  # Default to 48kHz
-        try:
-            if hasattr(composition, 'edit_rate'):
-                edit_rate = float(composition.edit_rate)
-        except Exception:
-            pass
-        
-        # Get timeline slots (tracks)
-        if not hasattr(composition, 'slots'):
-            return
-        
-        slots = list(composition.slots) if hasattr(composition.slots, '__iter__') else []
-        track_index = 0
-        timeline_position = 0.0
-        
-        for slot_idx, slot in enumerate(slots):
-            if not hasattr(slot, 'segment') or not slot.segment:
-                continue
-            
-            segment = slot.segment
-            slot_start = 0.0
-            try:
-                if hasattr(slot, 'start'):
-                    slot_start = float(getattr(slot, 'start', 0))
-            except Exception:
-                pass
-            
-            timeline_position = slot_start / edit_rate if edit_rate > 0 else 0.0
-            
-            # Extract clips from this track segment
-            _extract_timeline_from_segment(segment, clips, processed_sources, aaf_file_path, 
-                                         track_index, timeline_position, edit_rate, depth=0)
-            track_index += 1
-    except Exception as e:
-        _debug_print(f"DEBUG: Error extracting timeline from composition: {e}", verbose_only=True)
-
-
-def _extract_timeline_from_segment(segment, clips: List[MediaClip], processed_sources: Set[str], 
-                                   aaf_file_path: str, track_index: int, timeline_position: float, 
-                                   edit_rate: float, depth: int = 0):
-    """
-    Extracts clips from a segment with timeline positions.
-    """
-    MAX_DEPTH = 20
-    if depth > MAX_DEPTH:
-        return
-    
-    try:
-        # Check if this is a SourceClip
-        if hasattr(segment, 'mob') and segment.mob is not None:
-            source_mob = segment.mob
-            source_id = str(getattr(source_mob, 'mob_id', id(source_mob)))
-            
-            if source_id in processed_sources:
-                return
-            
-            # Get clip name
-            clip_name = getattr(segment, 'name', None) or getattr(source_mob, 'name', 'Unnamed Clip')
-            if not clip_name:
-                clip_name = f"Clip_{len(clips) + 1}"
-            
-            # Get segment timing
-            segment_start = 0.0
-            segment_length = 0.0
-            try:
-                if hasattr(segment, 'start'):
-                    segment_start = float(getattr(segment, 'start', 0))
-                if hasattr(segment, 'length'):
-                    segment_length = float(getattr(segment, 'length', 0))
-            except Exception:
-                pass
-            
-            # Convert to seconds
-            clip_start = timeline_position
-            source_start = segment_start / edit_rate if edit_rate > 0 else 0.0
-            clip_length = segment_length / edit_rate if edit_rate > 0 and segment_length > 0 else 0.0
-            clip_end = clip_start + clip_length if clip_length > 0 else clip_start + 1.0  # Default 1 second if no length
-            
-            # Check for external path (same logic as _extract_clips_from_segment)
-            is_embedded = False
-            external_path = None
-            
-            try:
-                if hasattr(source_mob, 'descriptor'):
-                    descriptor = source_mob.descriptor
-                    if hasattr(descriptor, 'locator'):
-                        locator = descriptor.locator
-                        if locator:
-                            if hasattr(locator, 'path'):
-                                external_path = str(locator.path)
-                            elif hasattr(locator, 'url_string'):
-                                url = str(locator.url_string)
-                                if url.startswith('file://'):
-                                    external_path = url[7:]
-                                elif not url.startswith('http'):
-                                    external_path = url
-                    
-                    if hasattr(descriptor, 'essence') or hasattr(descriptor, 'essence_data'):
-                        is_embedded = True
-                
-                if not external_path and not is_embedded:
-                    if hasattr(source_mob, 'essence'):
-                        is_embedded = True
-            except Exception:
-                pass
-            
-            # Resolve relative paths
-            if external_path:
-                if not os.path.isabs(external_path):
-                    aaf_dir = os.path.dirname(os.path.abspath(aaf_file_path))
-                    external_path = os.path.join(aaf_dir, external_path)
-                external_path = os.path.normpath(external_path)
-            
-            # Create clip with timeline information
-            clip = MediaClip(
-                name=clip_name,
-                clip_id=source_id,
-                is_embedded=is_embedded,
-                external_path=external_path,
-                track_index=track_index,
-                timeline_start=clip_start,
-                timeline_end=clip_end
-            )
-            clips.append(clip)
-            processed_sources.add(source_id)
-            
-            # Update timeline position for next clip
-            if clip_length > 0:
-                timeline_position += clip_length
-        
-        # Recursively process components
-        if hasattr(segment, 'components'):
-            comp_list = list(segment.components) if hasattr(segment.components, '__iter__') else []
-            current_pos = timeline_position
-            for component in comp_list:
-                comp_length = 0.0
-                try:
-                    if hasattr(component, 'length'):
-                        comp_length = float(getattr(component, 'length', 0)) / edit_rate if edit_rate > 0 else 0.0
-                except Exception:
-                    pass
-                
-                _extract_timeline_from_segment(component, clips, processed_sources, aaf_file_path,
-                                             track_index, current_pos, edit_rate, depth + 1)
-                
-                if comp_length > 0:
-                    current_pos += comp_length
-    except Exception:
-        pass
 
 
 def _extract_clips_from_segment(segment, clips: List[MediaClip], processed_sources: Set[str], aaf_file_path: str, depth: int = 0):
@@ -944,28 +768,6 @@ def _aggressive_omf_parse(file_handle, base_dir: str, omf_file_path: str) -> Lis
     return clips
 
 
-def _validate_clip_name_match(clip: MediaClip) -> None:
-    """
-    Check if clip name matches the linked filename.
-    Sets name_matches_file and expected_filename on the clip.
-    """
-    if not clip.external_path:
-        clip.name_matches_file = None  # Can't check embedded clips
-        clip.expected_filename = None
-        return
-    
-    # Extract filename without extension
-    actual_filename = os.path.splitext(os.path.basename(clip.external_path))[0]
-    expected_name = clip.name.strip()
-    
-    # Normalize for comparison (case-insensitive, strip spaces)
-    actual_normalized = actual_filename.lower().strip()
-    expected_normalized = expected_name.lower().strip()
-    
-    clip.name_matches_file = (actual_normalized == expected_normalized)
-    clip.expected_filename = expected_name
-
-
 def validate_omf_aaf_media(file_path: str) -> ValidationReport:
     """
     Validates an OMF or AAF file for missing or unlinked audio media.
@@ -1006,13 +808,8 @@ def validate_omf_aaf_media(file_path: str) -> ValidationReport:
     
     # Validate each clip
     missing_clips: List[MediaClip] = []
-    timeline_clips: List[MediaClip] = []
     
     for clip in all_clips:
-        # Validate name matching for non-embedded clips
-        if not clip.is_embedded and clip.external_path:
-            _validate_clip_name_match(clip)
-        
         if clip.is_embedded:
             # Validate embedded media structure
             if not validate_embedded_media(clip):
@@ -1035,21 +832,12 @@ def validate_omf_aaf_media(file_path: str) -> ValidationReport:
                     clip.is_valid = False
                     clip.error_message = f"External path exists but is not a file: {clip.external_path}"
                     missing_clips.append(clip)
-        
-        # Collect clips with timeline information for visualization
-        if clip.timeline_end > clip.timeline_start:
-            timeline_clips.append(clip)
     
     # Count clips by type
     embedded_count = sum(1 for clip in all_clips if clip.is_embedded)
     linked_count = sum(1 for clip in all_clips if not clip.is_embedded)
     valid_count = sum(1 for clip in all_clips if clip.is_valid)
     missing_clips_count = len(missing_clips)
-    
-    # Calculate total timeline duration
-    total_duration = 0.0
-    if timeline_clips:
-        total_duration = max(clip.timeline_end for clip in timeline_clips) if timeline_clips else 0.0
     
     # Create and return validation report
     report = ValidationReport(
@@ -1059,9 +847,7 @@ def validate_omf_aaf_media(file_path: str) -> ValidationReport:
         missing_clips=missing_clips_count,
         valid_clips=valid_count,
         missing_clip_details=missing_clips,
-        file_path=file_path,
-        timeline_clips=timeline_clips if timeline_clips else [],
-        total_duration=total_duration
+        file_path=file_path
     )
     
     return report
@@ -3697,21 +3483,7 @@ if __name__ == "__main__":
         if True:  # Always use normal validation mode now
             # Normal validation mode
             report = validate_omf_aaf_media(file_path)
-            
-            # Output as JSON for Swift to parse
-            output = {
-                "total_clips": report.total_clips,
-                "embedded_clips": report.embedded_clips,
-                "linked_clips": report.linked_clips,
-                "missing_clips": report.missing_clips,
-                "valid_clips": report.valid_clips,
-                "file_path": report.file_path,
-                "total_duration": report.total_duration,
-                "missing_clip_details": [asdict(clip) for clip in report.missing_clip_details],
-                "timeline_clips": [asdict(clip) for clip in report.timeline_clips]
-            }
-            json_output = json.dumps(output, indent=2)
-            print(json_output, flush=True)
+            print(format_report(report))
             
             # Exit with error code if there are missing clips
             if report.missing_clips > 0:

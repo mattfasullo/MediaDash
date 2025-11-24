@@ -304,6 +304,12 @@ struct ContentView: View {
         .sheet(isPresented: $showVideoConverterSheet) {
             VideoConverterView(manager: manager)
         }
+        .sheet(isPresented: $manager.showOMFAAFValidator) {
+            if let fileURL = manager.omfAafFileToValidate,
+               let validator = manager.omfAafValidator {
+                OMFAAFValidatorView(validator: validator, fileURL: fileURL)
+            }
+        }
         .onChange(of: settingsManager.currentSettings) { oldValue, newValue in
             manager.updateConfig(settings: newValue)
             metadataManager.updateSettings(newValue)
@@ -640,29 +646,35 @@ struct ContentView: View {
                     Spacer()
 
                     // Always show Add Files button
-                    Button(action: { manager.pickFiles() }) {
+                    HoverableButton(action: { manager.pickFiles() }) { isHovered in
                         HStack(spacing: 4) {
                             Image(systemName: "plus")
                                 .font(.system(size: 11))
                             Text("Add Files")
                                 .font(.system(size: 12, weight: .medium))
                         }
-                        .foregroundColor(.blue)
+                        .foregroundColor(isHovered ? .blue.opacity(0.8) : .blue)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(isHovered ? Color.blue.opacity(0.1) : Color.clear)
+                        .cornerRadius(6)
                     }
-                    .buttonStyle(.plain)
                     .keyboardShortcut("o", modifiers: .command)
 
                     if !manager.selectedFiles.isEmpty {
-                        Button(action: { manager.clearFiles() }) {
+                        HoverableButton(action: { manager.clearFiles() }) { isHovered in
                             HStack(spacing: 4) {
                                 Image(systemName: "trash")
                                     .font(.system(size: 11))
                                 Text("Clear")
                                     .font(.system(size: 12, weight: .medium))
                             }
-                            .foregroundColor(.red)
+                            .foregroundColor(isHovered ? .red.opacity(0.8) : .red)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(isHovered ? Color.red.opacity(0.1) : Color.clear)
+                            .cornerRadius(6)
                         }
-                        .buttonStyle(.plain)
                         .keyboardShortcut("w", modifiers: .command)
                     }
                 }
@@ -771,6 +783,45 @@ struct ContentView: View {
                                             Text(size)
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    
+                                    // Remove button
+                                    HoverableButton(action: {
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            manager.removeFile(withId: f.id)
+                                        }
+                                    }) { isHovered in
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(isHovered ? .red : (currentTheme == .retroDesktop ? Color(red: 0.502, green: 0.502, blue: 0.502) : .secondary))
+                                            .font(.system(size: 14))
+                                            .scaleEffect(isHovered ? 1.15 : 1.0)
+                                    }
+                                    .help("Remove from staging")
+                                }
+                            }
+                            .contextMenu {
+                                // Remove option
+                                Button("Remove from Staging") {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        manager.removeFile(withId: f.id)
+                                    }
+                                }
+                                
+                                // Show context menu for OMF/AAF files
+                                if !f.isDirectory {
+                                    let ext = f.url.pathExtension.lowercased()
+                                    if ext == "omf" {
+                                        Divider()
+                                        Button("Validate OMF") {
+                                            manager.omfAafFileToValidate = f.url
+                                            manager.showOMFAAFValidator = true
+                                        }
+                                    } else if ext == "aaf" {
+                                        Divider()
+                                        Button("Validate AAF") {
+                                            manager.omfAafFileToValidate = f.url
+                                            manager.showOMFAAFValidator = true
                                         }
                                     }
                                 }
@@ -1182,6 +1233,56 @@ extension Color {
         let a = components.count > 3 ? components[3] : 1.0
 
         return Color(red: r, green: g, blue: b, opacity: a)
+    }
+}
+
+// MARK: - Hoverable Button
+
+struct HoverableButton<Content: View>: View {
+    let action: () -> Void
+    let content: (Bool) -> Content
+    @State private var isHovered = false
+    
+    init(action: @escaping () -> Void, @ViewBuilder content: @escaping (Bool) -> Content) {
+        self.action = action
+        self.content = content
+    }
+    
+    var body: some View {
+        Button(action: action) {
+            content(isHovered)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+    }
+}
+
+// MARK: - Hoverable List Button (for List items)
+
+struct HoverableListButton<Content: View>: View {
+    let action: () -> Void
+    let content: (Bool) -> Content
+    @State private var isHovered = false
+    
+    init(action: @escaping () -> Void, @ViewBuilder content: @escaping (Bool) -> Content) {
+        self.action = action
+        self.content = content
+    }
+    
+    var body: some View {
+        Button(action: action) {
+            content(isHovered)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isHovered = hovering
+            }
+        }
     }
 }
 

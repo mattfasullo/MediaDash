@@ -3,45 +3,50 @@ import SwiftUI
 // MARK: - Timeline View
 
 struct TimelineView: View {
-    let clips: [TimelineClip]
-    let totalDuration: Double
+    let clips: [PlaybackClip]
+    @ObservedObject var playbackManager: OMFPlaybackManager
     @State private var zoomLevel: CGFloat = 1.0
+    @State private var scrollPosition: CGFloat = 0.0
+    
+    // Calculate timeline duration
+    private var timelineDuration: Double {
+        clips.map { $0.timelineEnd }.max() ?? 10.0
+    }
     
     // Group clips by track
-    private var tracks: [[TimelineClip]] {
-        guard !clips.isEmpty else { return [] }
+    private var tracks: [[PlaybackClip]] {
         let maxTrack = clips.map { $0.trackIndex }.max() ?? 0
-        var trackClips: [[TimelineClip]] = Array(repeating: [], count: maxTrack + 1)
+        var trackClips: [[PlaybackClip]] = Array(repeating: [], count: maxTrack + 1)
         for clip in clips {
             trackClips[clip.trackIndex].append(clip)
         }
         // Sort clips in each track by timeline position
+        // Also filter out clips with zero or invalid durations
         return trackClips.map { track in
-            track.sorted { $0.startTime < $1.startTime }
-                .filter { $0.endTime > $0.startTime } // Only show clips with valid duration
+            track.sorted { $0.timelineStart < $1.timelineStart }
+                .filter { $0.timelineEnd > $0.timelineStart } // Only show clips with valid duration
         }
     }
     
     var body: some View {
         VStack(spacing: 0) {
             // Timecode ruler
-            TimelineRulerView(duration: totalDuration, zoomLevel: zoomLevel)
+            TimelineRulerView(duration: timelineDuration, zoomLevel: zoomLevel)
                 .frame(height: 30)
             
             // Tracks
-            ScrollView([.vertical, .horizontal], showsIndicators: true) {
+            ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: 2) {
                     ForEach(Array(tracks.enumerated()), id: \.offset) { trackIndex, trackClips in
                         TrackView(
                             trackIndex: trackIndex,
                             clips: trackClips,
-                            timelineDuration: totalDuration,
+                            timelineDuration: timelineDuration,
                             zoomLevel: zoomLevel
                         )
                         .frame(height: 50)
                     }
                 }
-                .frame(minWidth: max(800, CGFloat(totalDuration) * 10 * zoomLevel))
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
@@ -54,7 +59,7 @@ struct TimelineRulerView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            let pixelsPerSecond = (geometry.size.width / max(CGFloat(duration), 1.0)) * zoomLevel
+            let pixelsPerSecond = (geometry.size.width / CGFloat(duration)) * zoomLevel
             let majorInterval = max(1.0, duration / 10.0) // Show ~10 major ticks
             
             ZStack(alignment: .leading) {
@@ -89,13 +94,13 @@ struct TimelineRulerView: View {
 
 struct TrackView: View {
     let trackIndex: Int
-    let clips: [TimelineClip]
+    let clips: [PlaybackClip]
     let timelineDuration: Double
     let zoomLevel: CGFloat
     
     var body: some View {
         GeometryReader { geometry in
-            let pixelsPerSecond = (geometry.size.width / max(CGFloat(timelineDuration), 1.0)) * zoomLevel
+            let pixelsPerSecond = (geometry.size.width / CGFloat(timelineDuration)) * zoomLevel
             
             ZStack(alignment: .leading) {
                 // Track background
@@ -113,9 +118,9 @@ struct TrackView: View {
                     
                     // Clips on this track
                     ZStack(alignment: .leading) {
-                        ForEach(clips) { clip in
+                        ForEach(clips, id: \.id) { clip in
                             ClipBlockView(clip: clip, pixelsPerSecond: pixelsPerSecond)
-                                .offset(x: CGFloat(clip.startTime) * pixelsPerSecond)
+                                .offset(x: CGFloat(clip.timelineStart) * pixelsPerSecond)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -126,18 +131,17 @@ struct TrackView: View {
 }
 
 struct ClipBlockView: View {
-    let clip: TimelineClip
+    let clip: PlaybackClip
     let pixelsPerSecond: CGFloat
-    @State private var isHovered = false
     
     var body: some View {
-        let duration = clip.endTime - clip.startTime
+        let duration = clip.timelineEnd - clip.timelineStart
         let width = max(20, CGFloat(duration) * pixelsPerSecond)
         
         // Only render if clip has valid duration
         if duration > 0 {
             RoundedRectangle(cornerRadius: 4)
-                .fill(clip.nameMatches ? Color.green.opacity(0.7) : Color.red.opacity(0.7))
+                .fill(Color.blue.opacity(0.7))
                 .frame(width: width, height: 40)
                 .overlay(
                     Text(clip.name)
@@ -146,43 +150,12 @@ struct ClipBlockView: View {
                         .lineLimit(1)
                         .padding(.horizontal, 4)
                 )
-                .overlay(
-                    // Tooltip on hover
-                    Group {
-                        if isHovered {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(clip.name)
-                                    .font(.system(size: 11, weight: .semibold))
-                                if let expected = clip.expectedFilename, !clip.nameMatches {
-                                    Text("Expected: \(expected)")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.red)
-                                }
-                                Text("Track \(clip.trackIndex + 1)")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.secondary)
-                                Text("\(String(format: "%.2f", clip.startTime))s - \(String(format: "%.2f", clip.endTime))s")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(8)
-                            .background(Color.black.opacity(0.9))
-                            .foregroundColor(.white)
-                            .cornerRadius(6)
-                            .shadow(radius: 4)
-                            .offset(y: -50)
-                        }
-                    }
-                    .opacity(isHovered ? 1 : 0)
-                )
-                .onHover { hovering in
-                    isHovered = hovering
-                }
         } else {
             // Show a small marker for clips with no duration
             Circle()
-                .fill(clip.nameMatches ? Color.green.opacity(0.7) : Color.red.opacity(0.7))
+                .fill(Color.blue.opacity(0.7))
                 .frame(width: 8, height: 8)
         }
     }
 }
+

@@ -101,7 +101,6 @@ struct MediaClipResult: Identifiable, Hashable {
          isValid: Bool = true, errorMessage: String? = nil, trackIndex: Int = 0,
          timelineStart: Double = 0.0, timelineEnd: Double = 0.0,
          nameMatchesFile: Bool? = nil, expectedFilename: String? = nil) {
-        self.id = UUID()
         self.name = name
         self.clipId = clipId
         self.isEmbedded = isEmbedded
@@ -117,7 +116,7 @@ struct MediaClipResult: Identifiable, Hashable {
 }
 
 struct TimelineClip: Identifiable {
-    let id = UUID()
+    let id: UUID
     let name: String
     let trackIndex: Int
     let startTime: Double
@@ -161,7 +160,6 @@ struct ValidationReportResult: Identifiable, Equatable {
     init(filePath: String, totalClips: Int, embeddedClips: Int, linkedClips: Int,
          missingClips: Int, validClips: Int, missingClipDetails: [MediaClipResult],
          timelineClips: [TimelineClip] = [], totalDuration: Double = 0.0) {
-        self.id = UUID()
         self.filePath = filePath
         self.totalClips = totalClips
         self.embeddedClips = embeddedClips

@@ -516,43 +516,49 @@ class MediaManager: ObservableObject {
 
     private var cachedSessions: [String] = [] // Legacy - for backward compatibility
     var folderCaches: [SearchFolder: [String]] = [:] // New cache system - internal for validation
-    private var finderScript: NSAppleScript?
     var config: AppConfig // Internal for DocketSearchView access
     private var prepFolderWatcher: DispatchSourceFileSystemObject?
     private var currentPrepFolder: String?
     private var metadataManager: DocketMetadataManager
     var videoConverter: VideoConverterManager?
+    var omfAafValidator: OMFAAFValidatorManager?
+    @Published var showOMFAAFValidator: Bool = false
+    @Published var omfAafFileToValidate: URL?
 
     init(settingsManager: SettingsManager, metadataManager: DocketMetadataManager) {
         self.config = AppConfig(settings: settingsManager.currentSettings)
         self.metadataManager = metadataManager
-        let source = """
-        tell application "Finder"
-            set selectionList to selection
-            set pathList to {}
-            repeat with i in selectionList
-                set end of pathList to POSIX path of (i as alias)
-            end repeat
-            return pathList
-        end tell
-        """
-        self.finderScript = NSAppleScript(source: source)
 
         // Check directory access on startup
         checkAllDirectoryAccess()
 
         refreshDockets()
         buildSessionIndex()
-        startFinderLoop()
 
         // Initialize video converter
         self.videoConverter = VideoConverterManager()
+        
+        // Initialize OMF/AAF validator
+        self.omfAafValidator = OMFAAFValidatorManager()
     }
     
     func updateConfig(settings: AppSettings) {
+        let oldSettings = self.config.settings
         self.config = AppConfig(settings: settings)
-        refreshDockets()
-        buildSessionIndex()
+        
+        // Only refresh dockets and indexes if path-related settings changed
+        // Don't refresh if only theme or other non-path settings changed
+        let pathSettingsChanged = 
+            oldSettings.serverBasePath != settings.serverBasePath ||
+            oldSettings.sessionsBasePath != settings.sessionsBasePath ||
+            oldSettings.yearPrefix != settings.yearPrefix ||
+            oldSettings.workPictureFolderName != settings.workPictureFolderName ||
+            oldSettings.prepFolderName != settings.prepFolderName
+        
+        if pathSettingsChanged {
+            refreshDockets()
+            buildSessionIndex()
+        }
     }
 
     // MARK: - Directory Connection Checking
@@ -747,31 +753,6 @@ class MediaManager: ObservableObject {
         }.value
     }
     
-    func startFinderLoop() {
-        Task {
-            while true {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                if !isProcessing { checkFinder() }
-            }
-        }
-    }
-    
-    func checkFinder() {
-        var error: NSDictionary?
-        if let output = finderScript?.executeAndReturnError(&error) {
-            var newItems: [FileItem] = []
-            let count = output.numberOfItems
-            if count > 0 {
-                for i in 1...count {
-                    if let path = output.atIndex(i)?.stringValue {
-                        newItems.append(FileItem(url: URL(fileURLWithPath: path)))
-                    }
-                }
-            }
-            if newItems != selectedFiles { selectedFiles = newItems }
-        }
-    }
-    
     func pickFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -787,7 +768,28 @@ class MediaManager: ObservableObject {
         }
     }
     
+    func checkForOMFAAFFiles(in urls: [URL]) {
+        let aafOmfExtensions = ["aaf", "omf"]
+        for url in urls {
+            let ext = url.pathExtension.lowercased()
+            if aafOmfExtensions.contains(ext) && !url.hasDirectoryPath {
+                // Found an AAF/OMF file, show validator
+                omfAafFileToValidate = url
+                showOMFAAFValidator = true
+                break // Only show validator for the first AAF/OMF file found
+            }
+        }
+    }
+    
     func clearFiles() { selectedFiles.removeAll() }
+
+    func removeFile(withId id: UUID) {
+        selectedFiles.removeAll { $0.id == id }
+        // Also clean up any progress tracking for this file
+        fileProgress.removeValue(forKey: id)
+        fileCompletionState.removeValue(forKey: id)
+        conversionProgress.removeValue(forKey: id)
+    }
 
     func cancelProcessing() {
         cancelRequested = true
@@ -845,15 +847,15 @@ class MediaManager: ObservableObject {
                 
                 // Check if folder already exists, if not create it
                 if !fm.fileExists(atPath: destFolder.path) {
-                    do {
+                do {
                         try fm.createDirectory(at: destFolder, withIntermediateDirectories: false)
-                    } catch {
-                        await MainActor.run {
+                } catch {
+                    await MainActor.run {
                             self.errorMessage = "Failed to create work picture folder: \(error.localizedDescription)\n\nPath: \(destFolder.path)"
-                            self.showError = true
-                            self.isProcessing = false
-                        }
-                        return
+                        self.showError = true
+                        self.isProcessing = false
+                    }
+                    return
                     }
                 }
 
@@ -885,8 +887,8 @@ class MediaManager: ObservableObject {
                             }
                         }
                     } else {
-                        if !self.copyItem(from: f.url, to: dest) {
-                            failedFiles.append(f.name)
+                    if !self.copyItem(from: f.url, to: dest) {
+                        failedFiles.append(f.name)
                         }
                     }
 
@@ -934,15 +936,15 @@ class MediaManager: ObservableObject {
                 // Check if prep folder already exists, if not create it
                 // If it exists, we'll use the existing folder and skip duplicate files
                 if !fm.fileExists(atPath: root.path) {
-                    do {
+                do {
                         try fm.createDirectory(at: root, withIntermediateDirectories: false)
-                    } catch {
-                        await MainActor.run {
+                } catch {
+                    await MainActor.run {
                             self.errorMessage = "Failed to create prep folder: \(error.localizedDescription)\n\nPath: \(root.path)"
-                            self.showError = true
-                            self.isProcessing = false
-                        }
-                        return
+                        self.showError = true
+                        self.isProcessing = false
+                    }
+                    return
                     }
                 }
 
@@ -1002,10 +1004,10 @@ class MediaManager: ObservableObject {
                     
                     // Create category directory if it doesn't exist
                     if !fm.fileExists(atPath: dir.path) {
-                        do {
+                    do {
                             try fm.createDirectory(at: dir, withIntermediateDirectories: false)
-                        } catch {
-                            print("Error creating category directory \(cat): \(error.localizedDescription)")
+                    } catch {
+                        print("Error creating category directory \(cat): \(error.localizedDescription)")
                             failedFiles.append(flatFile.lastPathComponent)
                             continue
                         }
@@ -1019,7 +1021,7 @@ class MediaManager: ObservableObject {
                         print("Skipping existing file: \(flatFile.lastPathComponent)")
                     } else {
                         if !self.copyItem(from: flatFile, to: destFile) {
-                            failedFiles.append(flatFile.lastPathComponent)
+                        failedFiles.append(flatFile.lastPathComponent)
                         }
                     }
 
