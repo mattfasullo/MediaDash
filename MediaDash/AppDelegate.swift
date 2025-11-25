@@ -131,29 +131,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         print("   New channel: \(channel.displayName)")
         print("   Feed URL: \(channel.feedURL)")
         
-        // Force Sparkle to re-check with the new feed URL by recreating the updater
-        // This ensures it picks up the new channel from UserDefaults
-        guard let oldController = updaterController else {
-            print("⚠️ No updater controller to reset")
-            return
+        // Clear Sparkle's cache to force it to re-fetch the feed
+        let fileManager = FileManager.default
+        let cacheURLs = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
+        
+        if let cacheURL = cacheURLs.first {
+            // Clear global Sparkle cache
+            let sparkleCache = cacheURL.appendingPathComponent("org.sparkle-project.Sparkle")
+            if fileManager.fileExists(atPath: sparkleCache.path) {
+                try? fileManager.removeItem(at: sparkleCache)
+                print("   ✓ Cleared global Sparkle cache")
+            }
+            
+            // Clear app-specific Sparkle cache
+            let bundleID = Bundle.main.bundleIdentifier ?? "mattfasullo.MediaDash"
+            let appSparkleCache = cacheURL.appendingPathComponent(bundleID).appendingPathComponent("org.sparkle-project.Sparkle")
+            if fileManager.fileExists(atPath: appSparkleCache.path) {
+                try? fileManager.removeItem(at: appSparkleCache)
+                print("   ✓ Cleared app Sparkle cache")
+            }
         }
         
-        // Stop the old updater
-        oldController.updater.stop()
+        // Force Sparkle to re-check with the new feed URL by recreating the updater
+        // This ensures it picks up the new channel from UserDefaults
+        let oldController = updaterController
+        updaterController = nil
         
-        // Recreate with the new channel (will read from UserDefaults via delegate)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        // Give Sparkle time to clean up
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             print("   Creating new updater controller...")
             self.updaterController = SPUStandardUpdaterController(
-                startingUpdater: true,
+                startingUpdater: false, // Don't auto-start, we'll check manually
                 updaterDelegate: self,
                 userDriverDelegate: nil
             )
             
+            // Verify the delegate is set
+            if let updater = self.updaterController?.updater {
+                print("   ✓ Updater created, delegate: \(updater.delegate != nil ? "set" : "NOT SET")")
+            }
+            
             // Now check for updates with the new feed URL
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                print("   Checking for updates with new channel...")
-                self.updaterController?.checkForUpdates(nil)
+            // Give it a moment to ensure everything is initialized
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                print("   🔍 Checking for updates with new channel...")
+                if let controller = self.updaterController {
+                    controller.checkForUpdates(nil)
+                } else {
+                    print("   ❌ ERROR: Updater controller is nil!")
+                }
             }
         }
     }
