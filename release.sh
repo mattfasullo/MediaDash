@@ -42,6 +42,9 @@ echo -e "${BLUE}📝 Updating version...${NC}"
 BUILD_NUMBER=$(echo "$VERSION" | awk -F. '{printf "%d", $1*100 + $2*10 + $3}')
 ./sync_version.sh "$VERSION" "$BUILD_NUMBER"
 
+# Store BUILD_NUMBER for use in appcast
+export BUILD_NUMBER
+
 # Build
 echo -e "${BLUE}🔨 Building...${NC}"
 xcodebuild -project "$PROJECT" \
@@ -87,8 +90,34 @@ cd ..
 
 # Sign
 echo -e "${BLUE}🔐 Signing...${NC}"
-SIGNATURE=$(./sign_update "$RELEASE_DIR/$APP_NAME.zip")
+if [ ! -f "./sign_update" ]; then
+    echo -e "${RED}❌ ERROR: sign_update tool not found!${NC}"
+    exit 1
+fi
+
+SIGN_OUTPUT=$(./sign_update "$RELEASE_DIR/$APP_NAME.zip" 2>&1)
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ ERROR: Signing failed!${NC}"
+    echo "$SIGN_OUTPUT"
+    exit 1
+fi
+
+SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
+if [ -z "$SIGNATURE" ]; then
+    echo -e "${RED}❌ ERROR: Failed to extract signature from sign_update output!${NC}"
+    echo "Output was: $SIGN_OUTPUT"
+    exit 1
+fi
+
 FILE_SIZE=$(stat -f%z "$RELEASE_DIR/$APP_NAME.zip")
+if [ -z "$FILE_SIZE" ] || [ "$FILE_SIZE" -eq 0 ]; then
+    echo -e "${RED}❌ ERROR: Invalid file size!${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Signed successfully${NC}"
+echo -e "  Signature: ${SIGNATURE:0:20}..."
+echo -e "  File size: $FILE_SIZE bytes"
 
 # Update appcast
 echo -e "${BLUE}📡 Updating appcast...${NC}"
@@ -103,7 +132,7 @@ NEW_ITEM="        <item>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url=\"https://github.com/mattfasullo/MediaDash/releases/download/v$VERSION/$APP_NAME.zip\"
-                sparkle:version=\"$VERSION\"
+                sparkle:version=\"$BUILD_NUMBER\"
                 sparkle:shortVersionString=\"$VERSION\"
                 sparkle:edSignature=\"$SIGNATURE\"
                 length=\"$FILE_SIZE\"
@@ -112,17 +141,74 @@ NEW_ITEM="        <item>
         </item>"
 
 cp "$APPCAST_FILE" "$APPCAST_FILE.backup"
-awk -v item="$NEW_ITEM" '
-/<language>en<\/language>/ {
-    print;
-    print item;
-    next;
-}
-/<item>/ { skip=1 }
-/<\/item>/ { skip=0; next }
-!skip
-' "$APPCAST_FILE.backup" > "$APPCAST_FILE"
-rm "$APPCAST_FILE.backup"
+
+if command -v python3 &> /dev/null; then
+    python3 <<PYTHON
+import re
+import sys
+
+version = "$VERSION"
+release_notes = """$RELEASE_NOTES""".replace('"""', "'")
+pub_date = "$PUB_DATE"
+signature = "$SIGNATURE"
+file_size = "$FILE_SIZE"
+app_name = "$APP_NAME"
+
+new_item = f"""        <item>
+            <title>Version {version}</title>
+            <description><![CDATA[
+                <p>{release_notes}</p>
+            ]]></description>
+            <pubDate>{pub_date}</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v{version}/{app_name}.zip"
+                sparkle:version="{version}"
+                sparkle:shortVersionString="{version}"
+                sparkle:edSignature="{signature}"
+                length="{file_size}"
+                type="application/octet-stream"
+            />
+        </item>"""
+
+with open("$APPCAST_FILE.backup", "r") as f:
+    content = f.read()
+
+# Find the language tag and insert new item after it
+pattern = r'(<language>en</language>)'
+replacement = r'\1\n' + new_item
+
+content = re.sub(pattern, replacement, content, count=1)
+
+with open("$APPCAST_FILE", "w") as f:
+    f.write(content)
+PYTHON
+else
+    # Fallback: use sed (less reliable for multiline)
+    sed -i '' "/<language>en<\/language>/a\\
+        <item>\\
+            <title>Version $VERSION</title>\\
+            <description><![CDATA[\\
+                <p>$RELEASE_NOTES</p>\\
+            ]]></description>\\
+            <pubDate>$PUB_DATE</pubDate>\\
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>\\
+            <enclosure\\
+                url=\"https://github.com/mattfasullo/MediaDash/releases/download/v$VERSION/$APP_NAME.zip\"\\
+                sparkle:version=\"$VERSION\"\\
+                sparkle:shortVersionString=\"$VERSION\"\\
+                sparkle:edSignature=\"$SIGNATURE\"\\
+                length=\"$FILE_SIZE\"\\
+                type=\"application/octet-stream\"\\
+            />\\
+        </item>
+" "$APPCAST_FILE.backup" 2>/dev/null && mv "$APPCAST_FILE.backup" "$APPCAST_FILE" || {
+        echo "Failed to update appcast. Please update manually."
+        exit 1
+    }
+fi
+
+rm -f "$APPCAST_FILE.backup"
 
 # Commit and push
 echo -e "${BLUE}🚀 Publishing...${NC}"
