@@ -166,10 +166,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
                 userDriverDelegate: nil
             )
             
-            // Verify the delegate is set
-            if let updater = self.updaterController?.updater {
-                print("   ✓ Updater created, delegate: \(updater.delegate != nil ? "set" : "NOT SET")")
-            }
+            print("   ✓ Updater controller created with delegate")
             
             // Now check for updates with the new feed URL
             // Give it a moment to ensure everything is initialized
