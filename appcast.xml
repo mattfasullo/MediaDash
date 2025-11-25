@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>MediaDash Updates</title>
+        <description>Most recent updates to MediaDash</description>
+        <language>en</language>
+                <item>
+            <title>Version 0.3.3</title>
+            <description><![CDATA[
+                <h2>What's New in 0.3.3</h2><ul><li>Update channel switcher - Switch between Production and Dev Builds in Settings. Users can now choose their update channel without needing separate app downloads.</li></ul>
+            ]]></description>
+            <pubDate>Tue, 25 Nov 2025 02:45:16 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.3.3/MediaDash.zip"
+                sparkle:version="33"
+                sparkle:shortVersionString="0.3.3"
+                sparkle:edSignature="AQ890TpqL954is5qBAjoh+0UO6eA/FaRqJ4WBRrDhimZDw6OksR9z7U6KSzVRd1i2pRESd10nXbuRRGmgHomBQ=="
+                length="3067414"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.3.2</title>
+            <description><![CDATA[
+                <h2>What's New in 0.3.2</h2><ul><li>Fixed version synchronization - About window now shows correct version</li><li>All version sources (Info.plist and Xcode project) now stay in sync automatically</li></ul>
+            ]]></description>
+            <pubDate>Mon, 24 Nov 2025 20:41:06 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.3.2/MediaDash.zip"
+                sparkle:version="32"
+                sparkle:shortVersionString="0.3.2"
+                sparkle:edSignature="34bYWmE99u/ZkXWDOpbF/R9pjvTmHgMSW8C9VHeeTf52J+o66hE8VLViptGTR97XYbVLY2MhpwP/+B20sVhZDg=="
+                length="3067586"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.3</title>
+            <description><![CDATA[
+                <h2>What's New in 0.3</h2><ul><li>Added OMF/AAF media checker feature</li><li>Improved Asana integration with OAuth service</li><li>Enhanced UI components and settings</li><li>Bug fixes and performance improvements</li></ul>
+            ]]></description>
+            <pubDate>Mon, 24 Nov 2025 20:24:30 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.3/MediaDash.zip"
+                sparkle:version="30"
+                sparkle:shortVersionString="0.3"
+                sparkle:edSignature="Ucr5DgMhHUfkEU497qAaKNrhcxy7T3s1hieAhgf9hx/rupNNb8krnUjU2ouNjWU/j7vA+2+5aSHmqrsP1nW7DA=="
+                length="3067417"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.2.3</title>
+            <description><![CDATA[
+                <h2>What's New in 0.2.3</h2><ul><li>Fixed video count to exclude z_unconverted folder</li><li>Fixed app hanging/freezing issues with recursion limits and timeouts</li><li>Fixed FFmpeg path detection for Apple Silicon Macs</li><li>Fixed folder numbering in Work Picture filing (properly counts up)</li><li>Removed Finder auto-population feature</li><li>Removed workspace functionality, simplified to single login</li><li>Added automatic settings clearing on app update</li><li>Improved file watcher throttling to prevent excessive updates</li><li>Added timeout protection for video duration detection</li></ul>
+            ]]></description>
+            <pubDate>Sat, 22 Nov 2025 00:40:24 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.2.3/MediaDash.zip"
+                sparkle:version="23"
+                sparkle:shortVersionString="0.2.3"
+                sparkle:edSignature="2PMLRrVY4XTRbVOYk7qkDaraBd4ptW+tzsvwXPvFp9e0LVnDD/1w5/2Xa1gruXoPZdcNSBrQtCq/yP8JhJxZDA=="
+                length="2547388"
+                type="application/octet-stream"
+            />
+        </item>
+    </channel>
+</rss>
