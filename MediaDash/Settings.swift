@@ -143,28 +143,6 @@ enum DefaultQuickSearch: String, Codable {
     case jobInfo = "Job Info"
 }
 
-// MARK: - Update Channel
-
-enum UpdateChannel: String, Codable, CaseIterable, Identifiable {
-    case production = "Production"
-    case development = "Development"
-
-    var id: String { self.rawValue }
-
-    var displayName: String {
-        self.rawValue
-    }
-
-    var feedURL: String {
-        switch self {
-        case .production:
-            return "https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml"
-        case .development:
-            return "https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/appcast-dev.xml"
-        }
-    }
-}
-
 // MARK: - App Theme
 
 enum AppTheme: String, Codable, CaseIterable {
@@ -299,9 +277,6 @@ struct AppSettings: Codable, Equatable {
     // App Theme
     var appTheme: AppTheme
 
-    // Update Channel
-    var updateChannel: UpdateChannel
-
     // Folder Naming
     var workPictureFolderName: String
     var prepFolderName: String
@@ -371,7 +346,6 @@ struct AppSettings: Codable, Equatable {
             sessionsBasePath: "/Volumes/Grayson Assets/SESSIONS",
             docketSource: .csv,
             appTheme: .modern,
-            updateChannel: .production,
             workPictureFolderName: "WORK PICTURE",
             prepFolderName: "SESSION PREP",
             yearPrefix: "GM_",
@@ -432,8 +406,10 @@ class SettingsManager: ObservableObject {
         let profileName = userDefaults.string(forKey: currentProfileKey) ?? "Default"
 
         // Load available profiles
+        var profiles: [String: AppSettings] = [:]
         if let profilesData = userDefaults.data(forKey: profilesKey),
-           let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData) {
+           let decodedProfiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData) {
+            profiles = decodedProfiles
             self.availableProfiles = Array(profiles.keys).sorted()
             self.currentSettings = profiles[profileName] ?? .default
         } else {
@@ -441,6 +417,46 @@ class SettingsManager: ObservableObject {
             self.currentSettings = .default
             self.availableProfiles = ["Default"]
             saveProfile(settings: .default, name: "Default")
+        }
+        
+        // Reset path-related settings to defaults on app update
+        // This ensures paths work consistently across different machines
+        // Must be called after self is fully initialized
+        resetPathsOnUpdateIfNeeded()
+    }
+    
+    /// Resets path-related settings to defaults when app version changes
+    /// This ensures paths work consistently across different machines
+    private func resetPathsOnUpdateIfNeeded() {
+        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        let lastResetVersion = userDefaults.string(forKey: "lastPathResetVersion") ?? "0.0.0"
+        
+        // If version changed, reset path-related settings to defaults
+        if currentVersion != lastResetVersion {
+            print("🔄 App version changed from \(lastResetVersion) to \(currentVersion)")
+            print("   Resetting path-related settings to defaults...")
+            
+            // Load all profiles
+            var profiles = loadAllProfiles()
+            
+            // Reset path-related settings for each profile
+            for (profileName, var profile) in profiles {
+                profile.serverBasePath = AppSettings.default.serverBasePath
+                profile.sessionsBasePath = AppSettings.default.sessionsBasePath
+                profile.workPictureFolderName = AppSettings.default.workPictureFolderName
+                profile.yearPrefix = AppSettings.default.yearPrefix
+                profiles[profileName] = profile
+                print("   ✓ Reset paths for profile: \(profileName)")
+            }
+            
+            // Save updated profiles
+            if let encoded = try? JSONEncoder().encode(profiles) {
+                userDefaults.set(encoded, forKey: profilesKey)
+            }
+            
+            // Store current version so we don't reset again until next update
+            userDefaults.set(currentVersion, forKey: "lastPathResetVersion")
+            print("   ✅ Paths reset to defaults")
         }
     }
 
@@ -501,16 +517,16 @@ class SettingsManager: ObservableObject {
         }
     }
 
+    func resetToDefaults() {
+        currentSettings = .default
+        saveCurrentProfile()
+    }
+    
     private func loadAllProfiles() -> [String: AppSettings] {
         guard let profilesData = userDefaults.data(forKey: profilesKey),
               let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData) else {
             return ["Default": .default]
         }
         return profiles
-    }
-
-    func resetToDefaults() {
-        currentSettings = .default
-        saveCurrentProfile()
     }
 }

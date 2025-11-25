@@ -9,30 +9,18 @@ import Cocoa
 import SwiftUI
 import Sparkle
 
-class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
-    private var updaterController: SPUStandardUpdaterController?
+class AppDelegate: NSObject, NSApplicationDelegate {
+    private var updaterController: SPUStandardUpdaterController!
     private var quitEventMonitor: Any?
 
-    private var currentUpdateChannel: UpdateChannel {
-        if let settingsData = UserDefaults.standard.data(forKey: "savedProfiles"),
-           let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: settingsData),
-           let currentProfileName = UserDefaults.standard.string(forKey: "currentProfile"),
-           let profile = profiles[currentProfileName] {
-            return profile.updateChannel
-        }
-        return .production // Default
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Initialize Sparkle updater with delegate to support channel switching
-        // Delayed initialization to ensure app is ready
-        DispatchQueue.main.async {
-            self.updaterController = SPUStandardUpdaterController(
-                startingUpdater: true,
-                updaterDelegate: self, // Set delegate here
-                userDriverDelegate: nil
-            )
-        }
+        // Initialize Sparkle updater
+        // Each app (MediaDash vs MediaDash-Dev) has its own appcast URL in Info.plist
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
         
         // Set up global CMD+Q handler that works even when sheets/modals are open
         setupGlobalQuitHandler()
@@ -105,80 +93,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         window.invalidateShadow()
     }
 
-    // MARK: - SPUUpdaterDelegate
-    func feedURL(for updater: SPUUpdater) -> URL? {
-        let channel = currentUpdateChannel
-        guard let url = URL(string: channel.feedURL) else {
-            print("❌ Invalid feed URL for channel: \(channel.displayName)")
-            return URL(string: UpdateChannel.production.feedURL) // Fallback to production
-        }
-        print("ℹ️ Sparkle checking feed URL: \(url.absoluteString) (Channel: \(channel.displayName))")
-        print("   Current app version: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown") (build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))")
-        return url
-    }
-
     @IBAction func checkForUpdates(_ sender: Any?) {
-        guard let updater = updaterController else {
-            print("⚠️ Updater not initialized yet")
-            return
-        }
-        updater.checkForUpdates(sender)
-    }
-    
-    func resetUpdaterForChannelChange() {
-        print("🔄 Resetting updater for channel change...")
-        let channel = currentUpdateChannel
-        print("   New channel: \(channel.displayName)")
-        print("   Feed URL: \(channel.feedURL)")
-        
-        // Clear Sparkle's cache to force it to re-fetch the feed
-        let fileManager = FileManager.default
-        let cacheURLs = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
-        
-        if let cacheURL = cacheURLs.first {
-            // Clear global Sparkle cache
-            let sparkleCache = cacheURL.appendingPathComponent("org.sparkle-project.Sparkle")
-            if fileManager.fileExists(atPath: sparkleCache.path) {
-                try? fileManager.removeItem(at: sparkleCache)
-                print("   ✓ Cleared global Sparkle cache")
-            }
-            
-            // Clear app-specific Sparkle cache
-            let bundleID = Bundle.main.bundleIdentifier ?? "mattfasullo.MediaDash"
-            let appSparkleCache = cacheURL.appendingPathComponent(bundleID).appendingPathComponent("org.sparkle-project.Sparkle")
-            if fileManager.fileExists(atPath: appSparkleCache.path) {
-                try? fileManager.removeItem(at: appSparkleCache)
-                print("   ✓ Cleared app Sparkle cache")
-            }
-        }
-        
-        // Force Sparkle to re-check with the new feed URL by recreating the updater
-        // This ensures it picks up the new channel from UserDefaults
-        let oldController = updaterController
-        updaterController = nil
-        
-        // Give Sparkle time to clean up
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            print("   Creating new updater controller...")
-            self.updaterController = SPUStandardUpdaterController(
-                startingUpdater: false, // Don't auto-start, we'll check manually
-                updaterDelegate: self,
-                userDriverDelegate: nil
-            )
-            
-            print("   ✓ Updater controller created with delegate")
-            
-            // Now check for updates with the new feed URL
-            // Give it a moment to ensure everything is initialized
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                print("   🔍 Checking for updates with new channel...")
-                if let controller = self.updaterController {
-                    controller.checkForUpdates(nil)
-                } else {
-                    print("   ❌ ERROR: Updater controller is nil!")
-                }
-            }
-        }
+        updaterController.checkForUpdates(sender)
     }
     
     // Allow CMD+Q to quit even when modals/popups are shown
