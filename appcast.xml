@@ -4,12 +4,12 @@
         <title>MediaDash Updates</title>
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
-                <item>
+                        <item>
             <title>Version 0.3.3</title>
             <description><![CDATA[
-                <h2>What's New in 0.3.3</h2><ul><li>Update channel switcher - Switch between Production and Dev Builds in Settings. Users can now choose their update channel without needing separate app downloads.</li></ul>
+                <h2>What's New in 0.3.3</h2><ul><li>Update channel switcher - Switch between Production and Dev Builds in Settings</li><li>Users can now choose their update channel without needing separate app downloads</li></ul>
             ]]></description>
-            <pubDate>Tue, 25 Nov 2025 02:45:16 +0000</pubDate>
+            <pubDate>Tue, 25 Nov 2025 02:45:36 +0000</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.3.3/MediaDash.zip"
