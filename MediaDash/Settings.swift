@@ -143,6 +143,28 @@ enum DefaultQuickSearch: String, Codable {
     case jobInfo = "Job Info"
 }
 
+// MARK: - Update Channel
+
+enum UpdateChannel: String, Codable, CaseIterable, Identifiable {
+    case production = "Production"
+    case development = "Development"
+
+    var id: String { self.rawValue }
+
+    var displayName: String {
+        self.rawValue
+    }
+
+    var feedURL: String {
+        switch self {
+        case .production:
+            return "https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml"
+        case .development:
+            return "https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/appcast-dev.xml"
+        }
+    }
+}
+
 // MARK: - App Theme
 
 enum AppTheme: String, Codable, CaseIterable {
@@ -277,6 +299,9 @@ struct AppSettings: Codable, Equatable {
     // App Theme
     var appTheme: AppTheme
 
+    // Update Channel
+    var updateChannel: UpdateChannel
+
     // Folder Naming
     var workPictureFolderName: String
     var prepFolderName: String
@@ -346,6 +371,7 @@ struct AppSettings: Codable, Equatable {
             sessionsBasePath: "/Volumes/Grayson Assets/SESSIONS",
             docketSource: .csv,
             appTheme: .modern,
+            updateChannel: .production,
             workPictureFolderName: "WORK PICTURE",
             prepFolderName: "SESSION PREP",
             yearPrefix: "GM_",

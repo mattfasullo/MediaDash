@@ -9,17 +9,30 @@ import Cocoa
 import SwiftUI
 import Sparkle
 
-class AppDelegate: NSObject, NSApplicationDelegate {
-    private var updaterController: SPUStandardUpdaterController!
+class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
+    private var updaterController: SPUStandardUpdaterController?
     private var quitEventMonitor: Any?
 
+    private var currentUpdateChannel: UpdateChannel {
+        if let settingsData = UserDefaults.standard.data(forKey: "savedProfiles"),
+           let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: settingsData),
+           let currentProfileName = UserDefaults.standard.string(forKey: "currentProfile"),
+           let profile = profiles[currentProfileName] {
+            return profile.updateChannel
+        }
+        return .production // Default
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Initialize Sparkle updater
-        updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: nil,
-            userDriverDelegate: nil
-        )
+        // Initialize Sparkle updater with delegate to support channel switching
+        // Delayed initialization to ensure app is ready
+        DispatchQueue.main.async {
+            self.updaterController = SPUStandardUpdaterController(
+                startingUpdater: true,
+                updaterDelegate: self, // Set delegate here
+                userDriverDelegate: nil
+            )
+        }
         
         // Set up global CMD+Q handler that works even when sheets/modals are open
         setupGlobalQuitHandler()
@@ -92,8 +105,57 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.invalidateShadow()
     }
 
+    // MARK: - SPUUpdaterDelegate
+    func feedURL(for updater: SPUUpdater) -> URL? {
+        let channel = currentUpdateChannel
+        guard let url = URL(string: channel.feedURL) else {
+            print("❌ Invalid feed URL for channel: \(channel.displayName)")
+            return URL(string: UpdateChannel.production.feedURL) // Fallback to production
+        }
+        print("ℹ️ Sparkle checking feed URL: \(url.absoluteString) (Channel: \(channel.displayName))")
+        print("   Current app version: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown") (build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))")
+        return url
+    }
+
     @IBAction func checkForUpdates(_ sender: Any?) {
-        updaterController.checkForUpdates(sender)
+        guard let updater = updaterController else {
+            print("⚠️ Updater not initialized yet")
+            return
+        }
+        updater.checkForUpdates(sender)
+    }
+    
+    func resetUpdaterForChannelChange() {
+        print("🔄 Resetting updater for channel change...")
+        let channel = currentUpdateChannel
+        print("   New channel: \(channel.displayName)")
+        print("   Feed URL: \(channel.feedURL)")
+        
+        // Force Sparkle to re-check with the new feed URL by recreating the updater
+        // This ensures it picks up the new channel from UserDefaults
+        guard let oldController = updaterController else {
+            print("⚠️ No updater controller to reset")
+            return
+        }
+        
+        // Stop the old updater
+        oldController.updater.stop()
+        
+        // Recreate with the new channel (will read from UserDefaults via delegate)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            print("   Creating new updater controller...")
+            self.updaterController = SPUStandardUpdaterController(
+                startingUpdater: true,
+                updaterDelegate: self,
+                userDriverDelegate: nil
+            )
+            
+            // Now check for updates with the new feed URL
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                print("   Checking for updates with new channel...")
+                self.updaterController?.checkForUpdates(nil)
+            }
+        }
     }
     
     // Allow CMD+Q to quit even when modals/popups are shown

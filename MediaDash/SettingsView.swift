@@ -279,7 +279,7 @@ struct SettingsView: View {
                         }
 
                         // Advanced Settings
-                        AdvancedSettingsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                        AdvancedSettingsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges, settingsManager: settingsManager)
                     }
                 }
                 .padding(.horizontal, 24)
@@ -1398,6 +1398,7 @@ struct CategoryRow: View {
 struct AdvancedSettingsSection: View {
     @Binding var settings: AppSettings
     @Binding var hasUnsavedChanges: Bool
+    @ObservedObject var settingsManager: SettingsManager
 
     var body: some View {
         SettingsCard {
@@ -1608,7 +1609,50 @@ struct AdvancedSettingsSection: View {
                         }
                         .toggleStyle(.switch)
                     }
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    // Update Channel Selection
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .foregroundColor(.purple)
+                                .font(.system(size: 18))
+                            Text("Update Channel")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        Text("Choose which update channel to receive builds from.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+
+                        Picker("Channel", selection: Binding(
+                            get: { settings.updateChannel },
+                            set: {
+                                settings.updateChannel = $0
+                                hasUnsavedChanges = true
+                                settingsManager.saveProfile(settings: settings, name: settings.profileName) // Save settings immediately
+                                triggerUpdateCheck() // Trigger update check
+                            }
+                        )) {
+                            ForEach(UpdateChannel.allCases, id: \.self) { channel in
+                                Text(channel.displayName).tag(channel)
+                            }
+                        }
+                        .pickerStyle(.radioGroup)
+                        .horizontalRadioGroupLayout()
+                        .labelsHidden()
+                    }
                 }
+            }
+        }
+    }
+
+    private func triggerUpdateCheck() {
+        // Trigger Sparkle to check for updates with the new channel
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
+                appDelegate.resetUpdaterForChannelChange() // Reset and check with new channel
             }
         }
     }
