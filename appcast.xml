@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.5.4</title>
+            <description><![CDATA[
+                <p>Fix Gmail authentication persistence and settings Save button</p>
+            ]]></description>
+            <pubDate>Wed, 26 Nov 2025 21:31:50 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.5.4/MediaDash.zip"
+                sparkle:version="54"
+                sparkle:shortVersionString="0.5.4"
+                sparkle:edSignature="hRAAG2WWXU1huJIaRal6kemgl0sqj0E2jPhtXUXAf9wvOjOf2efalSUsOhgK6hEBtjKP/kadW0Oecn5C7kJ9Ag=="
+                length="3861080"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.5.3</title>
             <description><![CDATA[
                 <p>Settings UI improvements: Uniform integration widgets, moved detailed settings to Advanced Settings</p>
