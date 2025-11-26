@@ -72,6 +72,8 @@ cat > "$RELEASE_DIR/export_options.plist" <<EOF
     <string>automatic</string>
     <key>teamID</key>
     <string>9XPBY59H89</string>
+    <key>signingCertificate</key>
+    <string>Developer ID Application</string>
 </dict>
 </plist>
 EOF
@@ -90,6 +92,23 @@ if [ -f "media_validator.py" ]; then
     echo -e "${GREEN}✓ media_validator.py copied to bundle${NC}"
 else
     echo -e "${RED}❌ WARNING: media_validator.py not found in project root!${NC}"
+fi
+
+# Re-sign with Developer ID (in case copying files broke the signature)
+echo -e "${BLUE}🔐 Re-signing app with Developer ID...${NC}"
+codesign --force --deep --sign "Developer ID Application: Matt Fasullo (9XPBY59H89)" "$RELEASE_DIR/$APP_NAME.app" 2>&1
+if [ $? -ne 0 ]; then
+    echo -e "${YELLOW}⚠️  Warning: Re-signing failed, trying automatic signing...${NC}"
+    codesign --force --deep --sign - "$RELEASE_DIR/$APP_NAME.app" 2>&1 || true
+fi
+
+# Verify signature
+echo -e "${BLUE}🔍 Verifying signature...${NC}"
+codesign -vv --deep --strict "$RELEASE_DIR/$APP_NAME.app" 2>&1
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ App signature verified${NC}"
+else
+    echo -e "${RED}❌ WARNING: Signature verification failed!${NC}"
 fi
 
 # Create ZIP
@@ -226,11 +245,12 @@ git add "$APPCAST_FILE" "MediaDash/Info.plist"
 git commit -m "Release v$VERSION"
 git push
 
-# Create release
+# Create release (as pre-release)
 gh release create "v$VERSION" \
     "$RELEASE_DIR/$APP_NAME.zip" \
     --title "$APP_NAME v$VERSION" \
-    --notes "$RELEASE_NOTES"
+    --notes "$RELEASE_NOTES" \
+    --prerelease
 
 echo ""
 echo -e "${GREEN}✅ Release v$VERSION published!${NC}"
