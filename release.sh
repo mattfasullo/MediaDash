@@ -94,13 +94,13 @@ else
     echo -e "${RED}❌ WARNING: media_validator.py not found in project root!${NC}"
 fi
 
-# Re-sign with Developer ID (in case copying files broke the signature)
-echo -e "${BLUE}🔐 Re-signing app with Developer ID...${NC}"
-codesign --force --deep --sign "Developer ID Application: Matt Fasullo (9XPBY59H89)" "$RELEASE_DIR/$APP_NAME.app" 2>&1
-if [ $? -ne 0 ]; then
-    echo -e "${YELLOW}⚠️  Warning: Re-signing failed, trying automatic signing...${NC}"
-    codesign --force --deep --sign - "$RELEASE_DIR/$APP_NAME.app" 2>&1 || true
-fi
+# Re-sign with available certificate (in case copying files broke the signature)
+echo -e "${BLUE}🔐 Re-signing app...${NC}"
+# Try Developer ID first, fall back to automatic signing
+codesign --force --deep --sign "Developer ID Application: Matt Fasullo (9XPBY59H89)" "$RELEASE_DIR/$APP_NAME.app" 2>&1 || \
+codesign --force --deep --sign - "$RELEASE_DIR/$APP_NAME.app" 2>&1 || {
+    echo -e "${YELLOW}⚠️  Warning: Re-signing failed, app may need manual signing${NC}"
+}
 
 # Verify signature
 echo -e "${BLUE}🔍 Verifying signature...${NC}"
@@ -245,11 +245,29 @@ git add "$APPCAST_FILE" "MediaDash/Info.plist"
 git commit -m "Release v$VERSION"
 git push
 
+# Prepare release notes with Gatekeeper instructions
+GATEKEEPER_NOTES="## ⚠️ Installation Note
+
+This app is not notarized (no Developer ID certificate). macOS may show a security warning.
+
+**To install:**
+1. Download and extract \`MediaDash.zip\`
+2. Run: \`./install_mediadash.sh\` (included in release)
+   - OR manually: \`xattr -d com.apple.quarantine MediaDash.app\`
+3. First launch: Right-click → Open (or System Settings → Privacy & Security → Allow)
+
+**Alternative:** Drag to Applications, then right-click → Open on first launch.
+
+---
+
+$RELEASE_NOTES"
+
 # Create release (as pre-release)
 gh release create "v$VERSION" \
     "$RELEASE_DIR/$APP_NAME.zip" \
+    "install_mediadash.sh" \
     --title "$APP_NAME v$VERSION" \
-    --notes "$RELEASE_NOTES" \
+    --notes "$GATEKEEPER_NOTES" \
     --prerelease
 
 echo ""

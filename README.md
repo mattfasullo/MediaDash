@@ -38,6 +38,25 @@ See [RELEASE_GUIDE.md](RELEASE_GUIDE.md) for detailed instructions.
 - Public key: Embedded in `MediaDash/Info.plist`
 - All updates are cryptographically signed
 
+## 📥 Installation
+
+**For first-time installation from GitHub Releases:**
+
+1. Download `MediaDash.zip` from the [latest release](https://github.com/mattfasullo/MediaDash/releases/latest)
+2. Extract the ZIP file
+3. Run the installation helper:
+   ```bash
+   ./install_mediadash.sh
+   ```
+   Or manually remove the quarantine attribute:
+   ```bash
+   xattr -d com.apple.quarantine MediaDash.app
+   ```
+4. **First launch:** Right-click on `MediaDash.app` → **Open** (macOS will ask for confirmation)
+   - After the first launch, you can open it normally
+
+**Note:** This app is not notarized (no Developer ID certificate), so macOS Gatekeeper requires manual approval on first launch. This is normal and safe.
+
 ## 🛠️ Development
 
 Built with:
