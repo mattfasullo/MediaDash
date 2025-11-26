@@ -177,6 +177,35 @@ enum UpdateChannel: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Browser Preference
+
+enum BrowserPreference: String, Codable, CaseIterable {
+    case chrome = "Google Chrome"
+    case safari = "Safari"
+    case firefox = "Firefox"
+    case edge = "Microsoft Edge"
+    case defaultBrowser = "Default Browser"
+    
+    var displayName: String {
+        self.rawValue
+    }
+    
+    var bundleIdentifier: String? {
+        switch self {
+        case .chrome:
+            return "com.google.Chrome"
+        case .safari:
+            return "com.apple.Safari"
+        case .firefox:
+            return "org.mozilla.firefox"
+        case .edge:
+            return "com.microsoft.edgemac"
+        case .defaultBrowser:
+            return nil // Use system default
+        }
+    }
+}
+
 // MARK: - App Theme
 
 enum AppTheme: String, Codable, CaseIterable {
@@ -380,6 +409,22 @@ struct AppSettings: Codable, Equatable {
     var sharedCacheURL: String?
     var useSharedCache: Bool
 
+    // Gmail Integration
+    var gmailEnabled: Bool
+    var gmailQuery: String // Gmail search query (e.g., "subject:New Docket")
+    var gmailPollInterval: TimeInterval // Polling interval in seconds (default: 300 = 5 minutes)
+    var docketParsingPatterns: [String] // Regex patterns for extracting docket info
+    
+    // Simian Integration (via Zapier webhook)
+    var simianEnabled: Bool
+    var simianWebhookURL: String? // Zapier webhook URL for creating Simian projects (get from Zapier Zap settings)
+    
+    // Notification Window Settings
+    var notificationWindowLocked: Bool // Whether notification window follows main window
+    
+    // Browser Preference
+    var defaultBrowser: BrowserPreference // Default browser for opening email links
+
     static var `default`: AppSettings {
         AppSettings(
             profileName: "Default",
@@ -429,7 +474,15 @@ struct AppSettings: Codable, Equatable {
             asanaDocketField: nil,
             asanaJobNameField: nil,
             sharedCacheURL: "/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache",
-            useSharedCache: true
+            useSharedCache: true,
+            gmailEnabled: false,
+            gmailQuery: "label:\"New Docket\"",
+            gmailPollInterval: 300, // 5 minutes
+            docketParsingPatterns: [],
+            simianEnabled: false,
+            simianWebhookURL: nil,
+            notificationWindowLocked: true, // Default to locked (follows main window)
+            defaultBrowser: .chrome // Default to Chrome
         )
     }
 }

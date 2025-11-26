@@ -61,7 +61,7 @@ struct NoSelectTextField: NSViewRepresentable {
             self.parent = parent
         }
 
-        func controlTextDidChange(_ obj: Notification) {
+        func controlTextDidChange(_ obj: Foundation.Notification) {
             if let textField = obj.object as? NSTextField {
                 parent.text = textField.stringValue
                 parent.onTextChange()

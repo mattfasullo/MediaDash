@@ -41,6 +41,8 @@ struct AuthenticatedRootView: View {
     @StateObject private var settingsManager: SettingsManager
     @StateObject private var metadataManager: DocketMetadataManager
     @StateObject private var manager: MediaManager
+    @StateObject private var emailScanningService: EmailScanningService
+    @StateObject private var notificationCenter = NotificationCenter()
 
     init(sessionManager: SessionManager, profile: WorkspaceProfile) {
         self.sessionManager = sessionManager
@@ -54,6 +56,19 @@ struct AuthenticatedRootView: View {
         _settingsManager = StateObject(wrappedValue: settings)
         _metadataManager = StateObject(wrappedValue: metadata)
         _manager = StateObject(wrappedValue: mediaManager)
+        
+        // Initialize notification center
+        let notificationCenter = NotificationCenter()
+        _notificationCenter = StateObject(wrappedValue: notificationCenter)
+        
+        // Initialize email scanning service
+        let gmailService = GmailService()
+        let parser = EmailDocketParser()
+        let emailService = EmailScanningService(gmailService: gmailService, parser: parser)
+        emailService.mediaManager = mediaManager
+        emailService.settingsManager = settings
+        emailService.notificationCenter = notificationCenter
+        _emailScanningService = StateObject(wrappedValue: emailService)
     }
 
     var body: some View {
@@ -62,13 +77,42 @@ struct AuthenticatedRootView: View {
             .environmentObject(metadataManager)
             .environmentObject(manager)
             .environmentObject(sessionManager)
+            .environmentObject(emailScanningService)
+            .environmentObject(notificationCenter)
             .onAppear {
                 // Sync settings manager with profile settings
                 settingsManager.currentSettings = profile.settings
+                
+                // Update email scanning service references
+                emailScanningService.mediaManager = manager
+                emailScanningService.settingsManager = settingsManager
+                
+                // Start email scanning if enabled and authenticated
+                if settingsManager.currentSettings.gmailEnabled {
+                    if let token = KeychainService.retrieve(key: "gmail_access_token"), !token.isEmpty {
+                        emailScanningService.gmailService.setAccessToken(token)
+                        emailScanningService.startScanning()
+                    }
+                }
             }
             .onChange(of: settingsManager.currentSettings) { _, newSettings in
                 // Update the profile when settings change
                 sessionManager.updateProfile(settings: newSettings)
+                
+                // Update email scanning service settings
+                emailScanningService.settingsManager = settingsManager
+                
+                // Start/stop scanning based on settings
+                if newSettings.gmailEnabled {
+                    if let token = KeychainService.retrieve(key: "gmail_access_token"), !token.isEmpty {
+                        emailScanningService.gmailService.setAccessToken(token)
+                        if !emailScanningService.isEnabled {
+                            emailScanningService.startScanning()
+                        }
+                    }
+                } else {
+                    emailScanningService.stopScanning()
+                }
             }
     }
 }

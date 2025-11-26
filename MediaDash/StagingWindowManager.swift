@@ -46,8 +46,8 @@ class StagingWindowManager: ObservableObject {
     
     private func setupWindowMonitoring() {
         // Monitor when main window moves
-        NotificationCenter.default.publisher(for: NSWindow.didMoveNotification)
-            .sink { [weak self] notification in
+        Foundation.NotificationCenter.default.publisher(for: NSWindow.didMoveNotification)
+            .sink { [weak self] (notification: Foundation.Notification) in
                 if let window = notification.object as? NSWindow,
                    window == self?.mainWindow {
                     self?.updateStagingWindowPosition()
@@ -56,8 +56,8 @@ class StagingWindowManager: ObservableObject {
             .store(in: &cancellables)
         
         // Monitor when main window resizes
-        NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)
-            .sink { [weak self] notification in
+        Foundation.NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)
+            .sink { [weak self] (notification: Foundation.Notification) in
                 if let window = notification.object as? NSWindow,
                    window == self?.mainWindow {
                     self?.updateStagingWindowPosition()

@@ -55,8 +55,8 @@ struct MediaDashApp: App {
         window.contentView?.wantsLayer = true
         // Remove any title bar buttons if needed (but keep them for functionality)
         window.standardWindowButton(.closeButton)?.isHidden = false
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
-        window.standardWindowButton(.zoomButton)?.isHidden = false
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
         // Force window to update
         window.invalidateShadow()
         // Set content layout rect to extend to top

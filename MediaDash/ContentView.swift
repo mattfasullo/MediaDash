@@ -25,7 +25,10 @@ struct ContentView: View {
     @State private var hoverInfo: String = "Ready."
     @State private var initialSearchText = ""
     @State private var isStagingAreaVisible = true
+    @State private var showNotificationCenter = false
     @FocusState private var mainViewFocused: Bool
+    @EnvironmentObject var notificationCenter: NotificationCenter
+    @EnvironmentObject var emailScanningService: EmailScanningService
 
     // Task handle for hourly cache sync
     @State private var hourlySyncTask: Task<Void, Never>?
@@ -155,42 +158,93 @@ struct ContentView: View {
                 autoSyncAsanaCache: autoSyncAsanaCache,
                 hourlySyncTask: $hourlySyncTask
             ))
+            // Notification popup is now handled by NotificationPopupWindowManager
+            .onChange(of: showNotificationCenter) { oldValue, newValue in
+                if newValue {
+                    // Always show as separate window (locked or unlocked)
+                    // Load lock state from settings
+                    let isLocked = settingsManager.currentSettings.notificationWindowLocked
+                    let content = AnyView(
+                        NotificationCenterView(
+                            notificationCenter: notificationCenter,
+                            emailScanningService: emailScanningService,
+                            mediaManager: manager,
+                            settingsManager: settingsManager,
+                            isExpanded: $showNotificationCenter
+                        )
+                    )
+                    NotificationWindowManager.shared.showNotificationWindow(content: content, isLocked: isLocked)
+                } else {
+                    // Hide window
+                    NotificationWindowManager.shared.hideNotificationWindow()
+                }
+            }
+            .onChange(of: settingsManager.currentSettings.notificationWindowLocked) { oldValue, newValue in
+                // When lock state changes, update the existing window
+                if showNotificationCenter && NotificationWindowManager.shared.isVisible {
+                    NotificationWindowManager.shared.setLocked(newValue)
+                }
+            }
+            .background(
+                Button(action: {
+                    showNotificationCenter.toggle()
+                }) {
+                    EmptyView()
+                }
+                .keyboardShortcut("`", modifiers: .command)
+                .hidden()
+            )
+            // Popup notifications disabled to prevent UI blocking
+            // .onChange(of: notificationCenter.notifications) { oldValue, newValue in
+            //     // Show popup when new notification arrives
+            //     if let latestNotification = newValue.first,
+            //        latestNotification.status == .pending,
+            //        !oldValue.contains(where: { $0.id == latestNotification.id }) {
+            //         // Show popup as separate window
+            //         NotificationPopupWindowManager.shared.showPopup(notification: latestNotification)
+            //     }
+            // }
     }
     
     private var mainContentView: some View {
-        HStack(spacing: 0) {
-            SidebarView(
-                focusedButton: $focusedButton,
-                mainViewFocused: $mainViewFocused,
-                isKeyboardMode: $isKeyboardMode,
-                isCommandKeyHeld: $isCommandKeyHeld,
-                hoverInfo: $hoverInfo,
-                isStagingAreaVisible: $isStagingAreaVisible,
-                showSearchSheet: $showSearchSheet,
-                showQuickSearchSheet: $showQuickSearchSheet,
-                showSettingsSheet: $showSettingsSheet,
-                showVideoConverterSheet: $showVideoConverterSheet,
-                logoClickCount: $logoClickCount,
-                wpDate: wpDate,
-                prepDate: prepDate,
-                dateFormatter: dateFormatter,
-                attempt: attempt,
-                cycleTheme: cycleTheme
-            )
-            
-            if isStagingAreaVisible {
-                StagingAreaView(
-                    cacheManager: cacheManager,
-                    isStagingHovered: $isStagingHovered,
-                    isStagingPressed: $isStagingPressed
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                SidebarView(
+                    focusedButton: $focusedButton,
+                    mainViewFocused: $mainViewFocused,
+                    isKeyboardMode: $isKeyboardMode,
+                    isCommandKeyHeld: $isCommandKeyHeld,
+                    hoverInfo: $hoverInfo,
+                    isStagingAreaVisible: $isStagingAreaVisible,
+                    showSearchSheet: $showSearchSheet,
+                    showQuickSearchSheet: $showQuickSearchSheet,
+                    showSettingsSheet: $showSettingsSheet,
+                    showVideoConverterSheet: $showVideoConverterSheet,
+                    logoClickCount: $logoClickCount,
+                    notificationCenter: notificationCenter,
+                    showNotificationCenter: $showNotificationCenter,
+                    wpDate: wpDate,
+                    prepDate: prepDate,
+                    dateFormatter: dateFormatter,
+                    attempt: attempt,
+                    cycleTheme: cycleTheme
                 )
-                .environmentObject(manager)
+                
+                if isStagingAreaVisible {
+                    StagingAreaView(
+                        cacheManager: cacheManager,
+                        isStagingHovered: $isStagingHovered,
+                        isStagingPressed: $isStagingPressed
+                    )
+                    .environmentObject(manager)
+                }
             }
+            .frame(width: isStagingAreaVisible ? 650 : 300, height: 550)
+            .focusable()
+            .focused($mainViewFocused)
+            .focusEffectDisabled()
+            
         }
-        .frame(width: isStagingAreaVisible ? 650 : 300, height: 550)
-        .focusable()
-        .focused($mainViewFocused)
-        .focusEffectDisabled()
     }
     
     // MARK: - Asana Auto-Sync
@@ -3061,6 +3115,11 @@ struct KeyboardHandlersModifier: ViewModifier {
                     return .ignored
                 }
 
+                // Don't trigger quick search if CMD is held (for keyboard shortcuts)
+                if press.modifiers.contains(.command) {
+                    return .ignored
+                }
+
                 if press.characters.count == 1 {
                     let char = press.characters.first!
                     if char.isLetter || char.isNumber {
@@ -3286,6 +3345,150 @@ struct ContentViewLifecycleModifier: ViewModifier {
                 hourlySyncTask?.cancel()
                 hourlySyncTask = nil
             }
+    }
+}
+
+// MARK: - Notification Tab Button
+
+struct NotificationTabButton: View {
+    @ObservedObject var notificationCenter: NotificationCenter
+    @Binding var showNotificationCenter: Bool
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: {
+            showNotificationCenter.toggle()
+        }) {
+            HStack(spacing: 6) {
+                Spacer()
+                
+                Image(systemName: "bell")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                
+                Text("Notifications")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.primary)
+                
+                if notificationCenter.unreadCount > 0 {
+                    Text("\(notificationCenter.unreadCount)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Color.red)
+                        .clipShape(Capsule())
+                }
+                
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.accentColor.opacity(0.1))
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Notifications (\(notificationCenter.unreadCount))")
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .scaleEffect(isHovered ? 1.02 : 1.0)
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+    }
+}
+
+// MARK: - Email Refresh Button
+
+struct EmailRefreshButton: View {
+    @EnvironmentObject var emailScanningService: EmailScanningService
+    @State private var isHovered = false
+    @State private var isRefreshing = false
+    
+    var body: some View {
+        Button(action: {
+            guard !isRefreshing else { return }
+            isRefreshing = true
+            Task {
+                // Use scanUnreadEmails with forceRescan to rescan even if notifications exist
+                await emailScanningService.scanUnreadEmails(forceRescan: true)
+                await MainActor.run {
+                    isRefreshing = false
+                }
+            }
+        }) {
+            Image(systemName: isRefreshing ? "arrow.clockwise" : "arrow.clockwise")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
+                )
+                .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+        }
+        .buttonStyle(.plain)
+        .help("Refresh emails")
+        .disabled(isRefreshing || emailScanningService.isScanning)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+}
+
+// MARK: - Workspace Menu Button
+
+struct WorkspaceMenuButton: View {
+    let profile: WorkspaceProfile
+    @ObservedObject var sessionManager: SessionManager
+    @State private var isHovered = false
+    
+    var body: some View {
+        Menu {
+            Button("Change Workspace...") {
+                // TODO: Implement workspace switching
+                sessionManager.logout()
+            }
+            
+            Divider()
+            
+            Button(role: .destructive) {
+                sessionManager.logout()
+            } label: {
+                Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: profile.name == "Grayson Music" ? "cloud.fill" : "desktopcomputer")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+
+                Text(profile.name)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+        }
     }
 }
 

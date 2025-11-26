@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var emailScanningService: EmailScanningService
     var focusedButton: FocusState<ActionButtonFocus?>.Binding
     var mainViewFocused: FocusState<Bool>.Binding
     @Binding var isKeyboardMode: Bool
@@ -14,6 +15,8 @@ struct SidebarView: View {
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
     @Binding var logoClickCount: Int
+    var notificationCenter: NotificationCenter?
+    @Binding var showNotificationCenter: Bool
     
     let wpDate: Date
     let prepDate: Date
@@ -47,24 +50,13 @@ struct SidebarView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 4)
 
-                // Workspace Name Display
-                if case .loggedIn(let profile) = sessionManager.authenticationState {
-                    HStack(spacing: 6) {
-                        Image(systemName: profile.name == "Grayson Music" ? "cloud.fill" : "desktopcomputer")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-
-                        Text(profile.name)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.primary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.accentColor.opacity(0.1))
+                // Notification Tab (where workspace label used to be)
+                if let notificationCenter = notificationCenter {
+                    NotificationTabButton(
+                        notificationCenter: notificationCenter,
+                        showNotificationCenter: $showNotificationCenter
                     )
+                    .frame(maxWidth: .infinity)
                 }
 
                 // MARK: Action Buttons Grid
@@ -147,29 +139,9 @@ struct SidebarView: View {
                     Divider()
                         .padding(.vertical, 4)
 
-                    // Log Out Button
-                    HoverableButton(action: {
-                        sessionManager.logout()
-                    }) { isHovered in
-                        HStack(spacing: 10) {
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                                .font(.system(size: 14))
-                                .foregroundColor(.red)
-                                .frame(width: 18)
-
-                            Text("Log Out")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.red)
-
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(isHovered ? Color.red.opacity(0.2) : Color.red.opacity(0.1))
-                        )
+                    // Workspace Button (where log out button was)
+                    if case .loggedIn(let profile) = sessionManager.authenticationState {
+                        WorkspaceMenuButton(profile: profile, sessionManager: sessionManager)
                     }
                 }
                 .padding(.bottom, 12)

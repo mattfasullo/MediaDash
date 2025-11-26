@@ -33,7 +33,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return .production // Default for production builds
     }
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_ aNotification: Foundation.Notification) {
         // Initialize Sparkle updater
         // Each app (MediaDash vs MediaDash-Dev) has its own appcast URL in Info.plist
         updaterController = SPUStandardUpdaterController(
@@ -53,7 +53,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Configure windows when they become key
-        NotificationCenter.default.addObserver(
+        Foundation.NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
             object: nil,
             queue: .main
@@ -64,7 +64,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Configure windows when they become main
-        NotificationCenter.default.addObserver(
+        Foundation.NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeMainNotification,
             object: nil,
             queue: .main
@@ -90,7 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
-    func applicationWillTerminate(_ notification: Notification) {
+    func applicationWillTerminate(_ aNotification: Foundation.Notification) {
         // Clean up event monitor
         if let monitor = quitEventMonitor {
             NSEvent.removeMonitor(monitor)
@@ -105,10 +105,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView?.wantsLayer = true
         // Set content border thickness to 0 to remove any grey bar
         window.setContentBorderThickness(0, for: .minY)
-        // Keep window buttons visible for functionality
+        // Keep only close button visible (no minimize or zoom)
         window.standardWindowButton(.closeButton)?.isHidden = false
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
-        window.standardWindowButton(.zoomButton)?.isHidden = false
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
         // Force window update
         window.invalidateShadow()
     }

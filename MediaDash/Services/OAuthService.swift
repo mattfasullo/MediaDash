@@ -153,6 +153,191 @@ class OAuthService: ObservableObject {
     func clearToken(for service: String) {
         KeychainService.delete(key: "\(service)_access_token")
     }
+    
+    // MARK: - Convenience Methods (using hardcoded credentials)
+    
+    /// Start OAuth2 flow for Asana using hardcoded credentials from OAuthConfig
+    func authenticateAsana(useOutOfBand: Bool = false) async throws -> OAuthToken {
+        guard OAuthConfig.isAsanaConfigured else {
+            throw OAuthError.serverError("Asana OAuth credentials not configured. Please update OAuthConfig.swift with your credentials.")
+        }
+        return try await authenticateAsana(
+            clientId: OAuthConfig.asanaClientID,
+            clientSecret: OAuthConfig.asanaClientSecret,
+            useOutOfBand: useOutOfBand
+        )
+    }
+    
+    /// Exchange authorization code for access token (for manual code entry) using hardcoded credentials
+    func exchangeCodeForTokenManually(code: String) async throws -> OAuthToken {
+        guard OAuthConfig.isAsanaConfigured else {
+            throw OAuthError.serverError("Asana OAuth credentials not configured. Please update OAuthConfig.swift with your credentials.")
+        }
+        return try await exchangeCodeForTokenManually(
+            code: code,
+            clientId: OAuthConfig.asanaClientID,
+            clientSecret: OAuthConfig.asanaClientSecret
+        )
+    }
+    
+    // MARK: - Gmail OAuth
+    
+    /// Start OAuth2 flow for Gmail with local server callback
+    func authenticateGmail(clientId: String, clientSecret: String, useOutOfBand: Bool = false) async throws -> OAuthToken {
+        isAuthenticating = true
+        authenticationError = nil
+        
+        defer {
+            isAuthenticating = false
+        }
+        
+        // Generate state for CSRF protection
+        let state = UUID().uuidString
+        self.authState = state
+        
+        // Gmail OAuth scopes
+        let scopes = [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.modify"
+        ]
+        let scopeString = scopes.joined(separator: " ")
+        
+        // Use out-of-band flow for native apps, or localhost for web apps
+        let redirectURI = useOutOfBand ? "urn:ietf:wg:oauth:2.0:oob" : "http://localhost:8081/callback"
+        
+        // Build authorization URL for Google OAuth
+        var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
+        let queryItems = [
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "scope", value: scopeString),
+            URLQueryItem(name: "access_type", value: "offline"),
+            URLQueryItem(name: "prompt", value: "consent"),
+            URLQueryItem(name: "state", value: state)
+        ]
+        
+        components.queryItems = queryItems
+        
+        guard let authURL = components.url else {
+            throw OAuthError.invalidURL
+        }
+        
+        if useOutOfBand {
+            // Out-of-band flow: user will see code in browser and paste it
+            throw OAuthError.manualCodeRequired(state: state, authURL: authURL)
+        } else {
+            // Local server flow - use port 8081 for Gmail to avoid conflict with Asana (8080)
+            let server = LocalOAuthServer(port: 8081)
+            self.localServer = server
+            
+            // Start listening for callback
+            let authCode = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+                self.authContinuation = continuation
+                
+                server.start { [weak self] code, receivedState in
+                    guard let self = self else { return }
+                    
+                    // Verify state matches
+                    guard receivedState == self.authState else {
+                        continuation.resume(throwing: OAuthError.invalidState)
+                        return
+                    }
+                    
+                    continuation.resume(returning: code)
+                }
+                
+                // Open browser for authentication after server is ready
+                NSWorkspace.shared.open(authURL)
+            }
+            
+            // Wait for callback (server will call continuation when callback is received)
+            let code = authCode
+            
+            // Stop the server
+            server.stop()
+            self.localServer = nil
+            self.authContinuation = nil
+            
+            // Exchange code for token
+            let token = try await exchangeCodeForGmailToken(
+                code: code,
+                clientId: clientId,
+                clientSecret: clientSecret,
+                redirectURI: redirectURI
+            )
+            
+            return token
+        }
+    }
+    
+    /// Exchange authorization code for access token (for manual code entry)
+    func exchangeCodeForGmailTokenManually(code: String, clientId: String, clientSecret: String) async throws -> OAuthToken {
+        return try await exchangeCodeForGmailToken(
+            code: code,
+            clientId: clientId,
+            clientSecret: clientSecret,
+            redirectURI: "urn:ietf:wg:oauth:2.0:oob"
+        )
+    }
+    
+    /// Exchange authorization code for access token (Gmail)
+    func exchangeCodeForGmailToken(code: String, clientId: String, clientSecret: String, redirectURI: String) async throws -> OAuthToken {
+        let url = URL(string: "https://oauth2.googleapis.com/token")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let body = [
+            "grant_type": "authorization_code",
+            "client_id": clientId,
+            "client_secret": clientSecret,
+            "redirect_uri": redirectURI,
+            "code": code
+        ]
+        
+        request.httpBody = body.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OAuthError.tokenExchangeFailed
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw OAuthError.serverError("HTTP \(httpResponse.statusCode): \(errorMessage)")
+        }
+        
+        let tokenResponse = try JSONDecoder().decode(GmailTokenResponse.self, from: data)
+        return OAuthToken(accessToken: tokenResponse.access_token, refreshToken: tokenResponse.refresh_token)
+    }
+    
+    /// Start OAuth2 flow for Gmail using hardcoded credentials from OAuthConfig
+    func authenticateGmail(useOutOfBand: Bool = false) async throws -> OAuthToken {
+        guard OAuthConfig.isGmailConfigured else {
+            throw OAuthError.serverError("Gmail OAuth credentials not configured. Please update OAuthConfig.swift with your credentials.")
+        }
+        return try await authenticateGmail(
+            clientId: OAuthConfig.gmailClientID,
+            clientSecret: OAuthConfig.gmailClientSecret,
+            useOutOfBand: useOutOfBand
+        )
+    }
+    
+    /// Exchange authorization code for access token (for manual code entry) using hardcoded credentials
+    func exchangeCodeForGmailTokenManually(code: String) async throws -> OAuthToken {
+        guard OAuthConfig.isGmailConfigured else {
+            throw OAuthError.serverError("Gmail OAuth credentials not configured. Please update OAuthConfig.swift with your credentials.")
+        }
+        return try await exchangeCodeForGmailTokenManually(
+            code: code,
+            clientId: OAuthConfig.gmailClientID,
+            clientSecret: OAuthConfig.gmailClientSecret
+        )
+    }
 }
 
 // MARK: - Models

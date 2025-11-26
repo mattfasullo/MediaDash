@@ -78,10 +78,8 @@ struct SettingsView: View {
     }
     
     private func connectToAsana() {
-        guard let clientId = KeychainService.retrieve(key: "asana_client_id"),
-              let clientSecret = KeychainService.retrieve(key: "asana_client_secret"),
-              !clientId.isEmpty, !clientSecret.isEmpty else {
-            connectionError = "Please enter Client ID and Client Secret"
+        guard OAuthConfig.isAsanaConfigured else {
+            connectionError = "Asana OAuth credentials not configured. Please update OAuthConfig.swift with your credentials."
             return
         }
         
@@ -91,11 +89,7 @@ struct SettingsView: View {
         Task {
             do {
                 // Try localhost first
-                let token = try await oauthService.authenticateAsana(
-                    clientId: clientId,
-                    clientSecret: clientSecret,
-                    useOutOfBand: false
-                )
+                let token = try await oauthService.authenticateAsana(useOutOfBand: false)
                 
                 // Store the access token
                 oauthService.storeToken(token.accessToken, for: "asana")
@@ -123,11 +117,7 @@ struct SettingsView: View {
                         // Offer to try out-of-band flow
                         Task {
                             do {
-                                let token = try await oauthService.authenticateAsana(
-                                    clientId: clientId,
-                                    clientSecret: clientSecret,
-                                    useOutOfBand: true
-                                )
+                                let token = try await oauthService.authenticateAsana(useOutOfBand: true)
                                 oauthService.storeToken(token.accessToken, for: "asana")
                                 await MainActor.run {
                                     isConnecting = false
@@ -156,9 +146,7 @@ struct SettingsView: View {
     }
     
     private func submitManualCode() {
-        guard !manualAuthCode.isEmpty,
-              let clientId = KeychainService.retrieve(key: "asana_client_id"),
-              let clientSecret = KeychainService.retrieve(key: "asana_client_secret") else {
+        guard !manualAuthCode.isEmpty else {
             return
         }
         
@@ -168,9 +156,7 @@ struct SettingsView: View {
         Task {
             do {
                 let token = try await oauthService.exchangeCodeForTokenManually(
-                    code: manualAuthCode.trimmingCharacters(in: .whitespaces),
-                    clientId: clientId,
-                    clientSecret: clientSecret
+                    code: manualAuthCode.trimmingCharacters(in: .whitespaces)
                 )
                 
                 oauthService.storeToken(token.accessToken, for: "asana")
@@ -246,6 +232,19 @@ struct SettingsView: View {
                             connectionError: $connectionError
                         )
                     }
+
+                    // Gmail Integration Section
+                    GmailIntegrationSection(
+                        settings: $settings,
+                        hasUnsavedChanges: $hasUnsavedChanges,
+                        oauthService: oauthService
+                    )
+
+                    // Simian Integration Section
+                    SimianIntegrationSection(
+                        settings: $settings,
+                        hasUnsavedChanges: $hasUnsavedChanges
+                    )
 
                     // Advanced Settings Toggle
                     SettingsCard {
@@ -766,8 +765,6 @@ struct AsanaIntegrationSection: View {
     @Binding var connectionError: String?
     
     @StateObject private var cacheManager = AsanaCacheManager()
-    @State private var clientID: String = ""
-    @State private var clientSecret: String = ""
     @State private var showManualCodeEntry = false
     @State private var manualAuthCode = ""
     @State private var manualAuthURL: URL?
@@ -775,8 +772,8 @@ struct AsanaIntegrationSection: View {
     @State private var showCacheDetails = false
     
     private func connectToAsana() {
-        guard !clientID.isEmpty, !clientSecret.isEmpty else {
-            connectionError = "Please enter Client ID and Client Secret"
+        guard OAuthConfig.isAsanaConfigured else {
+            connectionError = "Asana OAuth credentials not configured. Please update OAuthConfig.swift with your credentials."
             return
         }
         
@@ -786,11 +783,7 @@ struct AsanaIntegrationSection: View {
         Task {
             do {
                 // Try localhost first
-                let token = try await oauthService.authenticateAsana(
-                    clientId: clientID,
-                    clientSecret: clientSecret,
-                    useOutOfBand: false
-                )
+                let token = try await oauthService.authenticateAsana(useOutOfBand: false)
                 
                 // Store the access token
                 oauthService.storeToken(token.accessToken, for: "asana")
@@ -818,11 +811,7 @@ struct AsanaIntegrationSection: View {
                         // Try out-of-band flow
                         Task {
                             do {
-                                let token = try await oauthService.authenticateAsana(
-                                    clientId: clientID,
-                                    clientSecret: clientSecret,
-                                    useOutOfBand: true
-                                )
+                                let token = try await oauthService.authenticateAsana(useOutOfBand: true)
                                 oauthService.storeToken(token.accessToken, for: "asana")
                                 await MainActor.run {
                                     isConnecting = false
@@ -861,9 +850,7 @@ struct AsanaIntegrationSection: View {
         Task {
             do {
                 let token = try await oauthService.exchangeCodeForTokenManually(
-                    code: manualAuthCode.trimmingCharacters(in: .whitespaces),
-                    clientId: clientID,
-                    clientSecret: clientSecret
+                    code: manualAuthCode.trimmingCharacters(in: .whitespaces)
                 )
                 
                 oauthService.storeToken(token.accessToken, for: "asana")
@@ -902,88 +889,51 @@ struct AsanaIntegrationSection: View {
                 // Note: This section only shows when docketSource == .asana
                 // The toggle is removed since selection is handled by the picker
                 VStack(alignment: .leading, spacing: 8) {
-                        // OAuth2 Client Credentials
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("OAuth2 Credentials")
-                                .font(.system(size: 14, weight: .medium))
-                            
-                                // Client ID
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Client ID")
+                        // Connect Button
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 12) {
+                                if isConnecting {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                    Text("Connecting...")
                                         .font(.system(size: 12))
-                                    TextField("Enter Client ID", text: $clientID)
-                                        .textFieldStyle(.roundedBorder)
-                                        .onChange(of: clientID) { oldValue, newValue in
-                                            if !newValue.isEmpty {
-                                                _ = KeychainService.store(key: "asana_client_id", value: newValue)
-                                            } else {
-                                                KeychainService.delete(key: "asana_client_id")
-                                            }
-                                            hasUnsavedChanges = true
-                                        }
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Button("Connect to Asana") {
+                                        connectToAsana()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(!OAuthConfig.isAsanaConfigured)
                                 }
                                 
-                                // Client Secret
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Client Secret")
-                                        .font(.system(size: 12))
-                                    SecureField("Enter Client Secret", text: $clientSecret)
-                                        .textFieldStyle(.roundedBorder)
-                                        .onChange(of: clientSecret) { oldValue, newValue in
-                                            if !newValue.isEmpty {
-                                                _ = KeychainService.store(key: "asana_client_secret", value: newValue)
-                                            } else {
-                                                KeychainService.delete(key: "asana_client_secret")
-                                            }
-                                            hasUnsavedChanges = true
-                                        }
-                                }
-                            
-                            // Connect Button
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(spacing: 12) {
-                                    if isConnecting {
-                                        ProgressView()
-                                            .scaleEffect(0.8)
-                                        Text("Connecting...")
+                                // Show connection status
+                                if let token = KeychainService.retrieve(key: "asana_access_token"), !token.isEmpty {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundColor(.green)
+                                            .font(.system(size: 14))
+                                        Text("Connected")
                                             .font(.system(size: 12))
-                                            .foregroundColor(.secondary)
-                                    } else {
-                                        Button("Connect to Asana") {
-                                            connectToAsana()
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .disabled(clientID.isEmpty || clientSecret.isEmpty)
-                                    }
-                                    
-                                    // Show connection status
-                                    if let token = KeychainService.retrieve(key: "asana_access_token"), !token.isEmpty {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundColor(.green)
-                                                .font(.system(size: 14))
-                                            Text("Connected")
-                                                .font(.system(size: 12))
-                                                .foregroundColor(.green)
-                                        }
+                                            .foregroundColor(.green)
                                     }
                                 }
-                                
+                            }
+                            
                                 if let error = connectionError {
                                     Text(error)
                                         .font(.system(size: 12))
                                         .foregroundColor(.red)
                                         .padding(.top, 4)
                                 }
-                            }
-                            
-                            Text("Get credentials from: https://app.asana.com/0/my-apps")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                            
-                            Text("Note: Add 'http://localhost:8080/callback' as a redirect URL in Asana, or uncheck 'native app' to enable redirect URLs.")
-                                .font(.system(size: 11))
-                                .foregroundColor(.orange)
+                                
+                                // Only show warning if credentials aren't configured AND user isn't connected
+                                let isConnected = KeychainService.retrieve(key: "asana_access_token") != nil
+                                if !OAuthConfig.isAsanaConfigured && !isConnected {
+                                    Text("OAuth credentials not configured. Please update OAuthConfig.swift with your Asana OAuth credentials.")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.orange)
+                                        .padding(.top, 4)
+                                }
                         }
                         
                         // Manual Code Entry (shown when redirect fails)
@@ -1153,10 +1103,653 @@ struct AsanaIntegrationSection: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Gmail Integration Section
+
+struct GmailIntegrationSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+    @StateObject var oauthService: OAuthService
+    
+    @StateObject private var gmailService = GmailService()
+    @State private var isConnecting = false
+    @State private var connectionError: String?
+    @State private var showManualCodeEntry = false
+    @State private var manualAuthCode = ""
+    @State private var manualAuthURL: URL?
+    @State private var manualAuthState = ""
+    @State private var isTestingConnection = false
+    @State private var testResult: String?
+    @State private var testError: String?
+    @State private var connectedEmail: String?
+    @State private var isLoadingEmail = false
+    @State private var hasAuthenticated = false // Track if user has actually authenticated
+    
+    private func connectToGmail() {
+        guard OAuthConfig.isGmailConfigured else {
+            connectionError = "Gmail OAuth credentials not configured. Please update OAuthConfig.swift with your credentials."
+            return
+        }
+        
+        isConnecting = true
+        connectionError = nil
+        
+        Task {
+            do {
+                let token = try await oauthService.authenticateGmail(useOutOfBand: false)
+                
+                oauthService.storeToken(token.accessToken, for: "gmail")
+                gmailService.setAccessToken(token.accessToken)
+                
+                // Fetch user's email address
+                do {
+                    let email = try await gmailService.getUserEmail()
+                    await MainActor.run {
+                        connectedEmail = email
+                        hasAuthenticated = true // Mark as authenticated
+                        // Store in UserDefaults for persistence
+                        UserDefaults.standard.set(email, forKey: "gmail_connected_email")
+                    }
+                } catch {
+                    print("Failed to fetch user email: \(error.localizedDescription)")
+                }
+                
+                await MainActor.run {
+                    isConnecting = false
+                    hasAuthenticated = true // Mark as authenticated even if email fetch fails
+                    print("Gmail OAuth successful! Token stored.")
+                }
+            } catch OAuthError.manualCodeRequired(let state, let authURL) {
+                await MainActor.run {
+                    isConnecting = false
+                    manualAuthState = state
+                    manualAuthURL = authURL
+                    showManualCodeEntry = true
+                    NSWorkspace.shared.open(authURL)
+                }
+            } catch {
+                await MainActor.run {
+                    isConnecting = false
+                    connectionError = error.localizedDescription
+                    print("Gmail OAuth failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func submitManualCode() {
+        guard !manualAuthCode.isEmpty else { return }
+        
+        isConnecting = true
+        connectionError = nil
+        
+        Task {
+            do {
+                let token = try await oauthService.exchangeCodeForGmailTokenManually(
+                    code: manualAuthCode.trimmingCharacters(in: .whitespaces)
+                )
+                
+                oauthService.storeToken(token.accessToken, for: "gmail")
+                gmailService.setAccessToken(token.accessToken)
+                
+                // Fetch user's email address
+                do {
+                    let email = try await gmailService.getUserEmail()
+                    await MainActor.run {
+                        connectedEmail = email
+                        hasAuthenticated = true // Mark as authenticated
+                        // Store in UserDefaults for persistence
+                        UserDefaults.standard.set(email, forKey: "gmail_connected_email")
+                    }
+                } catch {
+                    print("Failed to fetch user email: \(error.localizedDescription)")
+                }
+                
+                await MainActor.run {
+                    isConnecting = false
+                    showManualCodeEntry = false
+                    manualAuthCode = ""
+                    hasAuthenticated = true // Mark as authenticated even if email fetch fails
+                    print("Gmail OAuth successful! Token stored.")
+                }
+            } catch {
+                await MainActor.run {
+                    isConnecting = false
+                    connectionError = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func loadConnectedEmail() async {
+        guard gmailService.isAuthenticated else { return }
+        
+        await MainActor.run {
+            isLoadingEmail = true
+        }
+        
+        do {
+            let email = try await gmailService.getUserEmail()
+            await MainActor.run {
+                connectedEmail = email
+                UserDefaults.standard.set(email, forKey: "gmail_connected_email")
+                isLoadingEmail = false
+            }
+        } catch {
+            await MainActor.run {
+                isLoadingEmail = false
+                print("Failed to load connected email: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    private func testGmailConnection() {
+        guard gmailService.isAuthenticated else {
+            testError = "Not connected to Gmail. Please connect first."
+            testResult = nil
+            // Clear connected status if authentication fails
+            connectedEmail = nil
+            UserDefaults.standard.removeObject(forKey: "gmail_connected_email")
+            return
+        }
+        
+        isTestingConnection = true
+        testResult = nil
+        testError = nil
+        
+        Task {
+            do {
+                // Use the configured query or default to label:"New Docket"
+                let query = settings.gmailQuery.isEmpty ? "label:\"New Docket\"" : settings.gmailQuery
+                
+                // Fetch a few emails to test the connection
+                let messageRefs = try await gmailService.fetchEmails(query: query, maxResults: 5)
+                
+                if messageRefs.isEmpty {
+                    await MainActor.run {
+                        testResult = "Connection successful! No emails found matching query: \(query)"
+                        testError = nil
+                        isTestingConnection = false
+                    }
+                } else {
+                    // Get full details of first email
+                    let firstMessage = try await gmailService.getEmail(messageId: messageRefs.first!.id)
+                    
+                    await MainActor.run {
+                        let subject = firstMessage.subject ?? "No subject"
+                        let from = firstMessage.from ?? "Unknown sender"
+                        testResult = "Connection successful! Found \(messageRefs.count) email(s).\n\nSample email:\nFrom: \(from)\nSubject: \(subject)"
+                        testError = nil
+                        isTestingConnection = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    testError = "Connection test failed: \(error.localizedDescription)"
+                    testResult = nil
+                    isTestingConnection = false
+                    
+                    // If authentication error, clear the token and connected status
+                    if error.localizedDescription.contains("authentication") || 
+                       error.localizedDescription.contains("401") ||
+                       error.localizedDescription.contains("not authenticated") {
+                        gmailService.clearAccessToken()
+                        connectedEmail = nil
+                        hasAuthenticated = false // Clear authentication status
+                        UserDefaults.standard.removeObject(forKey: "gmail_connected_email")
+                    }
+                }
+            }
+        }
+    }
+    
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Image(systemName: "envelope")
+                        .foregroundColor(.red)
+                        .font(.system(size: 18))
+                    Text("Gmail Integration")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+                
+                Text("Automatically scan emails for new dockets and create folders")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                
+                VStack(alignment: .leading, spacing: 16) {
+                    // Enable Toggle
+                    Toggle("Enable Gmail Integration", isOn: Binding(
+                        get: { settings.gmailEnabled },
+                        set: {
+                            settings.gmailEnabled = $0
+                            hasUnsavedChanges = true
+                        }
+                    ))
+                    
+                    if settings.gmailEnabled {
+                        // Connect Button
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 12) {
+                                if isConnecting {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                    Text("Connecting...")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Button("Connect to Gmail") {
+                                        connectToGmail()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(!OAuthConfig.isGmailConfigured)
+                                }
+                                
+                                if hasAuthenticated && gmailService.isAuthenticated {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundColor(.green)
+                                            .font(.system(size: 14))
+                                        Text("Connected")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.green)
+                                    }
+                                }
+                                
+                                // Show connected email address
+                                if let email = connectedEmail {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "envelope.fill")
+                                            .foregroundColor(.secondary)
+                                            .font(.system(size: 11))
+                                        Text(email)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.leading, 8)
+                                } else if gmailService.isAuthenticated && !isLoadingEmail {
+                                    // Email will be loaded in onAppear
+                                }
+                            }
+                            
+                            if let error = connectionError {
+                                Text(error)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.red)
+                                    .textSelection(.enabled)
+                                    .padding(.top, 4)
+                            }
+                            
+                            // Only show warning if credentials aren't configured AND user isn't connected
+                            if !OAuthConfig.isGmailConfigured && !gmailService.isAuthenticated {
+                                Text("OAuth credentials not configured. Please update OAuthConfig.swift with your Gmail OAuth credentials.")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.orange)
+                                    .padding(.top, 4)
+                            }
+                            
+                            // Test Connection Button (only show if connected)
+                            if gmailService.isAuthenticated {
+                                HStack(spacing: 12) {
+                                    if isTestingConnection {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                        Text("Testing...")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.secondary)
+                                    } else {
+                                        Button("Test Connection") {
+                                            testGmailConnection()
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(isConnecting)
+                                    }
+                                }
+                                .padding(.top, 4)
+                                
+                                // Test Results
+                                if let result = testResult {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(.green)
+                                                .font(.system(size: 12))
+                                            Text("Test Successful")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundColor(.green)
+                                        }
+                                        Text(result)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+                                    .padding(8)
+                                    .background(Color.green.opacity(0.1))
+                                    .cornerRadius(6)
+                                    .padding(.top, 4)
+                                }
+                                
+                                if let error = testError {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .foregroundColor(.red)
+                                                .font(.system(size: 12))
+                                            Text("Test Failed")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundColor(.red)
+                                        }
+                                        Text(error)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.red)
+                                            .textSelection(.enabled)
+                                    }
+                                    .padding(8)
+                                    .background(Color.red.opacity(0.1))
+                                    .cornerRadius(6)
+                                    .padding(.top, 4)
+                                }
+                            }
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        // Gmail Query Settings
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Email Search Query")
+                                .font(.system(size: 14, weight: .medium))
+                            
+                            TextField("e.g., label:\"New Docket\"", text: Binding(
+                                get: { settings.gmailQuery },
+                                set: {
+                                    settings.gmailQuery = $0
+                                    hasUnsavedChanges = true
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            
+                            Text("Gmail search query to find docket emails. Examples: 'label:\"New Docket\"', 'subject:\"New Docket\"', 'from:sender@example.com'")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Polling Interval
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Scan Interval (seconds)")
+                                .font(.system(size: 14, weight: .medium))
+                            
+                            TextField("300", value: Binding(
+                                get: { settings.gmailPollInterval },
+                                set: {
+                                    settings.gmailPollInterval = max(60, $0) // Minimum 60 seconds
+                                    hasUnsavedChanges = true
+                                }
+                            ), format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            
+                            Text("How often to check for new emails (minimum: 60 seconds)")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        // Status Information
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Status")
+                                .font(.system(size: 14, weight: .medium))
+                            
+                            Text("Email scanning runs automatically in the background when enabled. The service will scan for new docket emails and create folders automatically.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        
+                        // Manual Code Entry
+                        if showManualCodeEntry {
+                            Divider()
+                                .padding(.vertical, 4)
+                            
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Manual Authorization Code")
+                                    .font(.system(size: 12, weight: .medium))
+                                
+                                Text("Copy the authorization code from your browser and paste it here:")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                
+                                HStack(spacing: 8) {
+                                    TextField("Enter authorization code", text: $manualAuthCode)
+                                        .textFieldStyle(.roundedBorder)
+                                    
+                                    Button("Submit") {
+                                        submitManualCode()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(manualAuthCode.isEmpty || isConnecting)
+                                    
+                                    Button("Cancel") {
+                                        showManualCodeEntry = false
+                                        manualAuthCode = ""
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         .onAppear {
-            // Load existing values from Keychain when view appears
-            clientID = KeychainService.retrieve(key: "asana_client_id") ?? ""
-            clientSecret = KeychainService.retrieve(key: "asana_client_secret") ?? ""
+            // Load access token if available, but don't mark as authenticated yet
+            // Authentication status should only be set after successful OAuth flow
+            if let token = KeychainService.retrieve(key: "gmail_access_token"), !token.isEmpty {
+                gmailService.setAccessToken(token)
+                // Verify token is valid by trying to get user email
+                // If it fails, we'll clear the token
+            } else {
+                // Clear email if no valid token
+                connectedEmail = nil
+                hasAuthenticated = false
+                UserDefaults.standard.removeObject(forKey: "gmail_connected_email")
+            }
+            
+            // Load connected email from UserDefaults if available
+            if let storedEmail = UserDefaults.standard.string(forKey: "gmail_connected_email") {
+                connectedEmail = storedEmail
+                // Only mark as authenticated if we have both token and stored email
+                // This indicates a previous successful authentication
+                if gmailService.isAuthenticated {
+                    hasAuthenticated = true
+                }
+            }
+        }
+        .task {
+            // Verify token is valid by trying to fetch email
+            // If we have a token but no stored email, try to fetch it
+            if gmailService.isAuthenticated && connectedEmail == nil && !isLoadingEmail {
+                await loadConnectedEmail()
+                // If successful, mark as authenticated
+                if connectedEmail != nil {
+                    hasAuthenticated = true
+                } else {
+                    // If email fetch failed, token might be invalid - verify by trying to get email
+                    do {
+                        _ = try await gmailService.getUserEmail()
+                        hasAuthenticated = true
+                    } catch {
+                        // Token is invalid - clear it
+                        gmailService.clearAccessToken()
+                        hasAuthenticated = false
+                        connectedEmail = nil
+                        UserDefaults.standard.removeObject(forKey: "gmail_connected_email")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Simian Integration Section
+
+struct SimianIntegrationSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+    
+    @StateObject private var simianService = SimianService()
+    @State private var webhookURL: String = ""
+    @State private var isTesting = false
+    @State private var testResult: String?
+    @State private var testError: String?
+    
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Image(systemName: "link.circle")
+                        .foregroundColor(.purple)
+                        .font(.system(size: 18))
+                    Text("Simian Integration")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+                
+                Text("Create Simian projects automatically from notifications via Zapier webhook")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                
+                VStack(alignment: .leading, spacing: 16) {
+                    // Enable Toggle
+                    Toggle("Enable Simian Integration", isOn: Binding(
+                        get: { settings.simianEnabled },
+                        set: {
+                            settings.simianEnabled = $0
+                            hasUnsavedChanges = true
+                        }
+                    ))
+                    
+                    if settings.simianEnabled {
+                        // Webhook URL
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Zapier Webhook URL")
+                                .font(.system(size: 14, weight: .medium))
+                            
+                            TextField("https://hooks.zapier.com/hooks/catch/...", text: $webhookURL)
+                                .textFieldStyle(.roundedBorder)
+                                .onChange(of: webhookURL) { oldValue, newValue in
+                                    settings.simianWebhookURL = newValue.isEmpty ? nil : newValue
+                                    if newValue.isEmpty {
+                                        simianService.clearWebhookURL()
+                                    } else {
+                                        simianService.setWebhookURL(newValue)
+                                    }
+                                    hasUnsavedChanges = true
+                                }
+                            
+                            Text("Get this URL from your Zapier Zap: Webhook by Zapier (Catch Hook) → Simian (Create Project)")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            
+                            // Test Webhook Button
+                            if simianService.isConfigured {
+                                HStack(spacing: 12) {
+                                    if isTesting {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                        Text("Testing...")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.secondary)
+                                    } else {
+                                        Button("Test Webhook") {
+                                            testWebhook()
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(isTesting)
+                                    }
+                                    
+                                    if testResult != nil {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(.green)
+                                                .font(.system(size: 12))
+                                            Text("Test successful")
+                                                .font(.system(size: 11))
+                                                .foregroundColor(.green)
+                                        }
+                                    }
+                                    
+                                    if testError != nil {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .foregroundColor(.red)
+                                                .font(.system(size: 12))
+                                            Text("Test failed")
+                                                .font(.system(size: 11))
+                                                .foregroundColor(.red)
+                                        }
+                                    }
+                                }
+                                .padding(.top, 4)
+                                
+                                if let error = testError {
+                                    Text(error)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.red)
+                                        .textSelection(.enabled)
+                                        .padding(.top, 2)
+                                }
+                            }
+                            
+                            if !simianService.isConfigured && settings.simianEnabled {
+                                Text("Please enter a valid Zapier webhook URL")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.orange)
+                                    .padding(.top, 2)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            webhookURL = settings.simianWebhookURL ?? ""
+            if !webhookURL.isEmpty {
+                simianService.setWebhookURL(webhookURL)
+            }
+        }
+    }
+    
+    private func testWebhook() {
+        guard simianService.isConfigured else {
+            testError = "Webhook URL not configured"
+            testResult = nil
+            return
+        }
+        
+        isTesting = true
+        testResult = nil
+        testError = nil
+        
+        Task {
+            do {
+                // Test with a sample docket
+                try await simianService.createJob(docketNumber: "TEST", jobName: "Test Job")
+                
+                await MainActor.run {
+                    testResult = "Webhook test successful! Check your Zapier Zap to confirm it received the test."
+                    testError = nil
+                    isTesting = false
+                }
+            } catch {
+                await MainActor.run {
+                    testError = error.localizedDescription
+                    testResult = nil
+                    isTesting = false
+                }
+            }
         }
     }
 }
@@ -1691,6 +2284,33 @@ struct AdvancedSettingsSection: View {
                             }
                         }
                         .padding(.top, 4)
+                    }
+
+                    Divider()
+                        .padding(.vertical, 4)
+                    
+                    // Browser Preference
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Default Browser for Email Links")
+                            .font(.system(size: 14, weight: .medium))
+                        
+                        Picker("Browser", selection: Binding(
+                            get: { settings.defaultBrowser },
+                            set: {
+                                settings.defaultBrowser = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            ForEach(BrowserPreference.allCases, id: \.self) { browser in
+                                Text(browser.displayName).tag(browser)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 200)
+                        
+                        Text("Choose which browser to use when opening email links from notifications")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
                     }
 
                     Divider()
