@@ -619,6 +619,20 @@ class MediaManager: ObservableObject {
         }
     }
 
+    /// Check if server directory is connected
+    func isServerDirectoryConnected() -> Bool {
+        let fm = FileManager.default
+        let serverBase = config.settings.serverBasePath
+        return fm.fileExists(atPath: serverBase)
+    }
+    
+    /// Check if sessions directory is connected
+    func isSessionsDirectoryConnected() -> Bool {
+        let fm = FileManager.default
+        let sessionsBase = config.settings.sessionsBasePath
+        return fm.fileExists(atPath: sessionsBase)
+    }
+
     func refreshDockets() {
         guard !isScanningDockets else { return }
         isScanningDockets = true

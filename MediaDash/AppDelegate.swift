@@ -37,10 +37,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize Sparkle updater
         // Each app (MediaDash vs MediaDash-Dev) has its own appcast URL in Info.plist
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+                startingUpdater: true,
             updaterDelegate: nil,
-            userDriverDelegate: nil
-        )
+                userDriverDelegate: nil
+            )
         
         // Set up global CMD+Q handler that works even when sheets/modals are open
         setupGlobalQuitHandler()
