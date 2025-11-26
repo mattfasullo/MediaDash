@@ -5,6 +5,29 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.5.0</title>
+            <description><![CDATA[
+                <p>Gmail/Simian integration and notification system
+
+- Added Gmail integration for email scanning
+- Added Simian service integration  
+- New notification system with popup windows
+- Auto docket creation from emails
+- Enhanced OAuth configuration
+- Improved notification center UI</p>
+            ]]></description>
+            <pubDate>Wed, 26 Nov 2025 16:55:08 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.5.0/MediaDash.zip"
+                sparkle:version="0.5.0"
+                sparkle:shortVersionString="0.5.0"
+                sparkle:edSignature="Y68N3VXOYMEJ1gvb4AUihULnVKJ9rG9Ky79rlkzaVtOhDrqyvx3oDkap6EcTEtuHDAB6Bqom5mxfscon2ThHAQ=="
+                length="3842937"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.4.0</title>
             <description><![CDATA[
                 <p>Pre-release: Major refactoring and new features
