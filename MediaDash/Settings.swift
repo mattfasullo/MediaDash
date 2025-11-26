@@ -411,7 +411,8 @@ struct AppSettings: Codable, Equatable {
 
     // Gmail Integration
     var gmailEnabled: Bool
-    var gmailQuery: String // Gmail search query (e.g., "subject:New Docket")
+    var gmailQuery: String // Gmail search query (e.g., "subject:New Docket") - deprecated, use gmailSearchTerms instead
+    var gmailSearchTerms: [String] // Search terms/labels to look for (case-insensitive, e.g., ["New Docket", "DOCKET"])
     var gmailPollInterval: TimeInterval // Polling interval in seconds (default: 300 = 5 minutes)
     var docketParsingPatterns: [String] // Regex patterns for extracting docket info
     
@@ -477,6 +478,7 @@ struct AppSettings: Codable, Equatable {
             useSharedCache: true,
             gmailEnabled: false,
             gmailQuery: "label:\"New Docket\"",
+            gmailSearchTerms: ["New Docket", "DOCKET"], // Default search terms
             gmailPollInterval: 300, // 5 minutes
             docketParsingPatterns: [],
             simianEnabled: false,

@@ -1261,8 +1261,24 @@ struct GmailIntegrationSection: View {
         
         Task {
             do {
-                // Use the configured query or default to label:"New Docket"
-                let query = settings.gmailQuery.isEmpty ? "label:\"New Docket\"" : settings.gmailQuery
+                // Build query from search terms
+                let baseQuery: String
+                if !settings.gmailSearchTerms.isEmpty {
+                    // Build OR query for each term, trying both label and subject
+                    let queryParts = settings.gmailSearchTerms.filter { !$0.isEmpty }.flatMap { term in
+                        [
+                            "label:\"\(term)\"",
+                            "subject:\"\(term)\""
+                        ]
+                    }
+                    baseQuery = queryParts.isEmpty ? "label:\"New Docket\"" : "(\(queryParts.joined(separator: " OR ")))"
+                } else if !settings.gmailQuery.isEmpty {
+                    baseQuery = settings.gmailQuery
+                } else {
+                    baseQuery = "label:\"New Docket\""
+                }
+                
+                let query = "\(baseQuery) is:unread"
                 
                 // Fetch a few emails to test the connection
                 let messageRefs = try await gmailService.fetchEmails(query: query, maxResults: 5)
@@ -1458,23 +1474,76 @@ struct GmailIntegrationSection: View {
                         Divider()
                             .padding(.vertical, 4)
                         
-                        // Gmail Query Settings
+                        // Gmail Search Terms
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Email Search Query")
+                            Text("Search Terms / Labels")
                                 .font(.system(size: 14, weight: .medium))
                             
-                            TextField("e.g., label:\"New Docket\"", text: Binding(
-                                get: { settings.gmailQuery },
-                                set: {
-                                    settings.gmailQuery = $0
-                                    hasUnsavedChanges = true
-                                }
-                            ))
-                            .textFieldStyle(.roundedBorder)
-                            
-                            Text("Gmail search query to find docket emails. Examples: 'label:\"New Docket\"', 'subject:\"New Docket\"', 'from:sender@example.com'")
+                            Text("Add terms or labels to search for in email subjects and labels (case-insensitive)")
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
+                            
+                            // List of search terms
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(settings.gmailSearchTerms.indices, id: \.self) { index in
+                                    HStack(spacing: 8) {
+                                        TextField("Search term", text: Binding(
+                                            get: { settings.gmailSearchTerms[index] },
+                                            set: {
+                                                settings.gmailSearchTerms[index] = $0
+                                                hasUnsavedChanges = true
+                                            }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                        
+                                        Button(action: {
+                                            settings.gmailSearchTerms.remove(at: index)
+                                            hasUnsavedChanges = true
+                                        }) {
+                                            Image(systemName: "minus.circle.fill")
+                                                .foregroundColor(.red)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Remove this search term")
+                                    }
+                                }
+                                
+                                // Add new term button
+                                Button(action: {
+                                    settings.gmailSearchTerms.append("")
+                                    hasUnsavedChanges = true
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "plus.circle.fill")
+                                        Text("Add Search Term")
+                                    }
+                                    .font(.system(size: 12))
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            
+                            // Legacy query field (hidden but kept for backward compatibility)
+                            if !settings.gmailQuery.isEmpty && settings.gmailQuery != "label:\"New Docket\"" {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Legacy Query (deprecated)")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.orange)
+                                    
+                                    TextField("Custom query", text: Binding(
+                                        get: { settings.gmailQuery },
+                                        set: {
+                                            settings.gmailQuery = $0
+                                            hasUnsavedChanges = true
+                                        }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    
+                                    Text("This field is deprecated. Use Search Terms above instead.")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.orange)
+                                }
+                                .padding(.top, 4)
+                            }
                         }
                         
                         // Polling Interval

@@ -61,8 +61,27 @@ class EmailScanningService: ObservableObject {
         scanningTask = nil
     }
     
+    /// Build Gmail query from search terms (case-insensitive, supports labels and subject)
+    private func buildGmailQuery(from searchTerms: [String]) -> String {
+        guard !searchTerms.isEmpty else {
+            // Fallback to old gmailQuery if no search terms configured
+            return "label:\"New Docket\""
+        }
+        
+        // Build OR query for each term, trying both label and subject
+        // Gmail queries are case-insensitive by default, but we'll be explicit
+        let queryParts = searchTerms.flatMap { term in
+            [
+                "label:\"\(term)\"",
+                "subject:\"\(term)\""
+            ]
+        }
+        
+        return "(\(queryParts.joined(separator: " OR ")))"
+    }
+    
     /// Perform a manual scan now
-    func scanNow() async {
+    func scanNow(forceRescan: Bool = false) async {
         guard let settings = settingsManager?.currentSettings, settings.gmailEnabled else {
             await MainActor.run {
                 lastError = "Gmail integration is not enabled"
@@ -83,10 +102,19 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Use label:"New Docket" query if gmailQuery is default, otherwise use custom query
-            let query = settings.gmailQuery.isEmpty || settings.gmailQuery == "subject:\"New Docket\"" 
-                ? "label:\"New Docket\"" 
-                : settings.gmailQuery
+            // Build query from search terms (or fallback to old gmailQuery)
+            let baseQuery: String
+            if !settings.gmailSearchTerms.isEmpty {
+                baseQuery = buildGmailQuery(from: settings.gmailSearchTerms)
+            } else if !settings.gmailQuery.isEmpty {
+                baseQuery = settings.gmailQuery
+            } else {
+                baseQuery = "label:\"New Docket\""
+            }
+            
+            // Only fetch unread emails
+            let query = "\(baseQuery) is:unread"
+            print("EmailScanningService: Scanning with query: \(query)")
             
             // Fetch emails matching query
             let messageRefs = try await gmailService.fetchEmails(
@@ -97,8 +125,18 @@ class EmailScanningService: ObservableObject {
             // Get full email messages
             let messages = try await gmailService.getEmails(messageReferences: messageRefs)
             
-            // Filter out already processed emails
-            let newMessages = messages.filter { !processedEmailIds.contains($0.id) }
+            // Filter to only unread emails (double-check labelIds)
+            let unreadMessages = messages.filter { message in
+                guard let labelIds = message.labelIds else { return false }
+                return labelIds.contains("UNREAD")
+            }
+            
+            print("EmailScanningService: Found \(unreadMessages.count) unread emails (out of \(messages.count) total)")
+            
+            // Filter out already processed emails (unless force rescan)
+            let newMessages = unreadMessages.filter { 
+                forceRescan || !processedEmailIds.contains($0.id) 
+            }
             
             // Parse and create notifications (don't auto-create dockets)
             var notificationCount = 0
@@ -130,6 +168,12 @@ class EmailScanningService: ObservableObject {
     
     /// Process a single email and create notification (don't auto-create docket)
     func processEmailAndCreateNotification(_ message: GmailMessage) async -> Bool {
+        // Safety check: Only process unread emails
+        guard let labelIds = message.labelIds, labelIds.contains("UNREAD") else {
+            print("EmailScanningService: Skipping email \(message.id) - already marked as read")
+            return false
+        }
+        
         // Use parser with custom patterns if configured
         guard let settingsManager = settingsManager else { return false }
         let currentSettings = settingsManager.currentSettings
@@ -315,35 +359,25 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Build query - try label first, then fall back to subject
+            // Build query from search terms (or fallback to old gmailQuery)
             let baseQuery: String
-            if settings.gmailQuery.isEmpty || settings.gmailQuery == "subject:\"New Docket\"" {
-                // Try label first, but also support subject as fallback
-                baseQuery = "label:\"New Docket\""
-            } else {
+            if !settings.gmailSearchTerms.isEmpty {
+                baseQuery = buildGmailQuery(from: settings.gmailSearchTerms)
+            } else if !settings.gmailQuery.isEmpty {
                 baseQuery = settings.gmailQuery
+            } else {
+                baseQuery = "label:\"New Docket\""
             }
             
-            // Add is:unread to only get unread emails
-            var query = "\(baseQuery) is:unread"
+            // Only fetch unread emails
+            let query = "\(baseQuery) is:unread"
             print("EmailScanningService: Scanning unread emails with query: \(query)")
             
             // Fetch unread emails matching query
-            var messageRefs: [GmailMessageReference] = []
-            do {
-                messageRefs = try await gmailService.fetchEmails(
-                    query: query,
-                    maxResults: 50
-                )
-            } catch {
-                // If label query fails, try subject query as fallback
-                print("EmailScanningService: Label query failed, trying subject query: \(error.localizedDescription)")
-                query = "subject:\"New Docket\" is:unread"
-                messageRefs = try await gmailService.fetchEmails(
-                    query: query,
-                    maxResults: 50
-                )
-            }
+            let messageRefs = try await gmailService.fetchEmails(
+                query: query,
+                maxResults: 50
+            )
             
             print("EmailScanningService: Found \(messageRefs.count) unread email references")
             

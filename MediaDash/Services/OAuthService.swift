@@ -527,30 +527,4 @@ class LocalOAuthServer {
             connection.cancel()
         }
     }
-    
-    // MARK: - Convenience Methods (using hardcoded credentials)
-    
-    /// Start OAuth2 flow for Asana using hardcoded credentials from OAuthConfig
-    func authenticateAsana(useOutOfBand: Bool = false) async throws -> OAuthToken {
-        guard OAuthConfig.isAsanaConfigured else {
-            throw OAuthError.serverError("Asana OAuth credentials not configured. Please update OAuthConfig.swift with your credentials.")
-        }
-        return try await authenticateAsana(
-            clientId: OAuthConfig.asanaClientID,
-            clientSecret: OAuthConfig.asanaClientSecret,
-            useOutOfBand: useOutOfBand
-        )
-    }
-    
-    /// Exchange authorization code for access token (for manual code entry) using hardcoded credentials
-    func exchangeCodeForTokenManually(code: String) async throws -> OAuthToken {
-        guard OAuthConfig.isAsanaConfigured else {
-            throw OAuthError.serverError("Asana OAuth credentials not configured. Please update OAuthConfig.swift with your credentials.")
-        }
-        return try await exchangeCodeForTokenManually(
-            code: code,
-            clientId: OAuthConfig.asanaClientID,
-            clientSecret: OAuthConfig.asanaClientSecret
-        )
-    }
-    
+}
