@@ -5,6 +5,29 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.4.0</title>
+            <description><![CDATA[
+                <p>Pre-release: Major refactoring and new features
+
+- Refactored ContentView into smaller focused components (SidebarView, StagingAreaView, ActionButtonsView)
+- Added new UI components: NewDocketView, PrepSummaryView, NoSelectTextField
+- Improved code organization and maintainability
+- Fixed dev builds to always use dev update channel
+- Added directory connection checking methods
+- Restored all missing components from previous refactor</p>
+            ]]></description>
+            <pubDate>Wed, 26 Nov 2025 05:39:23 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.4.0/MediaDash.zip"
+                sparkle:version="0.4.0"
+                sparkle:shortVersionString="0.4.0"
+                sparkle:edSignature="Na0yYEaTZV5vcNb9EMzglueBSIgLqepYbAuzi1lMyoLxFlG4dAYZUF6liP8rGgQlHhOTWPPqIsAc/sARAhcDBA=="
+                length="3389047"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.3.4</title>
             <description><![CDATA[
                 <p>Update channel switcher - Switch between Production and Dev builds in Settings. Users can now choose their update channel without needing separate app downloads.</p>
