@@ -5,6 +5,28 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.5.1</title>
+            <description><![CDATA[
+                <p>Fixed Gmail OAuth credentials and duplicate method definitions
+
+- Restored GmailService, GmailModels, and SimianService files
+- Added Gmail OAuth authentication methods to OAuthService  
+- Fixed duplicate method definitions causing compilation errors
+- Fixed 'OAuth credentials not configured' error
+- Properly signed with available certificate</p>
+            ]]></description>
+            <pubDate>Wed, 26 Nov 2025 17:57:31 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.5.1/MediaDash.zip"
+                sparkle:version="51"
+                sparkle:shortVersionString="0.5.1"
+                sparkle:edSignature="dt4cu69ik2JFvgFh/PF0paDE+hxMg59x5NB1oGRwlCK+FaHnB/4YQzRnPD/NLMX6Hkdt01rJECEAnzq7C2YIAQ=="
+                length="3895677"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.5.0</title>
             <description><![CDATA[
                 <p>Gmail/Simian integration and notification system
@@ -20,7 +42,7 @@
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.5.0/MediaDash.zip"
-                sparkle:version="0.5.0"
+                sparkle:version="50"
                 sparkle:shortVersionString="0.5.0"
                 sparkle:edSignature="Y68N3VXOYMEJ1gvb4AUihULnVKJ9rG9Ky79rlkzaVtOhDrqyvx3oDkap6EcTEtuHDAB6Bqom5mxfscon2ThHAQ=="
                 length="3842937"
@@ -43,26 +65,10 @@
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v0.4.0/MediaDash.zip"
-                sparkle:version="0.4.0"
+                sparkle:version="40"
                 sparkle:shortVersionString="0.4.0"
                 sparkle:edSignature="Na0yYEaTZV5vcNb9EMzglueBSIgLqepYbAuzi1lMyoLxFlG4dAYZUF6liP8rGgQlHhOTWPPqIsAc/sARAhcDBA=="
                 length="3389047"
-                type="application/octet-stream"
-            />
-        </item>
-        <item>
-            <title>Version 0.3.4</title>
-            <description><![CDATA[
-                <p>Update channel switcher - Switch between Production and Dev builds in Settings. Users can now choose their update channel without needing separate app downloads.</p>
-            ]]></description>
-            <pubDate>Tue, 25 Nov 2025 03:12:30 +0000</pubDate>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.3.4/MediaDash.zip"
-                sparkle:version="34"
-                sparkle:shortVersionString="0.3.4"
-                sparkle:edSignature="zeoT2dybfmFuA5mMCgrV6V4iomdHA6WgexFZrtuRawTMUfdj4Hb7gPyCPOWZmOxl+NpyNqu/5eQN7p6613RzAw=="
-                length="3085348"
                 type="application/octet-stream"
             />
         </item>
