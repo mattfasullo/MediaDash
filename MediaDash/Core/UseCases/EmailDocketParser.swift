@@ -80,15 +80,15 @@ struct EmailDocketParser {
         
         // SECOND: If not found on first line, try other patterns
         if extractedDocketNumber == nil {
-            for pattern in patterns {
-                if let parsed = tryPattern(pattern, in: bodyText) {
-                    extractedDocketNumber = parsed.docketNumber
-                    // If we got a job name too, use it
-                    if !parsed.jobName.isEmpty {
-                        extractedJobName = parsed.jobName
-                    }
-                    break
+        for pattern in patterns {
+            if let parsed = tryPattern(pattern, in: bodyText) {
+                extractedDocketNumber = parsed.docketNumber
+                // If we got a job name too, use it
+                if !parsed.jobName.isEmpty {
+                    extractedJobName = parsed.jobName
                 }
+                break
+            }
             }
         }
         

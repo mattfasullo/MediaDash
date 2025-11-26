@@ -51,7 +51,7 @@ struct SidebarView: View {
                     .padding(.bottom, 4)
 
                 // Notification Tab (where workspace label used to be)
-                if let notificationCenter = notificationCenter {
+                        if let notificationCenter = notificationCenter {
                     NotificationTabButton(
                         notificationCenter: notificationCenter,
                         showNotificationCenter: $showNotificationCenter

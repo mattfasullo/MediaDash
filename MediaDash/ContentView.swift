@@ -208,41 +208,41 @@ struct ContentView: View {
     
     private var mainContentView: some View {
         ZStack(alignment: .topLeading) {
-            HStack(spacing: 0) {
-                SidebarView(
-                    focusedButton: $focusedButton,
-                    mainViewFocused: $mainViewFocused,
-                    isKeyboardMode: $isKeyboardMode,
-                    isCommandKeyHeld: $isCommandKeyHeld,
-                    hoverInfo: $hoverInfo,
-                    isStagingAreaVisible: $isStagingAreaVisible,
-                    showSearchSheet: $showSearchSheet,
-                    showQuickSearchSheet: $showQuickSearchSheet,
-                    showSettingsSheet: $showSettingsSheet,
-                    showVideoConverterSheet: $showVideoConverterSheet,
-                    logoClickCount: $logoClickCount,
-                    notificationCenter: notificationCenter,
-                    showNotificationCenter: $showNotificationCenter,
-                    wpDate: wpDate,
-                    prepDate: prepDate,
-                    dateFormatter: dateFormatter,
-                    attempt: attempt,
-                    cycleTheme: cycleTheme
+        HStack(spacing: 0) {
+            SidebarView(
+                focusedButton: $focusedButton,
+                mainViewFocused: $mainViewFocused,
+                isKeyboardMode: $isKeyboardMode,
+                isCommandKeyHeld: $isCommandKeyHeld,
+                hoverInfo: $hoverInfo,
+                isStagingAreaVisible: $isStagingAreaVisible,
+                showSearchSheet: $showSearchSheet,
+                showQuickSearchSheet: $showQuickSearchSheet,
+                showSettingsSheet: $showSettingsSheet,
+                showVideoConverterSheet: $showVideoConverterSheet,
+                logoClickCount: $logoClickCount,
+                notificationCenter: notificationCenter,
+                showNotificationCenter: $showNotificationCenter,
+                wpDate: wpDate,
+                prepDate: prepDate,
+                dateFormatter: dateFormatter,
+                attempt: attempt,
+                cycleTheme: cycleTheme
+            )
+            
+            if isStagingAreaVisible {
+                StagingAreaView(
+                    cacheManager: cacheManager,
+                    isStagingHovered: $isStagingHovered,
+                    isStagingPressed: $isStagingPressed
                 )
-                
-                if isStagingAreaVisible {
-                    StagingAreaView(
-                        cacheManager: cacheManager,
-                        isStagingHovered: $isStagingHovered,
-                        isStagingPressed: $isStagingPressed
-                    )
-                    .environmentObject(manager)
-                }
+                .environmentObject(manager)
             }
-            .frame(width: isStagingAreaVisible ? 650 : 300, height: 550)
-            .focusable()
-            .focused($mainViewFocused)
-            .focusEffectDisabled()
+        }
+        .frame(width: isStagingAreaVisible ? 650 : 300, height: 550)
+        .focusable()
+        .focused($mainViewFocused)
+        .focusEffectDisabled()
             
         }
     }
@@ -3488,7 +3488,7 @@ struct WorkspaceMenuButton: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             isHovered = hovering
-        }
+            }
     }
 }
 

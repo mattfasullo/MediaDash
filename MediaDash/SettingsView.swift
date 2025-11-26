@@ -1530,14 +1530,14 @@ struct GmailIntegrationSection: View {
                                         .foregroundColor(.orange)
                                     
                                     TextField("Custom query", text: Binding(
-                                        get: { settings.gmailQuery },
-                                        set: {
-                                            settings.gmailQuery = $0
-                                            hasUnsavedChanges = true
-                                        }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
-                                    
+                                get: { settings.gmailQuery },
+                                set: {
+                                    settings.gmailQuery = $0
+                                    hasUnsavedChanges = true
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            
                                     Text("This field is deprecated. Use Search Terms above instead.")
                                         .font(.system(size: 10))
                                         .foregroundColor(.orange)
