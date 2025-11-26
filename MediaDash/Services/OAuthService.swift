@@ -527,14 +527,6 @@ class LocalOAuthServer {
             connection.cancel()
         }
     }
-}
-
-    }
-    
-    /// Clear stored token
-    func clearToken(for service: String) {
-        KeychainService.delete(key: "\(service)_access_token")
-    }
     
     // MARK: - Convenience Methods (using hardcoded credentials)
     
@@ -910,4 +902,3 @@ class LocalOAuthServer {
         }
     }
 }
-
