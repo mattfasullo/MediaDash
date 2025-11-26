@@ -225,7 +225,7 @@ else
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>\\
             <enclosure\\
                 url=\"https://github.com/mattfasullo/MediaDash/releases/download/v$VERSION/$APP_NAME.zip\"\\
-                sparkle:version=\"$VERSION\"\\
+                sparkle:version=\"$BUILD_NUMBER\"\\
                 sparkle:shortVersionString=\"$VERSION\"\\
                 sparkle:edSignature=\"$SIGNATURE\"\\
                 length=\"$FILE_SIZE\"\\
@@ -239,6 +239,20 @@ else
 fi
 
 rm -f "$APPCAST_FILE.backup"
+
+# Verify appcast before committing
+echo -e "${BLUE}🔍 Verifying appcast...${NC}"
+if [ -f "verify_appcast.sh" ]; then
+    if ./verify_appcast.sh; then
+        echo -e "${GREEN}✓ Appcast verification passed${NC}"
+    else
+        echo -e "${RED}❌ Appcast verification failed!${NC}"
+        echo -e "${RED}Please fix the appcast before committing.${NC}"
+        exit 1
+    fi
+else
+    echo -e "${RED}⚠️  Warning: verify_appcast.sh not found, skipping verification${NC}"
+fi
 
 # Commit and push
 echo -e "${BLUE}🚀 Publishing...${NC}"
