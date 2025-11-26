@@ -90,7 +90,7 @@ struct AuthenticatedRootView: View {
                 // Start email scanning if enabled and authenticated
                 if settingsManager.currentSettings.gmailEnabled {
                     if let token = KeychainService.retrieve(key: "gmail_access_token"), !token.isEmpty {
-                        emailScanningService.gmailService.setAccessToken(token)
+                        emailScanningService.gmailService.setAccessToken(token, refreshToken: nil)
                         emailScanningService.startScanning()
                     }
                 }
@@ -105,7 +105,7 @@ struct AuthenticatedRootView: View {
                 // Start/stop scanning based on settings
                 if newSettings.gmailEnabled {
                     if let token = KeychainService.retrieve(key: "gmail_access_token"), !token.isEmpty {
-                        emailScanningService.gmailService.setAccessToken(token)
+                        emailScanningService.gmailService.setAccessToken(token, refreshToken: nil)
                         if !emailScanningService.isEnabled {
                             emailScanningService.startScanning()
                         }

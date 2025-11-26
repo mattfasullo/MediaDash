@@ -10,37 +10,117 @@ class GmailService: ObservableObject {
     
     private let baseURL = "https://www.googleapis.com/gmail/v1"
     private var accessToken: String?
+    private var isRefreshing = false
     
     /// Initialize with access token
     init(accessToken: String? = nil) {
         self.accessToken = accessToken ?? KeychainService.retrieve(key: "gmail_access_token")
     }
     
-    /// Set access token
-    func setAccessToken(_ token: String) {
-        self.accessToken = token
-        _ = KeychainService.store(key: "gmail_access_token", value: token)
+    /// Get refresh token from keychain
+    private var refreshToken: String? {
+        get {
+            return KeychainService.retrieve(key: "gmail_refresh_token")
+        }
+        set {
+            if let token = newValue {
+                _ = KeychainService.store(key: "gmail_refresh_token", value: token)
+            } else {
+                KeychainService.delete(key: "gmail_refresh_token")
+            }
+        }
     }
     
-    /// Clear access token
+    /// Set access token and optionally refresh token
+    func setAccessToken(_ token: String, refreshToken: String? = nil) {
+        self.accessToken = token
+        _ = KeychainService.store(key: "gmail_access_token", value: token)
+        
+        if let refreshToken = refreshToken {
+            self.refreshToken = refreshToken
+        }
+    }
+    
+    /// Clear access token and refresh token
     func clearAccessToken() {
         self.accessToken = nil
         KeychainService.delete(key: "gmail_access_token")
+        KeychainService.delete(key: "gmail_refresh_token")
     }
     
     /// Check if authenticated
     var isAuthenticated: Bool {
-        return accessToken != nil
+        return accessToken != nil || refreshToken != nil
     }
     
-    /// Get the current user's email address
-    func getUserEmail() async throws -> String {
+    /// Refresh access token using refresh token
+    private func refreshAccessToken() async throws {
+        guard !isRefreshing else {
+            // Already refreshing, wait a bit
+            try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+            return
+        }
+        
+        guard let refreshToken = refreshToken else {
+            throw GmailError.notAuthenticated
+        }
+        
+        guard OAuthConfig.isGmailConfigured else {
+            throw GmailError.apiError("Gmail OAuth credentials not configured")
+        }
+        
+        isRefreshing = true
+        defer { isRefreshing = false }
+        
+        let url = URL(string: "https://oauth2.googleapis.com/token")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let body = [
+            "grant_type": "refresh_token",
+            "client_id": OAuthConfig.gmailClientID,
+            "client_secret": OAuthConfig.gmailClientSecret,
+            "refresh_token": refreshToken
+        ]
+        
+        request.httpBody = body.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw GmailError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            // If refresh fails, clear tokens - user needs to re-authenticate
+            if httpResponse.statusCode == 401 {
+                clearAccessToken()
+            }
+            throw GmailError.apiError("Token refresh failed: HTTP \(httpResponse.statusCode): \(errorMessage)")
+        }
+        
+        struct RefreshTokenResponse: Codable {
+            let access_token: String
+            let expires_in: Int?
+            let token_type: String
+        }
+        
+        let tokenResponse = try JSONDecoder().decode(RefreshTokenResponse.self, from: data)
+        setAccessToken(tokenResponse.access_token)
+        
+        print("GmailService: Successfully refreshed access token")
+    }
+    
+    /// Make an authenticated request with automatic token refresh on 401
+    private func makeAuthenticatedRequest(_ request: inout URLRequest) async throws -> (Data, HTTPURLResponse) {
         guard let token = accessToken else {
             throw GmailError.notAuthenticated
         }
         
-        let url = URL(string: "\(baseURL)/users/me/profile")!
-        var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -48,6 +128,35 @@ class GmailService: ObservableObject {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GmailError.invalidResponse
         }
+        
+        // If we get 401, try refreshing the token and retry once
+        if httpResponse.statusCode == 401 && refreshToken != nil {
+            print("GmailService: Access token expired, attempting refresh...")
+            try await refreshAccessToken()
+            
+            // Retry the request with new token
+            guard let newToken = accessToken else {
+                throw GmailError.notAuthenticated
+            }
+            request.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+            
+            let (retryData, retryResponse) = try await URLSession.shared.data(for: request)
+            guard let retryHttpResponse = retryResponse as? HTTPURLResponse else {
+                throw GmailError.invalidResponse
+            }
+            
+            return (retryData, retryHttpResponse)
+        }
+        
+        return (data, httpResponse)
+    }
+    
+    /// Get the current user's email address
+    func getUserEmail() async throws -> String {
+        let url = URL(string: "\(baseURL)/users/me/profile")!
+        var request = URLRequest(url: url)
+        
+        let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
         
         if httpResponse.statusCode == 401 {
             throw GmailError.notAuthenticated
@@ -72,10 +181,6 @@ class GmailService: ObservableObject {
     ///   - maxResults: Maximum number of results to return (default: 10)
     /// - Returns: Array of message references
     func fetchEmails(query: String, maxResults: Int = 10) async throws -> [GmailMessageReference] {
-        guard let token = accessToken else {
-            throw GmailError.notAuthenticated
-        }
-        
         isFetching = true
         lastError = nil
         defer { isFetching = false }
@@ -91,13 +196,7 @@ class GmailService: ObservableObject {
         }
         
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw GmailError.invalidResponse
-        }
+        let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
         
         if httpResponse.statusCode == 401 {
             throw GmailError.notAuthenticated
@@ -116,23 +215,13 @@ class GmailService: ObservableObject {
     /// - Parameter messageId: The message ID from fetchEmails
     /// - Returns: Full GmailMessage object
     func getEmail(messageId: String) async throws -> GmailMessage {
-        guard let token = accessToken else {
-            throw GmailError.notAuthenticated
-        }
-        
         isFetching = true
         lastError = nil
         defer { isFetching = false }
         
         let url = URL(string: "\(baseURL)/users/me/messages/\(messageId)")!
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw GmailError.invalidResponse
-        }
+        let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
         
         if httpResponse.statusCode == 401 {
             throw GmailError.notAuthenticated
@@ -207,14 +296,9 @@ class GmailService: ObservableObject {
     
     /// Mark an email as read
     func markAsRead(messageId: String) async throws {
-        guard let token = accessToken else {
-            throw GmailError.notAuthenticated
-        }
-        
         let url = URL(string: "\(baseURL)/users/me/messages/\(messageId)/modify")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let body: [String: Any] = [
@@ -223,11 +307,7 @@ class GmailService: ObservableObject {
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (_, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw GmailError.invalidResponse
-        }
+        let (_, httpResponse) = try await makeAuthenticatedRequest(&request)
         
         if httpResponse.statusCode == 401 {
             throw GmailError.notAuthenticated

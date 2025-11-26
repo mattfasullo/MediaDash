@@ -18,8 +18,8 @@ struct OAuthConfig {
     // MARK: - Gmail OAuth Credentials
     // TODO: Replace with your actual Gmail OAuth credentials
     // Get them from: https://console.cloud.google.com/apis/credentials
-    static let gmailClientID = "YOUR_GMAIL_CLIENT_ID_HERE"
-    static let gmailClientSecret = "YOUR_GMAIL_CLIENT_SECRET_HERE"
+    static let gmailClientID = "281310450512-nkqqosoq2i1cm8j80ln2b79m3398674d.apps.googleusercontent.com"
+    static let gmailClientSecret = "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"
     
     // MARK: - Validation
     
@@ -31,10 +31,32 @@ struct OAuthConfig {
     }
     
     static var isGmailConfigured: Bool {
-        return !gmailClientID.isEmpty &&
-               gmailClientID != "YOUR_GMAIL_CLIENT_ID_HERE" &&
-               !gmailClientSecret.isEmpty &&
-               gmailClientSecret != "YOUR_GMAIL_CLIENT_SECRET_HERE"
+        // Trim whitespace and check
+        let clientID = gmailClientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clientSecret = gmailClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        let isConfigured = !clientID.isEmpty &&
+               clientID != "YOUR_GMAIL_CLIENT_ID_HERE" &&
+               !clientSecret.isEmpty &&
+               clientSecret != "YOUR_GMAIL_CLIENT_SECRET_HERE"
+        
+        // Debug logging (only in debug builds)
+        #if DEBUG
+        if !isConfigured {
+            print("⚠️ OAuthConfig Debug - Gmail not configured:")
+            print("  gmailClientID.isEmpty: \(clientID.isEmpty)")
+            print("  gmailClientID == 'YOUR_GMAIL_CLIENT_ID_HERE': \(clientID == "YOUR_GMAIL_CLIENT_ID_HERE")")
+            print("  gmailClientID length: \(clientID.count)")
+            if !clientID.isEmpty && clientID.count < 50 {
+                print("  gmailClientID value: \(clientID)")
+            }
+            print("  gmailClientSecret.isEmpty: \(clientSecret.isEmpty)")
+            print("  gmailClientSecret == 'YOUR_GMAIL_CLIENT_SECRET_HERE': \(clientSecret == "YOUR_GMAIL_CLIENT_SECRET_HERE")")
+            print("  gmailClientSecret length: \(clientSecret.count)")
+        }
+        #endif
+        
+        return isConfigured
     }
 }
 

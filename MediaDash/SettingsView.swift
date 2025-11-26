@@ -870,238 +870,119 @@ struct AsanaIntegrationSection: View {
         }
     }
     
+    private var isConnected: Bool {
+        KeychainService.retrieve(key: "asana_access_token") != nil
+    }
+    
+    private func disconnectAsana() {
+        KeychainService.delete(key: "asana_access_token")
+        print("Asana disconnected.")
+    }
+    
     var body: some View {
         SettingsCard {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 16) {
+                // Header
                 HStack {
                     Image(systemName: "link")
                         .foregroundColor(.blue)
-                        .font(.system(size: 18))
+                        .font(.system(size: 16))
                     Text("Asana Integration")
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                 }
                 
                 Text("Fetch dockets and job names from Asana")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                 
-                VStack(alignment: .leading, spacing: 16) {
-                // Note: This section only shows when docketSource == .asana
-                // The toggle is removed since selection is handled by the picker
-                VStack(alignment: .leading, spacing: 8) {
-                        // Connect Button
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 12) {
-                                if isConnecting {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Connecting...")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.secondary)
-                                } else {
-                                    Button("Connect to Asana") {
-                                        connectToAsana()
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(!OAuthConfig.isAsanaConfigured)
-                                }
-                                
-                                // Show connection status
-                                if let token = KeychainService.retrieve(key: "asana_access_token"), !token.isEmpty {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundColor(.green)
-                                            .font(.system(size: 14))
-                                        Text("Connected")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(.green)
-                                    }
-                                }
-                            }
-                            
-                                if let error = connectionError {
-                                    Text(error)
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.red)
-                                        .padding(.top, 4)
-                                }
-                                
-                                // Only show warning if credentials aren't configured AND user isn't connected
-                                let isConnected = KeychainService.retrieve(key: "asana_access_token") != nil
-                                if !OAuthConfig.isAsanaConfigured && !isConnected {
-                                    Text("OAuth credentials not configured. Please update OAuthConfig.swift with your Asana OAuth credentials.")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.orange)
-                                        .padding(.top, 4)
-                                }
-                        }
-                        
-                        // Manual Code Entry (shown when redirect fails)
-                        if showManualCodeEntry {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Divider()
-                                    .padding(.vertical, 4)
-                                
-                                Text("Manual Authorization Code")
-                                    .font(.system(size: 12, weight: .medium))
-                                
-                                Text("Copy the authorization code from your browser and paste it here:")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                                
-                                HStack(spacing: 8) {
-                                    TextField("Enter authorization code", text: $manualAuthCode)
-                                        .textFieldStyle(.roundedBorder)
-                                    
-                                    Button("Submit") {
-                                        submitManualCode()
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(manualAuthCode.isEmpty || isConnecting)
-                                    
-                                    Button("Cancel") {
-                                        showManualCodeEntry = false
-                                        manualAuthCode = ""
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                                
-                                if let url = manualAuthURL {
-                                    Button(action: {
-                                        NSWorkspace.shared.open(url)
-                                    }) {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "safari")
-                                            Text("Open Authorization Page")
-                                        }
-                                        .font(.system(size: 12))
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                            }
-                            .padding(12)
-                            .background(Color.orange.opacity(0.1))
-                            .cornerRadius(8)
-                        }
-                        
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        // Workspace ID
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Workspace ID (optional)")
-                                .font(.system(size: 12, weight: .medium))
-                            TextField("Leave empty to search all workspaces", text: Binding(
-                                get: { settings.asanaWorkspaceID ?? "" },
-                                set: {
-                                    settings.asanaWorkspaceID = $0.isEmpty ? nil : $0
-                                    hasUnsavedChanges = true
-                                }
-                            ))
-                            .textFieldStyle(.roundedBorder)
-                        }
-                        
-                        // Project ID
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Project ID (optional)")
-                                .font(.system(size: 12, weight: .medium))
-                            TextField("Leave empty to search all projects", text: Binding(
-                                get: { settings.asanaProjectID ?? "" },
-                                set: {
-                                    settings.asanaProjectID = $0.isEmpty ? nil : $0
-                                    hasUnsavedChanges = true
-                                }
-                            ))
-                            .textFieldStyle(.roundedBorder)
-                        }
-                        
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        // Custom Fields (optional)
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Custom Fields (optional)")
-                                .font(.system(size: 12, weight: .medium))
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Docket Field Name")
-                                        .font(.system(size: 11))
-                                    TextField("e.g., Docket Number", text: Binding(
-                                        get: { settings.asanaDocketField ?? "" },
-                                        set: {
-                                            settings.asanaDocketField = $0.isEmpty ? nil : $0
-                                            hasUnsavedChanges = true
-                                        }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
-                                }
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Job Name Field Name")
-                                        .font(.system(size: 11))
-                                    TextField("e.g., Job Name", text: Binding(
-                                        get: { settings.asanaJobNameField ?? "" },
-                                        set: {
-                                            settings.asanaJobNameField = $0.isEmpty ? nil : $0
-                                            hasUnsavedChanges = true
-                                        }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
-                                }
-                            }
-                            Text("If not specified, will parse from task names (e.g., '12345_Job Name')")
-                                .font(.system(size: 11))
+                VStack(alignment: .leading, spacing: 12) {
+                    // Connection Status and Actions
+                    HStack(spacing: 12) {
+                        if isConnecting {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Connecting...")
+                                .font(.system(size: 12))
                                 .foregroundColor(.secondary)
-                        }
-                        
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        // Shared Cache Settings
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Shared Cache (Optional)")
-                                .font(.system(size: 12, weight: .medium))
-                            
-                            Toggle("Use Shared Cache", isOn: Binding(
-                                get: { settings.useSharedCache },
-                                set: {
-                                    settings.useSharedCache = $0
-                                    hasUnsavedChanges = true
-                                }
-                            ))
-                            .font(.system(size: 11))
-                            
-                            if settings.useSharedCache {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Shared Cache URL")
-                                        .font(.system(size: 11))
-                                    TextField("file:///Volumes/Server/cache.json or /path/to/cache.json", text: Binding(
-                                        get: { settings.sharedCacheURL ?? "" },
-                                        set: {
-                                            settings.sharedCacheURL = $0.isEmpty ? nil : $0
-                                            hasUnsavedChanges = true
-                                        }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
-                                    Text("Enter a file path (e.g., /Volumes/Server/MediaDash/cache.json) or HTTP URL. MediaDash will read from this shared cache file instead of syncing with Asana directly. Falls back to local sync if unavailable.")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.leading, 20)
+                        } else if isConnected {
+                            HStack(spacing: 6) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                    .font(.system(size: 14))
+                                Text("Connected")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.green)
                             }
+                        } else {
+                            Button("Connect to Asana") {
+                                connectToAsana()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!OAuthConfig.isAsanaConfigured)
                         }
                         
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        // Cache Visualization
-                        CacheVisualizationView(
-                            cacheManager: cacheManager,
-                            settings: settings,
-                            showCacheDetails: $showCacheDetails
-                        )
+                        if isConnected {
+                            Spacer()
+                            Button("Disconnect") {
+                                disconnectAsana()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                    
+                    // Error Messages
+                    if let error = connectionError {
+                        Text(error)
+                            .font(.system(size: 11))
+                            .foregroundColor(.red)
+                            .textSelection(.enabled)
+                    }
+                    
+                    // Config Warning
+                    if !OAuthConfig.isAsanaConfigured && !isConnected {
+                        Text("OAuth credentials not configured")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showManualCodeEntry) {
+            VStack(spacing: 20) {
+                Text("Manual Authorization")
+                    .font(.system(size: 16, weight: .semibold))
+                
+                if let url = manualAuthURL {
+                    Text("Copy the authorization code from your browser:")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    
+                    Button("Open Browser") {
+                        NSWorkspace.shared.open(url)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                
+                TextField("Enter authorization code", text: $manualAuthCode)
+                    .textFieldStyle(.roundedBorder)
+                
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        showManualCodeEntry = false
+                        manualAuthCode = ""
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    Button("Submit") {
+                        submitManualCode()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(manualAuthCode.isEmpty)
+                }
+            }
+            .padding(20)
+            .frame(width: 400)
         }
     }
 }
@@ -1125,7 +1006,7 @@ struct GmailIntegrationSection: View {
     @State private var testError: String?
     @State private var connectedEmail: String?
     @State private var isLoadingEmail = false
-    @State private var hasAuthenticated = false // Track if user has actually authenticated
+    @State private var hasAuthenticated = false
     
     private func connectToGmail() {
         guard OAuthConfig.isGmailConfigured else {
@@ -1141,7 +1022,8 @@ struct GmailIntegrationSection: View {
                 let token = try await oauthService.authenticateGmail(useOutOfBand: false)
                 
                 oauthService.storeToken(token.accessToken, for: "gmail")
-                gmailService.setAccessToken(token.accessToken)
+                // Store both access token and refresh token
+                gmailService.setAccessToken(token.accessToken, refreshToken: token.refreshToken)
                 
                 // Fetch user's email address
                 do {
@@ -1192,7 +1074,8 @@ struct GmailIntegrationSection: View {
                 )
                 
                 oauthService.storeToken(token.accessToken, for: "gmail")
-                gmailService.setAccessToken(token.accessToken)
+                // Store both access token and refresh token
+                gmailService.setAccessToken(token.accessToken, refreshToken: token.refreshToken)
                 
                 // Fetch user's email address
                 do {
@@ -1243,6 +1126,14 @@ struct GmailIntegrationSection: View {
                 print("Failed to load connected email: \(error.localizedDescription)")
             }
         }
+    }
+    
+    private func disconnectGmail() {
+        gmailService.clearAccessToken()
+        connectedEmail = nil
+        hasAuthenticated = false
+        UserDefaults.standard.removeObject(forKey: "gmail_connected_email")
+        print("Gmail disconnected. User can reconnect by clicking 'Connect to Gmail'.")
     }
     
     private func testGmailConnection() {
@@ -1323,345 +1214,163 @@ struct GmailIntegrationSection: View {
     
     var body: some View {
         SettingsCard {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 16) {
+                // Header
                 HStack {
                     Image(systemName: "envelope")
                         .foregroundColor(.red)
-                        .font(.system(size: 18))
+                        .font(.system(size: 16))
                     Text("Gmail Integration")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-                
-                Text("Automatically scan emails for new dockets and create folders")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                
-                VStack(alignment: .leading, spacing: 16) {
-                    // Enable Toggle
-                    Toggle("Enable Gmail Integration", isOn: Binding(
+                        .font(.system(size: 16, weight: .semibold))
+                    Spacer()
+                    Toggle("", isOn: Binding(
                         get: { settings.gmailEnabled },
                         set: {
                             settings.gmailEnabled = $0
                             hasUnsavedChanges = true
                         }
                     ))
-                    
-                    if settings.gmailEnabled {
-                        // Connect Button
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 12) {
-                                if isConnecting {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Connecting...")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.secondary)
-                                } else {
-                                    Button("Connect to Gmail") {
-                                        connectToGmail()
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(!OAuthConfig.isGmailConfigured)
-                                }
-                                
-                                if hasAuthenticated && gmailService.isAuthenticated {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundColor(.green)
-                                            .font(.system(size: 14))
-                                        Text("Connected")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(.green)
-                                    }
-                                }
-                                
-                                // Show connected email address
-                                if let email = connectedEmail {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "envelope.fill")
-                                            .foregroundColor(.secondary)
-                                            .font(.system(size: 11))
-                                        Text(email)
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .padding(.leading, 8)
-                                } else if gmailService.isAuthenticated && !isLoadingEmail {
-                                    // Email will be loaded in onAppear
-                                }
-                            }
-                            
-                            if let error = connectionError {
-                                Text(error)
+                    .labelsHidden()
+                }
+                
+                Text("Automatically scan emails for new dockets")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                
+                if settings.gmailEnabled {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // Connection Status and Actions
+                        HStack(spacing: 12) {
+                            if isConnecting {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                Text("Connecting...")
                                     .font(.system(size: 12))
-                                    .foregroundColor(.red)
-                                    .textSelection(.enabled)
-                                    .padding(.top, 4)
+                                    .foregroundColor(.secondary)
+                            } else if hasAuthenticated && gmailService.isAuthenticated {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                        .font(.system(size: 14))
+                                    Text("Connected")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.green)
+                                    if let email = connectedEmail {
+                                        Text("• \(email)")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            } else {
+                                Button("Connect to Gmail") {
+                                    connectToGmail()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!OAuthConfig.isGmailConfigured)
                             }
                             
-                            // Only show warning if credentials aren't configured AND user isn't connected
-                            if !OAuthConfig.isGmailConfigured && !gmailService.isAuthenticated {
-                                Text("OAuth credentials not configured. Please update OAuthConfig.swift with your Gmail OAuth credentials.")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.orange)
-                                    .padding(.top, 4)
-                            }
-                            
-                            // Test Connection Button (only show if connected)
-                            if gmailService.isAuthenticated {
-                                HStack(spacing: 12) {
+                            if hasAuthenticated && gmailService.isAuthenticated {
+                                Spacer()
+                                HStack(spacing: 8) {
                                     if isTestingConnection {
                                         ProgressView()
-                                            .scaleEffect(0.8)
+                                            .scaleEffect(0.7)
                                         Text("Testing...")
-                                            .font(.system(size: 12))
+                                            .font(.system(size: 11))
                                             .foregroundColor(.secondary)
                                     } else {
-                                        Button("Test Connection") {
+                                        Button("Test") {
                                             testGmailConnection()
                                         }
                                         .buttonStyle(.bordered)
-                                        .disabled(isConnecting)
-                                    }
-                                }
-                                .padding(.top, 4)
-                                
-                                // Test Results
-                                if let result = testResult {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundColor(.green)
-                                                .font(.system(size: 12))
-                                            Text("Test Successful")
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundColor(.green)
-                                        }
-                                        Text(result)
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.secondary)
-                                            .textSelection(.enabled)
-                                    }
-                                    .padding(8)
-                                    .background(Color.green.opacity(0.1))
-                                    .cornerRadius(6)
-                                    .padding(.top, 4)
-                                }
-                                
-                                if let error = testError {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "exclamationmark.triangle.fill")
-                                                .foregroundColor(.red)
-                                                .font(.system(size: 12))
-                                            Text("Test Failed")
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundColor(.red)
-                                        }
-                                        Text(error)
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.red)
-                                            .textSelection(.enabled)
-                                    }
-                                    .padding(8)
-                                    .background(Color.red.opacity(0.1))
-                                    .cornerRadius(6)
-                                    .padding(.top, 4)
-                                }
-                            }
-                        }
-                        
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        // Gmail Search Terms
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Search Terms / Labels")
-                                .font(.system(size: 14, weight: .medium))
-                            
-                            Text("Add terms or labels to search for in email subjects and labels (case-insensitive)")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                            
-                            // List of search terms
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(settings.gmailSearchTerms.indices, id: \.self) { index in
-                                    HStack(spacing: 8) {
-                                        TextField("Search term", text: Binding(
-                                            get: { settings.gmailSearchTerms[index] },
-                                            set: {
-                                                settings.gmailSearchTerms[index] = $0
-                                                hasUnsavedChanges = true
-                                            }
-                                        ))
-                                        .textFieldStyle(.roundedBorder)
+                                        .controlSize(.small)
                                         
-                                        Button(action: {
-                                            settings.gmailSearchTerms.remove(at: index)
-                                            hasUnsavedChanges = true
-                                        }) {
-                                            Image(systemName: "minus.circle.fill")
-                                                .foregroundColor(.red)
+                                        Button("Disconnect") {
+                                            disconnectGmail()
                                         }
-                                        .buttonStyle(.plain)
-                                        .help("Remove this search term")
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
                                     }
                                 }
-                                
-                                // Add new term button
-                                Button(action: {
-                                    settings.gmailSearchTerms.append("")
-                                    hasUnsavedChanges = true
-                                }) {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "plus.circle.fill")
-                                        Text("Add Search Term")
-                                    }
-                                    .font(.system(size: 12))
-                                }
-                                .buttonStyle(.bordered)
-                            }
-                            
-                            // Legacy query field (hidden but kept for backward compatibility)
-                            if !settings.gmailQuery.isEmpty && settings.gmailQuery != "label:\"New Docket\"" {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Legacy Query (deprecated)")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.orange)
-                                    
-                                    TextField("Custom query", text: Binding(
-                                get: { settings.gmailQuery },
-                                set: {
-                                    settings.gmailQuery = $0
-                                    hasUnsavedChanges = true
-                                }
-                            ))
-                            .textFieldStyle(.roundedBorder)
-                            
-                                    Text("This field is deprecated. Use Search Terms above instead.")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.orange)
-                                }
-                                .padding(.top, 4)
                             }
                         }
                         
-                        // Polling Interval
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Scan Interval (seconds)")
-                                .font(.system(size: 14, weight: .medium))
-                            
-                            TextField("300", value: Binding(
-                                get: { settings.gmailPollInterval },
-                                set: {
-                                    settings.gmailPollInterval = max(60, $0) // Minimum 60 seconds
-                                    hasUnsavedChanges = true
-                                }
-                            ), format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            
-                            Text("How often to check for new emails (minimum: 60 seconds)")
+                        // Error Messages
+                        if let error = connectionError {
+                            Text(error)
                                 .font(.system(size: 11))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.red)
+                                .textSelection(.enabled)
                         }
                         
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        // Status Information
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Status")
-                                .font(.system(size: 14, weight: .medium))
-                            
-                            Text("Email scanning runs automatically in the background when enabled. The service will scan for new docket emails and create folders automatically.")
+                        if let testError = testError {
+                            Text(testError)
                                 .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                                .foregroundColor(.red)
+                                .textSelection(.enabled)
                         }
                         
-                        // Manual Code Entry
-                        if showManualCodeEntry {
-                            Divider()
-                                .padding(.vertical, 4)
-                            
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Manual Authorization Code")
-                                    .font(.system(size: 12, weight: .medium))
-                                
-                                Text("Copy the authorization code from your browser and paste it here:")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                                
-                                HStack(spacing: 8) {
-                                    TextField("Enter authorization code", text: $manualAuthCode)
-                                        .textFieldStyle(.roundedBorder)
-                                    
-                                    Button("Submit") {
-                                        submitManualCode()
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(manualAuthCode.isEmpty || isConnecting)
-                                    
-                                    Button("Cancel") {
-                                        showManualCodeEntry = false
-                                        manualAuthCode = ""
-                                    }
-                                }
-                            }
+                        if let testResult = testResult {
+                            Text(testResult)
+                                .font(.system(size: 11))
+                                .foregroundColor(.green)
+                                .textSelection(.enabled)
+                        }
+                        
+                        // Config Warning
+                        if !OAuthConfig.isGmailConfigured && !gmailService.isAuthenticated {
+                            Text("OAuth credentials not configured")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
                         }
                     }
                 }
             }
         }
-        .onAppear {
-            // Load access token if available, but don't mark as authenticated yet
-            // Authentication status should only be set after successful OAuth flow
-            if let token = KeychainService.retrieve(key: "gmail_access_token"), !token.isEmpty {
-                gmailService.setAccessToken(token)
-                // Verify token is valid by trying to get user email
-                // If it fails, we'll clear the token
-            } else {
-                // Clear email if no valid token
-                connectedEmail = nil
-                hasAuthenticated = false
-                UserDefaults.standard.removeObject(forKey: "gmail_connected_email")
-            }
-            
-            // Load connected email from UserDefaults if available
-            if let storedEmail = UserDefaults.standard.string(forKey: "gmail_connected_email") {
-                connectedEmail = storedEmail
-                // Only mark as authenticated if we have both token and stored email
-                // This indicates a previous successful authentication
-                if gmailService.isAuthenticated {
-                    hasAuthenticated = true
+        .sheet(isPresented: $showManualCodeEntry) {
+            VStack(spacing: 20) {
+                Text("Manual Authorization")
+                    .font(.system(size: 16, weight: .semibold))
+                
+                if let url = manualAuthURL {
+                    Text("Copy the authorization code from your browser:")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    
+                    Button("Open Browser") {
+                        NSWorkspace.shared.open(url)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                
+                TextField("Enter authorization code", text: $manualAuthCode)
+                    .textFieldStyle(.roundedBorder)
+                
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        showManualCodeEntry = false
+                        manualAuthCode = ""
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    Button("Submit") {
+                        submitManualCode()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(manualAuthCode.isEmpty)
                 }
             }
+            .padding(20)
+            .frame(width: 400)
         }
         .task {
-            // Verify token is valid by trying to fetch email
-            // If we have a token but no stored email, try to fetch it
-            if gmailService.isAuthenticated && connectedEmail == nil && !isLoadingEmail {
+            if gmailService.isAuthenticated && connectedEmail == nil {
                 await loadConnectedEmail()
-                // If successful, mark as authenticated
-                if connectedEmail != nil {
-                    hasAuthenticated = true
-                } else {
-                    // If email fetch failed, token might be invalid - verify by trying to get email
-                    do {
-                        _ = try await gmailService.getUserEmail()
-                        hasAuthenticated = true
-                    } catch {
-                        // Token is invalid - clear it
-                        gmailService.clearAccessToken()
-                        hasAuthenticated = false
-                        connectedEmail = nil
-                        UserDefaults.standard.removeObject(forKey: "gmail_connected_email")
-                    }
-                }
             }
         }
     }
 }
+
 
 // MARK: - Simian Integration Section
 
@@ -1674,122 +1383,6 @@ struct SimianIntegrationSection: View {
     @State private var isTesting = false
     @State private var testResult: String?
     @State private var testError: String?
-    
-    var body: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    Image(systemName: "link.circle")
-                        .foregroundColor(.purple)
-                        .font(.system(size: 18))
-                    Text("Simian Integration")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-                
-                Text("Create Simian projects automatically from notifications via Zapier webhook")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                
-                VStack(alignment: .leading, spacing: 16) {
-                    // Enable Toggle
-                    Toggle("Enable Simian Integration", isOn: Binding(
-                        get: { settings.simianEnabled },
-                        set: {
-                            settings.simianEnabled = $0
-                            hasUnsavedChanges = true
-                        }
-                    ))
-                    
-                    if settings.simianEnabled {
-                        // Webhook URL
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Zapier Webhook URL")
-                                .font(.system(size: 14, weight: .medium))
-                            
-                            TextField("https://hooks.zapier.com/hooks/catch/...", text: $webhookURL)
-                                .textFieldStyle(.roundedBorder)
-                                .onChange(of: webhookURL) { oldValue, newValue in
-                                    settings.simianWebhookURL = newValue.isEmpty ? nil : newValue
-                                    if newValue.isEmpty {
-                                        simianService.clearWebhookURL()
-                                    } else {
-                                        simianService.setWebhookURL(newValue)
-                                    }
-                                    hasUnsavedChanges = true
-                                }
-                            
-                            Text("Get this URL from your Zapier Zap: Webhook by Zapier (Catch Hook) → Simian (Create Project)")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                            
-                            // Test Webhook Button
-                            if simianService.isConfigured {
-                                HStack(spacing: 12) {
-                                    if isTesting {
-                                        ProgressView()
-                                            .scaleEffect(0.8)
-                                        Text("Testing...")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(.secondary)
-                                    } else {
-                                        Button("Test Webhook") {
-                                            testWebhook()
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(isTesting)
-                                    }
-                                    
-                                    if testResult != nil {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundColor(.green)
-                                                .font(.system(size: 12))
-                                            Text("Test successful")
-                                                .font(.system(size: 11))
-                                                .foregroundColor(.green)
-                                        }
-                                    }
-                                    
-                                    if testError != nil {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "exclamationmark.triangle.fill")
-                                                .foregroundColor(.red)
-                                                .font(.system(size: 12))
-                                            Text("Test failed")
-                                                .font(.system(size: 11))
-                                                .foregroundColor(.red)
-                                        }
-                                    }
-                                }
-                                .padding(.top, 4)
-                                
-                                if let error = testError {
-                                    Text(error)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.red)
-                                        .textSelection(.enabled)
-                                        .padding(.top, 2)
-                                }
-                            }
-                            
-                            if !simianService.isConfigured && settings.simianEnabled {
-                                Text("Please enter a valid Zapier webhook URL")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.orange)
-                                    .padding(.top, 2)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .onAppear {
-            webhookURL = settings.simianWebhookURL ?? ""
-            if !webhookURL.isEmpty {
-                simianService.setWebhookURL(webhookURL)
-            }
-        }
-    }
     
     private func testWebhook() {
         guard simianService.isConfigured else {
@@ -1804,7 +1397,6 @@ struct SimianIntegrationSection: View {
         
         Task {
             do {
-                // Test with a sample docket
                 try await simianService.createJob(docketNumber: "TEST", jobName: "Test Job")
                 
                 await MainActor.run {
@@ -1819,6 +1411,103 @@ struct SimianIntegrationSection: View {
                     isTesting = false
                 }
             }
+        }
+    }
+    
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 16) {
+                // Header
+                HStack {
+                    Image(systemName: "link.circle")
+                        .foregroundColor(.purple)
+                        .font(.system(size: 16))
+                    Text("Simian Integration")
+                        .font(.system(size: 16, weight: .semibold))
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { settings.simianEnabled },
+                        set: {
+                            settings.simianEnabled = $0
+                            hasUnsavedChanges = true
+                        }
+                    ))
+                    .labelsHidden()
+                }
+                
+                Text("Create Simian projects automatically from notifications")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                
+                if settings.simianEnabled {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // Status
+                        if simianService.isConfigured {
+                            HStack(spacing: 6) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                    .font(.system(size: 14))
+                                Text("Configured")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.green)
+                            }
+                        } else {
+                            Text("Webhook URL required (configure in Advanced Settings)")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                        }
+                        
+                        // Test Button
+                        if simianService.isConfigured {
+                            HStack(spacing: 12) {
+                                if isTesting {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                    Text("Testing...")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Button("Test") {
+                                        testWebhook()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                            }
+                        }
+                        
+                        // Test Results
+                        if let testError = testError {
+                            Text(testError)
+                                .font(.system(size: 11))
+                                .foregroundColor(.red)
+                                .textSelection(.enabled)
+                        }
+                        
+                        if let testResult = testResult {
+                            Text(testResult)
+                                .font(.system(size: 11))
+                                .foregroundColor(.green)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            updateWebhookURL()
+        }
+        .onChange(of: settings.simianWebhookURL) { _, _ in
+            updateWebhookURL()
+        }
+    }
+    
+    private func updateWebhookURL() {
+        webhookURL = settings.simianWebhookURL ?? ""
+        if !webhookURL.isEmpty {
+            simianService.setWebhookURL(webhookURL)
+        } else {
+            simianService.clearWebhookURL()
         }
     }
 }
@@ -2540,6 +2229,227 @@ struct AdvancedSettingsSection: View {
                         .toggleStyle(.switch)
                     }
 
+                    // Gmail Advanced Settings
+                    if settings.gmailEnabled {
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Gmail Integration")
+                                .font(.system(size: 14, weight: .medium))
+                            
+                            // Search Terms
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Search Terms / Labels")
+                                    .font(.system(size: 13))
+                                
+                                Text("Add terms or labels to search for in email subjects and labels (case-insensitive)")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(settings.gmailSearchTerms.indices, id: \.self) { index in
+                                        HStack(spacing: 8) {
+                                            TextField("Search term", text: Binding(
+                                                get: { settings.gmailSearchTerms[index] },
+                                                set: {
+                                                    settings.gmailSearchTerms[index] = $0
+                                                    hasUnsavedChanges = true
+                                                }
+                                            ))
+                                            .textFieldStyle(.roundedBorder)
+                                            
+                                            Button(action: {
+                                                settings.gmailSearchTerms.remove(at: index)
+                                                hasUnsavedChanges = true
+                                            }) {
+                                                Image(systemName: "minus.circle.fill")
+                                                    .foregroundColor(.red)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                    
+                                    Button(action: {
+                                        settings.gmailSearchTerms.append("")
+                                        hasUnsavedChanges = true
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "plus.circle.fill")
+                                            Text("Add Search Term")
+                                        }
+                                        .font(.system(size: 12))
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            
+                            // Polling Interval
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Scan Interval (seconds)")
+                                    .font(.system(size: 13))
+                                
+                                TextField("300", value: Binding(
+                                    get: { settings.gmailPollInterval },
+                                    set: {
+                                        settings.gmailPollInterval = max(60, $0)
+                                        hasUnsavedChanges = true
+                                    }
+                                ), format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 120)
+                                
+                                Text("How often to check for new emails (minimum: 60 seconds)")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    
+                    // Asana Advanced Settings
+                    if settings.docketSource == .asana {
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Asana Integration")
+                                .font(.system(size: 14, weight: .medium))
+                            
+                            // Workspace ID
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Workspace ID (optional)")
+                                    .font(.system(size: 13))
+                                TextField("Leave empty to search all workspaces", text: Binding(
+                                    get: { settings.asanaWorkspaceID ?? "" },
+                                    set: {
+                                        settings.asanaWorkspaceID = $0.isEmpty ? nil : $0
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                            }
+                            
+                            // Project ID
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Project ID (optional)")
+                                    .font(.system(size: 13))
+                                TextField("Leave empty to search all projects", text: Binding(
+                                    get: { settings.asanaProjectID ?? "" },
+                                    set: {
+                                        settings.asanaProjectID = $0.isEmpty ? nil : $0
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                            }
+                            
+                            Divider()
+                                .padding(.vertical, 4)
+                            
+                            // Custom Fields
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Custom Fields (optional)")
+                                    .font(.system(size: 13))
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Docket Field Name")
+                                            .font(.system(size: 11))
+                                        TextField("e.g., Docket Number", text: Binding(
+                                            get: { settings.asanaDocketField ?? "" },
+                                            set: {
+                                                settings.asanaDocketField = $0.isEmpty ? nil : $0
+                                                hasUnsavedChanges = true
+                                            }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                    }
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Job Name Field Name")
+                                            .font(.system(size: 11))
+                                        TextField("e.g., Job Name", text: Binding(
+                                            get: { settings.asanaJobNameField ?? "" },
+                                            set: {
+                                                settings.asanaJobNameField = $0.isEmpty ? nil : $0
+                                                hasUnsavedChanges = true
+                                            }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                    }
+                                }
+                                Text("If not specified, will parse from task names (e.g., '12345_Job Name')")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Divider()
+                                .padding(.vertical, 4)
+                            
+                            // Shared Cache
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Shared Cache (Optional)")
+                                    .font(.system(size: 13))
+                                
+                                Toggle("Use Shared Cache", isOn: Binding(
+                                    get: { settings.useSharedCache },
+                                    set: {
+                                        settings.useSharedCache = $0
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .font(.system(size: 12))
+                                
+                                if settings.useSharedCache {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Shared Cache URL")
+                                            .font(.system(size: 11))
+                                        TextField("file:///Volumes/Server/cache.json or /path/to/cache.json", text: Binding(
+                                            get: { settings.sharedCacheURL ?? "" },
+                                            set: {
+                                                settings.sharedCacheURL = $0.isEmpty ? nil : $0
+                                                hasUnsavedChanges = true
+                                            }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                        Text("Enter a file path (e.g., /Volumes/Server/MediaDash/cache.json) or HTTP URL. MediaDash will read from this shared cache file instead of syncing with Asana directly. Falls back to local sync if unavailable.")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.leading, 20)
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Simian Advanced Settings
+                    if settings.simianEnabled {
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Simian Integration")
+                                .font(.system(size: 14, weight: .medium))
+                            
+                            // Webhook URL
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Zapier Webhook URL")
+                                    .font(.system(size: 13))
+                                
+                                TextField("https://hooks.zapier.com/hooks/catch/...", text: Binding(
+                                    get: { settings.simianWebhookURL ?? "" },
+                                    set: {
+                                        settings.simianWebhookURL = $0.isEmpty ? nil : $0
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                
+                                Text("Get this URL from your Zapier Zap: Webhook by Zapier (Catch Hook) → Simian (Create Project)")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+
                 }
             }
         }
@@ -2753,3 +2663,4 @@ struct CSVColumnMappingSection: View {
         }
     }
 }
+

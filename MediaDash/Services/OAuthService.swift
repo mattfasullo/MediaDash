@@ -217,11 +217,24 @@ class OAuthService: ObservableObject {
             URLQueryItem(name: "state", value: state)
         ]
         
+        // Debug: Log what we're sending
+        #if DEBUG
+        print("🔍 Gmail OAuth Debug:")
+        print("  Client ID: \(clientId)")
+        print("  Client ID length: \(clientId.count)")
+        print("  Redirect URI: \(redirectURI)")
+        print("  Scopes: \(scopeString)")
+        #endif
+        
         components.queryItems = queryItems
         
         guard let authURL = components.url else {
             throw OAuthError.invalidURL
         }
+        
+        #if DEBUG
+        print("  Authorization URL: \(authURL.absoluteString)")
+        #endif
         
         if useOutOfBand {
             // Out-of-band flow: user will see code in browser and paste it
@@ -308,6 +321,16 @@ class OAuthService: ObservableObject {
         
         guard httpResponse.statusCode == 200 else {
             let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            
+            // Provide more helpful error messages
+            if httpResponse.statusCode == 401 {
+                if errorMessage.contains("invalid_client") {
+                    throw OAuthError.serverError("Invalid Client ID or Secret. Please verify:\n1. Client ID and Secret are correct in OAuthConfig.swift\n2. Redirect URI 'http://localhost:8081/callback' is added in Google Cloud Console\n3. OAuth consent screen is configured\n\nError: \(errorMessage)")
+                } else {
+                    throw OAuthError.serverError("Authentication failed (401). Error: \(errorMessage)")
+                }
+            }
+            
             throw OAuthError.serverError("HTTP \(httpResponse.statusCode): \(errorMessage)")
         }
         
