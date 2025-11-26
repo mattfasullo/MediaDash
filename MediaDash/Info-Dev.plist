@@ -5,7 +5,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.4.0</string>
 	<key>CFBundleVersion</key>
-	<string>39</string>
+	<string>47</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>SUAllowsAutomaticUpdates</key>
@@ -20,4 +20,3 @@
 	<string>mkwmbcnLrJH+vvLx8Y4rs6OfEEU11wSA3b+ea84rZbQ=</string>
 </dict>
 </plist>
-
