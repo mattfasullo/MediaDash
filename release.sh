@@ -177,6 +177,7 @@ import re
 import sys
 
 version = "$VERSION"
+build_number = "$BUILD_NUMBER"
 release_notes = """$RELEASE_NOTES""".replace('"""', "'")
 pub_date = "$PUB_DATE"
 signature = "$SIGNATURE"
@@ -192,7 +193,7 @@ new_item = f"""        <item>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v{version}/{app_name}.zip"
-                sparkle:version="{version}"
+                sparkle:version="{build_number}"
                 sparkle:shortVersionString="{version}"
                 sparkle:edSignature="{signature}"
                 length="{file_size}"
