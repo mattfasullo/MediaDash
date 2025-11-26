@@ -82,7 +82,7 @@ class AsanaService: ObservableObject {
             var components = URLComponents(string: "\(baseURL)/projects")!
             var queryItems: [URLQueryItem] = [
                 URLQueryItem(name: "workspace", value: workspaceID),
-                URLQueryItem(name: "opt_fields", value: "gid,name,archived"),
+                URLQueryItem(name: "opt_fields", value: "gid,name,archived,created_by,owner,notes,color,due_date,public,team,custom_field_settings"),
                 URLQueryItem(name: "limit", value: "\(limit)")
             ]
             
@@ -178,7 +178,7 @@ class AsanaService: ObservableObject {
         repeat {
             var components = URLComponents(string: "\(baseURL)/tasks")!
             var queryItems: [URLQueryItem] = [
-                URLQueryItem(name: "opt_fields", value: "gid,name,custom_fields"),
+                URLQueryItem(name: "opt_fields", value: "gid,name,custom_fields,modified_at,parent,memberships"),
                 URLQueryItem(name: "limit", value: "\(limit)")
             ]
             
@@ -262,11 +262,21 @@ class AsanaService: ObservableObject {
         
         // If no project specified, fetch all projects from workspace and get tasks from all of them
         var allTasks: [AsanaTask] = []
+        var projectMetadataMap: [String: ProjectMetadata] = [:] // project GID -> ProjectMetadata
         
         if let projectID = projectID {
-            // Fetch tasks from specific project (limit to 500 to avoid pagination issues)
-            let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: projectID, maxTasks: 500)
+            // Fetch project metadata for the specific project
+            if let workspaceID = workspaceID {
+                let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: nil)
+                if let project = projects.first(where: { $0.gid == projectID }) {
+                    projectMetadataMap[projectID] = createProjectMetadata(from: project)
+                }
+            }
+            
+            // Fetch ALL tasks from specific project (no limit to get all dockets)
+            let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: projectID, maxTasks: nil)
             allTasks = tasks
+            print("🔄 [SYNC] Fetched \(tasks.count) tasks from project")
         } else {
             // Fetch all projects and get tasks from each
             var finalWorkspaceID = workspaceID
@@ -280,10 +290,16 @@ class AsanaService: ObservableObject {
             }
             
             if let workspaceID = finalWorkspaceID {
-                let projects = try await fetchProjects(workspaceID: workspaceID)
-                print("🔄 [SYNC] Found \(projects.count) projects, fetching tasks...")
+                // Fetch ALL projects (no limit to ensure we get all dockets)
+                let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: nil)
+                print("🔄 [SYNC] Found \(projects.count) projects, fetching ALL tasks from each...")
                 
-                // Fetch tasks from each project (limit to 500 per project to avoid pagination)
+                // Build project metadata map
+                for project in projects {
+                    projectMetadataMap[project.gid] = createProjectMetadata(from: project)
+                }
+                
+                // Fetch ALL tasks from each project (no limit to ensure we get all dockets)
                 for (index, project) in projects.enumerated() {
                     // Only log every 10th project to reduce noise
                     if index % 10 == 0 || index == projects.count - 1 {
@@ -291,134 +307,248 @@ class AsanaService: ObservableObject {
                     }
                     
                     do {
-                        // Limit to 500 tasks per project to avoid pagination hell
-                        let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: project.gid, maxTasks: 500)
+                        // Fetch ALL tasks (no limit) to ensure we get all dockets including current year
+                        let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: project.gid, maxTasks: nil)
                         allTasks.append(contentsOf: tasks)
+                        if index % 10 == 0 || index == projects.count - 1 {
+                            print("   Project \(index + 1): \(tasks.count) tasks")
+                        }
                     } catch {
-                        // Silently continue with other projects
+                        // Log error but continue with other projects
+                        print("⚠️ [SYNC] Error fetching tasks from project \(index + 1): \(error.localizedDescription)")
                     }
                 }
             }
         }
         
-        var dockets: [DocketInfo] = []
-        var parsedCount = 0
+        // First pass: Parse all tasks and identify which have docket numbers
+        var tasksWithDockets: [String: (task: AsanaTask, docketInfo: DocketInfo)] = [:] // keyed by task gid
+        var tasksWithoutDockets: [AsanaTask] = []
+        var parentToChildren: [String: [AsanaTask]] = [:] // parent gid -> children tasks
         
         for task in allTasks {
-            // Try to extract docket and job name
-            if let docketInfo = parseDocketFromTask(task, docketField: docketField, jobNameField: jobNameField) {
-                dockets.append(docketInfo)
-                parsedCount += 1
+            let parseResult = parseDocketFromString(task.name)
+            
+            if let docket = parseResult.docket {
+                // Get project metadata from task's memberships
+                var projectMetadata: ProjectMetadata? = nil
+                if let memberships = task.memberships {
+                    for membership in memberships {
+                        if let projectGid = membership.project?.gid,
+                           let metadata = projectMetadataMap[projectGid] {
+                            // Enhance metadata with custom field values from the task
+                            if let customFields = task.custom_fields {
+                                var taskCustomFields = metadata.customFields
+                                for field in customFields {
+                                    if let value = field.display_value, !value.isEmpty {
+                                        taskCustomFields[field.name] = value
+                                    }
+                                }
+                                // Create updated metadata with task-specific custom field values
+                                projectMetadata = ProjectMetadata(
+                                    projectGid: metadata.projectGid,
+                                    projectName: metadata.projectName,
+                                    createdBy: metadata.createdBy,
+                                    owner: metadata.owner,
+                                    notes: metadata.notes,
+                                    color: metadata.color,
+                                    dueDate: metadata.dueDate,
+                                    team: metadata.team,
+                                    customFields: taskCustomFields
+                                )
+                            } else {
+                                projectMetadata = metadata
+                            }
+                            break // Use first project found
+                        }
+                    }
+                }
+                
+                // Task has a docket number - this will be in the main list
+                let docketInfo = DocketInfo(
+                    number: docket,
+                    jobName: parseResult.jobName.isEmpty ? task.name : parseResult.jobName,
+                    fullName: "\(docket)_\(parseResult.jobName.isEmpty ? task.name : parseResult.jobName)",
+                    updatedAt: task.modified_at,
+                    metadataType: parseResult.metadataType,
+                    subtasks: nil, // Will be populated in second pass
+                    projectMetadata: projectMetadata
+                )
+                tasksWithDockets[task.gid] = (task: task, docketInfo: docketInfo)
+            } else {
+                // Task doesn't have a docket number
+                tasksWithoutDockets.append(task)
+                
+                // Track parent-child relationships
+                if let parentGid = task.parent?.gid {
+                    if parentToChildren[parentGid] == nil {
+                        parentToChildren[parentGid] = []
+                    }
+                    parentToChildren[parentGid]?.append(task)
+                }
             }
         }
         
-        print("✅ [SYNC] Complete: \(parsedCount) dockets from \(allTasks.count) tasks")
-        return dockets
+        // Second pass: Attach subtasks to their parent docket tasks
+        var finalDockets: [DocketInfo] = []
+        
+        for (taskGid, taskData) in tasksWithDockets {
+            var subtasks: [DocketSubtask] = []
+            
+            // Find all children of this task that don't have docket numbers
+            if let children = parentToChildren[taskGid] {
+                for childTask in children {
+                    let childParseResult = parseDocketFromString(childTask.name)
+                    let subtask = DocketSubtask(
+                        name: childParseResult.jobName.isEmpty ? childTask.name : childParseResult.jobName,
+                        updatedAt: childTask.modified_at,
+                        metadataType: childParseResult.metadataType
+                    )
+                    subtasks.append(subtask)
+                }
+            }
+            
+            // Create final docket info with subtasks and project metadata
+            let finalDocket = DocketInfo(
+                number: taskData.docketInfo.number,
+                jobName: taskData.docketInfo.jobName,
+                fullName: taskData.docketInfo.fullName,
+                updatedAt: taskData.docketInfo.updatedAt,
+                metadataType: taskData.docketInfo.metadataType,
+                subtasks: subtasks.isEmpty ? nil : subtasks,
+                projectMetadata: taskData.docketInfo.projectMetadata
+            )
+            finalDockets.append(finalDocket)
+        }
+        
+        let subtaskCount = finalDockets.compactMap { $0.subtasks?.count }.reduce(0, +)
+        print("✅ [SYNC] Complete: \(finalDockets.count) dockets with numbers from \(allTasks.count) tasks")
+        print("   - \(tasksWithoutDockets.count) tasks without docket numbers")
+        if subtaskCount > 0 {
+            print("   - \(subtaskCount) subtasks attached to docket tasks")
+        }
+        
+        return finalDockets
     }
     
-    /// Parse docket and job name from Asana task
-    private func parseDocketFromTask(_ task: AsanaTask, docketField: String?, jobNameField: String?) -> DocketInfo? {
-        // Option 1: Use custom fields if specified
-        if let docketField = docketField, let jobNameField = jobNameField {
-            let docketNumber = task.getCustomFieldValue(name: docketField) ?? ""
-            let jobName = task.getCustomFieldValue(name: jobNameField) ?? task.name
-            
-            if !docketNumber.isEmpty {
-                return DocketInfo(
-                    number: docketNumber,
-                    jobName: jobName.isEmpty ? task.name : jobName,
-                    fullName: "\(docketNumber)_\(jobName.isEmpty ? task.name : jobName)"
-                )
-            }
+    
+    /// Extract docket number and job name from any string
+    /// Docket is defined as exactly 5 digits, optionally followed by -XX suffix (like -US, -CA)
+    func parseDocketFromString(_ text: String) -> (docket: String?, jobName: String, metadataType: String?) {
+        // Pattern: 5 digits, optionally followed by -XX suffix (1-3 uppercase letters)
+        let docketPattern = #"\d{5}(?:-[A-Z]{1,3})?"#
+        
+        guard let regex = try? NSRegularExpression(pattern: docketPattern, options: []),
+              let match = regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)),
+              let docketRange = Range(match.range, in: text) else {
+            // No docket found - return cleaned job name
+            let cleaned = cleanJobName(from: text, docketRange: nil)
+            let metadata = extractMetadataType(from: text)
+            return (nil, cleaned, metadata)
         }
         
-        // Option 2: Parse from task name
-        // Try various formats: "Job Name - 12345 (Client) - Producer", "12345_Job Name", "Docket 12345: Job Name", "12345 - Job Name"
-        let taskName = task.name
+        let docket = String(text[docketRange])
+        let metadata = extractMetadataType(from: text)
+        let jobName = cleanJobName(from: text, docketRange: docketRange)
         
-        // Format: "Job Name - 12345 (Client) - Producer" or "Job Name - 12345 - Producer"
-        // Example: "Vertex The Journey of Pain - 24517 (Klick) - SY"
-        // Pattern: Look for " - " followed by digits, optionally followed by " (Client) - Producer"
-        if let dashRange = taskName.range(of: " - ") {
-            let beforeFirstDash = String(taskName[..<dashRange.lowerBound]).trimmingCharacters(in: .whitespaces)
-            let afterFirstDash = String(taskName[dashRange.upperBound...]).trimmingCharacters(in: .whitespaces)
-            
-            // Try to extract docket number from after the first dash
-            // Could be: "24517 (Klick) - SY" or "24517 - SY" or just "24517"
-            let docketPattern = #"^(\d+)"#
-            if let docketMatch = afterFirstDash.range(of: docketPattern, options: .regularExpression) {
-                let docketNumber = String(afterFirstDash[docketMatch])
-                let jobName = beforeFirstDash
-                
-                if !docketNumber.isEmpty && !jobName.isEmpty {
-                    return DocketInfo(
-                        number: docketNumber,
-                        jobName: jobName,
-                        fullName: "\(docketNumber)_\(jobName)"
-                    )
-                }
-            }
-        }
+        return (docket, jobName, metadata)
+    }
+    
+    /// Extract metadata type (SESSION, PREP, POST, JOB INFO, SESSION REPORT) from text
+    private func extractMetadataType(from text: String) -> String? {
+        let metadataKeywords = ["SESSION REPORT", "JOB INFO", "SESSION", "PREP", "POST"]
         
-        // Format: "12345_Job Name"
-        if let underscoreIndex = taskName.firstIndex(of: "_") {
-            let docketPart = String(taskName[..<underscoreIndex]).trimmingCharacters(in: .whitespaces)
-            let jobPart = String(taskName[taskName.index(after: underscoreIndex)...]).trimmingCharacters(in: .whitespaces)
-            
-            if !docketPart.isEmpty && !jobPart.isEmpty {
-                let docketNumber = extractDocketNumber(from: docketPart)
-                if !docketNumber.isEmpty {
-                    return DocketInfo(
-                        number: docketNumber,
-                        jobName: jobPart,
-                        fullName: taskName
-                    )
-                }
-            }
-        }
-        
-        // Format: "Docket 12345: Job Name" or "12345: Job Name"
-        if let colonIndex = taskName.firstIndex(of: ":") {
-            let beforeColon = String(taskName[..<colonIndex]).trimmingCharacters(in: .whitespaces)
-            let afterColon = String(taskName[taskName.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
-            
-            let docketNumber = extractDocketNumber(from: beforeColon)
-            if !docketNumber.isEmpty && !afterColon.isEmpty {
-                return DocketInfo(
-                    number: docketNumber,
-                    jobName: afterColon,
-                    fullName: taskName
-                )
-            }
-        }
-        
-        // Format: "12345 - Job Name" (docket first)
-        if let dashIndex = taskName.range(of: " - ")?.lowerBound {
-            let beforeDash = String(taskName[..<dashIndex]).trimmingCharacters(in: .whitespaces)
-            let afterDash = String(taskName[taskName.index(dashIndex, offsetBy: 3)...]).trimmingCharacters(in: .whitespaces)
-            
-            // Check if beforeDash is a docket number
-            let docketNumber = extractDocketNumber(from: beforeDash)
-            if !docketNumber.isEmpty && !afterDash.isEmpty && docketNumber == beforeDash {
-                return DocketInfo(
-                    number: docketNumber,
-                    jobName: afterDash,
-                    fullName: taskName
-                )
+        for keyword in metadataKeywords {
+            let escapedKeyword = NSRegularExpression.escapedPattern(for: keyword)
+            // Match keyword at start (with optional leading whitespace) followed by " - " or space
+            let pattern = #"^\s*"# + escapedKeyword + #"(\s*-\s*|\s+|$)"#
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+               regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)) != nil {
+                return keyword.uppercased()
             }
         }
         
         return nil
     }
     
-    /// Extract docket number from string (handles various formats)
-    private func extractDocketNumber(from text: String) -> String {
-        // Remove "Docket" prefix if present
-        let cleaned = text.replacingOccurrences(of: "Docket", with: "", options: .caseInsensitive).trimmingCharacters(in: .whitespaces)
+    /// Clean up the job name by removing docket, production company, and initials
+    private func cleanJobName(from text: String, docketRange: Range<String.Index>?) -> String {
+        var result = text
         
-        // Extract alphanumeric docket number
-        let docketNumber = cleaned.components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
-        return docketNumber.isEmpty ? cleaned : docketNumber
+        // Remove the docket number if we have its range
+        if let range = docketRange {
+            result.removeSubrange(range)
+        }
+        
+        // Remove underscores at start (from "12345_JobName" format after docket removal)
+        if let regex = try? NSRegularExpression(pattern: #"^_+"#, options: []) {
+            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        
+        // Remove metadata keywords FIRST (before other cleaning): "JOB INFO", "SESSION REPORT", "SESSION" (case-insensitive)
+        // These should be treated as metadata, not part of the job name
+        // Process in order: longest first to avoid partial matches
+        let metadataKeywords = ["SESSION REPORT", "JOB INFO", "SESSION"]
+        for keyword in metadataKeywords {
+            let escapedKeyword = NSRegularExpression.escapedPattern(for: keyword)
+            
+            // Pattern 1: Keyword at start (with optional leading whitespace) followed by " - " or space
+            // Handles: "SESSION - ", " SESSION - ", "SESSION ", etc.
+            let pattern1 = #"^\s*"# + escapedKeyword + #"\s*-\s*"#
+            if let regex = try? NSRegularExpression(pattern: pattern1, options: [.caseInsensitive]) {
+                result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: "")
+            }
+            
+            // Pattern 2: Keyword at start followed by space (no dash)
+            let pattern2 = #"^\s*"# + escapedKeyword + #"\s+"#
+            if let regex = try? NSRegularExpression(pattern: pattern2, options: [.caseInsensitive]) {
+                result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: "")
+            }
+            
+            // Pattern 3: Keyword with dashes/spaces around it (anywhere in string)
+            let pattern3 = #"\s*-\s*"# + escapedKeyword + #"(\s*-\s*|\s+|$)"#
+            if let regex = try? NSRegularExpression(pattern: pattern3, options: [.caseInsensitive]) {
+                result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: " ")
+            }
+            
+            // Pattern 4: Standalone keyword with spaces (middle or end of string)
+            let pattern4 = #"\s+"# + escapedKeyword + #"(\s+|$)"#
+            if let regex = try? NSRegularExpression(pattern: pattern4, options: [.caseInsensitive]) {
+                result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: " ")
+            }
+        }
+        
+        // Remove production company in parentheses: (Publicis), (Klick), etc.
+        if let regex = try? NSRegularExpression(pattern: #"\([^)]+\)"#, options: []) {
+            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        
+        // Remove trailing initials pattern: - CM/KM, - SY, - AB/CD/EF etc.
+        if let regex = try? NSRegularExpression(pattern: #"\s*-\s*[A-Z]{1,3}(/[A-Z]{1,3})*\s*$"#, options: []) {
+            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        
+        // Clean up leftover separators
+        // Remove trailing " - " or " -" or "- "
+        if let regex = try? NSRegularExpression(pattern: #"\s*-\s*$"#, options: []) {
+            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        
+        // Remove leading " - " or " -" or "- "
+        if let regex = try? NSRegularExpression(pattern: #"^\s*-\s*"#, options: []) {
+            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        
+        // Clean up multiple consecutive separators " - - " -> " - "
+        if let regex = try? NSRegularExpression(pattern: #"\s*-\s*-\s*"#, options: []) {
+            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: " - ")
+        }
+        
+        // Final cleanup: trim whitespace and collapse multiple spaces
+        result = result.trimmingCharacters(in: .whitespaces)
+        result = result.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        
+        return result.isEmpty ? "Untitled Job" : result
     }
 }
 
@@ -451,16 +581,124 @@ struct AsanaProject: Codable, Identifiable {
     let gid: String
     let name: String
     let archived: Bool
+    let created_by: AsanaUser?
+    let owner: AsanaUser?
+    let notes: String?
+    let color: String?
+    let due_date: String?
+    let isPublic: Bool?
+    let team: AsanaTeam?
+    let custom_field_settings: [AsanaCustomFieldSetting]?
     
     var id: String { gid }
+    
+    enum CodingKeys: String, CodingKey {
+        case gid
+        case name
+        case archived
+        case created_by
+        case owner
+        case notes
+        case color
+        case due_date
+        case isPublic = "public"
+        case team
+        case custom_field_settings
+    }
+}
+
+struct AsanaUser: Codable {
+    let gid: String
+    let name: String?
+    let email: String?
+}
+
+struct AsanaTeam: Codable {
+    let gid: String
+    let name: String?
+}
+
+struct AsanaCustomFieldSetting: Codable {
+    let gid: String
+    let custom_field: AsanaCustomFieldDefinition?
+    let is_important: Bool?
+    
+    enum CodingKeys: String, CodingKey {
+        case gid
+        case custom_field
+        case is_important
+    }
+}
+
+struct AsanaCustomFieldDefinition: Codable {
+    let gid: String
+    let name: String
+    let resource_subtype: String? // text, number, enum, multi_enum, date, etc.
+    let enum_options: [AsanaEnumOption]?
+}
+
+struct AsanaEnumOption: Codable {
+    let gid: String
+    let name: String
+    let color: String?
+    let enabled: Bool?
 }
 
 struct AsanaTask: Codable, Identifiable {
     let gid: String
     let name: String
     let custom_fields: [AsanaCustomField]?
+    let modified_at: Date?
+    let parent: AsanaParent?
+    let memberships: [AsanaMembership]?
     
     var id: String { gid }
+    
+    enum CodingKeys: String, CodingKey {
+        case gid
+        case name
+        case custom_fields
+        case modified_at
+        case parent
+        case memberships
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        gid = try container.decode(String.self, forKey: .gid)
+        name = try container.decode(String.self, forKey: .name)
+        custom_fields = try container.decodeIfPresent([AsanaCustomField].self, forKey: .custom_fields)
+        parent = try container.decodeIfPresent(AsanaParent.self, forKey: .parent)
+        memberships = try container.decodeIfPresent([AsanaMembership].self, forKey: .memberships)
+        
+        // Parse modified_at as ISO8601 date string
+        if let modifiedAtString = try? container.decodeIfPresent(String.self, forKey: .modified_at) {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            // Try with fractional seconds first, then without
+            modified_at = formatter.date(from: modifiedAtString) ?? {
+                let formatterNoFractional = ISO8601DateFormatter()
+                formatterNoFractional.formatOptions = [.withInternetDateTime]
+                return formatterNoFractional.date(from: modifiedAtString)
+            }()
+        } else {
+            modified_at = nil
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(gid, forKey: .gid)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(custom_fields, forKey: .custom_fields)
+        try container.encodeIfPresent(parent, forKey: .parent)
+        try container.encodeIfPresent(memberships, forKey: .memberships)
+        if let modifiedAt = modified_at {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            try container.encode(formatter.string(from: modifiedAt), forKey: .modified_at)
+        }
+    }
     
     func getCustomFieldValue(name: String) -> String? {
         guard let fields = custom_fields else { return nil }
@@ -472,6 +710,59 @@ struct AsanaCustomField: Codable {
     let gid: String
     let name: String
     let display_value: String?
+}
+
+struct AsanaParent: Codable {
+    let gid: String
+    let name: String?
+}
+
+struct AsanaMembership: Codable {
+    let project: AsanaProjectRef?
+}
+
+struct AsanaProjectRef: Codable {
+    let gid: String
+    let name: String?
+}
+
+extension AsanaService {
+    /// Create ProjectMetadata from AsanaProject
+    func createProjectMetadata(from project: AsanaProject) -> ProjectMetadata {
+        // Extract custom fields from custom_field_settings
+        var customFields: [String: String] = [:]
+        if let settings = project.custom_field_settings {
+            for setting in settings {
+                if let field = setting.custom_field {
+                    let name = field.name
+                    // For enum fields, get the display value
+                    if let enumOptions = field.enum_options,
+                       let firstOption = enumOptions.first {
+                        customFields[name] = firstOption.name
+                    } else {
+                        // For other field types, we'd need to get the value from the task
+                        // For now, just store the field name
+                        customFields[name] = ""
+                    }
+                }
+            }
+        }
+        
+        // Format dates - due_date is a string from Asana API
+        let dueDateString = project.due_date
+        
+        return ProjectMetadata(
+            projectGid: project.gid,
+            projectName: project.name,
+            createdBy: project.created_by?.name ?? project.created_by?.email,
+            owner: project.owner?.name ?? project.owner?.email,
+            notes: project.notes,
+            color: project.color,
+            dueDate: dueDateString,
+            team: project.team?.name,
+            customFields: customFields
+        )
+    }
 }
 
 enum AsanaError: LocalizedError {

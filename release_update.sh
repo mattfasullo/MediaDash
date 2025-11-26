@@ -115,6 +115,17 @@ fi
 
 echo -e "${GREEN}✅ Build successful${NC}"
 
+# Copy media_validator.py into app bundle Resources
+echo ""
+echo -e "${BLUE}📝 Step 3.5: Copying media_validator.py into app bundle...${NC}"
+if [ -f "media_validator.py" ]; then
+    mkdir -p "$RELEASE_DIR/$APP_NAME.app/Contents/Resources"
+    cp "media_validator.py" "$RELEASE_DIR/$APP_NAME.app/Contents/Resources/"
+    echo -e "${GREEN}✅ media_validator.py copied to bundle${NC}"
+else
+    echo -e "${RED}❌ WARNING: media_validator.py not found in project root!${NC}"
+fi
+
 # Step 4: Create ZIP
 echo ""
 echo -e "${BLUE}📦 Step 4: Creating ZIP Archive${NC}"

@@ -82,6 +82,16 @@ xcodebuild -exportArchive \
     -exportOptionsPlist "$RELEASE_DIR/export_options.plist" \
     >> "$RELEASE_DIR/build.log" 2>&1
 
+# Copy media_validator.py into app bundle Resources
+echo -e "${BLUE}📝 Copying media_validator.py into app bundle...${NC}"
+if [ -f "media_validator.py" ]; then
+    mkdir -p "$RELEASE_DIR/$APP_NAME.app/Contents/Resources"
+    cp "media_validator.py" "$RELEASE_DIR/$APP_NAME.app/Contents/Resources/"
+    echo -e "${GREEN}✓ media_validator.py copied to bundle${NC}"
+else
+    echo -e "${RED}❌ WARNING: media_validator.py not found in project root!${NC}"
+fi
+
 # Create ZIP
 echo -e "${BLUE}🗜️  Creating ZIP...${NC}"
 cd "$RELEASE_DIR"

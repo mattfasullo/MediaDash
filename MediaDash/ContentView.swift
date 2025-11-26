@@ -3,6 +3,11 @@ import AppKit
 import Combine
 import UniformTypeIdentifiers
 
+// Focus management for all navigable buttons
+enum ActionButtonFocus: Hashable {
+    case file, prep, both, convert, jobInfo, search, settings
+}
+
 struct ContentView: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var metadataManager: DocketMetadataManager
@@ -22,14 +27,13 @@ struct ContentView: View {
     @State private var isStagingAreaVisible = true
     @FocusState private var mainViewFocused: Bool
 
+    // Task handle for hourly cache sync
+    @State private var hourlySyncTask: Task<Void, Never>?
+
     // Logic for auto-docket selection
     @State private var showDocketSelectionSheet = false
     @State private var pendingJobType: JobType? = nil
 
-    // Focus management for all navigable buttons
-    enum ActionButtonFocus: Hashable {
-        case file, prep, both, convert, jobInfo, search, settings
-    }
     @FocusState private var focusedButton: ActionButtonFocus?
 
     // Easter egg: Windows 95 theme
@@ -99,846 +103,191 @@ struct ContentView: View {
     }()
     
     var body: some View {
+        mainContentView
+            .modifier(KeyboardHandlersModifier(
+                isKeyboardMode: $isKeyboardMode,
+                focusedButton: $focusedButton,
+                moveGridFocus: moveGridFocus,
+                activateFocusedButton: activateFocusedButton,
+                settingsManager: settingsManager,
+                showSearchSheet: $showSearchSheet,
+                showQuickSearchSheet: $showQuickSearchSheet,
+                showSettingsSheet: $showSettingsSheet,
+                showVideoConverterSheet: $showVideoConverterSheet,
+                showNewDocketSheet: $showNewDocketSheet,
+                showDocketSelectionSheet: $showDocketSelectionSheet,
+                initialSearchText: $initialSearchText
+            ))
+            .modifier(AlertsModifier(
+                showAlert: $showAlert,
+                alertMessage: alertMessage,
+                manager: manager,
+                showSettingsSheet: $showSettingsSheet
+            ))
+            .modifier(SheetsModifier(
+                showNewDocketSheet: $showNewDocketSheet,
+                selectedDocket: $selectedDocket,
+                manager: manager,
+                settingsManager: settingsManager,
+                showSearchSheet: $showSearchSheet,
+                initialSearchText: initialSearchText,
+                showDocketSelectionSheet: $showDocketSelectionSheet,
+                pendingJobType: $pendingJobType,
+                wpDate: wpDate,
+                prepDate: prepDate,
+                showQuickSearchSheet: $showQuickSearchSheet,
+                cacheManager: cacheManager,
+                showSettingsSheet: $showSettingsSheet,
+                showVideoConverterSheet: $showVideoConverterSheet
+            ))
+            .modifier(ContentViewLifecycleModifier(
+                showSearchSheet: $showSearchSheet,
+                showSettingsSheet: $showSettingsSheet,
+                showQuickSearchSheet: $showQuickSearchSheet,
+                initialSearchText: $initialSearchText,
+                mainViewFocused: $mainViewFocused,
+                focusedButton: $focusedButton,
+                manager: manager,
+                settingsManager: settingsManager,
+                metadataManager: metadataManager,
+                cacheManager: cacheManager,
+                isCommandKeyHeld: $isCommandKeyHeld,
+                autoSyncAsanaCache: autoSyncAsanaCache,
+                hourlySyncTask: $hourlySyncTask
+            ))
+    }
+    
+    private var mainContentView: some View {
         HStack(spacing: 0) {
-            sidebarView
-
+            SidebarView(
+                focusedButton: $focusedButton,
+                mainViewFocused: $mainViewFocused,
+                isKeyboardMode: $isKeyboardMode,
+                isCommandKeyHeld: $isCommandKeyHeld,
+                hoverInfo: $hoverInfo,
+                isStagingAreaVisible: $isStagingAreaVisible,
+                showSearchSheet: $showSearchSheet,
+                showQuickSearchSheet: $showQuickSearchSheet,
+                showSettingsSheet: $showSettingsSheet,
+                showVideoConverterSheet: $showVideoConverterSheet,
+                logoClickCount: $logoClickCount,
+                wpDate: wpDate,
+                prepDate: prepDate,
+                dateFormatter: dateFormatter,
+                attempt: attempt,
+                cycleTheme: cycleTheme
+            )
+            
             if isStagingAreaVisible {
-                Divider()
-                stagingAreaView
+                StagingAreaView(
+                    cacheManager: cacheManager,
+                    isStagingHovered: $isStagingHovered,
+                    isStagingPressed: $isStagingPressed
+                )
+                .environmentObject(manager)
             }
         }
         .frame(width: isStagingAreaVisible ? 650 : 300, height: 550)
         .focusable()
         .focused($mainViewFocused)
         .focusEffectDisabled()
-        .onKeyPress(.leftArrow) {
-            isKeyboardMode = true
-            moveGridFocus(direction: .left)
-            return .handled
+    }
+    
+    // MARK: - Asana Auto-Sync
+    
+    /// Automatically sync Asana cache on app launch if configured
+    private func autoSyncAsanaCache() {
+        let settings = settingsManager.currentSettings
+        
+        // Only sync if Asana is the selected docket source
+        guard settings.docketSource == .asana else {
+            return
         }
-        .onKeyPress(.rightArrow) {
-            isKeyboardMode = true
-            moveGridFocus(direction: .right)
-            return .handled
+        
+        // Check if we have an access token
+        guard KeychainService.retrieve(key: "asana_access_token") != nil else {
+            print("📦 [AutoSync] No Asana access token found, skipping sync")
+            return
         }
-        .onKeyPress(.upArrow) {
-            isKeyboardMode = true
-            moveGridFocus(direction: .up)
-            return .handled
+        
+        // Check if cache should be synced (stale or missing)
+        guard cacheManager.shouldSync(maxAgeMinutes: 60) else {
+            print("📦 [AutoSync] Cache is fresh, skipping sync")
+            return
         }
-        .onKeyPress(.downArrow) {
-            isKeyboardMode = true
-            moveGridFocus(direction: .down)
-            return .handled
-        }
-        .onKeyPress(.return) {
-            activateFocusedButton()
-            return .handled
-        }
-        .onKeyPress(.space) {
-            activateFocusedButton()
-            return .handled
-        }
-        .alert("Missing Information", isPresented: $showAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(alertMessage)
-        }
-        .alert("Error", isPresented: $manager.showError) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            if let errorMessage = manager.errorMessage {
-                Text(errorMessage)
-            }
-        }
-        .alert("Directory Not Connected", isPresented: $manager.showConnectionWarning) {
-            Button("OK", role: .cancel) {}
-            Button("Open Settings") {
-                showSettingsSheet = true
-            }
-        } message: {
-            if let warning = manager.connectionWarning {
-                Text(warning)
-            }
-        }
-        .alert("Convert Videos to ProRes Proxy?", isPresented: $manager.showConvertVideosPrompt) {
-            Button("Convert", role: .destructive) {
-                Task {
-                    await manager.convertPrepVideos()
-                }
-            }
-            Button("Skip", role: .cancel) {
-                manager.skipPrepVideoConversion()
-            }
-        } message: {
-            if let pending = manager.pendingPrepConversion {
-                Text("Found \(pending.videoFiles.count) video file(s). Convert to ProRes Proxy 16:9 1920x1080?\n\nOriginals will be saved in PICTURE/z_unconverted folder.")
-            }
-        }
-        .sheet(isPresented: $showNewDocketSheet) {
-            NewDocketView(
-                isPresented: $showNewDocketSheet,
-                selectedDocket: $selectedDocket,
-                manager: manager,
-                settingsManager: settingsManager
-            )
-        }
-        .sheet(isPresented: $showSearchSheet) {
-            SearchView(manager: manager, settingsManager: settingsManager, isPresented: $showSearchSheet, initialText: initialSearchText)
-        }
-        .sheet(isPresented: $showDocketSelectionSheet) {
-            DocketSearchView(
-                manager: manager,
-                settingsManager: settingsManager,
-                isPresented: $showDocketSelectionSheet,
-                selectedDocket: $selectedDocket,
-                jobType: pendingJobType ?? .workPicture,
-                onConfirm: {
-                    if let type = pendingJobType {
-                        manager.runJob(
-                            type: type,
-                            docket: selectedDocket,
-                            wpDate: wpDate,
-                            prepDate: prepDate
-                        )
-                        pendingJobType = nil
-                    }
-                }
-            )
-        }
-        .onChange(of: showSearchSheet) { oldValue, newValue in
-            if !newValue {
-                initialSearchText = ""
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    mainViewFocused = true
-                }
-            }
-        }
-        .onChange(of: showSettingsSheet) { oldValue, newValue in
-            if !newValue {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    mainViewFocused = true
-                }
-            }
-        }
-        .onChange(of: manager.selectedFiles.count) { oldValue, newValue in
-            if newValue > 0 && focusedButton == nil {
-                focusedButton = .file
-            }
-        }
-        .onKeyPress { press in
-            if press.key == .tab {
-                isKeyboardMode = true
-            }
-
-            guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showVideoConverterSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
-                return .ignored
-            }
-
-            if press.characters.count == 1 {
-                let char = press.characters.first!
-                if char.isLetter || char.isNumber {
-                    initialSearchText = String(char)
-                    // Open configured default search
-                    if settingsManager.currentSettings.defaultQuickSearch == .search {
-                        showSearchSheet = true
-                    } else {
-                        showQuickSearchSheet = true
-                    }
-                    isKeyboardMode = true
-                    return .handled
-                }
-            }
-            return .ignored
-        }
-        .onChange(of: focusedButton) { oldValue, newValue in
-            if newValue != nil {
-                isKeyboardMode = true
-            }
-        }
-        .sheet(isPresented: $showQuickSearchSheet) {
-            QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager, cacheManager: cacheManager)
-        }
-        .onChange(of: showQuickSearchSheet) { oldValue, newValue in
-            if !newValue {
-                initialSearchText = ""
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    focusedButton = .file
-                }
-            }
-        }
-        .sheet(isPresented: $showSettingsSheet) {
-            SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
-        }
-        .sheet(isPresented: $manager.showPrepSummary) {
-            PrepSummaryView(summary: manager.prepSummary, isPresented: $manager.showPrepSummary)
-        }
-        .sheet(isPresented: $showVideoConverterSheet) {
-            VideoConverterView(manager: manager)
-        }
-        .sheet(isPresented: $manager.showOMFAAFValidator) {
-            if let fileURL = manager.omfAafFileToValidate,
-               let validator = manager.omfAafValidator {
-                OMFAAFValidatorView(validator: validator, fileURL: fileURL)
-            }
-        }
-        .onChange(of: settingsManager.currentSettings) { oldValue, newValue in
-            manager.updateConfig(settings: newValue)
-            metadataManager.updateSettings(newValue)
-        }
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                mainViewFocused = true
-                focusedButton = .file
-            }
-
-            // Build search indexes immediately at app startup
-            manager.buildAllFolderIndexes()
-
-            // Monitor Command key state for showing shortcuts
-            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-                isCommandKeyHeld = event.modifierFlags.contains(.command)
-                return event
+        
+        print("🔄 [AutoSync] Starting automatic Asana sync on app launch...")
+        
+        // Sync in background (non-blocking)
+        performSync()
+        
+        // Set up hourly timer for automatic sync
+        setupHourlySyncTimer()
+    }
+    
+    /// Perform the actual sync operation
+    private func performSync() {
+        let settings = settingsManager.currentSettings
+        
+        Task {
+            do {
+                try await cacheManager.syncWithAsana(
+                    workspaceID: settings.asanaWorkspaceID,
+                    projectID: settings.asanaProjectID,
+                    docketField: settings.asanaDocketField,
+                    jobNameField: settings.asanaJobNameField,
+                    sharedCacheURL: settings.sharedCacheURL,
+                    useSharedCache: settings.useSharedCache
+                )
+                print("✅ [AutoSync] Automatic sync completed successfully")
+            } catch {
+                print("⚠️ [AutoSync] Automatic sync failed: \(error.localizedDescription)")
+                // Silently fail - don't show error to user
             }
         }
     }
-
-    // MARK: - Sidebar View
-
-    private var sidebarView: some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(alignment: .leading, spacing: 12) {
-                    // App Logo (clickable Easter egg)
-                    Image("HeaderLogo")
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(height: 60)
-                        .rotationEffect(.degrees(0))
-                        .shadow(color: .clear, radius: 5, x: 2, y: 2)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            // Easter egg: 10 clicks cycles through themes
-                            logoClickCount += 1
-                            if logoClickCount >= 2 {
-                                cycleTheme()
-                                logoClickCount = 0
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.bottom, 4)
-
-                // Workspace Name Display
-                if case .loggedIn(let profile) = sessionManager.authenticationState {
-                    HStack(spacing: 6) {
-                        Image(systemName: profile.name == "Grayson Music" ? "cloud.fill" : "desktopcomputer")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-
-                        Text(profile.name)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.primary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.accentColor.opacity(0.1))
-                    )
-                }
-
-                // MARK: Action Buttons Grid
-                VStack(spacing: 8) {
-                    // Row 1: File and Prep
-                    HStack(spacing: 8) {
-                        ActionButtonWithShortcut(
-                            title: "File",
-                            subtitle: "Work Picture",
-                            shortcut: "⌘1",
-                            color: currentTheme.buttonColors.file,
-                            isPrimary: false,
-                            isFocused: focusedButton == .file,
-                            showShortcut: isCommandKeyHeld,
-                            theme: currentTheme,
-                            iconName: "folder"
-                        ) {
-                            attempt(type: .workPicture)
-                        }
-                        .focused($focusedButton, equals: .file)
-                        .focusEffectDisabled()
-                        .onHover { hovering in
-                            if hovering {
-                                focusedButton = nil
-                                mainViewFocused = true
-                                isKeyboardMode = false
-                            }
-                            hoverInfo = hovering ?
-                                "Files to Work Picture (\(dateFormatter.string(from: wpDate)))" :
-                                "Ready."
-                        }
-                        .keyboardShortcut("1", modifiers: .command)
-
-                        ActionButtonWithShortcut(
-                            title: "Prep",
-                            subtitle: "Session Prep",
-                            shortcut: "⌘2",
-                            color: currentTheme.buttonColors.prep,
-                            isPrimary: false,
-                            isFocused: focusedButton == .prep,
-                            showShortcut: isCommandKeyHeld,
-                            theme: currentTheme,
-                            iconName: "list.clipboard"
-                        ) {
-                            attempt(type: .prep)
-                        }
-                        .focused($focusedButton, equals: .prep)
-                        .focusEffectDisabled()
-                        .onHover { hovering in
-                            if hovering {
-                                focusedButton = nil
-                                mainViewFocused = true
-                                isKeyboardMode = false
-                            }
-                            hoverInfo = hovering ?
-                                "Files to Session Prep (\(dateFormatter.string(from: prepDate)))" :
-                                "Ready."
-                        }
-                        .keyboardShortcut("2", modifiers: .command)
-                    }
-
-                    // Row 2: Both and Convert
-                    HStack(spacing: 8) {
-                        ActionButtonWithShortcut(
-                            title: "File + Prep",
-                            subtitle: "Both",
-                            shortcut: "⌘3",
-                            color: currentTheme.buttonColors.both,
-                            isPrimary: false,
-                            isFocused: focusedButton == .both,
-                            showShortcut: isCommandKeyHeld,
-                            theme: currentTheme,
-                            iconName: "doc.on.doc"
-                        ) {
-                            attempt(type: .both)
-                        }
-                        .focused($focusedButton, equals: .both)
-                        .focusEffectDisabled()
-                        .onHover { hovering in
-                            if hovering {
-                                focusedButton = nil
-                                mainViewFocused = true
-                                isKeyboardMode = false
-                            }
-                            hoverInfo = hovering ?
-                                "Processes both Work Picture and Prep" :
-                                "Ready."
-                        }
-                        .keyboardShortcut("3", modifiers: .command)
-
-                        ActionButtonWithShortcut(
-                            title: "Convert Video",
-                            subtitle: "ProRes Proxy",
-                            shortcut: "⌘4",
-                            color: Color(red: 0.50, green: 0.25, blue: 0.25),  // Subtle dark red
-                            isPrimary: false,
-                            isFocused: focusedButton == .convert,
-                            showShortcut: isCommandKeyHeld,
-                            theme: currentTheme,
-                            iconName: "film"
-                        ) {
-                            showVideoConverterSheet = true
-                        }
-                        .focused($focusedButton, equals: .convert)
-                        .focusEffectDisabled()
-                        .onHover { hovering in
-                            if hovering {
-                                focusedButton = nil
-                                mainViewFocused = true
-                                isKeyboardMode = false
-                            }
-                            hoverInfo = hovering ?
-                                "Convert videos" :
-                                "Ready."
-                        }
-                        .keyboardShortcut("4", modifiers: .command)
-                    }
-                }
-
-                Spacer()
-
-                Divider()
-
-                // Bottom actions
-                VStack(spacing: 8) {
-                    FocusableNavButton(
-                        icon: "magnifyingglass",
-                        title: "Search",
-                        shortcut: "⌘F",
-                        isFocused: focusedButton == .search,
-                        showShortcut: isCommandKeyHeld,
-                        action: { showSearchSheet = true }
-                    )
-                    .focused($focusedButton, equals: .search)
-                    .focusEffectDisabled()
-                    .onHover { hovering in
-                        if hovering {
-                            focusedButton = nil
-                            mainViewFocused = true
-                            isKeyboardMode = false
-                        }
-                    }
-                    .keyboardShortcut("f", modifiers: .command)
-
-                    FocusableNavButton(
-                        icon: "number.circle",
-                        title: "Job Info",
-                        shortcut: "⌘D",
-                        isFocused: focusedButton == .jobInfo,
-                        showShortcut: isCommandKeyHeld,
-                        action: { showQuickSearchSheet = true }
-                    )
-                    .focused($focusedButton, equals: .jobInfo)
-                    .focusEffectDisabled()
-                    .onHover { hovering in
-                        if hovering {
-                            focusedButton = nil
-                            mainViewFocused = true
-                            isKeyboardMode = false
-                        }
-                    }
-                    .keyboardShortcut("d", modifiers: .command)
-                    
-                    FocusableNavButton(
-                        icon: "gearshape",
-                        title: "Settings",
-                        shortcut: "⌘,",
-                        isFocused: focusedButton == .settings,
-                        showShortcut: isCommandKeyHeld,
-                        action: { showSettingsSheet = true }
-                    )
-                    .focused($focusedButton, equals: .settings)
-                    .focusEffectDisabled()
-                    .onHover { hovering in
-                        if hovering {
-                            focusedButton = nil
-                            mainViewFocused = true
-                            isKeyboardMode = false
-                        }
-                    }
-                    .keyboardShortcut(",", modifiers: .command)
-
-                    Divider()
-                        .padding(.vertical, 4)
-
-                    // Log Out Button
-                    Button(action: {
-                        sessionManager.logout()
-                    }) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                                .font(.system(size: 14))
-                                .foregroundColor(.red)
-                                .frame(width: 18)
-
-                            Text("Log Out")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.red)
-
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.red.opacity(0.1))
-                    )
-                }
-                .padding(.bottom, 12)
-            }
-            .padding(16)
-            .frame(width: 300)
-            .background(currentTheme.sidebarBackground)
-
-            // Toggle staging button (top right)
-            Button(action: {
-                isStagingAreaVisible.toggle()
-            }) {
-                Image(systemName: isStagingAreaVisible ? "chevron.right" : "chevron.left")
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundColor(.secondary.opacity(0.6))
-            }
-            .buttonStyle(.plain)
-            .help(isStagingAreaVisible ? "Hide staging (⌘E)" : "Show staging (⌘E)")
-            .keyboardShortcut("e", modifiers: .command)
-            .padding(.top, 8)
-            .padding(.trailing, 16)
-        }
-    }
-
-    // MARK: - Staging Area View
-
-    private var stagingAreaView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-                // Header
-                HStack {
-                    HStack(spacing: 8) {
-                        Image(systemName: "tray.2")
-                            .foregroundColor(.blue)
-                        Text("STAGING")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.primary)
-
-                        if !manager.selectedFiles.isEmpty {
-                            Text("\(totalFileCount)")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.blue)
-                                .cornerRadius(10)
-                        }
-                    }
-
-                    Spacer()
-
-                    // Always show Add Files button
-                    HoverableButton(action: { manager.pickFiles() }) { isHovered in
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11))
-                            Text("Add Files")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .foregroundColor(isHovered ? .blue.opacity(0.8) : .blue)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(isHovered ? Color.blue.opacity(0.1) : Color.clear)
-                        .cornerRadius(6)
-                    }
-                    .keyboardShortcut("o", modifiers: .command)
-
-                    if !manager.selectedFiles.isEmpty {
-                        HoverableButton(action: { manager.clearFiles() }) { isHovered in
-                            HStack(spacing: 4) {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 11))
-                                Text("Clear")
-                                    .font(.system(size: 12, weight: .medium))
-                            }
-                            .foregroundColor(isHovered ? .red.opacity(0.8) : .red)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(isHovered ? Color.red.opacity(0.1) : Color.clear)
-                            .cornerRadius(6)
-                        }
-                        .keyboardShortcut("w", modifiers: .command)
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+    
+    /// Set up a task to sync every hour
+    private func setupHourlySyncTimer() {
+        // Cancel existing task if any
+        hourlySyncTask?.cancel()
+        
+        // Create a task that runs every hour
+        hourlySyncTask = Task {
+            while !Task.isCancelled {
+                // Wait for 1 hour (3600 seconds)
+                try? await Task.sleep(nanoseconds: 3_600_000_000_000)
                 
-                // File List or Empty State
-                ZStack {
-                    if manager.selectedFiles.isEmpty {
-                        // Empty State
-                        VStack(spacing: 16) {
-                            ZStack {
-                                Circle()
-                                    .fill(isStagingPressed ? Color.blue.opacity(0.2) : (isStagingHovered ? Color.gray.opacity(0.15) : Color.gray.opacity(0.1)))
-                                    .frame(width: 100, height: 100)
-                                Image(systemName: "doc.on.doc.fill")
-                                    .font(.system(size: 40))
-                                    .foregroundColor(isStagingPressed ? .blue : .secondary)
-                            }
-                            .scaleEffect(isStagingPressed ? 0.95 : (isStagingHovered ? 1.05 : 1.0))
-                            .animation(.easeInOut(duration: 0.15), value: isStagingPressed)
-                            .animation(.easeInOut(duration: 0.15), value: isStagingHovered)
-
-                            VStack(spacing: 6) {
-                                Text("No files staged")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.primary)
-                                Text("Click to add files or drop them here")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(isStagingPressed ? .blue : .secondary)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        // File List
-                        List(manager.selectedFiles) { f in
-                            ZStack(alignment: .leading) {
-                                // Progress bar background
-                                if let progress = manager.fileProgress[f.id], progress > 0 {
-                                    GeometryReader { geometry in
-                                        Rectangle()
-                                            .fill(Color.blue.opacity(0.2))
-                                            .frame(width: geometry.size.width * progress)
-                                    }
-                                } else if let convProgress = manager.conversionProgress[f.id], convProgress > 0 {
-                                    GeometryReader { geometry in
-                                        Rectangle()
-                                            .fill(Color.purple.opacity(0.2))
-                                            .frame(width: geometry.size.width * convProgress)
-                                    }
-                                }
-
-                                // File info
-                                HStack {
-                                    Image(nsImage: getIcon(f.url))
-                                        .resizable()
-                                        .frame(width: 16, height: 16)
-                                    Text(f.name)
-                                    Spacer()
-
-                                    // Show checkmark, progress, or file info
-                                    if let completionState = manager.fileCompletionState[f.id] {
-                                        switch completionState {
-                                        case .complete:
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundColor(.green)
-                                                .font(.system(size: 16))
-                                        case .workPicDone, .prepDone:
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundColor(.yellow)
-                                                .font(.system(size: 16))
-                                        case .none:
-                                            EmptyView()
-                                        }
-                                    } else if let convProgress = manager.conversionProgress[f.id], convProgress > 0, convProgress < 1.0 {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "film")
-                                                .font(.system(size: 10))
-                                            Text("\(Int(convProgress * 100))%")
-                                                .font(.caption)
-                                                .monospacedDigit()
-                                        }
-                                        .foregroundColor(.purple)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.purple.opacity(0.1))
-                                        .cornerRadius(4)
-                                    } else if let progress = manager.fileProgress[f.id], progress > 0, progress < 1.0 {
-                                        Text("\(Int(progress * 100))%")
-                                            .font(.caption)
-                                            .monospacedDigit()
-                                            .foregroundColor(.blue)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Color.blue.opacity(0.1))
-                                            .cornerRadius(4)
-                                    } else {
-                                        // Show file count for folders, or file size for files
-                                        if f.isDirectory {
-                                            Text("\(f.fileCount) file\(f.fileCount == 1 ? "" : "s")")
-                                                .font(.caption)
-                                                .foregroundColor(.blue)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(Color.blue.opacity(0.1))
-                                                .cornerRadius(4)
-                                        } else if let size = getFileSize(f.url) {
-                                            Text(size)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                    }
-                                    
-                                    // Remove button
-                                    HoverableButton(action: {
-                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                            manager.removeFile(withId: f.id)
-                                        }
-                                    }) { isHovered in
-                                        Image(systemName: "xmark.circle.fill")
-                                            .foregroundColor(isHovered ? .red : (currentTheme == .retroDesktop ? Color(red: 0.502, green: 0.502, blue: 0.502) : .secondary))
-                                            .font(.system(size: 14))
-                                            .scaleEffect(isHovered ? 1.15 : 1.0)
-                                    }
-                                    .help("Remove from staging")
-                                }
-                            }
-                            .contextMenu {
-                                // Remove option
-                                Button("Remove from Staging") {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        manager.removeFile(withId: f.id)
-                                    }
-                                }
-                                
-                                // Show context menu for OMF/AAF files
-                                if !f.isDirectory {
-                                    let ext = f.url.pathExtension.lowercased()
-                                    if ext == "omf" {
-                                        Divider()
-                                        Button("Validate OMF") {
-                                            manager.omfAafFileToValidate = f.url
-                                            manager.showOMFAAFValidator = true
-                                        }
-                                    } else if ext == "aaf" {
-                                        Divider()
-                                        Button("Validate AAF") {
-                                            manager.omfAafFileToValidate = f.url
-                                            manager.showOMFAAFValidator = true
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .listStyle(.inset(alternatesRowBackgrounds: true))
-                        .animation(.easeInOut(duration: 0.3), value: manager.selectedFiles)
-                        .animation(.easeInOut(duration: 0.2), value: manager.fileProgress)
-                        .animation(.easeInOut(duration: 0.2), value: manager.conversionProgress)
-                        .animation(.easeInOut(duration: 0.3), value: manager.fileCompletionState)
-                    }
+                // Check if task was cancelled during sleep
+                if Task.isCancelled { break }
+                
+                let settings = settingsManager.currentSettings
+                
+                // Only sync if Asana is the selected docket source
+                guard settings.docketSource == .asana else {
+                    continue
                 }
-                .contentShape(Rectangle())
-                .background(
-                    Group {
-                        if isStagingPressed {
-                            Color.blue.opacity(0.15)
-                        } else if isStagingHovered {
-                            Color.gray.opacity(0.05)
-                        } else {
-                            Color.clear
-                        }
-                    }
-                )
-                .scaleEffect(isStagingPressed ? 0.998 : 1.0)
-                .animation(.easeInOut(duration: 0.1), value: isStagingPressed)
-                .onHover { hovering in
-                    isStagingHovered = hovering
-                    if hovering {
-                        isKeyboardMode = false
-                    }
+                
+                // Check if we have an access token
+                guard KeychainService.retrieve(key: "asana_access_token") != nil else {
+                    print("📦 [AutoSync] No Asana access token found, skipping hourly sync")
+                    continue
                 }
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { _ in
-                            if !isStagingPressed {
-                                isStagingPressed = true
-                            }
-                        }
-                        .onEnded { _ in
-                            isStagingPressed = false
-                            manager.pickFiles()
-                        }
-                )
-                .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
-                    handleFileDrop(providers: providers)
-                    return true
+                
+                // Check if cache should be synced (stale or missing)
+                guard cacheManager.shouldSync(maxAgeMinutes: 60) else {
+                    print("📦 [AutoSync] Cache is fresh, skipping hourly sync")
+                    continue
                 }
-                .onHover { hovering in
-                    if hovering {
-                        NSCursor.pointingHand.push()
-                    } else {
-                        NSCursor.pop()
-                    }
-                }
-
-                // Status Bar
-                HStack {
-                    // Left side - Indexing indicator
-                    if manager.isIndexing {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .frame(width: 12, height: 12)
-                            Text("Indexing")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.orange)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(6)
-                    }
-
-                    Spacer()
-
-                    // Center/Right - Processing or hover info
-                    if manager.isProcessing {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                ProgressView(value: manager.progress)
-                                    .progressViewStyle(.linear)
-                                    .frame(maxWidth: 200)
-                                Text("\(Int(manager.progress * 100))%")
-                                    .font(.caption)
-                                    .monospacedDigit()
-                                    .frame(width: 40, alignment: .trailing)
-                                Button("Cancel") {
-                                    manager.cancelProcessing()
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                            Text(manager.statusMessage)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    } else {
-                        Text(hoverInfo)
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                    }
-                }
-                .padding()
-                .background(Color(nsColor: .controlBackgroundColor))
-        }
-    }
-
-    // MARK: - Helper Methods
-    
-    private func getIcon(_ url: URL) -> NSImage {
-        NSWorkspace.shared.icon(forFile: url.path)
-    }
-    
-    private func getFileSize(_ url: URL) -> String? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let fileSize = attributes[.size] as? Int64 else {
-            return nil
-        }
-        return ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)
-    }
-    
-    private func handleFileDrop(providers: [NSItemProvider]) {
-        for provider in providers {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
-                if let error = error {
-                    print("Error loading file: \(error.localizedDescription)")
-                    DispatchQueue.main.async {
-                        self.manager.errorMessage = "Failed to load dropped file: \(error.localizedDescription)"
-                        self.manager.showError = true
-                    }
-                    return
-                }
-
-                guard let data = item as? Data,
-                      let url = URL(dataRepresentation: data, relativeTo: nil) else {
-                    print("Invalid file data")
-                    DispatchQueue.main.async {
-                        self.manager.errorMessage = "Invalid file data in drop operation"
-                        self.manager.showError = true
-                    }
-                    return
-                }
-
-                DispatchQueue.main.async {
-                    // Check if file already exists in list
-                    if !manager.selectedFiles.contains(where: { $0.url == url }) {
-                        withAnimation(.spring(response: 0.3)) {
-                            manager.selectedFiles.append(FileItem(url: url))
-                        }
-                    }
-                }
+                
+                print("🔄 [AutoSync] Starting hourly automatic Asana sync...")
+                performSync()
             }
         }
+        
+        print("⏰ [AutoSync] Hourly sync task started")
     }
+
     
     private func attempt(type: JobType) {
         // 1. If no files are staged, open file picker
@@ -1398,206 +747,6 @@ struct ActionButtonWithShortcut: View {
     }
 }
 
-// MARK: - New Docket View
-
-struct NewDocketView: View {
-    @Binding var isPresented: Bool
-    @Binding var selectedDocket: String
-    @ObservedObject var manager: MediaManager
-    @ObservedObject var settingsManager: SettingsManager
-    var onDocketCreated: (() -> Void)? = nil
-
-    @State private var number = ""
-    @State private var jobName = ""
-    @State private var showValidationError = false
-    @State private var validationMessage = ""
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("New Docket")
-                .font(.headline)
-            
-            Form {
-                TextField("Number", text: $number)
-                    .textFieldStyle(.roundedBorder)
-                TextField("Job Name", text: $jobName)
-                    .textFieldStyle(.roundedBorder)
-            }
-            .frame(width: 300)
-            
-            if showValidationError {
-                Text(validationMessage)
-                    .foregroundColor(.red)
-                    .font(.caption)
-            }
-            
-            HStack {
-                Button("Cancel") {
-                    isPresented = false
-                }
-                .keyboardShortcut(.cancelAction)
-                
-                Button("Create") {
-                    createDocket()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(number.isEmpty || jobName.isEmpty)
-            }
-        }
-        .padding()
-    }
-    
-    private func createDocket() {
-        // Validate inputs
-        guard !number.trimmingCharacters(in: .whitespaces).isEmpty else {
-            validationMessage = "Docket number cannot be empty"
-            showValidationError = true
-            return
-        }
-
-        guard !jobName.trimmingCharacters(in: .whitespaces).isEmpty else {
-            validationMessage = "Job name cannot be empty"
-            showValidationError = true
-            return
-        }
-
-        let docketName = "\(number)_\(jobName)"
-
-        // Check if docket already exists
-        if manager.dockets.contains(docketName) {
-            validationMessage = "A docket with this name already exists"
-            showValidationError = true
-            return
-        }
-
-        // Create the docket folder on disk
-        let config = AppConfig(settings: settingsManager.currentSettings)
-        let paths = config.getPaths()
-        
-        // Verify parent directory exists before creating docket folder
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: paths.workPic.path) else {
-            validationMessage = "Work Picture folder path does not exist:\n\(paths.workPic.path)\n\nPlease check your settings and make sure the server is connected."
-            showValidationError = true
-            return
-        }
-        
-        let docketFolder = paths.workPic.appendingPathComponent(docketName)
-
-        // Only create the docket folder, not parent directories
-        // Parent directory (paths.workPic) must already exist
-        do {
-            try FileManager.default.createDirectory(at: docketFolder, withIntermediateDirectories: false)
-            selectedDocket = docketName
-            manager.refreshDockets() // Refresh to show the new docket
-            isPresented = false
-
-            // Call the callback if provided
-            if let callback = onDocketCreated {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    callback()
-                }
-            }
-        } catch {
-            validationMessage = "Failed to create docket folder: \(error.localizedDescription)\n\nPath: \(docketFolder.path)"
-            showValidationError = true
-        }
-    }
-}
-
-// MARK: - Custom TextField with Selection Control
-
-class NoSelectNSTextField: NSTextField {
-    override func becomeFirstResponder() -> Bool {
-        let result = super.becomeFirstResponder()
-        // Move cursor to end without selecting text
-        if let editor = currentEditor() {
-            editor.selectedRange = NSRange(location: stringValue.count, length: 0)
-        }
-        return result
-    }
-}
-
-struct NoSelectTextField: NSViewRepresentable {
-    @Binding var text: String
-    var placeholder: String
-    var isEnabled: Bool
-    var onSubmit: () -> Void
-    var onTextChange: () -> Void
-
-    func makeNSView(context: Context) -> NoSelectNSTextField {
-        let textField = NoSelectNSTextField()
-        textField.delegate = context.coordinator
-        textField.placeholderString = placeholder
-        textField.font = .systemFont(ofSize: 20)
-        textField.isBordered = false
-        textField.focusRingType = .none
-        textField.backgroundColor = .clear
-        return textField
-    }
-
-    func updateNSView(_ nsView: NoSelectNSTextField, context: Context) {
-        nsView.placeholderString = placeholder
-        nsView.isEnabled = isEnabled
-
-        // Only update text if it's actually different
-        if nsView.stringValue != text {
-            nsView.stringValue = text
-
-            // Only adjust cursor position when text changes and editor is active
-            if let editor = nsView.currentEditor(), text.count > 0 {
-                let expectedRange = NSRange(location: text.count, length: 0)
-                if editor.selectedRange != expectedRange {
-                    editor.selectedRange = expectedRange
-                }
-            }
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-
-    class Coordinator: NSObject, NSTextFieldDelegate {
-        var parent: NoSelectTextField
-
-        init(_ parent: NoSelectTextField) {
-            self.parent = parent
-        }
-
-        func controlTextDidChange(_ obj: Notification) {
-            if let textField = obj.object as? NSTextField {
-                parent.text = textField.stringValue
-                parent.onTextChange()
-            }
-        }
-
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            // Handle Enter key
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                parent.onSubmit()
-                return true
-            }
-
-            // Let arrow keys pass through to SwiftUI handlers
-            // This allows navigation and folder cycling to work
-            if commandSelector == #selector(NSResponder.moveUp(_:)) ||
-               commandSelector == #selector(NSResponder.moveDown(_:)) ||
-               commandSelector == #selector(NSResponder.moveLeft(_:)) ||
-               commandSelector == #selector(NSResponder.moveRight(_:)) {
-                return false  // Don't consume, let it bubble up
-            }
-
-            // Let delete/backspace pass through
-            if commandSelector == #selector(NSResponder.deleteBackward(_:)) ||
-               commandSelector == #selector(NSResponder.deleteForward(_:)) {
-                return false  // Don't consume, let it bubble up
-            }
-
-            return false  // Don't consume other commands
-        }
-    }
-}
 
 // MARK: - Docket Selection Search View (New)
 
@@ -1644,11 +793,11 @@ struct DocketSearchView: View {
                 .padding(10)
 
                 if !searchText.isEmpty {
-                    Button(action: { searchText = "" }) {
+                    HoverableButton(action: { searchText = "" }) { isHovered in
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(isHovered ? .primary : .secondary)
+                            .scaleEffect(isHovered ? 1.1 : 1.0)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding()
@@ -1658,12 +807,44 @@ struct DocketSearchView: View {
 
             // MARK: Results List
             ZStack {
-                ScrollViewReader { proxy in
-                    List(selection: $selectedPath) {
+                // Check if directories are connected
+                if !manager.isServerDirectoryConnected() {
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(.orange)
+                        
+                        VStack(spacing: 8) {
+                            Text("Search Unavailable")
+                                .font(.title3)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                            Text("Server directory is not connected")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Please connect to the server directory in Settings to use search")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 40)
+                        }
+                        
+                        Button("Open Settings") {
+                            // Note: Parent view should handle opening settings
+                            isPresented = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.regular)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                } else {
+                    ScrollViewReader { proxy in
+                        List(selection: $selectedPath) {
                         // "Create New Docket" option at the top
-                        Button(action: {
+                        HoverableButton(action: {
                             showNewDocketSheet = true
-                        }) {
+                        }) { isHovered in
                             HStack {
                                 Image(systemName: "plus.circle.fill")
                                     .foregroundColor(.green)
@@ -1676,21 +857,21 @@ struct DocketSearchView: View {
                             }
                             .padding(.vertical, 6)
                             .contentShape(Rectangle())
+                            .background(isHovered ? Color.green.opacity(0.15) : Color.clear)
                         }
-                        .buttonStyle(.plain)
                         .listRowBackground(Color.green.opacity(0.1))
 
                         if !filteredDockets.isEmpty {
                             Section {
                                 ForEach(filteredDockets, id: \.self) { docket in
-                                    Button(action: {
+                                    HoverableListButton(action: {
                                         if selectedPath == docket {
                                             // Double click - select docket
                                             selectDocket(docket)
                                         } else {
                                             selectedPath = docket
                                         }
-                                    }) {
+                                    }) { isHovered in
                                         HStack {
                                             Image(systemName: "folder.fill")
                                                 .foregroundColor(.blue)
@@ -1700,8 +881,8 @@ struct DocketSearchView: View {
                                         }
                                         .padding(.vertical, 6)
                                         .contentShape(Rectangle())
+                                        .background(isHovered ? Color.blue.opacity(0.1) : Color.clear)
                                     }
-                                    .buttonStyle(.plain)
                                     .tag(docket)
                                 }
                             } header: {
@@ -1747,8 +928,10 @@ struct DocketSearchView: View {
                             }
                         }
                     }
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // MARK: Action Bar
             HStack {
@@ -2056,7 +1239,7 @@ struct SearchView: View {
 
     private func folderButton(_ folder: SearchFolder) -> some View {
         let isSelected = selectedFolder == folder
-        return Button(action: {
+        return HoverableButton(action: {
             selectedFolder = folder
             if settingsManager.currentSettings.searchFolderPreference == .rememberLast {
                 settingsManager.currentSettings.lastUsedSearchFolder = folder
@@ -2072,16 +1255,15 @@ struct SearchView: View {
                 isSearchFieldFocused = true
                 isListFocused = false
             }
-        }) {
+        }) { isHovered in
             Text(folder.displayName)
                 .font(.system(size: 11))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
-                .background(isSelected ? Color.accentColor : Color.clear)
+                .background(isSelected ? Color.accentColor : (isHovered ? Color.gray.opacity(0.2) : Color.clear))
                 .foregroundColor(isSelected ? .white : .primary)
                 .cornerRadius(4)
         }
-        .buttonStyle(.plain)
     }
 
     var folderSelectorView: some View {
@@ -2119,11 +1301,11 @@ struct SearchView: View {
                 .padding(10)
 
                 if !searchText.isEmpty {
-                    Button(action: { searchText = "" }) {
+                    HoverableButton(action: { searchText = "" }) { isHovered in
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(isHovered ? .primary : .secondary)
+                            .scaleEffect(isHovered ? 1.1 : 1.0)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding()
@@ -2136,10 +1318,42 @@ struct SearchView: View {
             
             // MARK: Results List
             ZStack {
-                ScrollViewReader { proxy in
-                    List(selection: $selectedPath) {
-                        // Exact matches section
-                        if !exactResults.isEmpty {
+                // Check if directories are connected
+                if !manager.isSessionsDirectoryConnected() {
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(.orange)
+                        
+                        VStack(spacing: 8) {
+                            Text("Search Unavailable")
+                                .font(.title3)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                            Text("Sessions directory is not connected")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Please connect to the sessions directory in Settings to use search")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 40)
+                        }
+                        
+                        Button("Open Settings") {
+                            // Note: Parent view should handle opening settings
+                            isPresented = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.regular)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                } else {
+                    ScrollViewReader { proxy in
+                        List(selection: $selectedPath) {
+                            // Exact matches section
+                            if !exactResults.isEmpty {
                             // Exact results header
                             HStack {
                                 VStack {
@@ -2242,10 +1456,8 @@ struct SearchView: View {
                             .foregroundColor(.gray)
                             .font(.caption)
                     }
-                    .frame(width: 180)
-                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.regularMaterial)
-                    .cornerRadius(8)
                 } else if manager.isIndexing && exactResults.isEmpty && fuzzyResults.isEmpty {
                     VStack(spacing: 8) {
                         ProgressView()
@@ -2254,10 +1466,8 @@ struct SearchView: View {
                             .foregroundColor(.gray)
                             .font(.caption)
                     }
-                    .frame(width: 180)
-                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.regularMaterial)
-                    .cornerRadius(8)
                 } else if exactResults.isEmpty && fuzzyResults.isEmpty && !searchText.isEmpty && !manager.isIndexing {
                     VStack(spacing: 8) {
                         ProgressView()
@@ -2266,12 +1476,12 @@ struct SearchView: View {
                             .foregroundColor(.gray)
                             .font(.caption)
                     }
-                    .frame(width: 180)
-                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.regularMaterial)
-                    .cornerRadius(8)
                 }
+                    }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             
             // MARK: Action Bar
             HStack {
@@ -2578,70 +1788,14 @@ struct SearchView: View {
     }
 }
 
-// MARK: - Search Result Row
-
-struct SearchResultRow: View {
-    let path: String
-    let year: String
-    
-    var fileName: String {
-        (path as NSString).lastPathComponent
-    }
-    
-    var parentFolder: String {
-        (path as NSString).deletingLastPathComponent
-            .components(separatedBy: "/").last ?? ""
-    }
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "waveform.circle.fill")
-                .foregroundColor(.blue)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(fileName)
-                    .lineLimit(1)
-                
-                Text(parentFolder)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Spacer()
-        }
-        .contentShape(Rectangle())
-    }
-}
-
 // MARK: - Quick Docket Search (Reference Only)
-
-struct DocketInfo: Identifiable, Hashable, Codable {
-    let id: UUID
-    let number: String
-    let jobName: String
-    let fullName: String
-    
-    nonisolated init(id: UUID = UUID(), number: String, jobName: String, fullName: String) {
-        self.id = id
-        self.number = number
-        self.jobName = jobName
-        self.fullName = fullName
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(fullName)
-    }
-
-    static func == (lhs: DocketInfo, rhs: DocketInfo) -> Bool {
-        lhs.fullName == rhs.fullName
-    }
-}
 
 struct QuickDocketSearchView: View {
     @Binding var isPresented: Bool
     let initialText: String
     @ObservedObject var settingsManager: SettingsManager
     @ObservedObject var cacheManager: AsanaCacheManager
+    @EnvironmentObject var manager: MediaManager
     @StateObject private var metadataManager: DocketMetadataManager
 
     @State private var searchText: String
@@ -2651,7 +1805,12 @@ struct QuickDocketSearchView: View {
     @State private var selectedDocket: DocketInfo?
     @State private var asanaError: String?
     @FocusState private var isSearchFocused: Bool
+    @FocusState private var isListFocused: Bool
     @State private var searchTask: Task<Void, Never>?
+    @State private var showSettingsSheet = false
+    @State private var showMetadataEditor = false
+    @State private var sortOrder: DocketSortOrder = .recentlyUpdated
+    @State private var hasAutoSelectedInitial = false // Track if we've done initial auto-selection
 
     init(isPresented: Binding<Bool>, initialText: String, settingsManager: SettingsManager, cacheManager: AsanaCacheManager) {
         self._isPresented = isPresented
@@ -2664,60 +1823,204 @@ struct QuickDocketSearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // MARK: Search Bar
-            HStack {
-                Image(systemName: "number.circle")
-                    .foregroundColor(.primary)
-
-                NoSelectTextField(
-                    text: $searchText,
-                    placeholder: "Search docket numbers or job names...",
-                    isEnabled: true,
-                    onSubmit: {
-                        performSearch()
-                    },
-                    onTextChange: {
-                        performSearch()
-                    }
-                )
-                .padding(10)
-
-                if !searchText.isEmpty {
-                    Button(action: { searchText = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
-
+            searchBarSection
             Divider()
-
-            // MARK: Sync Status Banner (non-blocking)
-            if cacheManager.isSyncing {
-                HStack {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                    Text("Syncing with Asana...")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    if let lastSync = cacheManager.lastSyncDate {
-                        Text("Last sync: \(lastSync, style: .relative)")
-                            .font(.caption2)
-                            .foregroundColor(.secondary.opacity(0.7))
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            sortOrderSection
+            Divider()
+            syncStatusSection
+            resultsListSection
+            infoBarSection
+        }
+        .frame(width: 600, height: 500)
+        .sheet(isPresented: $showSettingsSheet) {
+            SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
+        }
+        .sheet(isPresented: $showMetadataEditor) {
+            if let docket = selectedDocket {
+                DocketMetadataEditorView(
+                    docket: docket,
+                    isPresented: $showMetadataEditor,
+                    metadataManager: metadataManager
+                )
             }
+        }
+        .onAppear {
+            handleOnAppear()
+        }
+        .onDisappear {
+            // Cancel any pending search
+            searchTask?.cancel()
+        }
+        .onKeyPress(.escape) {
+            isPresented = false
+            return .handled
+        }
+        .onKeyPress(.upArrow) {
+            if !filteredDockets.isEmpty {
+                isSearchFocused = false
+                isListFocused = true
+                moveSelection(-1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.downArrow) {
+            if !filteredDockets.isEmpty {
+                isSearchFocused = false
+                isListFocused = true
+                moveSelection(1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.tab) {
+            // Pressing Tab refocuses the search field
+            isSearchFocused = true
+            isListFocused = false
+            return .handled
+        }
+        .onKeyPress(.return) {
+            // Enter key opens the metadata editor for selected docket
+            if isListFocused, selectedDocket != nil {
+                showMetadataEditor = true
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.delete) {
+            // Backspace refocuses search field
+            if isListFocused {
+                isSearchFocused = true
+                isListFocused = false
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress { press in
+            // Any letter/character refocuses search field
+            if isListFocused && press.characters.count == 1 {
+                let char = press.characters.first!
+                if char.isLetter || char.isNumber || char.isWhitespace || char.isPunctuation {
+                    isSearchFocused = true
+                    isListFocused = false
+                    return .handled
+                }
+            }
+            return .ignored
+        }
+    }
+    
+    // MARK: - View Sections
+    
+    private var searchBarSection: some View {
+        HStack {
+            Image(systemName: "number.circle")
+                .foregroundColor(.primary)
 
-            // MARK: Results List
-            ZStack {
-                if isScanning {
+            NoSelectTextField(
+                text: $searchText,
+                placeholder: "Search docket numbers or job names...",
+                isEnabled: true,
+                onSubmit: {
+                    performSearch()
+                },
+                onTextChange: {
+                    performSearch()
+                }
+            )
+            .padding(10)
+
+            if !searchText.isEmpty {
+                HoverableButton(action: { searchText = "" }) { isHovered in
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(isHovered ? .primary : .secondary)
+                        .scaleEffect(isHovered ? 1.1 : 1.0)
+                }
+            }
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+    
+    private var sortOrderSection: some View {
+        HStack {
+            Text("Sort by:")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            Picker("", selection: $sortOrder) {
+                ForEach(DocketSortOrder.allCases, id: \.self) { order in
+                    Text(order.displayName).tag(order)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 200)
+            .onChange(of: sortOrder) {
+                applySorting()
+            }
+            
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+    }
+    
+    @ViewBuilder
+    private var syncStatusSection: some View {
+        if cacheManager.isSyncing {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Syncing with Asana...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                if let lastSync = cacheManager.lastSyncDate {
+                    Text("Last sync: \(lastSync, style: .relative)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        }
+    }
+    
+    private var resultsListSection: some View {
+        ZStack {
+            // Check if directories are connected (for non-Asana sources)
+            if settingsManager.currentSettings.docketSource != .asana && !manager.isServerDirectoryConnected() {
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(.orange)
+                        
+                        VStack(spacing: 8) {
+                            Text("Search Unavailable")
+                                .font(.title3)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                            Text("Directories are not connected")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Please connect to the server directory to use search")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 40)
+                        }
+                        
+                        Button("Open Settings") {
+                            showSettingsSheet = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.regular)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                } else if isScanning {
                     VStack {
                         ProgressView()
                             .scaleEffect(0.8)
@@ -2731,262 +2034,361 @@ struct QuickDocketSearchView: View {
                             .foregroundColor(.gray)
                         }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding()
-                } else if allDockets.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "doc.text.magnifyingglass")
-                            .font(.system(size: 48))
-                            .foregroundColor(.gray.opacity(0.5))
-                        
-                        if settingsManager.currentSettings.docketSource == .asana {
-                            if searchText.isEmpty {
-                                Text("Type to search Asana...")
-                                    .font(.title3)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.primary)
-                                Text("Search by docket number or job name")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                Text("No Results")
-                                    .font(.title3)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.primary)
-                                Text("No dockets found matching '\(searchText)'")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        } else {
-                        Text("No Docket Data")
-                            .font(.title3)
-                            .fontWeight(.medium)
-                            .foregroundColor(.primary)
-                        }
-                        
-                        if let error = asanaError {
+                } else if allDockets.isEmpty && !isScanning {
                             VStack(spacing: 8) {
-                                Text("Asana Error:")
-                                    .font(.caption)
-                                    .foregroundColor(.red)
-                                Text(error)
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 40)
-                            }
-                        } else {
-                            Text("No dockets found on server. Check Sessions path in Settings.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 40)
-                        }
-                    }
-                    .padding()
-                } else if filteredDockets.isEmpty && !searchText.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "questionmark.folder")
-                            .font(.system(size: 32))
-                            .foregroundColor(.gray.opacity(0.5))
-                        Text("No dockets found")
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Populating list...")
                             .foregroundColor(.gray)
-                        Text("Try a different search term")
                             .font(.caption)
-                            .foregroundColor(.gray.opacity(0.7))
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
                 } else {
-                    List {
-                        if !filteredDockets.isEmpty {
-                            Section {
-                                ForEach(filteredDockets) { docket in
-                                    Button(action: {
-                                        selectedDocket = docket
-                                    }) {
-                                        HStack(spacing: 12) {
-                                            // Number badge
-                                            Text(docket.number)
-                                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                                                .foregroundColor(.white)
-                                                .padding(.horizontal, 8)
-                                                .padding(.vertical, 4)
-                                                .background(Color.blue)
-                                                .cornerRadius(6)
-
-                                            // Job name and metadata indicator
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(docket.jobName)
-                                                    .font(.system(size: 14))
-                                                    .foregroundColor(.primary)
-
-                                                if metadataManager.hasMetadata(for: docket.fullName) {
-                                                    let meta = metadataManager.getMetadata(forId: docket.fullName)
-                                                    HStack(spacing: 4) {
-                                                        if !meta.client.isEmpty {
-                                                            Text(meta.client)
-                                                                .font(.caption)
-                                                                .foregroundColor(.secondary)
-                                                        }
-                                                        if !meta.agency.isEmpty {
-                                                            Text("•")
-                                                                .font(.caption)
-                                                                .foregroundColor(.secondary)
-                                                            Text(meta.agency)
-                                                                .font(.caption)
-                                                                .foregroundColor(.secondary)
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            Spacer()
-
-                                            // Metadata indicator
-                                            if metadataManager.hasMetadata(for: docket.fullName) {
-                                                Image(systemName: "info.circle.fill")
-                                                    .foregroundColor(.blue)
-                                                    .font(.caption)
-                                            }
-
-                                            // Copy button
-                                            Button(action: {
-                                                NSPasteboard.general.clearContents()
-                                                NSPasteboard.general.setString(docket.fullName, forType: .string)
-                                            }) {
-                                                Image(systemName: "doc.on.doc")
-                                                    .foregroundColor(.secondary)
-                                            }
-                                            .buttonStyle(.plain)
-                                            .help("Copy full name")
-                                        }
-                                        .padding(.vertical, 4)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            } header: {
-                                HStack {
-                                    Text("Results")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Spacer()
-                                    Text("\(filteredDockets.count) docket\(filteredDockets.count == 1 ? "" : "s")")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        } else if searchText.isEmpty && !allDockets.isEmpty {
-                            Section {
-                                ForEach(allDockets.prefix(20)) { docket in
-                                    HStack(spacing: 12) {
-                                        Text(docket.number)
-                                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                                            .foregroundColor(.white)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 4)
-                                            .background(Color.blue)
-                                            .cornerRadius(6)
-
-                                        Text(docket.jobName)
-                                            .font(.system(size: 14))
-
-                                        Spacer()
-
-                                        Button(action: {
-                                            NSPasteboard.general.clearContents()
-                                            NSPasteboard.general.setString(docket.fullName, forType: .string)
-                                        }) {
-                                            Image(systemName: "doc.on.doc")
-                                                .foregroundColor(.secondary)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .help("Copy full name")
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-                            } header: {
-                                HStack {
-                                    Text("Recent Dockets")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Spacer()
-                                    Text("Showing 20 of \(allDockets.count)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
+                    docketsListView
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var docketsListView: some View {
+        ScrollViewReader { proxy in
+            List {
+                if !filteredDockets.isEmpty {
+                    filteredDocketsSection
+                } else if searchText.isEmpty && !allDockets.isEmpty {
+                    allDocketsSection
+                }
+            }
+            .listStyle(.inset)
+            .focused($isListFocused)
+            .onChange(of: selectedDocket) { oldValue, newValue in
+                if let docket = newValue {
+                    withAnimation(.easeInOut(duration: 0.08)) {
+                        proxy.scrollTo(docket.id, anchor: .center)
                     }
-                    .listStyle(.inset)
                 }
             }
-
-            // MARK: Info Bar
-            HStack {
-                HStack(spacing: 6) {
-                    Image(systemName: "info.circle")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text("Reference only - type to search by number or job name")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                Button("Close") {
-                    isPresented = false
-                }
-                .keyboardShortcut(.cancelAction)
+            .onChange(of: filteredDockets) { oldValue, newValue in
+                handleFilteredDocketsChange(oldValue: oldValue, newValue: newValue)
             }
-            .padding()
-            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 600, height: 500)
-        .onAppear {
-            isSearchFocused = true
-            metadataManager.reloadMetadata()
+    }
+    
+    @ViewBuilder
+    private var filteredDocketsSection: some View {
+        Section {
+            ForEach(filteredDockets) { docket in
+                docketRow(docket: docket)
+            }
+        } header: {
+            HStack {
+                Text(searchText.isEmpty ? "All Dockets" : "Results")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(filteredDockets.count) docket\(filteredDockets.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+    
+    @ViewBuilder
+    private var allDocketsSection: some View {
+        Section {
+            ForEach(allDockets) { docket in
+                simpleDocketRow(docket: docket)
+            }
+        } header: {
+            HStack {
+                Text("Recent Dockets")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(allDockets.count) docket\(allDockets.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+    
+    private func docketRow(docket: DocketInfo) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: {
+                selectedDocket = docket
+            }) {
+                docketRowContent(docket: docket)
+            }
+            .buttonStyle(.plain)
+            .tag(docket.id)
+            .id(docket.id)
+            .onTapGesture(count: 2) {
+                // Double-click opens metadata editor
+                selectedDocket = docket
+                showMetadataEditor = true
+            }
             
-            let settings = settingsManager.currentSettings
-            
-            // Only load dockets on appear if NOT using Asana (Asana uses cache)
-            if settings.docketSource != .asana {
-            loadDockets()
-            } else {
-                // For Asana: Load existing cache immediately for instant search
-                let cachedDockets = cacheManager.loadCachedDockets()
-                if !cachedDockets.isEmpty {
-                    allDockets = cachedDockets
-                    filteredDockets = cachedDockets
-                    print("📦 [CACHE] Loaded \(cachedDockets.count) dockets from cache")
-                } else {
-                    print("📦 [CACHE] Cache is empty - waiting for sync...")
+            if let subtasks = docket.subtasks, !subtasks.isEmpty {
+                subtasksView(subtasks: subtasks)
+            }
+        }
+    }
+    
+    private func docketRowContent(docket: DocketInfo) -> some View {
+        HStack(spacing: 12) {
+            // Number badge
+            Text(docket.number)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.blue)
+                .cornerRadius(6)
+
+            // Job name and metadata
+            VStack(alignment: .leading, spacing: 2) {
+                Text(docket.jobName)
+                    .font(.system(size: 14))
+                    .foregroundColor(.primary)
+
+                if let metadataType = docket.metadataType {
+                    Text(metadataType)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 
-                // Sync cache in background if needed (stale or missing)
-                if cacheManager.shouldSync() {
-                    print("🔵 [QuickSearch] Cache is stale or missing, syncing with Asana in background...")
-                    Task {
-                        do {
-                            try await cacheManager.syncWithAsana(
-                                workspaceID: settings.asanaWorkspaceID,
-                                projectID: settings.asanaProjectID,
-                                docketField: settings.asanaDocketField,
-                                jobNameField: settings.asanaJobNameField
-                            )
-                            print("🟢 [QuickSearch] Cache sync complete")
+                if metadataManager.hasMetadata(for: docket.fullName) {
+                    metadataInfoView(docket: docket)
+                }
+            }
+
+            Spacer()
+
+            // Info button to open metadata editor
+            Button(action: {
+                selectedDocket = docket
+                showMetadataEditor = true
+            }) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundColor(metadataManager.hasMetadata(for: docket.fullName) ? .blue : .secondary)
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .help("View/Edit docket information")
+
+            Button(action: {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(docket.fullName, forType: .string)
+            }) {
+                Image(systemName: "doc.on.doc")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Copy full name")
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+    
+    @ViewBuilder
+    private func metadataInfoView(docket: DocketInfo) -> some View {
+        let meta = metadataManager.getMetadata(forId: docket.fullName)
+        HStack(spacing: 4) {
+            if !meta.client.isEmpty {
+                Text(meta.client)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            if !meta.agency.isEmpty {
+                Text("•")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(meta.agency)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+    
+    private func subtasksView(subtasks: [DocketSubtask]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(subtasks) { subtask in
+                HStack(spacing: 12) {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: 20)
+                    
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .frame(width: 12)
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(subtask.name)
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        
+                        if let metadataType = subtask.metadataType {
+                            Text(metadataType)
+                                .font(.caption2)
+                                .foregroundColor(.secondary.opacity(0.7))
+                        }
+                    }
+                    
+                    Spacer()
+                }
+                .padding(.vertical, 2)
+                .padding(.leading, 8)
+            }
+        }
+        .padding(.leading, 20)
+        .padding(.bottom, 4)
+    }
+    
+    private func simpleDocketRow(docket: DocketInfo) -> some View {
+        Button(action: {
+            selectedDocket = docket
+            showMetadataEditor = true
+        }) {
+            HStack(spacing: 12) {
+                Text(docket.number)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.blue)
+                    .cornerRadius(6)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(docket.jobName)
+                        .font(.system(size: 14))
+                    
+                    if let metadataType = docket.metadataType {
+                        Text(metadataType)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Spacer()
+
+                Button(action: {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(docket.fullName, forType: .string)
+                }) {
+                    Image(systemName: "doc.on.doc")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Copy full name")
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+    
+    private func handleFilteredDocketsChange(oldValue: [DocketInfo], newValue: [DocketInfo]) {
+        // Only auto-select in these cases:
+        // 1. Initial load: first time we get results (oldValue was empty, haven't auto-selected yet)
+        // 2. Current selection was filtered out: if selected docket is no longer in the list
+        if let currentSelected = selectedDocket {
+            // If current selection is still in the new list, keep it
+            if !newValue.contains(where: { $0.id == currentSelected.id }) {
+                // Current selection is gone - only auto-select if list is not empty
+                if !newValue.isEmpty {
+                    selectedDocket = newValue.first
+                } else {
+                    selectedDocket = nil
+                }
+            }
+        } else if !hasAutoSelectedInitial && oldValue.isEmpty && !newValue.isEmpty {
+            // Initial load: only auto-select once when we first get results
+            selectedDocket = newValue.first
+            hasAutoSelectedInitial = true
+        }
+    }
+    
+    private var infoBarSection: some View {
+        HStack {
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("Reference only - type to search by number or job name")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Button("Close") {
+                isPresented = false
+            }
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding()
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+    
+    // MARK: - Lifecycle
+    
+    private func handleOnAppear() {
+        isSearchFocused = true
+        metadataManager.reloadMetadata()
+        
+        // Reset auto-selection flag when sheet opens
+        hasAutoSelectedInitial = false
+        selectedDocket = nil
+        
+        let settings = settingsManager.currentSettings
+        
+        // Only load dockets on appear if NOT using Asana (Asana uses cache)
+        if settings.docketSource != .asana {
+            loadDockets()
+        } else {
+            // For Asana: Load existing cache immediately for instant search
+            let cachedDockets = cacheManager.loadCachedDockets()
+            if !cachedDockets.isEmpty {
+                allDockets = cachedDockets
+                filteredDockets = cachedDockets
+                applySorting()
+                print("📦 [CACHE] Loaded \(cachedDockets.count) dockets from cache")
+            } else {
+                print("📦 [CACHE] Cache is empty - waiting for sync...")
+            }
+            
+            // Sync cache in background if needed (stale or missing)
+            if cacheManager.shouldSync() {
+                print("🔵 [QuickSearch] Cache is stale or missing, syncing with Asana in background...")
+                Task {
+                    do {
+                        try await cacheManager.syncWithAsana(
+                            workspaceID: settings.asanaWorkspaceID,
+                            projectID: settings.asanaProjectID,
+                            docketField: settings.asanaDocketField,
+                            jobNameField: settings.asanaJobNameField,
+                            sharedCacheURL: settings.sharedCacheURL,
+                            useSharedCache: settings.useSharedCache
+                        )
+                        print("🟢 [QuickSearch] Cache sync complete")
                             
                             // Update results with fresh cache after sync
                             await MainActor.run {
                                 let freshDockets = cacheManager.loadCachedDockets()
                                 if !freshDockets.isEmpty {
                                     allDockets = freshDockets
-                                    // Re-apply current search filter if there's search text
+                                    // Re-apply search filter if there's search text
                                     if !searchText.isEmpty {
-                                        filteredDockets = cacheManager.searchCachedDockets(query: searchText)
+                                        searchAsana(query: searchText)
                                     } else {
                                         filteredDockets = freshDockets
+                                        applySorting()
                                     }
                                     print("🟢 [QuickSearch] Updated results with fresh cache (\(freshDockets.count) dockets)")
                                 }
@@ -3003,27 +2405,10 @@ struct QuickDocketSearchView: View {
                 }
             }
         }
-        .onDisappear {
-            // Cancel any pending search
-            searchTask?.cancel()
-        }
-        .onKeyPress(.escape) {
-            isPresented = false
-            return .handled
-        }
-        .sheet(item: $selectedDocket) { docket in
-            DocketMetadataEditorView(
-                docket: docket,
-                isPresented: Binding(
-                    get: { selectedDocket != nil },
-                    set: { if !$0 { selectedDocket = nil } }
-                ),
-                metadataManager: metadataManager
-            )
-        }
-    }
-
-    private func loadDockets() {
+    
+    // MARK: - Helper Functions
+    
+    func loadDockets() {
         print("🔵 [ContentView] loadDockets() called")
         var settings = settingsManager.currentSettings
         print("🔵 [ContentView] Docket source: \(settings.docketSource)")
@@ -3047,6 +2432,7 @@ struct QuickDocketSearchView: View {
             if !cachedDockets.isEmpty {
                 allDockets = cachedDockets
                 filteredDockets = cachedDockets
+                applySorting()
                 print("🟢 [ContentView] Loaded \(cachedDockets.count) dockets from cache")
         } else {
                 print("🔵 [ContentView] Cache is empty, will sync on search view appear")
@@ -3065,14 +2451,14 @@ struct QuickDocketSearchView: View {
         }
     }
     
-    private func loadDocketsFromAsana() {
+    func loadDocketsFromAsana() {
         // This function is no longer used - Asana now uses cache
         // Cache sync happens in onAppear of QuickDocketSearchView
         print("🔵 [Asana] loadDocketsFromAsana() called but Asana now uses cache")
         isScanning = false
     }
 
-    private func loadDocketsFromCSV() {
+    func loadDocketsFromCSV() {
         // Force reload metadata from CSV
         metadataManager.reloadMetadata()
 
@@ -3082,10 +2468,12 @@ struct QuickDocketSearchView: View {
         print("Loading dockets from metadata. Total entries: \(metadataManager.metadata.count)")
 
         for (_, meta) in metadataManager.metadata {
+            let metadataType = extractMetadataType(from: meta.jobName)
             dockets.append(DocketInfo(
                 number: meta.docketNumber,
                 jobName: meta.jobName,
-                fullName: meta.id
+                fullName: meta.id,
+                metadataType: metadataType
             ))
         }
 
@@ -3109,10 +2497,11 @@ struct QuickDocketSearchView: View {
         }
 
         filteredDockets = allDockets
+        applySorting()
         performSearch()
     }
 
-    private func scanDocketsFromServer() {
+    func scanDocketsFromServer() {
         isScanning = true
 
         Task.detached(priority: .userInitiated) {
@@ -3174,12 +2563,12 @@ struct QuickDocketSearchView: View {
                 self.allDockets = dockets
                 self.filteredDockets = dockets
                 self.isScanning = false
-                self.performSearch()
+                self.applySorting()
             }
         }
     }
 
-    nonisolated private func checkAndAddDocket(folderURL: URL, to dict: inout [String: DocketInfo]) {
+    nonisolated func checkAndAddDocket(folderURL: URL, to dict: inout [String: DocketInfo]) {
         let folderName = folderURL.lastPathComponent
 
         // Parse format: "number_jobName"
@@ -3190,9 +2579,10 @@ struct QuickDocketSearchView: View {
         let docketNumber = extractDocketNumber(from: firstPart)
         guard !docketNumber.isEmpty else { return }
 
-        // Clean up job name
+        // Clean up job name and extract metadata
         let rawJobName = String(components[1])
         let cleanedJobName = cleanJobName(rawJobName)
+        let metadataType = extractMetadataType(from: rawJobName)
 
         // Use full name as unique key to avoid duplicates
         if dict[folderName] == nil {
@@ -3200,13 +2590,14 @@ struct QuickDocketSearchView: View {
             let docket = DocketInfo(
                 number: docketNumber,
                 jobName: cleanedJobName,
-                fullName: folderName
+                fullName: folderName,
+                metadataType: metadataType
             )
             dict[folderName] = docket
         }
     }
 
-    nonisolated private func extractDocketNumber(from text: String) -> String {
+    nonisolated func extractDocketNumber(from text: String) -> String {
         // Match format: 12345 or 12345-US
         let pattern = #"^(\d+(-[A-Z]{2})?)$"#
 
@@ -3219,11 +2610,60 @@ struct QuickDocketSearchView: View {
         return ""
     }
 
-    nonisolated private func cleanJobName(_ name: String) -> String {
+    nonisolated func cleanJobName(_ name: String) -> String {
         var cleaned = name
 
         // Replace underscores with spaces
         cleaned = cleaned.replacingOccurrences(of: "_", with: " ")
+        
+        // Remove metadata keywords FIRST (before other cleaning): "JOB INFO", "SESSION REPORT", "SESSION" (case-insensitive)
+        // These should be treated as metadata, not part of the job name
+        // Process in order: longest first to avoid partial matches
+        let metadataKeywords = ["SESSION REPORT", "JOB INFO", "SESSION"]
+        for keyword in metadataKeywords {
+            let escapedKeyword = NSRegularExpression.escapedPattern(for: keyword)
+            
+            // Pattern 1: Keyword at start (with optional leading whitespace) followed by " - " or space
+            // Handles: "SESSION - ", " SESSION - ", "SESSION ", etc.
+            let pattern1 = #"^\s*"# + escapedKeyword + #"\s*-\s*"#
+            if let regex = try? NSRegularExpression(pattern: pattern1, options: [.caseInsensitive]) {
+                cleaned = regex.stringByReplacingMatches(
+                    in: cleaned,
+                    range: NSRange(cleaned.startIndex..., in: cleaned),
+                    withTemplate: ""
+                )
+            }
+            
+            // Pattern 2: Keyword at start followed by space (no dash)
+            let pattern2 = #"^\s*"# + escapedKeyword + #"\s+"#
+            if let regex = try? NSRegularExpression(pattern: pattern2, options: [.caseInsensitive]) {
+                cleaned = regex.stringByReplacingMatches(
+                    in: cleaned,
+                    range: NSRange(cleaned.startIndex..., in: cleaned),
+                    withTemplate: ""
+                )
+            }
+            
+            // Pattern 3: Keyword with dashes/spaces around it (anywhere in string)
+            let pattern3 = #"\s*-\s*"# + escapedKeyword + #"(\s*-\s*|\s+|$)"#
+            if let regex = try? NSRegularExpression(pattern: pattern3, options: [.caseInsensitive]) {
+                cleaned = regex.stringByReplacingMatches(
+                    in: cleaned,
+                    range: NSRange(cleaned.startIndex..., in: cleaned),
+                    withTemplate: " "
+                )
+            }
+            
+            // Pattern 4: Standalone keyword with spaces (middle or end of string)
+            let pattern4 = #"\s+"# + escapedKeyword + #"(\s+|$)"#
+            if let regex = try? NSRegularExpression(pattern: pattern4, options: [.caseInsensitive]) {
+                cleaned = regex.stringByReplacingMatches(
+                    in: cleaned,
+                    range: NSRange(cleaned.startIndex..., in: cleaned),
+                    withTemplate: " "
+                )
+            }
+        }
 
         // Remove common date patterns (including MMMd.yy format like "Nov19.24")
         let datePatterns = [
@@ -3261,25 +2701,41 @@ struct QuickDocketSearchView: View {
         return cleaned
     }
 
-    private func performSearch() {
+    /// Extract metadata type (SESSION, PREP, POST, JOB INFO, SESSION REPORT) from text
+    nonisolated func extractMetadataType(from text: String) -> String? {
+        let metadataKeywords = ["SESSION REPORT", "JOB INFO", "SESSION", "PREP", "POST"]
+        
+        for keyword in metadataKeywords {
+            let escapedKeyword = NSRegularExpression.escapedPattern(for: keyword)
+            // Match keyword at start (with optional leading whitespace) followed by " - " or space
+            let pattern = #"^\s*"# + escapedKeyword + #"(\s*-\s*|\s+|$)"#
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+               regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)) != nil {
+                return keyword.uppercased()
+            }
+        }
+        
+        return nil
+    }
+
+    func performSearch() {
         let settings = settingsManager.currentSettings
         
         // Cancel previous search task
         searchTask?.cancel()
         
         if searchText.isEmpty {
-            // Clear results when search is empty
-            allDockets = []
-            filteredDockets = []
-            isScanning = false
+            // Show all dockets when search is empty
+            filteredDockets = allDockets
+            applySorting()
             return
         }
         
         // If using Asana, search on-demand with debouncing
         if settings.docketSource == .asana {
-            // Debounce: wait 500ms after user stops typing
+            // Debounce: wait 300ms after user stops typing
             searchTask = Task {
-                try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
                 
                 // Check if task was cancelled or search text changed
                 guard !Task.isCancelled else { return }
@@ -3312,278 +2768,524 @@ struct QuickDocketSearchView: View {
                     }
                 }
             }
+            applySorting()
         }
     }
     
-    private func searchAsana(query: String) {
+    /// Move selection up or down in the list
+    func moveSelection(_ direction: Int) {
+        guard !filteredDockets.isEmpty else { return }
+        
+        let currentIndex: Int
+        if let selected = selectedDocket,
+           let index = filteredDockets.firstIndex(where: { $0.id == selected.id }) {
+            currentIndex = index
+        } else {
+            currentIndex = 0
+        }
+        
+        let newIndex = max(0, min(filteredDockets.count - 1, currentIndex + direction))
+        selectedDocket = filteredDockets[newIndex]
+    }
+    
+    func applySorting() {
+        let docketsToSort = searchText.isEmpty ? allDockets : filteredDockets
+        let sorted = docketsToSort.sorted { d1, d2 in
+            switch sortOrder {
+            case .recentlyUpdated:
+                if let date1 = d1.updatedAt, let date2 = d2.updatedAt {
+                    return date1 > date2
+                } else if d1.updatedAt != nil {
+                    return true
+                } else if d2.updatedAt != nil {
+                    return false
+                }
+                if let n1 = Int(d1.number.filter { $0.isNumber }),
+                   let n2 = Int(d2.number.filter { $0.isNumber }) {
+                    return n1 > n2
+                }
+                return d1.number > d2.number
+                
+            case .docketNumberDesc:
+                if let n1 = Int(d1.number.filter { $0.isNumber }),
+                   let n2 = Int(d2.number.filter { $0.isNumber }) {
+                    if n1 == n2 {
+                        return d1.jobName < d2.jobName
+                    }
+                    return n1 > n2
+                }
+                if d1.number == d2.number {
+                    return d1.jobName < d2.jobName
+                }
+                return d1.number > d2.number
+                
+            case .docketNumberAsc:
+                if let n1 = Int(d1.number.filter { $0.isNumber }),
+                   let n2 = Int(d2.number.filter { $0.isNumber }) {
+                    if n1 == n2 {
+                        return d1.jobName < d2.jobName
+                    }
+                    return n1 < n2
+                }
+                if d1.number == d2.number {
+                    return d1.jobName < d2.jobName
+                }
+                return d1.number < d2.number
+                
+            case .jobNameAsc:
+                if d1.jobName == d2.jobName {
+                    if let n1 = Int(d1.number.filter { $0.isNumber }),
+                       let n2 = Int(d2.number.filter { $0.isNumber }) {
+                        return n1 > n2
+                    }
+                    return d1.number > d2.number
+                }
+                return d1.jobName < d2.jobName
+                
+            case .jobNameDesc:
+                if d1.jobName == d2.jobName {
+                    if let n1 = Int(d1.number.filter { $0.isNumber }),
+                       let n2 = Int(d2.number.filter { $0.isNumber }) {
+                        return n1 > n2
+                    }
+                    return d1.number > d2.number
+                }
+                return d1.jobName > d2.jobName
+            }
+        }
+        
+        if searchText.isEmpty {
+            allDockets = sorted
+            filteredDockets = sorted
+            // Auto-select first if none selected
+            if selectedDocket == nil && !filteredDockets.isEmpty {
+                selectedDocket = filteredDockets.first
+            }
+        } else {
+            filteredDockets = sorted
+            // Auto-select first if none selected
+            if selectedDocket == nil && !filteredDockets.isEmpty {
+                selectedDocket = filteredDockets.first
+            }
+        }
+    }
+    
+    /// Check if a docket matches the search query
+    func matchesSearch(docket: DocketInfo, query: String) -> Bool {
+        guard !query.isEmpty else { return true }
+        
+        let searchLower = query.lowercased()
+        let isNumericQuery = query.allSatisfy { $0.isNumber }
+        
+        if isNumericQuery {
+            let docketNumberLower = docket.number.lowercased()
+            return docket.fullName.lowercased().contains(searchLower) ||
+                   docketNumberLower.hasPrefix(searchLower) ||
+                   docket.jobName.lowercased().contains(searchLower)
+        } else {
+            return docket.fullName.lowercased().contains(searchLower) ||
+                   docket.number.lowercased().contains(searchLower) ||
+                   docket.jobName.lowercased().contains(searchLower)
+        }
+    }
+    
+    func searchAsana(query: String) {
         // Cancel any previous search
         searchTask?.cancel()
         
         guard !query.isEmpty else {
-            print("🔵 [QuickSearch] Query is empty, clearing results")
-            allDockets = []
-            filteredDockets = []
+            // If query is empty, show all dockets
+            filteredDockets = allDockets
+            applySorting()
             isScanning = false
             return
         }
         
-        // Require at least 3 characters
-        guard query.count >= 3 else {
-            print("🔵 [QuickSearch] Query too short (\(query.count) chars), clearing results")
-            allDockets = []
-            filteredDockets = []
             isScanning = false
-            return
-        }
-        
-        isScanning = false // No loading needed - cache is instant!
         asanaError = nil
         
-        // Search local cache - instant results!
-        let results = cacheManager.searchCachedDockets(query: query)
+        // If we don't have dockets loaded yet, load from cache
+        if allDockets.isEmpty {
+            let cachedDockets = cacheManager.loadCachedDockets()
+            if !cachedDockets.isEmpty {
+                allDockets = cachedDockets
+                applySorting()
+            }
+        }
         
-        allDockets = results
-        filteredDockets = results
+        // Filter dockets based on search query
+        let searchLower = query.lowercased()
+        let isNumericQuery = query.allSatisfy { $0.isNumber }
+        
+        let matched = allDockets.filter { docket in
+            if isNumericQuery {
+                let docketNumberLower = docket.number.lowercased()
+                return docket.fullName.lowercased().contains(searchLower) ||
+                       docketNumberLower.hasPrefix(searchLower) ||
+                       docket.jobName.lowercased().contains(searchLower)
+            } else {
+                return docket.fullName.lowercased().contains(searchLower) ||
+                       docket.number.lowercased().contains(searchLower) ||
+                       docket.jobName.lowercased().contains(searchLower)
+            }
+        }
+        
+        // Apply sorting to filtered results
+        let sorted = matched.sorted { d1, d2 in
+            switch sortOrder {
+            case .recentlyUpdated:
+                if let date1 = d1.updatedAt, let date2 = d2.updatedAt {
+                    return date1 > date2
+                } else if d1.updatedAt != nil {
+                    return true
+                } else if d2.updatedAt != nil {
+                    return false
+                }
+                if let n1 = Int(d1.number.filter { $0.isNumber }),
+                   let n2 = Int(d2.number.filter { $0.isNumber }) {
+                    return n1 > n2
+                }
+                return d1.number > d2.number
+                
+            case .docketNumberDesc:
+                if let n1 = Int(d1.number.filter { $0.isNumber }),
+                   let n2 = Int(d2.number.filter { $0.isNumber }) {
+                    if n1 == n2 {
+                        return d1.jobName < d2.jobName
+                    }
+                    return n1 > n2
+                }
+                if d1.number == d2.number {
+                    return d1.jobName < d2.jobName
+                }
+                return d1.number > d2.number
+                
+            case .docketNumberAsc:
+                if let n1 = Int(d1.number.filter { $0.isNumber }),
+                   let n2 = Int(d2.number.filter { $0.isNumber }) {
+                    if n1 == n2 {
+                        return d1.jobName < d2.jobName
+                    }
+                    return n1 < n2
+                }
+                if d1.number == d2.number {
+                    return d1.jobName < d2.jobName
+                }
+                return d1.number < d2.number
+                
+            case .jobNameAsc:
+                if d1.jobName == d2.jobName {
+                    if let n1 = Int(d1.number.filter { $0.isNumber }),
+                       let n2 = Int(d2.number.filter { $0.isNumber }) {
+                        return n1 > n2
+                    }
+                    return d1.number > d2.number
+                }
+                return d1.jobName < d2.jobName
+                
+            case .jobNameDesc:
+                if d1.jobName == d2.jobName {
+                    if let n1 = Int(d1.number.filter { $0.isNumber }),
+                       let n2 = Int(d2.number.filter { $0.isNumber }) {
+                        return n1 > n2
+                    }
+                    return d1.number > d2.number
+                }
+                return d1.jobName > d2.jobName
+            }
+        }
+        
+        filteredDockets = sorted
+        
+        // Auto-select first result if available
+        if !filteredDockets.isEmpty {
+            selectedDocket = filteredDockets.first
+        } else {
+            selectedDocket = nil
+        }
     }
 }
 
-// MARK: - Docket Metadata Editor
+// MARK: - View Modifiers
 
-struct DocketMetadataEditorView: View {
-    let docket: DocketInfo
-    @Binding var isPresented: Bool
-    @ObservedObject var metadataManager: DocketMetadataManager
-
-    @State private var metadata: DocketMetadata
-
-    init(docket: DocketInfo, isPresented: Binding<Bool>, metadataManager: DocketMetadataManager) {
-        self.docket = docket
-        self._isPresented = isPresented
-        self.metadataManager = metadataManager
-        self._metadata = State(initialValue: metadataManager.getMetadata(forId: docket.fullName))
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Docket Information")
-                        .font(.title2)
-                        .fontWeight(.bold)
-
-                    HStack(spacing: 8) {
-                        Text(docket.number)
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(Color.blue)
-                            .cornerRadius(4)
-
-                        Text(docket.jobName)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                Button("Done") {
-                    metadataManager.saveMetadata(metadata)
-                    isPresented = false
-                }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
+struct KeyboardHandlersModifier: ViewModifier {
+    @Binding var isKeyboardMode: Bool
+    var focusedButton: FocusState<ActionButtonFocus?>.Binding
+    let moveGridFocus: (ContentView.GridDirection) -> Void
+    let activateFocusedButton: () -> Void
+    @ObservedObject var settingsManager: SettingsManager
+    @Binding var showSearchSheet: Bool
+    @Binding var showQuickSearchSheet: Bool
+    @Binding var showSettingsSheet: Bool
+    @Binding var showVideoConverterSheet: Bool
+    @Binding var showNewDocketSheet: Bool
+    @Binding var showDocketSelectionSheet: Bool
+    @Binding var initialSearchText: String
+    
+    func body(content: Content) -> some View {
+        content
+            .onKeyPress(.leftArrow) {
+                isKeyboardMode = true
+                moveGridFocus(.left)
+                return .handled
             }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
+            .onKeyPress(.rightArrow) {
+                isKeyboardMode = true
+                moveGridFocus(.right)
+                return .handled
+            }
+            .onKeyPress(.upArrow) {
+                isKeyboardMode = true
+                moveGridFocus(.up)
+                return .handled
+            }
+            .onKeyPress(.downArrow) {
+                isKeyboardMode = true
+                moveGridFocus(.down)
+                return .handled
+            }
+            .onKeyPress(.return) {
+                activateFocusedButton()
+                return .handled
+            }
+            .onKeyPress(.space) {
+                activateFocusedButton()
+                return .handled
+            }
+            .onKeyPress { press in
+                if press.key == .tab {
+                    isKeyboardMode = true
+                }
 
-            Divider()
+                guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showVideoConverterSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
+                    return .ignored
+                }
 
-            // Content
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Job Details Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Job Details")
-                            .font(.headline)
-
-                        MetadataField(label: "Client", icon: "building.2", text: $metadata.client)
-                        MetadataField(label: "Agency", icon: "briefcase", text: $metadata.agency)
-                        MetadataField(label: "License Total", icon: "dollarsign.circle", text: $metadata.licenseTotal)
-                        MetadataField(label: "Currency", icon: "banknote", text: $metadata.currency)
+                if press.characters.count == 1 {
+                    let char = press.characters.first!
+                    if char.isLetter || char.isNumber {
+                        initialSearchText = String(char)
+                        // Open configured default search
+                        if settingsManager.currentSettings.defaultQuickSearch == .search {
+                            showSearchSheet = true
+                        } else {
+                            showQuickSearchSheet = true
+                        }
+                        isKeyboardMode = true
+                        return .handled
                     }
+                }
+                return .ignored
+            }
+            .onChange(of: focusedButton.wrappedValue) { oldValue, newValue in
+                if newValue != nil {
+                    isKeyboardMode = true
+                }
+            }
+    }
+}
 
-                    Divider()
-
-                    // Production Team Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Production Info")
-                            .font(.headline)
-
-                        MetadataField(label: "Producer", icon: "person", text: $metadata.producer)
-                        MetadataField(label: "Agency Producer", icon: "person.badge.key", text: $metadata.agencyProducer)
-                        MetadataField(label: "Status", icon: "checkmark.circle", text: $metadata.status)
-                        MetadataField(label: "Music Type", icon: "music.note", text: $metadata.musicType)
-                        MetadataField(label: "Track", icon: "waveform", text: $metadata.track)
-                        MetadataField(label: "Media", icon: "tv", text: $metadata.media)
+struct AlertsModifier: ViewModifier {
+    @Binding var showAlert: Bool
+    let alertMessage: String
+    @ObservedObject var manager: MediaManager
+    @Binding var showSettingsSheet: Bool
+    
+    func body(content: Content) -> some View {
+        content
+            .alert("Missing Information", isPresented: $showAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(alertMessage)
+            }
+            .alert("Error", isPresented: $manager.showError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                if let errorMessage = manager.errorMessage {
+                    Text(errorMessage)
+                }
+            }
+            .alert("Directory Not Connected", isPresented: $manager.showConnectionWarning) {
+                Button("OK", role: .cancel) {}
+                Button("Open Settings") {
+                    showSettingsSheet = true
+                }
+            } message: {
+                if let warning = manager.connectionWarning {
+                    Text(warning)
+                }
+            }
+            .alert("Convert Videos to ProRes Proxy?", isPresented: $manager.showConvertVideosPrompt) {
+                Button("Convert", role: .destructive) {
+                    Task {
+                        await manager.convertPrepVideos()
                     }
+                }
+                Button("Skip", role: .cancel) {
+                    manager.skipPrepVideoConversion()
+                }
+            } message: {
+                if let pending = manager.pendingPrepConversion {
+                    Text("Found \(pending.videoFiles.count) video file(s). Convert to ProRes Proxy 16:9 1920x1080?\n\nOriginals will be saved in PICTURE/z_unconverted folder.")
+                }
+            }
+    }
+}
 
-                    Divider()
-
-                    // Notes Section
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Notes")
-                            .font(.headline)
-
-                        TextEditor(text: $metadata.notes)
-                            .frame(minHeight: 100)
-                            .font(.system(size: 13))
-                            .padding(8)
-                            .background(Color(nsColor: .textBackgroundColor))
-                            .cornerRadius(6)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+struct SheetsModifier: ViewModifier {
+    @Binding var showNewDocketSheet: Bool
+    @Binding var selectedDocket: String
+    @ObservedObject var manager: MediaManager
+    @ObservedObject var settingsManager: SettingsManager
+    @Binding var showSearchSheet: Bool
+    let initialSearchText: String
+    @Binding var showDocketSelectionSheet: Bool
+    @Binding var pendingJobType: JobType?
+    let wpDate: Date
+    let prepDate: Date
+    @Binding var showQuickSearchSheet: Bool
+    @ObservedObject var cacheManager: AsanaCacheManager
+    @Binding var showSettingsSheet: Bool
+    @Binding var showVideoConverterSheet: Bool
+    
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $showNewDocketSheet) {
+                NewDocketView(
+                    isPresented: $showNewDocketSheet,
+                    selectedDocket: $selectedDocket,
+                    manager: manager,
+                    settingsManager: settingsManager
+                )
+            }
+            .sheet(isPresented: $showSearchSheet) {
+                SearchView(manager: manager, settingsManager: settingsManager, isPresented: $showSearchSheet, initialText: initialSearchText)
+            }
+            .sheet(isPresented: $showDocketSelectionSheet) {
+                DocketSearchView(
+                    manager: manager,
+                    settingsManager: settingsManager,
+                    isPresented: $showDocketSelectionSheet,
+                    selectedDocket: $selectedDocket,
+                    jobType: pendingJobType ?? .workPicture,
+                    onConfirm: {
+                        if let type = pendingJobType {
+                            manager.runJob(
+                                type: type,
+                                docket: selectedDocket,
+                                wpDate: wpDate,
+                                prepDate: prepDate
                             )
-                    }
-
-                    if metadata.lastUpdated > Date.distantPast {
-                        HStack {
-                            Image(systemName: "clock")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("Last updated: \(metadata.lastUpdated, style: .relative)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            pendingJobType = nil
                         }
                     }
-                }
-                .padding()
+                )
             }
-
-            Divider()
-
-            // Footer
-            HStack {
-                Button("Clear All") {
-                    metadata = DocketMetadata(docketNumber: docket.number, jobName: docket.jobName)
-                }
-                .foregroundColor(.red)
-
-                Spacer()
-
-                Button("Cancel") {
-                    isPresented = false
-                }
-                .keyboardShortcut(.cancelAction)
-
-                Button("Save") {
-                    metadataManager.saveMetadata(metadata)
-                    isPresented = false
-                }
-                .keyboardShortcut("s", modifiers: .command)
+            .sheet(isPresented: $showQuickSearchSheet) {
+                QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager, cacheManager: cacheManager)
             }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
-        }
-        .frame(width: 500, height: 650)
+            .sheet(isPresented: $showSettingsSheet) {
+                SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
+            }
+            .sheet(isPresented: $manager.showPrepSummary) {
+                PrepSummaryView(summary: manager.prepSummary, isPresented: $manager.showPrepSummary)
+            }
+            .sheet(isPresented: $showVideoConverterSheet) {
+                VideoConverterView(manager: manager)
+            }
+            .sheet(isPresented: $manager.showOMFAAFValidator) {
+                if let fileURL = manager.omfAafFileToValidate,
+                   let validator = manager.omfAafValidator {
+                    OMFAAFValidatorView(validator: validator, fileURL: fileURL)
+                }
+            }
     }
 }
 
-struct MetadataField: View {
-    let label: String
-    let icon: String
-    @Binding var text: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.caption)
-                    .foregroundColor(.blue)
-                    .frame(width: 16)
-                Text(label)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
-            }
-
-            TextField("Enter \(label.lowercased())", text: $text)
-                .textFieldStyle(.roundedBorder)
-        }
-    }
-}
-
-// MARK: - Prep Summary View
-
-struct PrepSummaryView: View {
-    let summary: String
-    @Binding var isPresented: Bool
-    @State private var copied = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Prep Summary")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                Spacer()
-                Button("Done") {
-                    isPresented = false
-                }
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
-
-            // Summary content
-            ScrollView {
-                Text(summary)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-            }
-            .background(Color(nsColor: .textBackgroundColor))
-
-            Divider()
-
-            // Action buttons
-            HStack {
-                if copied {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                        Text("Copied to clipboard!")
-                            .foregroundColor(.green)
-                    }
-                    .font(.caption)
-                }
-
-                Spacer()
-
-                Button("Copy to Clipboard") {
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(summary, forType: .string)
-                    copied = true
-
-                    // Reset copied state after 2 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        copied = false
+struct ContentViewLifecycleModifier: ViewModifier {
+    @Binding var showSearchSheet: Bool
+    @Binding var showSettingsSheet: Bool
+    @Binding var showQuickSearchSheet: Bool
+    @Binding var initialSearchText: String
+    var mainViewFocused: FocusState<Bool>.Binding
+    var focusedButton: FocusState<ActionButtonFocus?>.Binding
+    @ObservedObject var manager: MediaManager
+    @ObservedObject var settingsManager: SettingsManager
+    @ObservedObject var metadataManager: DocketMetadataManager
+    @ObservedObject var cacheManager: AsanaCacheManager
+    @Binding var isCommandKeyHeld: Bool
+    let autoSyncAsanaCache: () -> Void
+    @Binding var hourlySyncTask: Task<Void, Never>?
+    
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: showSearchSheet) { oldValue, newValue in
+                if !newValue {
+                    initialSearchText = ""
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        mainViewFocused.wrappedValue = true
                     }
                 }
-                .keyboardShortcut("c", modifiers: .command)
             }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
-        }
-        .frame(width: 600, height: 500)
+            .onChange(of: showSettingsSheet) { oldValue, newValue in
+                if !newValue {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        mainViewFocused.wrappedValue = true
+                    }
+                }
+            }
+            .onChange(of: manager.selectedFiles.count) { oldValue, newValue in
+                if newValue > 0 && focusedButton.wrappedValue == nil {
+                    focusedButton.wrappedValue = .file
+                }
+            }
+            .onChange(of: showQuickSearchSheet) { oldValue, newValue in
+                if !newValue {
+                    initialSearchText = ""
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        focusedButton.wrappedValue = .file
+                    }
+                }
+            }
+            .onChange(of: settingsManager.currentSettings) { oldValue, newValue in
+                manager.updateConfig(settings: newValue)
+                metadataManager.updateSettings(newValue)
+                // Update cache manager with new shared cache settings
+                cacheManager.updateCacheSettings(
+                    sharedCacheURL: newValue.sharedCacheURL,
+                    useSharedCache: newValue.useSharedCache
+                )
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    mainViewFocused.wrappedValue = true
+                    focusedButton.wrappedValue = .file
+                }
+
+                // Build search indexes immediately at app startup
+                manager.buildAllFolderIndexes()
+
+                // Monitor Command key state for showing shortcuts
+                NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                    isCommandKeyHeld = event.modifierFlags.contains(.command)
+                    return event
+                }
+                
+                // Update cache manager with shared cache settings
+                let settings = settingsManager.currentSettings
+                cacheManager.updateCacheSettings(
+                    sharedCacheURL: settings.sharedCacheURL,
+                    useSharedCache: settings.useSharedCache
+                )
+                
+                // Auto-sync Asana cache on app launch if using Asana source
+                autoSyncAsanaCache()
+            }
+            .onDisappear {
+                // Clean up task when view disappears
+                hourlySyncTask?.cancel()
+                hourlySyncTask = nil
+            }
     }
 }
 
@@ -3592,3 +3294,4 @@ struct PrepSummaryView: View {
 #Preview {
     ContentView()
 }
+

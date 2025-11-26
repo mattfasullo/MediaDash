@@ -765,12 +765,14 @@ struct AsanaIntegrationSection: View {
     @Binding var isConnecting: Bool
     @Binding var connectionError: String?
     
+    @StateObject private var cacheManager = AsanaCacheManager()
     @State private var clientID: String = ""
     @State private var clientSecret: String = ""
     @State private var showManualCodeEntry = false
     @State private var manualAuthCode = ""
     @State private var manualAuthURL: URL?
     @State private var manualAuthState = ""
+    @State private var showCacheDetails = false
     
     private func connectToAsana() {
         guard !clientID.isEmpty, !clientSecret.isEmpty else {
@@ -1100,6 +1102,53 @@ struct AsanaIntegrationSection: View {
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
                         }
+                        
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        // Shared Cache Settings
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Shared Cache (Optional)")
+                                .font(.system(size: 12, weight: .medium))
+                            
+                            Toggle("Use Shared Cache", isOn: Binding(
+                                get: { settings.useSharedCache },
+                                set: {
+                                    settings.useSharedCache = $0
+                                    hasUnsavedChanges = true
+                                }
+                            ))
+                            .font(.system(size: 11))
+                            
+                            if settings.useSharedCache {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Shared Cache URL")
+                                        .font(.system(size: 11))
+                                    TextField("file:///Volumes/Server/cache.json or /path/to/cache.json", text: Binding(
+                                        get: { settings.sharedCacheURL ?? "" },
+                                        set: {
+                                            settings.sharedCacheURL = $0.isEmpty ? nil : $0
+                                            hasUnsavedChanges = true
+                                        }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    Text("Enter a file path (e.g., /Volumes/Server/MediaDash/cache.json) or HTTP URL. MediaDash will read from this shared cache file instead of syncing with Asana directly. Falls back to local sync if unavailable.")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.leading, 20)
+                            }
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        // Cache Visualization
+                        CacheVisualizationView(
+                            cacheManager: cacheManager,
+                            settings: settings,
+                            showCacheDetails: $showCacheDetails
+                        )
                     }
                 }
             }
@@ -1109,6 +1158,198 @@ struct AsanaIntegrationSection: View {
             clientID = KeychainService.retrieve(key: "asana_client_id") ?? ""
             clientSecret = KeychainService.retrieve(key: "asana_client_secret") ?? ""
         }
+    }
+}
+
+// MARK: - Cache Visualization View
+
+struct CacheVisualizationView: View {
+    @ObservedObject var cacheManager: AsanaCacheManager
+    let settings: AppSettings
+    @Binding var showCacheDetails: Bool
+    @State private var showClearCacheAlert = false
+    
+    private var cachedDockets: [DocketInfo] {
+        cacheManager.loadCachedDockets()
+    }
+    
+    private var cacheSize: String {
+        cacheManager.getCacheSize() ?? "Unknown"
+    }
+    
+    private var lastSync: Date? {
+        cacheManager.lastSyncDate
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Cache Status")
+                    .font(.system(size: 14, weight: .medium))
+                Spacer()
+                Button(showCacheDetails ? "Hide Details" : "Show Details") {
+                    showCacheDetails.toggle()
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 11))
+            }
+            
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "externaldrive.fill")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 12))
+                    Text("\(cachedDockets.count) dockets cached")
+                        .font(.system(size: 12))
+                }
+                
+                HStack {
+                    Image(systemName: "doc.text.fill")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 12))
+                    Text("Cache size: \(cacheSize)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                
+                if let lastSync = lastSync {
+                    HStack {
+                        Image(systemName: "clock.fill")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 12))
+                        Text("Last synced: \(formatDate(lastSync))")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.system(size: 12))
+                        Text("No cache found")
+                            .font(.system(size: 12))
+                            .foregroundColor(.orange)
+                    }
+                }
+                
+                if showCacheDetails && !cachedDockets.isEmpty {
+                    Divider()
+                        .padding(.vertical, 4)
+                    
+                    Text("Sample Dockets (first 10):")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                    
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(cachedDockets.prefix(10)) { docket in
+                                HStack(spacing: 8) {
+                                    Text(docket.number)
+                                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                        .foregroundColor(.blue)
+                                        .frame(width: 60, alignment: .leading)
+                                    Text(docket.jobName)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.primary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    if let updatedAt = docket.updatedAt {
+                                        Text(formatDate(updatedAt))
+                                            .font(.system(size: 9))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 200)
+                    .padding(8)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(6)
+                }
+                
+                HStack(spacing: 8) {
+                    Button("Sync Cache") {
+                        syncCache()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(cacheManager.isSyncing || KeychainService.retrieve(key: "asana_access_token") == nil)
+                    
+                    if cacheManager.isSyncing {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                Text("Syncing with Asana...")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                            }
+                            Text("This may take several minutes depending on the number of projects and tasks.")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary.opacity(0.8))
+                                .italic()
+                        }
+                    }
+                    
+                    Button("Clear Cache") {
+                        showClearCacheAlert = true
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.red)
+                    .alert("Clear Cache?", isPresented: $showClearCacheAlert) {
+                        Button("Cancel", role: .cancel) { }
+                        Button("Clear", role: .destructive) {
+                            clearCache()
+                        }
+                    } message: {
+                        Text("This will delete all cached Asana data. You'll need to sync with Asana again, which may take several minutes depending on the number of projects and tasks in your workspace.")
+                    }
+                    
+                    if let error = cacheManager.syncError {
+                        Text(error)
+                            .font(.system(size: 11))
+                            .foregroundColor(.red)
+                    }
+                }
+            }
+        }
+    }
+    
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+    
+    private func syncCache() {
+        guard let token = KeychainService.retrieve(key: "asana_access_token"), !token.isEmpty else {
+            cacheManager.syncError = "Not connected to Asana"
+            return
+        }
+        
+        Task {
+            do {
+                try await cacheManager.syncWithAsana(
+                    workspaceID: settings.asanaWorkspaceID,
+                    projectID: settings.asanaProjectID,
+                    docketField: settings.asanaDocketField,
+                    jobNameField: settings.asanaJobNameField,
+                    sharedCacheURL: settings.sharedCacheURL,
+                    useSharedCache: settings.useSharedCache
+                )
+            } catch {
+                await MainActor.run {
+                    cacheManager.syncError = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func clearCache() {
+        cacheManager.clearCache()
+        cacheManager.syncError = nil
     }
 }
 

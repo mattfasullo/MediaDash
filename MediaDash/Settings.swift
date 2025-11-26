@@ -143,6 +143,40 @@ enum DefaultQuickSearch: String, Codable {
     case jobInfo = "Job Info"
 }
 
+enum DocketSortOrder: String, Codable, CaseIterable {
+    case recentlyUpdated = "Recently Updated"
+    case docketNumberDesc = "Docket Number (High to Low)"
+    case docketNumberAsc = "Docket Number (Low to High)"
+    case jobNameAsc = "Job Name (A to Z)"
+    case jobNameDesc = "Job Name (Z to A)"
+    
+    var displayName: String {
+        self.rawValue
+    }
+}
+
+// MARK: - Update Channel
+
+enum UpdateChannel: String, Codable, CaseIterable, Identifiable {
+    case production = "Production"
+    case development = "Development"
+
+    var id: String { self.rawValue }
+
+    var displayName: String {
+        self.rawValue
+    }
+
+    var feedURL: String {
+        switch self {
+        case .production:
+            return "https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml"
+        case .development:
+            return "https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/appcast-dev.xml"
+        }
+    }
+}
+
 // MARK: - App Theme
 
 enum AppTheme: String, Codable, CaseIterable {
@@ -277,6 +311,9 @@ struct AppSettings: Codable, Equatable {
     // App Theme
     var appTheme: AppTheme
 
+    // Update Channel
+    var updateChannel: UpdateChannel
+
     // Folder Naming
     var workPictureFolderName: String
     var prepFolderName: String
@@ -338,6 +375,10 @@ struct AppSettings: Codable, Equatable {
     var asanaClientSecret: String? // Stored in Keychain, not in settings
     var asanaDocketField: String? // Custom field name for docket number (if using custom fields)
     var asanaJobNameField: String? // Custom field name for job name (if using custom fields)
+    
+    // Shared Cache (optional - if set, will fetch from shared cache instead of syncing locally)
+    var sharedCacheURL: String?
+    var useSharedCache: Bool
 
     static var `default`: AppSettings {
         AppSettings(
@@ -346,6 +387,7 @@ struct AppSettings: Codable, Equatable {
             sessionsBasePath: "/Volumes/Grayson Assets/SESSIONS",
             docketSource: .csv,
             appTheme: .modern,
+            updateChannel: .production,
             workPictureFolderName: "WORK PICTURE",
             prepFolderName: "SESSION PREP",
             yearPrefix: "GM_",
@@ -385,7 +427,9 @@ struct AppSettings: Codable, Equatable {
             asanaClientID: nil,
             asanaClientSecret: nil,
             asanaDocketField: nil,
-            asanaJobNameField: nil
+            asanaJobNameField: nil,
+            sharedCacheURL: "/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache",
+            useSharedCache: true
         )
     }
 }
@@ -402,27 +446,38 @@ class SettingsManager: ObservableObject {
     private let profilesKey = "savedProfiles"
 
     init() {
+        // Initialize stored properties first (required before calling instance methods)
         // Load current profile name
         let profileName = userDefaults.string(forKey: currentProfileKey) ?? "Default"
 
         // Load available profiles
-        var profiles: [String: AppSettings] = [:]
         if let profilesData = userDefaults.data(forKey: profilesKey),
-           let decodedProfiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData) {
-            profiles = decodedProfiles
+           let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData) {
             self.availableProfiles = Array(profiles.keys).sorted()
             self.currentSettings = profiles[profileName] ?? .default
         } else {
             // First launch - create default profile
             self.currentSettings = .default
             self.availableProfiles = ["Default"]
-            saveProfile(settings: .default, name: "Default")
         }
         
+        // Now that all stored properties are initialized, we can call instance methods
         // Reset path-related settings to defaults on app update
         // This ensures paths work consistently across different machines
-        // Must be called after self is fully initialized
         resetPathsOnUpdateIfNeeded()
+        
+        // After reset, reload profiles in case they were modified
+        if let profilesData = userDefaults.data(forKey: profilesKey),
+           let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData) {
+            self.availableProfiles = Array(profiles.keys).sorted()
+            let updatedProfileName = userDefaults.string(forKey: currentProfileKey) ?? profileName
+            self.currentSettings = profiles[updatedProfileName] ?? profiles[profileName] ?? .default
+        }
+        
+        // If this was first launch, save the default profile after reset
+        if availableProfiles.count == 1 && availableProfiles.first == "Default" {
+            saveProfile(settings: .default, name: "Default")
+        }
     }
     
     /// Resets path-related settings to defaults when app version changes

@@ -74,6 +74,22 @@ echo -e "${BLUE}📝 Updating version in Info-Dev.plist...${NC}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $DEV_BUILD_NUMBER" "MediaDash/Info-Dev.plist" 2>/dev/null || \
     /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $DEV_BUILD_NUMBER" "MediaDash/Info-Dev.plist"
 
+# Verify Info-Dev.plist has correct dev appcast URL before building
+echo -e "${BLUE}🔍 Verifying Info-Dev.plist has dev appcast URL...${NC}"
+DEV_APPCAST_URL="https://raw.githubusercontent.com/mattfasullo/MediaDash/$DEV_BRANCH/$APPCAST_DEV_FILE"
+CURRENT_DEV_APPCAST=$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "MediaDash/Info-Dev.plist" 2>/dev/null)
+if [ "$CURRENT_DEV_APPCAST" != "$DEV_APPCAST_URL" ]; then
+    echo -e "${RED}❌ ERROR: Info-Dev.plist has wrong appcast URL!${NC}"
+    echo -e "   Expected: $DEV_APPCAST_URL"
+    echo -e "   Got: $CURRENT_DEV_APPCAST"
+    echo -e "   Setting correct URL..."
+    /usr/libexec/PlistBuddy -c "Set :SUFeedURL $DEV_APPCAST_URL" "MediaDash/Info-Dev.plist" 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $DEV_APPCAST_URL" "MediaDash/Info-Dev.plist"
+    echo -e "${GREEN}✓ Fixed appcast URL in Info-Dev.plist${NC}"
+else
+    echo -e "${GREEN}✓ Info-Dev.plist has correct dev appcast URL${NC}"
+fi
+
 # Also update main Info.plist for consistency (but we'll use Info-Dev.plist for build)
 ./sync_version.sh "$DEV_VERSION" "$DEV_BUILD_NUMBER"
 
@@ -124,7 +140,17 @@ if [ -d "$RELEASE_DIR/$APP_NAME.app" ] && [ ! -d "$RELEASE_DIR/$DEV_APP_NAME.app
     mv "$RELEASE_DIR/$APP_NAME.app" "$RELEASE_DIR/$DEV_APP_NAME.app"
 fi
 
-# Create ZIP
+# Copy media_validator.py into app bundle Resources
+echo -e "${BLUE}📝 Copying media_validator.py into app bundle...${NC}"
+if [ -f "media_validator.py" ]; then
+    mkdir -p "$RELEASE_DIR/$DEV_APP_NAME.app/Contents/Resources"
+    cp "media_validator.py" "$RELEASE_DIR/$DEV_APP_NAME.app/Contents/Resources/"
+    echo -e "${GREEN}✓ media_validator.py copied to bundle${NC}"
+else
+    echo -e "${RED}❌ WARNING: media_validator.py not found in project root!${NC}"
+fi
+
+# Create ZIP using ditto (as per documentation and other release scripts)
 echo -e "${BLUE}🗜️  Creating ZIP...${NC}"
 ZIP_NAME="$DEV_APP_NAME-$VERSION_STRING.zip"
 cd "$RELEASE_DIR"
@@ -161,6 +187,19 @@ fi
 echo -e "${GREEN}✓ Signed successfully${NC}"
 echo -e "  Signature: ${SIGNATURE:0:20}..."
 echo -e "  File size: $FILE_SIZE bytes"
+
+# Verify built app has correct dev appcast URL
+echo -e "${BLUE}🔍 Verifying built app has dev appcast URL...${NC}"
+DEV_APPCAST_URL="https://raw.githubusercontent.com/mattfasullo/MediaDash/$DEV_BRANCH/$APPCAST_DEV_FILE"
+BUILT_APPCAST_URL=$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$RELEASE_DIR/$DEV_APP_NAME.app/Contents/Info.plist" 2>/dev/null)
+if [ "$BUILT_APPCAST_URL" != "$DEV_APPCAST_URL" ]; then
+    echo -e "${RED}❌ ERROR: Built app has wrong appcast URL!${NC}"
+    echo -e "   Expected: $DEV_APPCAST_URL"
+    echo -e "   Got: $BUILT_APPCAST_URL"
+    echo -e "   Build will not receive dev updates!"
+    exit 1
+fi
+echo -e "${GREEN}✓ Built app has correct dev appcast URL${NC}"
 
 # Switch to dev-builds branch
 echo -e "${BLUE}📡 Switching to dev-builds branch...${NC}"
@@ -231,4 +270,3 @@ git stash pop > /dev/null 2>&1 || true # Apply stash, ignore if no stash
 echo ""
 echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
 echo ""
-

@@ -197,25 +197,26 @@ class OMFAAFValidatorManager: ObservableObject {
     
     init() {
         // Find the media_validator.py script
-        // Try multiple locations:
-        // 1. Same directory as the app (for development)
-        // 2. In the app bundle's Resources (for distribution)
-        // 3. Current working directory
+        // Try multiple locations in order of priority:
+        // 1. App bundle Resources (PRIMARY - for distribution builds)
+        // 2. Same directory as executable (for development)
+        // 3. Current working directory (for development)
+        // 4. Parent of current directory (workspace root for development)
         
         var foundPath: URL?
         
-        // Try 1: Same directory as executable (development)
-        if let executablePath = Bundle.main.executablePath {
-            let executableURL = URL(fileURLWithPath: executablePath)
-            let scriptPath = executableURL.deletingLastPathComponent().appendingPathComponent("media_validator.py")
+        // Try 1: App bundle Resources (PRIMARY - this is where it should be in distributed builds)
+        if let resourcePath = Bundle.main.resourcePath {
+            let scriptPath = URL(fileURLWithPath: resourcePath).appendingPathComponent("media_validator.py")
             if FileManager.default.fileExists(atPath: scriptPath.path) {
                 foundPath = scriptPath
             }
         }
         
-        // Try 2: App bundle Resources
-        if foundPath == nil, let resourcePath = Bundle.main.resourcePath {
-            let scriptPath = URL(fileURLWithPath: resourcePath).appendingPathComponent("media_validator.py")
+        // Try 2: Same directory as executable (development)
+        if foundPath == nil, let executablePath = Bundle.main.executablePath {
+            let executableURL = URL(fileURLWithPath: executablePath)
+            let scriptPath = executableURL.deletingLastPathComponent().appendingPathComponent("media_validator.py")
             if FileManager.default.fileExists(atPath: scriptPath.path) {
                 foundPath = scriptPath
             }
@@ -230,7 +231,7 @@ class OMFAAFValidatorManager: ObservableObject {
             }
         }
         
-        // Try 4: Parent of current directory (workspace root)
+        // Try 4: Parent of current directory (workspace root for development)
         if foundPath == nil {
             let cwd = FileManager.default.currentDirectoryPath
             let scriptPath = URL(fileURLWithPath: cwd)
@@ -241,16 +242,45 @@ class OMFAAFValidatorManager: ObservableObject {
             }
         }
         
-        // Try 5: Explicit workspace path (for development)
-        if foundPath == nil {
-            let workspacePath = URL(fileURLWithPath: "/Users/mattfasullo/Documents/MediaDash/media_validator.py")
-            if FileManager.default.fileExists(atPath: workspacePath.path) {
-                foundPath = workspacePath
+        // Try 5: Walk up from executable to find workspace root (development fallback only)
+        if foundPath == nil, let executablePath = Bundle.main.executablePath {
+            var currentPath = URL(fileURLWithPath: executablePath).deletingLastPathComponent()
+            
+            // Walk up directory tree looking for media_validator.py
+            for _ in 0..<10 { // Limit to 10 levels up
+                let scriptPath = currentPath.appendingPathComponent("media_validator.py")
+                if FileManager.default.fileExists(atPath: scriptPath.path) {
+                    foundPath = scriptPath
+                    break
+                }
+                
+                // Also check parent directories (for when script is in project root but app is in build folder)
+                let parentPath = currentPath.deletingLastPathComponent()
+                let parentScriptPath = parentPath.appendingPathComponent("media_validator.py")
+                if FileManager.default.fileExists(atPath: parentScriptPath.path) {
+                    foundPath = parentScriptPath
+                    break
+                }
+                
+                let parent = currentPath.deletingLastPathComponent()
+                if parent.path == currentPath.path {
+                    break // Reached root
+                }
+                currentPath = parent
             }
         }
         
-        // Fallback: Use workspace path even if file doesn't exist (will show error with correct path)
-        self.pythonScriptPath = foundPath ?? URL(fileURLWithPath: "/Users/mattfasullo/Documents/MediaDash/media_validator.py")
+        // If not found, use a placeholder path that will trigger a clear error message
+        // The error will indicate where the script should be located
+        if let found = foundPath {
+            self.pythonScriptPath = found
+        } else {
+            // Use bundle resources path as the expected location for error message
+            let expectedPath = Bundle.main.resourcePath.map { 
+                URL(fileURLWithPath: $0).appendingPathComponent("media_validator.py").path 
+            } ?? "app bundle Resources folder"
+            self.pythonScriptPath = URL(fileURLWithPath: expectedPath)
+        }
     }
     
     func validateFile(_ fileURL: URL) async {
