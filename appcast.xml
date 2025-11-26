@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.5.2</title>
+            <description><![CDATA[
+                <p>Gmail email scanning improvements: Added configurable search terms/labels (case-insensitive), only process unread emails, support for multiple search terms with automatic label and subject matching, fixed OAuth compilation errors</p>
+            ]]></description>
+            <pubDate>Wed, 26 Nov 2025 18:33:19 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.5.2/MediaDash.zip"
+                sparkle:version="0.5.2"
+                sparkle:shortVersionString="0.5.2"
+                sparkle:edSignature="uz7Ohmt/rY/kbISOA8joNH3YRDb6y4W1fkWLW8yWTm3XwLy4KZkOttHPIZKmSFLYToezBjqUe89z5B3yrWqQAA=="
+                length="3862880"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.5.1</title>
             <description><![CDATA[
                 <p>Fixed Gmail OAuth credentials and duplicate method definitions
