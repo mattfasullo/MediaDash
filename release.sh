@@ -40,6 +40,15 @@ mkdir -p "$RELEASE_DIR"
 # Update version (syncs Info.plist and Xcode project)
 echo -e "${BLUE}📝 Updating version...${NC}"
 BUILD_NUMBER=$(echo "$VERSION" | awk -F. '{printf "%d", $1*100 + $2*10 + $3}')
+
+# Validate BUILD_NUMBER is numeric
+if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}❌ ERROR: Invalid build number calculated: $BUILD_NUMBER${NC}"
+    echo -e "${RED}Version: $VERSION${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Version: $VERSION, Build: $BUILD_NUMBER${NC}"
 ./sync_version.sh "$VERSION" "$BUILD_NUMBER"
 
 # Store BUILD_NUMBER for use in appcast
@@ -150,6 +159,8 @@ echo -e "  File size: $FILE_SIZE bytes"
 
 # Update appcast
 echo -e "${BLUE}📡 Updating appcast...${NC}"
+echo -e "   Using version: $VERSION"
+echo -e "   Using build number: $BUILD_NUMBER"
 PUB_DATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
 
 NEW_ITEM="        <item>
