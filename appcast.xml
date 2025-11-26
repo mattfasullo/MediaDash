@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.5.3</title>
+            <description><![CDATA[
+                <p>Settings UI improvements: Uniform integration widgets, moved detailed settings to Advanced Settings</p>
+            ]]></description>
+            <pubDate>Wed, 26 Nov 2025 21:03:20 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.5.3/MediaDash.zip"
+                sparkle:version="53"
+                sparkle:shortVersionString="0.5.3"
+                sparkle:edSignature="t/I1IQckhbGzB1JqtPuTNaE3/OfEZXyclduYoNOMcYYdpu3hldUdK7yxEoPG/vYAJ/yY4Ksemrv6XN7tTPqDAg=="
+                length="3854703"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.5.2</title>
             <description><![CDATA[
                 <p>Gmail email scanning improvements: Added configurable search terms/labels (case-insensitive), only process unread emails, support for multiple search terms with automatic label and subject matching, fixed OAuth compilation errors</p>
