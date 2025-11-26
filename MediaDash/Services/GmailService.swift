@@ -15,6 +15,8 @@ class GmailService: ObservableObject {
     /// Initialize with access token
     init(accessToken: String? = nil) {
         self.accessToken = accessToken ?? KeychainService.retrieve(key: "gmail_access_token")
+        // Refresh token is loaded lazily via computed property when needed
+        // This ensures it's always available from Keychain
     }
     
     /// Get refresh token from keychain
@@ -107,10 +109,17 @@ class GmailService: ObservableObject {
             let access_token: String
             let expires_in: Int?
             let token_type: String
+            let refresh_token: String? // Google may return a new refresh token
         }
         
         let tokenResponse = try JSONDecoder().decode(RefreshTokenResponse.self, from: data)
-        setAccessToken(tokenResponse.access_token)
+        // If Google returns a new refresh token, use it; otherwise keep the existing one
+        if let newRefreshToken = tokenResponse.refresh_token {
+            setAccessToken(tokenResponse.access_token, refreshToken: newRefreshToken)
+        } else {
+            // Keep existing refresh token
+            setAccessToken(tokenResponse.access_token, refreshToken: nil)
+        }
         
         print("GmailService: Successfully refreshed access token")
     }

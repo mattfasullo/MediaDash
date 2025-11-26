@@ -323,6 +323,7 @@ struct SettingsView: View {
                     .keyboardShortcut("s", modifiers: .command)
                     .buttonStyle(.borderedProminent)
                     .disabled(!hasUnsavedChanges)
+                    .help(hasUnsavedChanges ? "Save changes (Cmd+S)" : "No changes to save")
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
@@ -1042,6 +1043,7 @@ struct GmailIntegrationSection: View {
                     isConnecting = false
                     hasAuthenticated = true // Mark as authenticated even if email fetch fails
                     print("Gmail OAuth successful! Token stored.")
+                    print("Debug: hasUnsavedChanges = \(hasUnsavedChanges) after Gmail connection")
                 }
             } catch OAuthError.manualCodeRequired(let state, let authURL) {
                 await MainActor.run {
@@ -1363,7 +1365,31 @@ struct GmailIntegrationSection: View {
             .padding(20)
             .frame(width: 400)
         }
+        .onAppear {
+            // Restore connection state from Keychain when settings view appears
+            if let accessToken = KeychainService.retrieve(key: "gmail_access_token"), !accessToken.isEmpty {
+                // Restore refresh token if available
+                let refreshToken = KeychainService.retrieve(key: "gmail_refresh_token")
+                gmailService.setAccessToken(accessToken, refreshToken: refreshToken)
+                hasAuthenticated = true
+                
+                // Restore connected email from UserDefaults if available
+                if let savedEmail = UserDefaults.standard.string(forKey: "gmail_connected_email") {
+                    connectedEmail = savedEmail
+                } else {
+                    // Load email if not cached
+                    Task {
+                        await loadConnectedEmail()
+                    }
+                }
+            } else {
+                // No token found, ensure state is cleared
+                hasAuthenticated = false
+                connectedEmail = nil
+            }
+        }
         .task {
+            // Load email if authenticated but not yet loaded
             if gmailService.isAuthenticated && connectedEmail == nil {
                 await loadConnectedEmail()
             }

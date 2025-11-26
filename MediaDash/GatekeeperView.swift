@@ -89,9 +89,19 @@ struct AuthenticatedRootView: View {
                 
                 // Start email scanning if enabled and authenticated
                 if settingsManager.currentSettings.gmailEnabled {
-                    if let token = KeychainService.retrieve(key: "gmail_access_token"), !token.isEmpty {
-                        emailScanningService.gmailService.setAccessToken(token, refreshToken: nil)
+                    // Restore tokens from Keychain
+                    if let accessToken = KeychainService.retrieve(key: "gmail_access_token"), !accessToken.isEmpty {
+                        // Restore refresh token if available
+                        let refreshToken = KeychainService.retrieve(key: "gmail_refresh_token")
+                        print("GmailService: Restoring tokens on app launch")
+                        print("  - Access token: \(accessToken.prefix(20))...")
+                        print("  - Refresh token: \(refreshToken != nil ? "\(refreshToken!.prefix(20))..." : "nil")")
+                        emailScanningService.gmailService.setAccessToken(accessToken, refreshToken: refreshToken)
+                        
+                        // Start scanning - token will auto-refresh if expired
                         emailScanningService.startScanning()
+                    } else {
+                        print("GmailService: No access token found in Keychain")
                     }
                 }
             }
@@ -104,8 +114,10 @@ struct AuthenticatedRootView: View {
                 
                 // Start/stop scanning based on settings
                 if newSettings.gmailEnabled {
-                    if let token = KeychainService.retrieve(key: "gmail_access_token"), !token.isEmpty {
-                        emailScanningService.gmailService.setAccessToken(token, refreshToken: nil)
+                    if let accessToken = KeychainService.retrieve(key: "gmail_access_token"), !accessToken.isEmpty {
+                        // Restore refresh token if available
+                        let refreshToken = KeychainService.retrieve(key: "gmail_refresh_token")
+                        emailScanningService.gmailService.setAccessToken(accessToken, refreshToken: refreshToken)
                         if !emailScanningService.isEnabled {
                             emailScanningService.startScanning()
                         }
