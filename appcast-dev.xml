@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>MediaDash Dev Builds</title>
+        <description>Development builds for testing</description>
+        <language>en</language>
+        <item>
+                <title>Version 0.4.0-dev48</title>
+                <description><![CDATA[
+                    <p>Dev build with path reset functionality - paths reset to defaults on each update. Fixed: Dev builds now always check dev update channel.</p>
+                ]]></description>
+                <pubDate>Wed, 26 Nov 2025 05:20:49 +0000</pubDate>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <enclosure
+                    url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-Dev-0.4.0-dev48.zip"
+                    sparkle:version="48"
+                    sparkle:shortVersionString="0.4.0"
+                    sparkle:edSignature="8pDgDzO3uQPsYgviOjcI1Trx5nfrasuKD8AwS2GtI8WoCzffTJ4OgBsZ8988aydow85fBuQOCXmExvbakuOOAQ=="
+                    length="3074115"
+                    type="application/octet-stream"
+                />
+            </item>
+        <item>
+                <title>Version 0.4.0-dev47</title>
+                <description><![CDATA[
+                    <p>Dev build with path reset functionality - paths reset to defaults on each update</p>
+                ]]></description>
+                <pubDate>Wed, 26 Nov 2025 05:03:03 +0000</pubDate>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <enclosure
+                    url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-Dev-0.4.0-dev47.zip"
+                    sparkle:version="47"
+                    sparkle:shortVersionString="0.4.0"
+                    sparkle:edSignature="WcaFNuzM0Xs1FhhcM/uV7f2LDp7rVkg+csCV32/ypelhnEDEzCZxCEmIcx3ci5cSReYVGNX9pHIGpT+B/MZ5BQ=="
+                    length="3074115"
+                    type="application/octet-stream"
+                />
+            </item>
+        <item>
+                <title>Version 0.4.0-dev46</title>
+                <description><![CDATA[
+                    <p>Dev build with path reset functionality - paths reset to defaults on each update</p>
+                ]]></description>
+                <pubDate>Wed, 26 Nov 2025 04:52:08 +0000</pubDate>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <enclosure
+                    url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-Dev-0.4.0-dev46.zip"
+                    sparkle:version="46"
+                    sparkle:shortVersionString="0.4.0"
+                    sparkle:edSignature="anFERnI5XWIKV4zE6gPkGPHc2LZM/2crxxiQBi1etlnYqrjh+mSE+9XqC4xKaObigqMyHE5g4jREv4AScZAIBw=="
+                    length="3393845"
+                    type="application/octet-stream"
+                />
+            </item>
+        <item>
+                <title>Version 0.4.0-dev45</title>
+                <description><![CDATA[
+                    <p>Dev build with path reset functionality - paths reset to defaults on each update</p>
+                ]]></description>
+                <pubDate>Wed, 26 Nov 2025 04:42:18 +0000</pubDate>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <enclosure
+                    url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-Dev-0.4.0-dev45.zip"
+                    sparkle:version="45"
+                    sparkle:shortVersionString="0.4.0"
+                    sparkle:edSignature="VuUi2533LgUFhZld1BMHe7xYjkfdlGgW+E9TO+59EoiqYFx3a7ovKNHHUtTUxoyjzqeK/1hyyI3p1ppvtjoMAQ=="
+                    length="3393844"
+                    type="application/octet-stream"
+                />
+            </item>
+        <item>
+                <title>Version 0.4.0-dev44</title>
+                <description><![CDATA[
+                    <p>Dev build with path reset functionality - paths reset to defaults on each update</p>
+                ]]></description>
+                <pubDate>Wed, 26 Nov 2025 00:05:46 +0000</pubDate>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <enclosure
+                    url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-Dev-0.4.0-dev44.zip"
+                    sparkle:version="44"
+                    sparkle:shortVersionString="0.4.0"
+                    sparkle:edSignature="7il3uS2x2js3f2Xqj1HpzEWOdKvb+Lf48j54dJWiECaMag1NMr1LhR8BT4uVEyVMRcbWdN9I8IPGbxegDHg+Dw=="
+                    length="3163203"
+                    type="application/octet-stream"
+                />
+            </item>
+        <item>
+                <title>Version 0.4.0-dev43</title>
+                <description><![CDATA[
+                    <p>Dev build with path reset functionality - paths reset to defaults on each update</p>
+                ]]></description>
+                <pubDate>Tue, 25 Nov 2025 23:13:08 +0000</pubDate>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <enclosure
+                    url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-Dev-0.4.0-dev43.zip"
+                    sparkle:version="43"
+                    sparkle:shortVersionString="0.4.0"
+                    sparkle:edSignature="9YEKqpoIogVyN50/3JUWip/+d4NeAvtngama9WpA5gk98ZNGgFCaDoL1+lypwfFfAq0s3Z0rYK7Ow+N/42l8CA=="
+                    length="3120936"
+                    type="application/octet-stream"
+                />
+            </item>
+        <item>
+                <title>Version 0.4.0-dev42</title>
+                <description><![CDATA[
+                    <p>Dev build with path reset functionality - paths reset to defaults on each update</p>
+                ]]></description>
+                <pubDate>Tue, 25 Nov 2025 23:04:26 +0000</pubDate>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <enclosure
+                    url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-Dev-0.4.0-dev42.zip"
+                    sparkle:version="42"
+                    sparkle:shortVersionString="0.4.0"
+                    sparkle:edSignature="0s+5g/Q3zpXhjASZM14xKXeZn7EM+K+ULBSThgMEv9mCQ4E6iqdVLRy6adpF87xXDiz1M1pgrwEX6VJmsjIMCA=="
+                    length="3120944"
+                    type="application/octet-stream"
+                />
+            </item>
+        <item>
+                <title>Version 0.4.0-dev41</title>
+                <description><![CDATA[
+                    <p>Dev build with path reset functionality - paths reset to defaults on each update</p>
+                ]]></description>
+                <pubDate>Tue, 25 Nov 2025 22:57:07 +0000</pubDate>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <enclosure
+                    url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-Dev-0.4.0-dev41.zip"
+                    sparkle:version="41"
+                    sparkle:shortVersionString="0.4.0"
+                    sparkle:edSignature="4j0HoZvpkNhGIAMGNTmFBwJjtfmxQuvV9P2i1TXXZm7220cgfbHty1M+id521aXLIVSlalPdW5o2UePgBnB0CQ=="
+                    length="3120634"
+                    type="application/octet-stream"
+                />
+            </item>
+        <item>
+            <title>Version 0.4.0-dev40</title>
+            <description><![CDATA[
+                <p>Dev build with channel switcher - allows switching between production and dev</p>
+            ]]></description>
+            <pubDate>Tue, 25 Nov 2025 20:17:37 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-0.4.0-dev40.zip"
+                sparkle:version="40"
+                sparkle:shortVersionString="0.4.0-dev40"
+                sparkle:edSignature="NTJhZxXBcrIozmW/S4rpJyRIY03q5dC896VzDdvvvVeGi9dydliZnMTOoY2iGt1oFdfhdbwdumPVNYERoKAzCA=="
+                length="3074753"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.4.0-dev39</title>
+            <description><![CDATA[
+                <p>Dev build with channel switcher - allows switching between production and dev</p>
+            ]]></description>
+            <pubDate>Tue, 25 Nov 2025 17:52:00 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-0.4.0-dev39.zip"
+                sparkle:version="39"
+                sparkle:shortVersionString="0.4.0-dev39"
+                sparkle:edSignature="wjJImJtM0hePnElVOPs7lCNFSjo7PLNAeGrs7UZ3xPJsm1O2VXzjtqqlT2X0XKw4UQaeEwqeNdaxhqcUXWS0Cw=="
+                length="2999670"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.4.0-dev38</title>
+            <description><![CDATA[
+                <p>Dev build with channel switcher - allows switching between production and dev</p>
+            ]]></description>
+            <pubDate>Tue, 25 Nov 2025 16:57:17 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-0.4.0-dev38.zip"
+                sparkle:version="38"
+                sparkle:shortVersionString="0.4.0-dev38"
+                sparkle:edSignature="byT0/7hIaX1ZAcvLmfP/8CYdajJP0pW0MbSc3IE9KyUXuKQN+DqkIPbutWDcFaYI0c0PvHHuwSrD1kViBWPDBg=="
+                length="3067434"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.4.0-dev37</title>
+            <description><![CDATA[
+                <p>Dev build with channel switcher - allows switching between production and dev</p>
+            ]]></description>
+            <pubDate>Tue, 25 Nov 2025 16:45:23 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-0.4.0-dev37.zip"
+                sparkle:version="37"
+                sparkle:shortVersionString="0.4.0-dev37"
+                sparkle:edSignature="Tvw7OKq7wDKAE3bWZarMHjqx1Gs3jIoWi2vPqmTzP4nzLawmaIPbWAo+tu+jG7GYlF3l3pRwjgpYuDPLGAJhDg=="
+                length="3067409"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.4.0-dev36</title>
+            <description><![CDATA[
+                <p>Dev build with channel switcher - allows switching between production and dev</p>
+            ]]></description>
+            <pubDate>Tue, 25 Nov 2025 03:30:06 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-0.4.0-dev36.zip"
+                sparkle:version="36"
+                sparkle:shortVersionString="0.4.0-dev36"
+                sparkle:edSignature="pfOwou7kkTYtoFlctQvjNjFYckf1st69ksjzGolUkpOJxvFTPLFgxzwixnFqmAJYCAsSz4Xx8bMW1Z7Rl3qVCw=="
+                length="3086876"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.4.0-dev35</title>
+            <description><![CDATA[
+                <p>Dev build with channel switcher - allows switching between production and dev</p>
+            ]]></description>
+            <pubDate>Tue, 25 Nov 2025 03:14:56 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-0.4.0-dev35.zip"
+                sparkle:version="35"
+                sparkle:shortVersionString="0.4.0-dev35"
+                sparkle:edSignature="W2WV3RJkmlalQgGmAGeEqEZj2/p6Yzu2zFrx72Ag26+WvQoGsKodZ7Nj9Y26xBofq+e/6F5tTEYNT5SejbMyAw=="
+                length="3085349"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.4.0-dev34</title>
+            <description><![CDATA[
+                <p>Dev build with channel switcher - allows switching between production and dev</p>
+            ]]></description>
+            <pubDate>Mon, 24 Nov 2025 23:41:10 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-0.4.0-dev34.zip"
+                sparkle:version="34"
+                sparkle:shortVersionString="0.4.0-dev34"
+                sparkle:edSignature="4WNgULIfLk8VHUn9VJKAPRf/5ho/wickDswSSqqC3DSF2xYGuIN8L9Q24zFfIApAhK08cnohk0DCqn/vEUPfBA=="
+                length="3085395"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.3.2-dev3</title>
+            <description><![CDATA[
+                <p>Update channel switcher - switch between Production and Dev Builds in Settings</p>
+            ]]></description>
+            <pubDate>Mon, 24 Nov 2025 22:23:27 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-0.3.2-dev3.zip"
+                sparkle:version="3"
+                sparkle:shortVersionString="0.3.2-dev3"
+                sparkle:edSignature="PbST6NA72nXLW63StprYYRrw57+PVKlkRB/LpRnwwL8Zwdh2Bx1cLQCu9V/AeGKYT+lLJlvR3JDLSUdGMnI3CQ=="
+                length="3085390"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.3.2-dev2</title>
+            <description><![CDATA[
+                <p>New dev build with OMF/AAF validation - ready for testing</p>
+            ]]></description>
+            <pubDate>Mon, 24 Nov 2025 21:56:18 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/builds/MediaDash-0.3.2-dev2.zip"
+                sparkle:version="2"
+                sparkle:shortVersionString="0.3.2-dev2"
+                sparkle:edSignature="suS4TdgZh7K6pNWxVpS4gAlJnzV+hV0AZbwIeGBvKCmDMDKIUjPzf0PtQ14QwTrb8r74Ot3sayCapwkhwzEVBw=="
+                length="3067811"
+                type="application/octet-stream"
+            />
+        </item>
+    </channel>
+</rss>
+
