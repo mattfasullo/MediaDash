@@ -13,6 +13,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var updaterController: SPUStandardUpdaterController!
     private var quitEventMonitor: Any?
 
+    private var currentUpdateChannel: UpdateChannel {
+        // Check if this is a dev build (MediaDash-Dev bundle ID)
+        let isDevBuild = Bundle.main.bundleIdentifier == "mattfasullo.MediaDash-Dev"
+        
+        // Dev builds should ALWAYS use the dev channel, regardless of user settings
+        // This ensures dev builds check the correct appcast
+        if isDevBuild {
+            return .development
+        }
+        
+        // For production builds, respect user's channel preference
+        if let settingsData = UserDefaults.standard.data(forKey: "savedProfiles"),
+           let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: settingsData),
+           let currentProfileName = UserDefaults.standard.string(forKey: "currentProfile"),
+           let profile = profiles[currentProfileName] {
+            return profile.updateChannel
+        }
+        return .production // Default for production builds
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize Sparkle updater
         // Each app (MediaDash vs MediaDash-Dev) has its own appcast URL in Info.plist
