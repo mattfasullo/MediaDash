@@ -4,6 +4,7 @@ struct SidebarView: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var sessionManager: SessionManager
     @EnvironmentObject var emailScanningService: EmailScanningService
+    @EnvironmentObject var manager: MediaManager
     var focusedButton: FocusState<ActionButtonFocus?>.Binding
     var mainViewFocused: FocusState<Bool>.Binding
     @Binding var isKeyboardMode: Bool
@@ -58,11 +59,6 @@ struct SidebarView: View {
                     )
                     .frame(maxWidth: .infinity)
                 }
-                
-                // Recent Dockets Section
-                RecentDocketsSection(onDocketSelected: { docketName in
-                    onRecentDocketSelected?(docketName)
-                })
 
                 // MARK: Action Buttons Grid
                 ActionButtonsView(
@@ -156,18 +152,27 @@ struct SidebarView: View {
             .background(currentTheme.sidebarBackground)
 
             // Toggle staging button (top right)
-            HoverableButton(action: {
-                isStagingAreaVisible.toggle()
-            }) { isHovered in
-                Image(systemName: isStagingAreaVisible ? "chevron.right" : "chevron.left")
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundColor(isHovered ? .primary : .secondary.opacity(0.6))
-                    .padding(4)
-                    .background(isHovered ? Color.gray.opacity(0.1) : Color.clear)
-                    .cornerRadius(4)
+            HStack(spacing: 4) {
+                // Blue dot indicator when staging area has items
+                if !manager.selectedFiles.isEmpty {
+                    Circle()
+                        .fill(Color.blue)
+                        .frame(width: 6, height: 6)
+                }
+                
+                HoverableButton(action: {
+                    isStagingAreaVisible.toggle()
+                }) { isHovered in
+                    Image(systemName: isStagingAreaVisible ? "chevron.right" : "chevron.left")
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundColor(isHovered ? .primary : .secondary.opacity(0.6))
+                        .padding(4)
+                        .background(isHovered ? Color.gray.opacity(0.1) : Color.clear)
+                        .cornerRadius(4)
+                }
+                .help(isStagingAreaVisible ? "Hide staging (⌘E)" : "Show staging (⌘E)")
+                .keyboardShortcut("e", modifiers: .command)
             }
-            .help(isStagingAreaVisible ? "Hide staging (⌘E)" : "Show staging (⌘E)")
-            .keyboardShortcut("e", modifiers: .command)
             .padding(.top, 8)
             .padding(.trailing, 16)
         }
