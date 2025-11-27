@@ -23,6 +23,7 @@ struct SidebarView: View {
     let dateFormatter: DateFormatter
     let attempt: (JobType) -> Void
     let cycleTheme: () -> Void
+    var onRecentDocketSelected: ((String) -> Void)?
     
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
@@ -58,6 +59,11 @@ struct SidebarView: View {
                     )
                     .frame(maxWidth: .infinity)
                 }
+                
+                // Recent Dockets Section
+                RecentDocketsSection(onDocketSelected: { docketName in
+                    onRecentDocketSelected?(docketName)
+                })
 
                 // MARK: Action Buttons Grid
                 ActionButtonsView(

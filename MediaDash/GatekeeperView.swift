@@ -3,18 +3,29 @@ import AppKit
 
 struct GatekeeperView: View {
     @StateObject private var sessionManager = SessionManager()
+    @StateObject private var onboardingSettingsManager = SettingsManager()
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
 
     var body: some View {
         Group {
-            switch sessionManager.authenticationState {
-            case .loggedOut:
-                LoginView(sessionManager: sessionManager)
-
-            case .loggedIn(let profile):
-                AuthenticatedRootView(
-                    sessionManager: sessionManager,
-                    profile: profile
+            if !hasCompletedOnboarding {
+                // Show onboarding for first-time users
+                OnboardingView(
+                    hasCompletedOnboarding: $hasCompletedOnboarding,
+                    settingsManager: onboardingSettingsManager
                 )
+            } else {
+                // Normal app flow
+                switch sessionManager.authenticationState {
+                case .loggedOut:
+                    LoginView(sessionManager: sessionManager)
+
+                case .loggedIn(let profile):
+                    AuthenticatedRootView(
+                        sessionManager: sessionManager,
+                        profile: profile
+                    )
+                }
             }
         }
         .onAppear {

@@ -228,7 +228,12 @@ struct ContentView: View {
                 prepDate: prepDate,
                 dateFormatter: dateFormatter,
                 attempt: attempt,
-                cycleTheme: cycleTheme
+                cycleTheme: cycleTheme,
+                onRecentDocketSelected: { docketName in
+                    // Open search with the selected docket pre-filled
+                    initialSearchText = docketName
+                    showSearchSheet = true
+                }
             )
             
             if isStagingAreaVisible {
