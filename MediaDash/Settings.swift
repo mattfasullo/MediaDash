@@ -427,6 +427,21 @@ struct AppSettings: Codable, Equatable {
     // Browser Preference
     var defaultBrowser: BrowserPreference // Default browser for opening email links
 
+    // Advanced/Debug Settings
+    var showDebugFeatures: Bool // Show debug/test features in notification center
+    
+    // Company Media Email Settings
+    var companyMediaEmail: String // Email address to monitor for media file links (e.g., "media@graysonmusicgroup.com")
+    
+    // Media Team Grabbed Indicator Settings
+    var mediaTeamEmails: [String] // List of media team email addresses
+    var grabbedSubjectPatterns: [String] // Subject keywords that qualify as media-file-delivery (e.g., "FILE DELIVERY", "MEDIA FILE")
+    var grabbedSubjectExclusions: [String] // Subject keywords that EXCLUDE from media-file-delivery (user-configurable, no defaults)
+    var grabbedAttachmentTypes: [String] // File extensions that qualify as media files (e.g., "wav", "aiff", "zip", "mp4")
+    var grabbedFileHostingWhitelist: [String] // Whitelist of file hosting domains for delivery (e.g., "drive.google.com", "wdrv.it")
+    var grabbedSenderWhitelist: [String] // Approved sender email addresses
+    var grabbedBodyExclusions: [String] // Body keywords that EXCLUDE from media-file-delivery (e.g., "check out", "review", "options posted")
+
     static var `default`: AppSettings {
         AppSettings(
             profileName: "Default",
@@ -486,7 +501,37 @@ struct AppSettings: Codable, Equatable {
             simianWebhookURL: nil,
             simianProjectTemplate: nil,
             notificationWindowLocked: true, // Default to locked (follows main window)
-            defaultBrowser: .chrome // Default to Chrome
+            defaultBrowser: .chrome, // Default to Chrome
+            showDebugFeatures: false, // Debug features hidden by default
+            companyMediaEmail: "media@graysonmusicgroup.com", // Default company media email
+            mediaTeamEmails: ["kevin@graysonmusicgroup.com", "mattfasullo@graysonmusicgroup.com", "jeremy@graysonmusicgroup.com"], // Default media team
+            grabbedSubjectPatterns: [
+                "audio",           // Most common - appears in many subjects
+                "sfx",             // Sound effects
+                "mix",             // Mix or mix prep
+                "omf",             // OMF files
+                "aaf",             // AAF files
+                "prep",            // Audio prep, mix prep, prep files
+                "elements",        // Audio elements
+                "avtc",            // Audio/video timecode
+                "dc",              // Director's cut
+                "offline"          // Offline audio elements
+            ], // Default subject patterns (case-insensitive matching)
+            grabbedSubjectExclusions: [], // Subject exclusions (user-configurable, no defaults)
+            grabbedAttachmentTypes: ["wav", "aiff", "aif", "zip", "mp4", "mov", "mxf", "prores", "m4v", "mp3", "flac", "m4a", "aac", "omf", "aaf"], // Default attachment types
+            grabbedFileHostingWhitelist: [
+                "drive.google.com",      // Google Drive
+                "docs.google.com",      // Google Docs/Drive
+                "wdrv.it",              // WeTransfer
+                "wetransfer.com",       // WeTransfer
+                "wpp.box.com",          // Box (WPP)
+                "box.com",              // Box
+                "boxusercontent.com",   // Box
+                "psi.schoolediting.com", // School Editing custom hosting
+                "f.io"                  // Frame.io (delivery links, not review)
+            ], // Default file hosting whitelist (based on real examples)
+            grabbedSenderWhitelist: [], // Default sender whitelist (empty, user can add)
+            grabbedBodyExclusions: [] // Body exclusions (user-configurable, no defaults)
         )
     }
 }

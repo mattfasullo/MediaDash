@@ -9,13 +9,80 @@ class NotificationCenter: ObservableObject {
     @Published var unreadCount: Int = 0
     @Published var isExpanded: Bool = false
     
+    weak var grabbedIndicatorService: GrabbedIndicatorService?
+    
     private let notificationsKey = "mediadash_notifications"
     
     init() {
         loadNotifications()
+        migrateOldNotifications() // Migrate old notifications to have original values
         removeDuplicates() // Clean up any existing duplicates
         cleanupOldArchivedNotifications()
         updateUnreadCount()
+    }
+    
+    /// Migrate old notifications to populate missing original values
+    private func migrateOldNotifications() {
+        var needsSave = false
+        for index in notifications.indices {
+            let notification = notifications[index]
+            
+            // If originalMessage is nil but message exists, set it
+            if notification.originalMessage == nil && !notification.message.isEmpty {
+                notifications[index].originalMessage = notification.message
+                needsSave = true
+            }
+            
+            // If original values are nil but current values exist, set them
+            if notification.originalDocketNumber == nil && notification.docketNumber != nil {
+                notifications[index].originalDocketNumber = notification.docketNumber
+                needsSave = true
+            }
+            
+            if notification.originalJobName == nil && notification.jobName != nil {
+                notifications[index].originalJobName = notification.jobName
+                needsSave = true
+            } else if notification.originalJobName == nil && notification.jobName == nil {
+                // Try to extract job name from message if both are nil
+                // Pattern: "JOBNAME (Docket number pending)" or "Docket XXX: JOBNAME"
+                let message = notification.message
+                
+                // Pattern 1: "JOBNAME (Docket number pending)"
+                if let regex = try? NSRegularExpression(pattern: #"^(.+?)\s*\(Docket number pending\)$"#, options: []),
+                   let match = regex.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
+                   match.numberOfRanges >= 2,
+                   let jobNameRange = Range(match.range(at: 1), in: message) {
+                    let jobName = String(message[jobNameRange]).trimmingCharacters(in: .whitespaces)
+                    if !jobName.isEmpty {
+                        notifications[index].originalJobName = jobName
+                        notifications[index].jobName = jobName
+                        needsSave = true
+                    }
+                }
+                // Pattern 2: "Docket XXX: JOBNAME"
+                else if let regex = try? NSRegularExpression(pattern: #"^Docket \d+:\s*(.+)$"#, options: []),
+                        let match = regex.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
+                        match.numberOfRanges >= 2,
+                        let jobNameRange = Range(match.range(at: 1), in: message) {
+                    let jobName = String(message[jobNameRange]).trimmingCharacters(in: .whitespaces)
+                    if !jobName.isEmpty {
+                        notifications[index].originalJobName = jobName
+                        notifications[index].jobName = jobName
+                        needsSave = true
+                    }
+                }
+            }
+            
+            if notification.originalProjectManager == nil && notification.projectManager != nil {
+                notifications[index].originalProjectManager = notification.projectManager
+                needsSave = true
+            }
+        }
+        
+        if needsSave {
+            saveNotifications()
+            print("NotificationCenter: Migrated \(notifications.count) notification(s) with missing original values")
+        }
     }
     
     /// Remove archived notifications older than 24 hours
@@ -113,6 +180,87 @@ class NotificationCenter: ObservableObject {
     func updateProjectManager(_ notification: Notification, to projectManager: String?) {
         if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
             notifications[index].projectManager = projectManager
+            saveNotifications()
+        }
+    }
+    
+    /// Update notification job name (does not affect docket number)
+    func updateJobName(_ notification: Notification, to jobName: String) {
+        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+            // Explicitly preserve the docket number before updating
+            let preservedDocketNumber = notifications[index].docketNumber
+            
+            // Only update job name - docket number remains unchanged
+            notifications[index].jobName = jobName
+            
+            // Ensure docket number is preserved (defensive check)
+            notifications[index].docketNumber = preservedDocketNumber
+            
+            // Update message to reflect new job name (using existing docket number)
+            if let docketNumber = preservedDocketNumber, docketNumber != "TBD" {
+                notifications[index].message = "Docket \(docketNumber): \(jobName)"
+            } else {
+                notifications[index].message = "\(jobName) (Docket number pending)"
+            }
+            saveNotifications()
+        }
+    }
+    
+    /// Reset notification to original values by re-fetching and re-parsing the email
+    func resetToDefaults(_ notification: Notification, emailScanningService: EmailScanningService?) async {
+        guard let index = notifications.firstIndex(where: { $0.id == notification.id }),
+              let emailId = notification.emailId,
+              let emailService = emailScanningService else {
+            // Fallback to stored original values if we can't re-fetch
+            if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+                notifications[index].docketNumber = notifications[index].originalDocketNumber
+                notifications[index].jobName = notifications[index].originalJobName
+                notifications[index].projectManager = notifications[index].originalProjectManager
+                if let originalMessage = notifications[index].originalMessage {
+                    notifications[index].message = originalMessage
+                }
+                saveNotifications()
+            }
+            return
+        }
+        
+        // Re-fetch and re-parse the email
+        if let parsed = await emailService.reparseEmail(emailId: emailId) {
+            // Update with freshly parsed values
+            notifications[index].docketNumber = parsed.docketNumber
+            notifications[index].jobName = parsed.jobName
+            notifications[index].emailSubject = parsed.subject
+            notifications[index].emailBody = parsed.body
+            
+            // Update original values to match (so future resets use these)
+            notifications[index].originalDocketNumber = parsed.docketNumber
+            notifications[index].originalJobName = parsed.jobName
+            notifications[index].originalProjectManager = notification.sourceEmail // Reset to source email
+            
+            // Reconstruct message
+            if let docketNumber = parsed.docketNumber, docketNumber != "TBD" {
+                if let jobName = parsed.jobName {
+                    notifications[index].message = "Docket \(docketNumber): \(jobName)"
+                } else {
+                    notifications[index].message = "Docket \(docketNumber)"
+                }
+            } else if let jobName = parsed.jobName {
+                notifications[index].message = "\(jobName) (Docket number pending)"
+            }
+            
+            // Update original message
+            notifications[index].originalMessage = notifications[index].message
+            
+            saveNotifications()
+            print("NotificationCenter: Reset notification \(notification.id) to freshly parsed values from email")
+        } else {
+            // Fallback to stored original values if re-parsing fails
+            notifications[index].docketNumber = notifications[index].originalDocketNumber
+            notifications[index].jobName = notifications[index].originalJobName
+            notifications[index].projectManager = notifications[index].originalProjectManager
+            if let originalMessage = notifications[index].originalMessage {
+                notifications[index].message = originalMessage
+            }
             saveNotifications()
         }
     }

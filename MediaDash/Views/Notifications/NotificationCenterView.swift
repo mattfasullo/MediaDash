@@ -15,9 +15,23 @@ struct NotificationCenterView: View {
     @State private var debugInfo: String?
     @State private var showDebugInfo = false
     @State private var isArchivedExpanded = false
+    @State private var cacheInfo: String?
+    @State private var showCacheInfo = false
+    @State private var isLoadingCache = false // Keep for fallback if file write fails
     
     var body: some View {
-        VStack(spacing: 0) {
+        let _ = {
+            // Debug: Print notification counts when view updates
+            print("NotificationCenterView: Total notifications: \(notificationCenter.notifications.count)")
+            print("NotificationCenterView: Active notifications: \(notificationCenter.activeNotifications.count)")
+            let mediaFiles = notificationCenter.activeNotifications.filter { $0.type == .mediaFiles }
+            let regular = notificationCenter.activeNotifications.filter { $0.type != .mediaFiles }
+            print("NotificationCenterView: Media file notifications: \(mediaFiles.count)")
+            print("NotificationCenterView: Regular notifications: \(regular.count)")
+            print("NotificationCenterView: Archived notifications: \(notificationCenter.archivedNotifications.count)")
+        }()
+        
+        return VStack(spacing: 0) {
             // Header (double-click to toggle lock)
             HStack {
                 Text("Notifications")
@@ -32,7 +46,10 @@ struct NotificationCenterView: View {
                 }
                 
                 // Email refresh button
-                EmailRefreshButton()
+                EmailRefreshButton(
+                    notificationCenter: notificationCenter,
+                    grabbedIndicatorService: notificationCenter.grabbedIndicatorService
+                )
                     .environmentObject(emailScanningService)
                 
                 // Lock/Unlock toggle
@@ -117,7 +134,7 @@ struct NotificationCenterView: View {
             }
             
             // Notifications list - filter out completed notifications if docket already exists
-            let activeNotifications = notificationCenter.activeNotifications.filter { notification in
+            let allActiveNotifications = notificationCenter.activeNotifications.filter { notification in
                 // If notification is completed, check if docket exists
                 if notification.status == .completed,
                    notification.type == .newDocket,
@@ -135,9 +152,13 @@ struct NotificationCenterView: View {
                     }
                     return !exists
                 }
-                // Show all other notifications
+                // Show all other notifications (including media files)
                 return true
             }
+            
+            // Separate media file notifications from regular docket notifications
+            let mediaFileNotifications = allActiveNotifications.filter { $0.type == .mediaFiles }
+            let activeNotifications = allActiveNotifications.filter { $0.type != .mediaFiles }
             let archivedNotifications = notificationCenter.archivedNotifications
             
             // Show Gmail connection status if Gmail is enabled but not connected (empty state)
@@ -170,7 +191,7 @@ struct NotificationCenterView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding()
-            } else if activeNotifications.isEmpty && archivedNotifications.isEmpty {
+            } else if mediaFileNotifications.isEmpty && activeNotifications.isEmpty && archivedNotifications.isEmpty {
                 VStack(spacing: 12) {
                     if isScanningEmails {
                         ProgressView()
@@ -198,20 +219,64 @@ struct NotificationCenterView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
-                        // Active notifications
-                        ForEach(activeNotifications) { notification in
-                            NotificationRowView(
-                                notificationId: notification.id,
-                                notificationCenter: notificationCenter,
-                                emailScanningService: emailScanningService,
-                                mediaManager: mediaManager,
-                                settingsManager: settingsManager,
-                                processingNotification: $processingNotification
-                            )
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
+                        // Media File Notifications Section
+                        if !mediaFileNotifications.isEmpty {
+                            VStack(alignment: .leading, spacing: 0) {
+                                HStack {
+                                    Image(systemName: "link.circle.fill")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.blue)
+                                    Text("File Deliveries (\(mediaFileNotifications.count))")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(.primary)
+                                    Spacer()
+                                }
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                                .background(Color.blue.opacity(0.05))
+                                
+                                ForEach(mediaFileNotifications) { notification in
+                                    NotificationRowView(
+                                        notificationId: notification.id,
+                                        notificationCenter: notificationCenter,
+                                        emailScanningService: emailScanningService,
+                                        mediaManager: mediaManager,
+                                        settingsManager: settingsManager,
+                                        processingNotification: $processingNotification,
+                                        debugInfo: $debugInfo,
+                                        showDebugInfo: $showDebugInfo
+                                    )
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 8)
+                                    
+                                    Divider()
+                                }
+                            }
                             
-                            Divider()
+                            if !activeNotifications.isEmpty {
+                                Divider()
+                                    .padding(.vertical, 4)
+                            }
+                        }
+                        
+                        // Regular Docket Notifications Section
+                        if !activeNotifications.isEmpty {
+                            ForEach(activeNotifications) { notification in
+                                NotificationRowView(
+                                    notificationId: notification.id,
+                                    notificationCenter: notificationCenter,
+                                    emailScanningService: emailScanningService,
+                                    mediaManager: mediaManager,
+                                    settingsManager: settingsManager,
+                                    processingNotification: $processingNotification,
+                                    debugInfo: $debugInfo,
+                                    showDebugInfo: $showDebugInfo
+                                )
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                                
+                                Divider()
+                            }
                         }
                         
                         // Archived notifications (collapsible)
@@ -245,7 +310,9 @@ struct NotificationCenterView: View {
                                         emailScanningService: emailScanningService,
                                         mediaManager: mediaManager,
                                         settingsManager: settingsManager,
-                                        processingNotification: $processingNotification
+                                        processingNotification: $processingNotification,
+                                        debugInfo: $debugInfo,
+                                        showDebugInfo: $showDebugInfo
                                     )
                                     .padding(.horizontal)
                                     .padding(.vertical, 8)
@@ -279,6 +346,8 @@ struct NotificationCenterView: View {
                     .cornerRadius(4)
                 }
                 
+                // Debug features (only shown if enabled in settings)
+                if settingsManager.currentSettings.showDebugFeatures {
                 Button("Test Notification") {
                     let testNotification = Notification(
                         type: .newDocket,
@@ -300,6 +369,14 @@ struct NotificationCenterView: View {
                 .buttonStyle(.borderless)
                 .font(.system(size: 11))
                 .foregroundColor(.blue)
+                    
+                    Button("View Cache") {
+                        showCacheView()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11))
+                    .foregroundColor(.green)
+                }
                 
                 if !notificationCenter.notifications.isEmpty {
                     if !notificationCenter.archivedNotifications.isEmpty {
@@ -369,6 +446,69 @@ struct NotificationCenterView: View {
                         .padding(.bottom, 8)
                     } else {
                         Text("Running debug scan...")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                    }
+                }
+                .background(Color(nsColor: .controlBackgroundColor))
+            }
+            
+            // Cache info panel
+            if showCacheInfo {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Company Name Cache")
+                            .font(.system(size: 11, weight: .semibold))
+                        Spacer()
+                        if let cacheInfo = cacheInfo {
+                            Button(action: {
+                                let pasteboard = NSPasteboard.general
+                                pasteboard.clearContents()
+                                pasteboard.setString(cacheInfo, forType: .string)
+                            }) {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.system(size: 10))
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Copy cache info")
+                        }
+                        Button("Close") {
+                            showCacheInfo = false
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 10))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.top, 8)
+                    
+                    if isLoadingCache {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Loading cache...")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                    } else if let cacheInfo = cacheInfo {
+                        ScrollView {
+                            Text(cacheInfo)
+                                .font(.system(size: 10, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .padding(8)
+                        }
+                        .frame(height: 300)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .cornerRadius(4)
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 8)
+                    } else {
+                        Text("Loading cache...")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -663,6 +803,61 @@ struct NotificationCenterView: View {
         debugInfo = debugMessages.joined(separator: "\n")
         isScanningEmails = false
     }
+    
+    private func showCacheView() {
+        // Open cache in external text editor to avoid blocking UI
+        Task {
+            // Get cache text on background thread
+            let cacheText = await Task.detached(priority: .userInitiated) {
+                return await MainActor.run {
+                    return CompanyNameCache.shared.getCacheAsText()
+                }
+            }.value
+            
+            // Get shared cache path info
+            let sharedPath = await MainActor.run {
+                return CompanyNameCache.shared.getSharedCachePath()
+            }
+            
+            var finalCacheText = cacheText
+            
+            // Add shared cache status
+            if let sharedPath = sharedPath {
+                let fileExists = await Task.detached(priority: .userInitiated) {
+                    return FileManager.default.fileExists(atPath: sharedPath)
+                }.value
+                
+                if fileExists {
+                    finalCacheText += "\n\n✅ Shared cache file exists at:\n\(sharedPath)\n"
+                } else {
+                    finalCacheText += "\n\n⚠️ Shared cache file not found at:\n\(sharedPath)\n"
+                }
+            } else {
+                finalCacheText += "\n\nℹ️ Shared cache not configured (using local cache only)\n"
+            }
+            
+            // Write to temporary file and open it
+            let tempDir = FileManager.default.temporaryDirectory
+            let tempFile = tempDir.appendingPathComponent("MediaDash_Cache_\(UUID().uuidString).txt")
+            
+            do {
+                try finalCacheText.write(to: tempFile, atomically: true, encoding: .utf8)
+                
+                // Open in default text editor (non-blocking)
+                await MainActor.run {
+                    _ = NSWorkspace.shared.open(tempFile)
+                }
+            } catch {
+                print("Failed to write cache file: \(error.localizedDescription)")
+                await MainActor.run {
+                    // Fallback: show in panel if file write fails
+                    showCacheInfo = true
+                    cacheInfo = finalCacheText
+                    isLoadingCache = false
+                }
+            }
+        }
+    }
 }
 
 /// Individual notification row
@@ -673,6 +868,8 @@ struct NotificationRowView: View {
     @ObservedObject var mediaManager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
     @Binding var processingNotification: UUID?
+    @Binding var debugInfo: String?
+    @Binding var showDebugInfo: Bool
     
     @StateObject private var simianService = SimianService()
     @State private var showActions = false
@@ -681,6 +878,9 @@ struct NotificationRowView: View {
     @State private var isHovered = false
     @State private var showContextMenu = false
     @State private var isDocketInputForApproval = false // Track if dialog is for approval or just updating
+    @State private var isEmailPreviewExpanded = false
+    @State private var showJobNameEditDialog = false
+    @State private var selectedTextFromEmail: String? = nil
     
     // Get current notification from center (always up-to-date)
     private var notification: Notification? {
@@ -720,6 +920,43 @@ struct NotificationRowView: View {
                 Text(timeAgo(notification.timestamp))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
+                
+                // Grabbed and Priority Assist indicators
+                if notification.type == .mediaFiles {
+                    if notification.isPriorityAssist {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.red)
+                            Text("Priority Assist")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.red)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(4)
+                    } else if notification.isGrabbed {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.green)
+                            if let grabbedBy = notification.grabbedBy {
+                                Text("Grabbed by \(extractProducerName(from: grabbedBy))")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.green)
+                            } else {
+                                Text("Grabbed")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundColor(.green)
+                            }
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.1))
+                        .cornerRadius(4)
+                    }
+                }
                 
                 if notification.status == .pending {
                     Circle()
@@ -774,6 +1011,145 @@ struct NotificationRowView: View {
                             .font(.system(size: 10))
                             .foregroundColor(.secondary.opacity(0.8))
                     }
+                }
+                
+                // Email preview (expands on click)
+                if notification.emailSubject != nil || notification.emailBody != nil {
+                    // Visual indicator that notification is expandable
+                    HStack(spacing: 4) {
+                        Image(systemName: isEmailPreviewExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary.opacity(0.6))
+                        Text(isEmailPreviewExpanded ? "Hide email" : "Click to view email")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                    .padding(.top, 2)
+                    
+                    if isEmailPreviewExpanded {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Divider()
+                                .padding(.vertical, 4)
+                            
+                            Text("Email Content")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.secondary)
+                            
+                            // Email subject
+                            if let subject = notification.emailSubject, !subject.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Subject:")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                    SelectableTextView(
+                                        text: subject,
+                                        font: .systemFont(ofSize: 11),
+                                        selectedText: $selectedTextFromEmail
+                                    )
+                                    .frame(height: 40)
+                                    .padding(8)
+                                    .background(Color(nsColor: .textBackgroundColor))
+                                    .cornerRadius(6)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                                    )
+                                    .contextMenu {
+                                        notificationContextMenuContent(notification: notification)
+                                    }
+                                }
+                            }
+                            
+                            // Email body
+                            if let body = notification.emailBody, !body.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Body:")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                    SelectableTextView(
+                                        text: body,
+                                        font: .systemFont(ofSize: 11),
+                                        selectedText: $selectedTextFromEmail
+                                    )
+                                    .frame(height: 400)
+                                    .padding(8)
+                                    .background(Color(nsColor: .textBackgroundColor))
+                                    .cornerRadius(6)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                                    )
+                                    .contextMenu {
+                                        notificationContextMenuContent(notification: notification)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+            }
+        } else if notification.type == .mediaFiles {
+            // Media file notification content
+            VStack(alignment: .leading, spacing: 8) {
+                Text(notification.message)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                
+                // Show file hosting links if available
+                if let fileLinks = notification.fileLinks, !fileLinks.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("File Links:")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        
+                        ForEach(Array(fileLinks.enumerated()), id: \.offset) { index, link in
+                            Button(action: {
+                                if let url = URL(string: link) {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "link.circle.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.blue)
+                                    Text(link)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.blue)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer()
+                                    Image(systemName: "arrow.up.right.square")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.blue.opacity(0.7))
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .background(Color.blue.opacity(0.1))
+                                .cornerRadius(6)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .help("Click to open link in browser")
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+                
+                // Show priority assist warning
+                if notification.isPriorityAssist {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(.red)
+                        Text("Needs assistance - could not grab file")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.red)
+                    }
+                    .padding(.top, 2)
                 }
             }
         } else {
@@ -892,64 +1268,41 @@ struct NotificationRowView: View {
         }
         .padding(8)
         .background(
-            Group {
-                if isHovered {
-                    Color.blue.opacity(0.1)
-                } else if notification.status == .pending {
-                    Color.blue.opacity(0.05)
-                } else {
+            ZStack {
+                // Background color
+                Group {
+                    if isHovered {
+                        Color.blue.opacity(0.1)
+                    } else if notification.status == .pending {
+                        Color.blue.opacity(0.05)
+                    } else {
+                        Color.clear
+                    }
+                }
+                
+                // Tap area (only if email exists) - this captures taps on non-button areas
+                if notification.emailSubject != nil || notification.emailBody != nil {
                     Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            debugEmailExpansion(notification, currentState: isEmailPreviewExpanded)
+                            withAnimation {
+                                isEmailPreviewExpanded.toggle()
+                            }
+                        }
                 }
             }
         )
         .cornerRadius(8)
-        .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovered = hovering
             }
         }
         .contextMenu {
-            // Open email in browser
-            if let emailId = notification.emailId {
-                Button(action: {
-                    openEmailInBrowser(emailId: emailId)
-                }) {
-                    Label("Open Email in Browser", systemImage: "safari")
-                }
-            }
-            
-            // Add docket number if missing
-            if notification.type == .newDocket && (notification.docketNumber == nil || notification.docketNumber == "TBD") {
-                Button(action: {
-                    isDocketInputForApproval = false // Just updating, not approving
-                    showDocketInputDialog = true
-                }) {
-                    Label("Add Docket Number", systemImage: "number")
-                }
-            }
-            
-            Divider()
-            
-            // Archive option
-            if notification.status == .pending && notification.archivedAt == nil {
-                Button(action: {
-                    notificationCenter.archive(notification)
-                }) {
-                    Label("Archive", systemImage: "archivebox")
-                }
-            }
+            notificationContextMenuContent(notification: notification)
         }
-        .onTapGesture {
-            // On click: if email exists, open it; otherwise show docket input if needed
-            if let emailId = notification.emailId {
-                openEmailInBrowser(emailId: emailId)
-            } else if notification.type == .newDocket && (notification.docketNumber == nil || notification.docketNumber == "TBD") {
-                isDocketInputForApproval = false // Just updating, not approving
-                showDocketInputDialog = true
-            }
-        }
-        .help(notification.emailId != nil ? "Click to open email in Gmail, right-click for more options" : (notification.docketNumber == nil || notification.docketNumber == "TBD" ? "Click to add docket number, right-click for more options" : "Click or right-click for options"))
+        .help("Right-click for options")
         .onAppear {
             updateSimianServiceWebhook()
         }
@@ -977,6 +1330,25 @@ struct NotificationRowView: View {
                     }
                 }
             )
+        }
+        .sheet(isPresented: $showJobNameEditDialog) {
+            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                // Use originalJobName if available (from email), otherwise fall back to current jobName
+                let defaultJobName = currentNotification.originalJobName ?? currentNotification.jobName ?? ""
+                JobNameEditDialog(
+                    isPresented: $showJobNameEditDialog,
+                    jobName: Binding(
+                        get: { defaultJobName },
+                        set: { _ in }
+                    ),
+                    docketNumber: currentNotification.docketNumber,
+                    onConfirm: { newJobName in
+                        notificationCenter.updateJobName(currentNotification, to: newJobName)
+                        // Add to company name cache
+                        CompanyNameCache.shared.addCompanyName(newJobName, source: "user")
+                    }
+                )
+            }
         }
     }
     
@@ -1150,6 +1522,8 @@ struct NotificationRowView: View {
         switch type {
         case .newDocket:
             return "folder.badge.plus"
+        case .mediaFiles:
+            return "link.circle.fill"
         case .error:
             return "exclamationmark.triangle.fill"
         case .info:
@@ -1160,6 +1534,8 @@ struct NotificationRowView: View {
     private func colorForType(_ type: NotificationType) -> Color {
         switch type {
         case .newDocket:
+            return .blue
+        case .mediaFiles:
             return .blue
         case .error:
             return .red
@@ -1189,6 +1565,159 @@ struct NotificationRowView: View {
     
     /// Extract producer name from email source string
     /// Handles formats like "Name <email@example.com>" or just "email@example.com"
+    /// Use selected text as job name
+    private func useSelectedTextAsJobName(_ text: String) {
+        guard let notification = notification else { return }
+        let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedText.isEmpty else { return }
+        
+        // Update job name in notification
+        notificationCenter.updateJobName(notification, to: cleanedText)
+        
+        // Add to company name cache
+        CompanyNameCache.shared.addCompanyName(cleanedText, source: "user")
+    }
+    
+    /// Reusable context menu content for notifications (used by both notification body and text fields)
+    @ViewBuilder
+    private func notificationContextMenuContent(notification: Notification) -> some View {
+        // Replace job name with selected text (only show if text is selected)
+        if let selectedText = selectedTextFromEmail, !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Button(action: {
+                useSelectedTextAsJobName(selectedText.trimmingCharacters(in: .whitespacesAndNewlines))
+            }) {
+                Label("Replace Job Name with '\(selectedText.prefix(30))'", systemImage: "text.cursor")
+            }
+        }
+        
+        // Edit job name
+        if notification.type == .newDocket {
+            Button(action: {
+                showJobNameEditDialog = true
+            }) {
+                Label("Edit Job Name", systemImage: "pencil")
+            }
+        }
+        
+        // Reset to defaults
+        if notification.type == .newDocket {
+            Button(action: {
+                Task {
+                    await debugResetToDefaults(notification)
+                }
+            }) {
+                Label("Reset to Defaults", systemImage: "arrow.counterclockwise")
+            }
+        }
+        
+        Divider()
+        
+        // Open email in browser
+        if let emailId = notification.emailId {
+            Button(action: {
+                openEmailInBrowser(emailId: emailId)
+            }) {
+                Label("Open Email in Browser", systemImage: "safari")
+            }
+        }
+        
+        // Add docket number if missing
+        if notification.type == .newDocket && (notification.docketNumber == nil || notification.docketNumber == "TBD") {
+            Button(action: {
+                isDocketInputForApproval = false // Just updating, not approving
+                showDocketInputDialog = true
+            }) {
+                Label("Add Docket Number", systemImage: "number")
+            }
+        }
+        
+        Divider()
+        
+        // Archive option
+        if notification.status == .pending && notification.archivedAt == nil {
+            Button(action: {
+                notificationCenter.archive(notification)
+            }) {
+                Label("Archive", systemImage: "archivebox")
+            }
+        }
+    }
+    
+    /// Debug function for reset to defaults
+    private func debugResetToDefaults(_ notification: Notification) async {
+        var debugMessages: [String] = []
+        debugMessages.append("=== Reset to Defaults Debug ===")
+        debugMessages.append("")
+        debugMessages.append("📋 Notification ID: \(notification.id)")
+        debugMessages.append("")
+        debugMessages.append("🔍 BEFORE Reset:")
+        debugMessages.append("  Current docketNumber: \(notification.docketNumber ?? "nil")")
+        debugMessages.append("  Current jobName: \(notification.jobName ?? "nil")")
+        debugMessages.append("  Current projectManager: \(notification.projectManager ?? "nil")")
+        debugMessages.append("  Current message: \(notification.message)")
+        debugMessages.append("")
+        debugMessages.append("📦 Original Values:")
+        debugMessages.append("  originalDocketNumber: \(notification.originalDocketNumber ?? "nil")")
+        debugMessages.append("  originalJobName: \(notification.originalJobName ?? "nil")")
+        debugMessages.append("  originalProjectManager: \(notification.originalProjectManager ?? "nil")")
+        debugMessages.append("  originalMessage: \(notification.originalMessage ?? "nil")")
+        debugMessages.append("")
+        debugMessages.append("📧 Email Content:")
+        debugMessages.append("  emailSubject: \(notification.emailSubject?.prefix(50) ?? "nil")")
+        debugMessages.append("  emailBody: \(notification.emailBody != nil ? "\(notification.emailBody!.count) chars" : "nil")")
+        debugMessages.append("")
+        
+        // Perform the reset (re-fetches and re-parses email)
+        await notificationCenter.resetToDefaults(notification, emailScanningService: emailScanningService)
+        
+        // Get updated notification
+        if let updatedNotification = notificationCenter.notifications.first(where: { $0.id == notification.id }) {
+            debugMessages.append("✅ AFTER Reset:")
+            debugMessages.append("  Updated docketNumber: \(updatedNotification.docketNumber ?? "nil")")
+            debugMessages.append("  Updated jobName: \(updatedNotification.jobName ?? "nil")")
+            debugMessages.append("  Updated projectManager: \(updatedNotification.projectManager ?? "nil")")
+            debugMessages.append("  Updated message: \(updatedNotification.message)")
+            debugMessages.append("")
+            debugMessages.append("🔍 Verification:")
+            debugMessages.append("  docketNumber matches original: \(updatedNotification.docketNumber == notification.originalDocketNumber)")
+            debugMessages.append("  jobName matches original: \(updatedNotification.jobName == notification.originalJobName)")
+            debugMessages.append("  projectManager matches original: \(updatedNotification.projectManager == notification.originalProjectManager)")
+        } else {
+            debugMessages.append("❌ ERROR: Could not find notification after reset!")
+        }
+        
+        // Print to console only (don't auto-open debug panel)
+        let debugOutput = debugMessages.joined(separator: "\n")
+        print(debugOutput)
+    }
+    
+    /// Debug function for email expansion
+    private func debugEmailExpansion(_ notification: Notification, currentState: Bool) {
+        var debugMessages: [String] = []
+        debugMessages.append("=== Email Expansion Debug ===")
+        debugMessages.append("")
+        debugMessages.append("📋 Notification ID: \(notification.id)")
+        debugMessages.append("")
+        debugMessages.append("🔍 Current State:")
+        debugMessages.append("  isEmailPreviewExpanded (before): \(currentState)")
+        debugMessages.append("  Will toggle to: \(!currentState)")
+        debugMessages.append("")
+        debugMessages.append("📧 Email Content Check:")
+        debugMessages.append("  emailSubject exists: \(notification.emailSubject != nil)")
+        debugMessages.append("  emailSubject value: \(notification.emailSubject?.prefix(50) ?? "nil")")
+        debugMessages.append("  emailBody exists: \(notification.emailBody != nil)")
+        debugMessages.append("  emailBody length: \(notification.emailBody?.count ?? 0) chars")
+        debugMessages.append("  Has email content: \(notification.emailSubject != nil || notification.emailBody != nil)")
+        debugMessages.append("")
+        debugMessages.append("🎯 Tap Gesture Conditions:")
+        debugMessages.append("  Tap area should be visible: \(notification.emailSubject != nil || notification.emailBody != nil)")
+        debugMessages.append("")
+        
+        // Print to console only (don't auto-open debug panel)
+        let debugOutput = debugMessages.joined(separator: "\n")
+        print(debugOutput)
+    }
+    
     private func extractProducerName(from sourceEmail: String) -> String {
         // Check if it's in format "Name <email@example.com>"
         if let regex = try? NSRegularExpression(pattern: #"^(.+?)\s*<"#, options: []),

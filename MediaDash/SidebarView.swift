@@ -2,6 +2,24 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject var settingsManager: SettingsManager
+    
+    /// Helper function to seed shared cache from local cache
+    private func seedSharedCacheFromLocal(cacheManager: AsanaCacheManager, dockets: [DocketInfo]) async {
+        // Get shared cache URL from settings
+        let sharedURL = settingsManager.currentSettings.sharedCacheURL
+        
+        guard let sharedURL = sharedURL, !sharedURL.isEmpty else {
+            print("⚠️ [Cache] No shared cache URL configured in settings")
+            return
+        }
+        
+        do {
+            try await cacheManager.saveToSharedCache(dockets: dockets, url: sharedURL)
+            print("🟢 [Cache] Successfully created shared cache from local cache")
+        } catch {
+            print("⚠️ [Cache] Failed to create shared cache: \(error.localizedDescription)")
+        }
+    }
     @EnvironmentObject var sessionManager: SessionManager
     @EnvironmentObject var emailScanningService: EmailScanningService
     @EnvironmentObject var manager: MediaManager
@@ -24,6 +42,7 @@ struct SidebarView: View {
     let dateFormatter: DateFormatter
     let attempt: (JobType) -> Void
     let cycleTheme: () -> Void
+    let cacheManager: AsanaCacheManager?
     
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
@@ -51,12 +70,22 @@ struct SidebarView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 4)
 
-                // Notification Tab (where workspace label used to be)
-                        if let notificationCenter = notificationCenter {
-                    NotificationTabButton(
-                        notificationCenter: notificationCenter,
-                        showNotificationCenter: $showNotificationCenter
-                    )
+                // Info Hub: Notification Tab + Status Indicators
+                if let notificationCenter = notificationCenter {
+                    HStack(spacing: 8) {
+                        NotificationTabButton(
+                            notificationCenter: notificationCenter,
+                            showNotificationCenter: $showNotificationCenter
+                        )
+                        
+                        // Cache status indicator
+                        if let cacheManager = cacheManager {
+                            CacheStatusIndicator(
+                                cacheStatus: cacheManager.cacheStatus,
+                                cacheManager: cacheManager
+                            )
+                        }
+                    }
                     .frame(maxWidth: .infinity)
                 }
 
@@ -160,22 +189,123 @@ struct SidebarView: View {
                         .frame(width: 6, height: 6)
                 }
                 
-                HoverableButton(action: {
-                    isStagingAreaVisible.toggle()
-                }) { isHovered in
-                    Image(systemName: isStagingAreaVisible ? "chevron.right" : "chevron.left")
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundColor(isHovered ? .primary : .secondary.opacity(0.6))
-                        .padding(4)
-                        .background(isHovered ? Color.gray.opacity(0.1) : Color.clear)
-                        .cornerRadius(4)
-                }
-                .help(isStagingAreaVisible ? "Hide staging (⌘E)" : "Show staging (⌘E)")
-                .keyboardShortcut("e", modifiers: .command)
+            HoverableButton(action: {
+                isStagingAreaVisible.toggle()
+            }) { isHovered in
+                Image(systemName: isStagingAreaVisible ? "chevron.right" : "chevron.left")
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundColor(isHovered ? .primary : .secondary.opacity(0.6))
+                    .padding(4)
+                    .background(isHovered ? Color.gray.opacity(0.1) : Color.clear)
+                    .cornerRadius(4)
+            }
+            .help(isStagingAreaVisible ? "Hide staging (⌘E)" : "Show staging (⌘E)")
+            .keyboardShortcut("e", modifiers: .command)
             }
             .padding(.top, 8)
             .padding(.trailing, 16)
         }
+    }
+}
+
+// MARK: - Cache Status Indicator
+
+struct CacheStatusIndicator: View {
+    let cacheStatus: AsanaCacheManager.CacheStatus
+    let cacheManager: AsanaCacheManager?
+    @EnvironmentObject var settingsManager: SettingsManager
+    @State private var isHovered = false
+    
+    private var tooltipText: String {
+        let baseText: String
+        switch cacheStatus {
+        case .shared:
+            baseText = "Using shared cache - Connected to server"
+        case .local:
+            baseText = "Using local cache - Click to switch to shared cache"
+        case .unknown:
+            baseText = "Cache status unknown - Click to refresh"
+        }
+        
+        if cacheStatus != .shared {
+            return "\(baseText) (Click to refresh)"
+        }
+        return baseText
+    }
+    
+    var body: some View {
+        Group {
+            switch cacheStatus {
+            case .shared:
+                Image(systemName: "externaldrive.connected.to.line.below")
+                    .font(.system(size: 11))
+                    .foregroundColor(.green)
+            case .local:
+                Image(systemName: "internaldrive")
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+            case .unknown:
+                Image(systemName: "questionmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundColor(.gray.opacity(0.5))
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.gray.opacity(isHovered ? 0.15 : 0.08))
+        )
+        .help(tooltipText)
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .onTapGesture {
+            // Force refresh cache status and attempt to switch to shared cache
+            if let cacheManager = cacheManager {
+                Task { @MainActor in
+                    // First refresh status
+                    cacheManager.refreshCacheStatus()
+                    
+                    // If currently using local cache, try to create/switch to shared cache
+                    if cacheStatus == .local {
+                        // Try to seed shared cache from local cache
+                        print("🔄 [Cache] Attempting to seed shared cache from local cache...")
+                        
+                        // Get local cache dockets
+                        let localDockets = cacheManager.loadCachedDockets()
+                        
+                        if !localDockets.isEmpty {
+                            // Get shared cache URL from settings
+                            let sharedURL = settingsManager.currentSettings.sharedCacheURL
+                            
+                            if let sharedURL = sharedURL, !sharedURL.isEmpty {
+                                do {
+                                    try await cacheManager.saveToSharedCache(dockets: localDockets, url: sharedURL)
+                                    print("🟢 [Cache] Successfully created shared cache from local cache")
+                                } catch {
+                                    print("⚠️ [Cache] Failed to create shared cache: \(error.localizedDescription)")
+                                }
+                            } else {
+                                print("⚠️ [Cache] No shared cache URL configured in settings")
+                            }
+                        }
+                        
+                        // Refresh status after attempt
+                        cacheManager.refreshCacheStatus()
+                    } else {
+                        // Just refresh status
+                        cacheManager.refreshCacheStatus()
+                    }
+                }
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
 

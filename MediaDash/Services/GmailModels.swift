@@ -8,6 +8,12 @@ struct GmailListResponse: Codable {
     let resultSizeEstimate: Int
 }
 
+struct GmailThread: Codable {
+    let id: String
+    let messages: [GmailMessage]?
+    let historyId: String?
+}
+
 struct GmailMessageReference: Codable {
     let id: String
     let threadId: String
@@ -215,6 +221,69 @@ extension GmailMessage {
     /// Get sender from headers
     var from: String? {
         return payload?.getHeaderValue(name: "From")
+    }
+    
+    /// Get recipients from headers (To, Cc, Bcc)
+    var to: String? {
+        return payload?.getHeaderValue(name: "To")
+    }
+    
+    var cc: String? {
+        return payload?.getHeaderValue(name: "Cc")
+    }
+    
+    var bcc: String? {
+        return payload?.getHeaderValue(name: "Bcc")
+    }
+    
+    /// Get all recipients (To, Cc, Bcc combined)
+    var allRecipients: [String] {
+        var recipients: [String] = []
+        
+        // Parse To field
+        if let toField = to {
+            recipients.append(contentsOf: parseEmailAddresses(from: toField))
+        }
+        
+        // Parse Cc field
+        if let ccField = cc {
+            recipients.append(contentsOf: parseEmailAddresses(from: ccField))
+        }
+        
+        // Parse Bcc field
+        if let bccField = bcc {
+            recipients.append(contentsOf: parseEmailAddresses(from: bccField))
+        }
+        
+        return recipients
+    }
+    
+    /// Parse email addresses from a header field (handles "Name <email@example.com>" format)
+    private func parseEmailAddresses(from field: String) -> [String] {
+        var addresses: [String] = []
+        
+        // Split by comma to handle multiple addresses
+        let parts = field.components(separatedBy: ",")
+        
+        for part in parts {
+            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Check if it's in format "Name <email@example.com>"
+            if let regex = try? NSRegularExpression(pattern: #"<([^>]+)>"#, options: []),
+               let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+               match.numberOfRanges >= 2,
+               let emailRange = Range(match.range(at: 1), in: trimmed) {
+                let email = String(trimmed[emailRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                addresses.append(email)
+            } else {
+                // If no angle brackets, assume the whole string is the email
+                if trimmed.contains("@") {
+                    addresses.append(trimmed)
+                }
+            }
+        }
+        
+        return addresses
     }
     
     /// Get plain text body

@@ -20,4 +20,3 @@ class NotificationWindow: NSWindow {
         return true
     }
 }
-

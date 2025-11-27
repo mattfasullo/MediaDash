@@ -423,7 +423,7 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         let notificationWindowController = NSHostingController(rootView: content)
         notificationWindow = NotificationWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 500),
-            styleMask: [.borderless, .fullSizeContentView, .resizable],
+            styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -506,9 +506,9 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             height: startHeight
         )
         
-        // Set initial state (button size, fully visible, behind main window)
+        // Set initial state (button size, invisible, behind main window)
         notificationWindow.setFrame(startFrame, display: false)
-        notificationWindow.alphaValue = 1.0
+        notificationWindow.alphaValue = 0.0
         notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
         
         // Set initial locked position if locked
@@ -525,12 +525,13 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             // Ensure window is behind main window before animation
             notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
             
-            // Animate flying out effect: expand and move from button position to final position
+            // Animate flying out effect: fade in, expand and move from button position to final position
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.25
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 // Keep window behind during animation
                 notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
+                notificationWindow.animator().alphaValue = 1.0
                 notificationWindow.animator().setFrame(targetFrame, display: true)
             }) {
                 // Keep window behind main window after animation
@@ -635,13 +636,15 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         guard let mainWindow = mainWindow else { return }
         
         let mainFrame = mainWindow.frame
-        let notificationWidth: CGFloat = 400
-        let notificationHeight: CGFloat = 500
+        let notificationFrame = notificationWindow.frame
+        let notificationWidth = notificationFrame.width
+        let notificationHeight = notificationFrame.height
         
         // Position to the left of main window, vertically centered
-        let x = mainFrame.minX - notificationWidth
+        let x = mainFrame.minX - notificationWidth - 10
         let y = mainFrame.midY - (notificationHeight / 2)
         
+        // Only update position, keep current size
         notificationWindow.setFrame(
             NSRect(x: x, y: y, width: notificationWidth, height: notificationHeight),
             display: true
@@ -656,12 +659,12 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         guard let mainWindow = mainWindow else { return }
         
         let mainFrame = mainWindow.frame
-        let notificationWidth: CGFloat = 400
-        let notificationHeight: CGFloat = 500
+        let notificationFrame = notificationWindow.frame
+        let notificationWidth = notificationFrame.width
         
         // Position to the left of main window, vertically centered
         let x = mainFrame.minX - notificationWidth - 10 // 10px gap
-        let y = mainFrame.midY - (notificationHeight / 2)
+        let y = mainFrame.midY - (notificationFrame.height / 2)
         
         // Use setFrameOrigin for more efficient updates (only moves origin, not full frame)
         // This is faster and smoother than setFrame

@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import QuickLookUI
+import Combine
 
 struct StagingAreaView: View {
     @EnvironmentObject var manager: MediaManager
@@ -15,6 +16,7 @@ struct StagingAreaView: View {
     
     // Batch rename state
     @State private var showBatchRenameSheet: Bool = false
+    @State private var filesToRename: [FileItem] = []
     
     private var totalFileCount: Int {
         manager.selectedFiles.reduce(0) { $0 + $1.fileCount }
@@ -59,19 +61,6 @@ struct StagingAreaView: View {
                     .keyboardShortcut("o", modifiers: .command)
 
                     if !manager.selectedFiles.isEmpty {
-                        // Batch Rename button
-                        Button(action: { showBatchRenameSheet = true }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "pencil")
-                                    .font(.system(size: 11))
-                                Text("Rename")
-                                    .font(.system(size: 12, weight: .medium))
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help("Batch rename files")
-                        
                         HoverableButton(action: { manager.clearFiles() }) { isHovered in
                             HStack(spacing: 4) {
                                 Image(systemName: "trash")
@@ -139,7 +128,11 @@ struct StagingAreaView: View {
                 } else {
                     // File List with drag overlay
                     ZStack {
-                        StagingFileListView(manager: manager)
+                        StagingFileListView(
+                            manager: manager,
+                            showBatchRenameSheet: $showBatchRenameSheet,
+                            filesToRename: $filesToRename
+                        )
                         
                         // Drag overlay when files are being dragged
                         if isDragTargeted {
@@ -295,7 +288,7 @@ struct StagingAreaView: View {
         .frame(width: 350)
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: $showBatchRenameSheet) {
-            BatchRenameSheet(manager: manager)
+            BatchRenameSheet(manager: manager, filesToRename: filesToRename)
         }
     }
     
@@ -320,41 +313,185 @@ struct StagingAreaView: View {
     }
 }
 
+// MARK: - File Tree Node
+
+class FileTreeNode: Identifiable, ObservableObject {
+    let id = UUID()
+    let file: FileItem
+    @Published var children: [FileTreeNode]
+    @Published var isExpanded: Bool = false
+    var hasLoadedChildren: Bool = false
+    
+    init(file: FileItem) {
+        self.file = file
+        self.children = []
+    }
+    
+    var hasChildren: Bool {
+        file.isDirectory
+    }
+    
+    func loadChildrenIfNeeded() {
+        guard file.isDirectory, !hasLoadedChildren else { return }
+        hasLoadedChildren = true
+        
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(
+            at: file.url,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        
+        self.children = contents.map { url in
+            FileTreeNode(file: FileItem(url: url))
+        }.sorted { node1, node2 in
+            // Folders first, then files, both alphabetically
+            if node1.file.isDirectory && !node2.file.isDirectory {
+                return true
+            } else if !node1.file.isDirectory && node2.file.isDirectory {
+                return false
+            }
+            return node1.file.name.localizedCaseInsensitiveCompare(node2.file.name) == .orderedAscending
+        }
+    }
+}
+
 // MARK: - Staging File List View
 
 struct StagingFileListView: View {
     @ObservedObject var manager: MediaManager
     @State private var selectedFileId: UUID?
+    @State private var treeNodes: [FileTreeNode] = []
+    @Binding var showBatchRenameSheet: Bool
+    @Binding var filesToRename: [FileItem]
     
     // Supported thumbnail extensions
     private let thumbnailExtensions = ["jpg", "jpeg", "png", "gif", "heic", "mp4", "mov", "m4v", "avi", "mkv", "mxf"]
     
     var body: some View {
-        List(manager.selectedFiles, selection: $selectedFileId) { f in
-            StagingFileRow(
-                file: f,
-                manager: manager,
-                isSelected: selectedFileId == f.id,
-                supportsThumbnail: thumbnailExtensions.contains(f.url.pathExtension.lowercased())
-            )
-            .tag(f.id)
+        List {
+            ForEach(treeNodes) { node in
+                TreeNodeView(
+                    node: node,
+                    manager: manager,
+                    selectedFileId: $selectedFileId,
+                    thumbnailExtensions: thumbnailExtensions,
+                    filesToRename: $filesToRename,
+                    showBatchRenameSheet: $showBatchRenameSheet
+                )
+            }
         }
-        .listStyle(.inset(alternatesRowBackgrounds: true))
+        .listStyle(.inset(alternatesRowBackgrounds: false))
+        .scrollContentBackground(.hidden)
         .animation(.easeInOut(duration: 0.3), value: manager.selectedFiles)
         .animation(.easeInOut(duration: 0.2), value: manager.fileProgress)
         .animation(.easeInOut(duration: 0.2), value: manager.conversionProgress)
         .animation(.easeInOut(duration: 0.3), value: manager.fileCompletionState)
+        .onChange(of: manager.selectedFiles) { _, newFiles in
+            updateTreeNodes(from: newFiles)
+        }
+        .onAppear {
+            updateTreeNodes(from: manager.selectedFiles)
+        }
         .onKeyPress(.space) {
             // QuickLook preview with Space key
             if let selectedId = selectedFileId,
-               manager.selectedFiles.contains(where: { $0.id == selectedId }) {
-                QuickLookCoordinator.shared.togglePreview(
-                    for: manager.selectedFiles.map { $0.url },
-                    startingAt: manager.selectedFiles.firstIndex(where: { $0.id == selectedId }) ?? 0
-                )
-                return .handled
+               findNode(id: selectedId, in: treeNodes) != nil {
+                let allFiles = getAllFiles(from: treeNodes)
+                if let index = allFiles.firstIndex(where: { $0.id == selectedId }) {
+                    QuickLookCoordinator.shared.togglePreview(
+                        for: allFiles.map { $0.url },
+                        startingAt: index
+                    )
+                    return .handled
+                }
             }
             return .ignored
+        }
+    }
+    
+    private func updateTreeNodes(from files: [FileItem]) {
+        treeNodes = files.map { FileTreeNode(file: $0) }
+    }
+    
+    private func findNode(id: UUID, in nodes: [FileTreeNode]) -> FileTreeNode? {
+        for node in nodes {
+            if node.file.id == id {
+                return node
+            }
+            if !node.children.isEmpty {
+                if let found = findNode(id: id, in: node.children) {
+                    return found
+                }
+            }
+        }
+        return nil
+    }
+    
+    private func getAllFiles(from nodes: [FileTreeNode]) -> [FileItem] {
+        var files: [FileItem] = []
+        for node in nodes {
+            files.append(node.file)
+            if !node.children.isEmpty {
+                files.append(contentsOf: getAllFiles(from: node.children))
+            }
+        }
+        return files
+    }
+}
+
+// MARK: - Tree Node View
+
+struct TreeNodeView: View {
+    @ObservedObject var node: FileTreeNode
+    @ObservedObject var manager: MediaManager
+    @Binding var selectedFileId: UUID?
+    let thumbnailExtensions: [String]
+    @Binding var filesToRename: [FileItem]
+    @Binding var showBatchRenameSheet: Bool
+    
+    var body: some View {
+        if node.file.isDirectory {
+            DisclosureGroup(isExpanded: $node.isExpanded) {
+                ForEach(node.children) { childNode in
+                    TreeNodeView(
+                        node: childNode,
+                        manager: manager,
+                        selectedFileId: $selectedFileId,
+                        thumbnailExtensions: thumbnailExtensions,
+                        filesToRename: $filesToRename,
+                        showBatchRenameSheet: $showBatchRenameSheet
+                    )
+                }
+            } label: {
+                StagingFileRow(
+                    file: node.file,
+                    manager: manager,
+                    isSelected: selectedFileId == node.file.id,
+                    supportsThumbnail: false,
+                    onRename: nil
+                )
+                .tag(node.file.id)
+            }
+            .onChange(of: node.isExpanded) { _, isExpanded in
+                if isExpanded && !node.hasLoadedChildren {
+                    node.loadChildrenIfNeeded()
+                }
+            }
+        } else {
+            StagingFileRow(
+                file: node.file,
+                manager: manager,
+                isSelected: selectedFileId == node.file.id,
+                supportsThumbnail: thumbnailExtensions.contains(node.file.url.pathExtension.lowercased()),
+                onRename: {
+                    filesToRename = [node.file]
+                    showBatchRenameSheet = true
+                }
+            )
+            .tag(node.file.id)
         }
     }
 }
@@ -366,6 +503,7 @@ struct StagingFileRow: View {
     @ObservedObject var manager: MediaManager
     let isSelected: Bool
     let supportsThumbnail: Bool
+    var onRename: (() -> Void)?
     
     var body: some View {
         ZStack(alignment: .leading) {
@@ -397,6 +535,7 @@ struct StagingFileRow: View {
                 
                 Text(file.name)
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 
                 Spacer()
 
@@ -416,6 +555,8 @@ struct StagingFileRow: View {
                 }
                 .help("Remove from staging")
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
         }
         .contentShape(Rectangle())
         .contextMenu {
@@ -426,6 +567,16 @@ struct StagingFileRow: View {
             .keyboardShortcut(" ", modifiers: [])
             
             Divider()
+            
+            // Rename option (only for files, not directories)
+            if !file.isDirectory {
+                Button("Rename") {
+                    onRename?()
+                }
+                .keyboardShortcut("r", modifiers: [])
+                
+                Divider()
+            }
             
             // Remove option
             Button("Remove from Staging") {
@@ -457,56 +608,56 @@ struct StagingFileRow: View {
     @ViewBuilder
     private var fileStatusView: some View {
         if let completionState = manager.fileCompletionState[file.id] {
-            switch completionState {
-            case .complete:
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                    .font(.system(size: 16))
-            case .workPicDone, .prepDone:
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.yellow)
-                    .font(.system(size: 16))
-            case .none:
-                EmptyView()
-            }
+                        switch completionState {
+                        case .complete:
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 16))
+                        case .workPicDone, .prepDone:
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.yellow)
+                                .font(.system(size: 16))
+                        case .none:
+                            EmptyView()
+                        }
         } else if let convProgress = manager.conversionProgress[file.id], convProgress > 0, convProgress < 1.0 {
-            HStack(spacing: 4) {
-                Image(systemName: "film")
-                    .font(.system(size: 10))
-                Text("\(Int(convProgress * 100))%")
-                    .font(.caption)
-                    .monospacedDigit()
-            }
-            .foregroundColor(.purple)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Color.purple.opacity(0.1))
-            .cornerRadius(4)
+                        HStack(spacing: 4) {
+                            Image(systemName: "film")
+                                .font(.system(size: 10))
+                            Text("\(Int(convProgress * 100))%")
+                                .font(.caption)
+                                .monospacedDigit()
+                        }
+                        .foregroundColor(.purple)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.purple.opacity(0.1))
+                        .cornerRadius(4)
         } else if let progress = manager.fileProgress[file.id], progress > 0, progress < 1.0 {
-            Text("\(Int(progress * 100))%")
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundColor(.blue)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(4)
-        } else {
-            // Show file count for folders, or file size for files
+                        Text("\(Int(progress * 100))%")
+                            .font(.caption)
+                            .monospacedDigit()
+                            .foregroundColor(.blue)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(4)
+                    } else {
+                        // Show file count for folders, or file size for files
             if file.isDirectory {
                 Text("\(file.fileCount) file\(file.fileCount == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundColor(.blue)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.1))
-                    .cornerRadius(4)
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.blue.opacity(0.1))
+                                .cornerRadius(4)
             } else if let size = getFileSize(file.url) {
-                Text(size)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
+                            Text(size)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
     }
     
     private func getFileSize(_ url: URL) -> String? {

@@ -46,6 +46,8 @@ struct NotificationPopupView: View {
         switch type {
         case .newDocket:
             return "folder.badge.plus"
+        case .mediaFiles:
+            return "link.circle.fill"
         case .error:
             return "exclamationmark.triangle.fill"
         case .info:

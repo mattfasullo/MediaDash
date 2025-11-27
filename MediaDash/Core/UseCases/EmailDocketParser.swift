@@ -12,9 +12,13 @@ struct ParsedDocket {
 /// Use case for parsing emails to extract docket information
 struct EmailDocketParser {
     private let patterns: [String]
+    private let companyNameMatcher: CompanyNameMatcher?
+    private let metadataManager: DocketMetadataManager?
     
-    init(patterns: [String] = []) {
+    init(patterns: [String] = [], companyNameMatcher: CompanyNameMatcher? = nil, metadataManager: DocketMetadataManager? = nil) {
         self.patterns = patterns.isEmpty ? Self.defaultPatterns : patterns
+        self.companyNameMatcher = companyNameMatcher
+        self.metadataManager = metadataManager
     }
     
     /// Default parsing patterns
@@ -162,17 +166,37 @@ struct EmailDocketParser {
             }
         }
         
-        // If we have both, return the parsed docket
+        // If we have both, try to improve job name with fuzzy matching and metadata lookup
         if let docketNumber = extractedDocketNumber, let jobName = extractedJobName {
+            var finalJobName = jobName
+            var confidence: Double = 0.8
+            
+            // Try metadata lookup first (most reliable)
+            if let metadata = metadataManager?.getMetadata(for: docketNumber, jobName: jobName),
+               !metadata.jobName.isEmpty {
+                finalJobName = metadata.jobName
+                confidence = 0.95
+            }
+            // Try fuzzy matching against company cache
+            else if let matcher = companyNameMatcher {
+                let combinedText = "\(subjectText)\n\(bodyText)"
+                if let match = matcher.findBestMatch(in: combinedText) {
+                    finalJobName = match.name
+                    confidence = 0.85
+                }
+            }
+            
             return ParsedDocket(
                 docketNumber: docketNumber,
-                jobName: jobName,
+                jobName: finalJobName,
                 sourceEmail: from ?? "unknown",
-                confidence: 0.8,
+                confidence: confidence,
                 rawData: [
                     "method": "body_subject_combination",
                     "subject": subjectText,
-                    "body": bodyText
+                    "body": bodyText,
+                    "original_job_name": jobName,
+                    "final_job_name": finalJobName
                 ]
             )
         }
@@ -414,19 +438,38 @@ struct EmailDocketParser {
             // If we found a docket number, use it; otherwise use "TBD"
             let finalDocketNumber = foundDocketNumber ?? "TBD"
             
-            // Final fallback
-            let finalJobName = jobName ?? "New Docket"
+            // Try to improve job name with fuzzy matching and metadata lookup
+            var finalJobName = jobName ?? "New Docket"
+            var confidence: Double = foundDocketNumber != nil ? 0.7 : 0.3
+            
+            // Try metadata lookup first (most reliable)
+            if let docketNum = foundDocketNumber,
+               let metadata = metadataManager?.getMetadata(for: docketNum, jobName: finalJobName),
+               !metadata.jobName.isEmpty {
+                finalJobName = metadata.jobName
+                confidence = 0.9
+            }
+            // Try fuzzy matching against company cache
+            else if let matcher = companyNameMatcher, finalJobName == "New Docket" || finalJobName.count < 5 {
+                let combinedText = "\(subjectText)\n\(bodyText)"
+                if let match = matcher.findBestMatch(in: combinedText) {
+                    finalJobName = match.name
+                    confidence = 0.75
+                }
+            }
             
             return ParsedDocket(
                 docketNumber: finalDocketNumber,
                 jobName: finalJobName,
                 sourceEmail: from ?? "unknown",
-                confidence: foundDocketNumber != nil ? 0.7 : 0.3,
+                confidence: confidence,
                 rawData: [
                     "method": foundDocketNumber != nil ? "new_docket_with_number" : "new_docket_label_fallback",
                     "subject": subjectText,
                     "body": bodyText,
-                    "has_docket_number": foundDocketNumber != nil
+                    "has_docket_number": foundDocketNumber != nil,
+                    "original_job_name": jobName ?? "New Docket",
+                    "final_job_name": finalJobName
                 ]
             )
         }

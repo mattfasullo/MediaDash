@@ -46,6 +46,7 @@ struct RenamePreviewItem: Identifiable {
 struct BatchRenameSheet: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var manager: MediaManager
+    let filesToRename: [FileItem]
     
     @State private var pattern: String = "{original}"
     @State private var docketName: String = ""
@@ -54,11 +55,6 @@ struct BatchRenameSheet: View {
     @State private var showTokenHelp: Bool = false
     @State private var isRenaming: Bool = false
     @State private var renameError: String?
-    
-    // Files to rename (from staging area)
-    private var filesToRename: [FileItem] {
-        manager.selectedFiles.filter { !$0.isDirectory }
-    }
     
     // Preview of renamed files
     private var previewItems: [RenamePreviewItem] {
@@ -410,9 +406,12 @@ struct TokenHelpView: View {
 // MARK: - Preview
 
 #Preview {
-    BatchRenameSheet(manager: MediaManager(
-        settingsManager: SettingsManager(),
-        metadataManager: DocketMetadataManager(settings: .default)
-    ))
+    BatchRenameSheet(
+        manager: MediaManager(
+            settingsManager: SettingsManager(),
+            metadataManager: DocketMetadataManager(settings: .default)
+        ),
+        filesToRename: []
+    )
 }
 

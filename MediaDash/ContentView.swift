@@ -54,7 +54,7 @@ struct ContentView: View {
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
     }
-    
+
     // Fixed window height
     private var windowHeight: CGFloat {
         550
@@ -233,7 +233,8 @@ struct ContentView: View {
                 prepDate: prepDate,
                 dateFormatter: dateFormatter,
                 attempt: attempt,
-                cycleTheme: cycleTheme
+                cycleTheme: cycleTheme,
+                cacheManager: cacheManager
             )
             
             if isStagingAreaVisible {
@@ -3411,38 +3412,85 @@ struct NotificationTabButton: View {
 
 struct EmailRefreshButton: View {
     @EnvironmentObject var emailScanningService: EmailScanningService
+    var notificationCenter: NotificationCenter? = nil
+    var grabbedIndicatorService: GrabbedIndicatorService? = nil
     @State private var isHovered = false
     @State private var isRefreshing = false
+    @State private var statusMessage: String?
+    @State private var statusTimer: Timer?
     
     var body: some View {
-        Button(action: {
-            guard !isRefreshing else { return }
-            isRefreshing = true
-            Task {
-                // Use scanUnreadEmails with forceRescan to rescan even if notifications exist
-                await emailScanningService.scanUnreadEmails(forceRescan: true)
-                await MainActor.run {
-                    isRefreshing = false
+        HStack(spacing: 4) {
+            Button(action: {
+                guard !isRefreshing else { return }
+                isRefreshing = true
+                statusMessage = nil
+                
+                Task {
+                    // Get notification count before scan
+                    let beforeCount = notificationCenter?.notifications.filter { $0.status == .pending }.count ?? 0
+                    
+                    // Use scanUnreadEmails with forceRescan to rescan even if notifications exist
+                    await emailScanningService.scanUnreadEmails(forceRescan: true)
+                    
+                    // After scanning, immediately check for grabbed replies
+                    if let grabbedService = grabbedIndicatorService {
+                        print("EmailRefreshButton: Triggering grabbed reply check after scan...")
+                        await grabbedService.checkForGrabbedReplies()
+                    }
+                    
+                    // Get notification count after scan
+                    let afterCount = notificationCenter?.notifications.filter { $0.status == .pending }.count ?? 0
+                    let newCount = afterCount - beforeCount
+                    
+                    await MainActor.run {
+                        isRefreshing = false
+                        
+                        // Show status message
+                        if newCount > 0 {
+                            statusMessage = "✅ Found \(newCount) new notification\(newCount == 1 ? "" : "s")"
+                        } else {
+                            statusMessage = "✓ Up to date"
+                        }
+                        
+                        // Clear status message after 3 seconds
+                        statusTimer?.invalidate()
+                        statusTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                            statusMessage = nil
+                        }
+                    }
+                }
+            }) {
+                ZStack {
+                    Circle()
+                        .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
+                        .frame(width: 24, height: 24)
+                    
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                        .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
                 }
             }
-        }) {
-            ZStack {
-                Circle()
-                    .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
-                    .frame(width: 24, height: 24)
-                
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10, weight: .medium))
+            .buttonStyle(.plain)
+            .help(statusMessage ?? "Refresh emails")
+            .disabled(isRefreshing || emailScanningService.isScanning)
+            .onHover { hovering in
+                isHovered = hovering
+            }
+            
+            // Status message
+            if let status = statusMessage {
+                Text(status)
+                    .font(.system(size: 10))
                     .foregroundColor(.secondary)
-                    .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                    .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
+                    .animation(.easeInOut, value: statusMessage)
             }
         }
-        .buttonStyle(.plain)
-        .help("Refresh emails")
-        .disabled(isRefreshing || emailScanningService.isScanning)
-        .onHover { hovering in
-            isHovered = hovering
+        .onDisappear {
+            statusTimer?.invalidate()
         }
     }
 }

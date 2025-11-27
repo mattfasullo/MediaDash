@@ -1677,6 +1677,377 @@ struct GmailIntegrationSection: View {
                                         .font(.system(size: 11))
                                         .foregroundColor(.secondary)
                                 }
+                                
+                                Divider()
+                                    .padding(.vertical, 8)
+                                
+                                // Company Media Email Section
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Company Media Email")
+                                        .font(.system(size: 13, weight: .medium))
+                                    
+                                    Text("Emails sent to this address containing file hosting links will appear in a separate 'File Deliveries' section")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                    
+                                    TextField("media@graysonmusicgroup.com", text: Binding(
+                                        get: { settings.companyMediaEmail },
+                                        set: {
+                                            settings.companyMediaEmail = $0
+                                            hasUnsavedChanges = true
+                                        }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                }
+                                
+                                Divider()
+                                    .padding(.vertical, 8)
+                                
+                                // Media Team & Grabbed Indicator Section
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("Media Team & Grabbed Indicator")
+                                        .font(.system(size: 13, weight: .medium))
+                                    
+                                    Text("Configure which team members can 'grab' media file threads and what qualifies as a media-file-delivery thread")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                    
+                                    // Media Team Emails
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Media Team Emails")
+                                            .font(.system(size: 12))
+                                        
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            ForEach(settings.mediaTeamEmails.indices, id: \.self) { index in
+                                                HStack(spacing: 8) {
+                                                    TextField("email@example.com", text: Binding(
+                                                        get: { settings.mediaTeamEmails[index] },
+                                                        set: {
+                                                            settings.mediaTeamEmails[index] = $0
+                                                            hasUnsavedChanges = true
+                                                        }
+                                                    ))
+                                                    .textFieldStyle(.roundedBorder)
+                                                    
+                                                    Button(action: {
+                                                        settings.mediaTeamEmails.remove(at: index)
+                                                        hasUnsavedChanges = true
+                                                    }) {
+                                                        Image(systemName: "minus.circle.fill")
+                                                            .foregroundColor(.red)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                            
+                                            Button(action: {
+                                                settings.mediaTeamEmails.append("")
+                                                hasUnsavedChanges = true
+                                            }) {
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                    Text("Add Team Member")
+                                                }
+                                                .font(.system(size: 12))
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                    
+                                    Divider()
+                                        .padding(.vertical, 4)
+                                    
+                                    // Subject Patterns
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Subject Patterns (Keywords)")
+                                            .font(.system(size: 12))
+                                        
+                                        Text("Threads with these keywords in the subject qualify as media-file-delivery")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                        
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            ForEach(settings.grabbedSubjectPatterns.indices, id: \.self) { index in
+                                                HStack(spacing: 8) {
+                                                    TextField("FILE DELIVERY", text: Binding(
+                                                        get: { settings.grabbedSubjectPatterns[index] },
+                                                        set: {
+                                                            settings.grabbedSubjectPatterns[index] = $0
+                                                            hasUnsavedChanges = true
+                                                        }
+                                                    ))
+                                                    .textFieldStyle(.roundedBorder)
+                                                    
+                                                    Button(action: {
+                                                        settings.grabbedSubjectPatterns.remove(at: index)
+                                                        hasUnsavedChanges = true
+                                                    }) {
+                                                        Image(systemName: "minus.circle.fill")
+                                                            .foregroundColor(.red)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                            
+                                            Button(action: {
+                                                settings.grabbedSubjectPatterns.append("")
+                                                hasUnsavedChanges = true
+                                            }) {
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                    Text("Add Pattern")
+                                                }
+                                                .font(.system(size: 12))
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                    
+                                    Divider()
+                                        .padding(.vertical, 4)
+                                    
+                                    // Subject Exclusions
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Subject Exclusions")
+                                            .font(.system(size: 12))
+                                        
+                                        Text("Threads with these keywords in the subject will NOT qualify as media-file-delivery")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                        
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            ForEach(settings.grabbedSubjectExclusions.indices, id: \.self) { index in
+                                                HStack(spacing: 8) {
+                                                    TextField("SESSION CHECKLIST", text: Binding(
+                                                        get: { settings.grabbedSubjectExclusions[index] },
+                                                        set: {
+                                                            settings.grabbedSubjectExclusions[index] = $0
+                                                            hasUnsavedChanges = true
+                                                        }
+                                                    ))
+                                                    .textFieldStyle(.roundedBorder)
+                                                    
+                                                    Button(action: {
+                                                        settings.grabbedSubjectExclusions.remove(at: index)
+                                                        hasUnsavedChanges = true
+                                                    }) {
+                                                        Image(systemName: "minus.circle.fill")
+                                                            .foregroundColor(.red)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                            
+                                            Button(action: {
+                                                settings.grabbedSubjectExclusions.append("")
+                                                hasUnsavedChanges = true
+                                            }) {
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                    Text("Add Exclusion")
+                                                }
+                                                .font(.system(size: 12))
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                    
+                                    Divider()
+                                        .padding(.vertical, 4)
+                                    
+                                    // Attachment Types
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Attachment Types")
+                                            .font(.system(size: 12))
+                                        
+                                        Text("File extensions that qualify as media files (comma-separated or one per line)")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                        
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            ForEach(settings.grabbedAttachmentTypes.indices, id: \.self) { index in
+                                                HStack(spacing: 8) {
+                                                    TextField("wav", text: Binding(
+                                                        get: { settings.grabbedAttachmentTypes[index] },
+                                                        set: {
+                                                            settings.grabbedAttachmentTypes[index] = $0
+                                                            hasUnsavedChanges = true
+                                                        }
+                                                    ))
+                                                    .textFieldStyle(.roundedBorder)
+                                                    
+                                                    Button(action: {
+                                                        settings.grabbedAttachmentTypes.remove(at: index)
+                                                        hasUnsavedChanges = true
+                                                    }) {
+                                                        Image(systemName: "minus.circle.fill")
+                                                            .foregroundColor(.red)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                            
+                                            Button(action: {
+                                                settings.grabbedAttachmentTypes.append("")
+                                                hasUnsavedChanges = true
+                                            }) {
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                    Text("Add Type")
+                                                }
+                                                .font(.system(size: 12))
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                    
+                                    Divider()
+                                        .padding(.vertical, 4)
+                                    
+                                    // File Hosting Whitelist (Primary Method)
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("File Hosting Whitelist")
+                                            .font(.system(size: 12, weight: .semibold))
+                                        
+                                        Text("Primary method: Only links from these domains qualify as file delivery. Review platforms (simian.me, disco.ac) are automatically excluded.")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                        
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            ForEach(settings.grabbedFileHostingWhitelist.indices, id: \.self) { index in
+                                                HStack(spacing: 8) {
+                                                    TextField("drive.google.com", text: Binding(
+                                                        get: { settings.grabbedFileHostingWhitelist[index] },
+                                                        set: {
+                                                            settings.grabbedFileHostingWhitelist[index] = $0
+                                                            hasUnsavedChanges = true
+                                                        }
+                                                    ))
+                                                    .textFieldStyle(.roundedBorder)
+                                                    
+                                                    Button(action: {
+                                                        settings.grabbedFileHostingWhitelist.remove(at: index)
+                                                        hasUnsavedChanges = true
+                                                    }) {
+                                                        Image(systemName: "minus.circle.fill")
+                                                            .foregroundColor(.red)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                            
+                                            Button(action: {
+                                                settings.grabbedFileHostingWhitelist.append("")
+                                                hasUnsavedChanges = true
+                                            }) {
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                    Text("Add Domain")
+                                                }
+                                                .font(.system(size: 12))
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                    
+                                    Divider()
+                                        .padding(.vertical, 4)
+                                    
+                                    // Body Exclusions
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Body Exclusions")
+                                            .font(.system(size: 12))
+                                        
+                                        Text("Threads with these keywords in the body will NOT qualify as media-file-delivery")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                        
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            ForEach(settings.grabbedBodyExclusions.indices, id: \.self) { index in
+                                                HStack(spacing: 8) {
+                                                    TextField("check out", text: Binding(
+                                                        get: { settings.grabbedBodyExclusions[index] },
+                                                        set: {
+                                                            settings.grabbedBodyExclusions[index] = $0
+                                                            hasUnsavedChanges = true
+                                                        }
+                                                    ))
+                                                    .textFieldStyle(.roundedBorder)
+                                                    
+                                                    Button(action: {
+                                                        settings.grabbedBodyExclusions.remove(at: index)
+                                                        hasUnsavedChanges = true
+                                                    }) {
+                                                        Image(systemName: "minus.circle.fill")
+                                                            .foregroundColor(.red)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                            
+                                            Button(action: {
+                                                settings.grabbedBodyExclusions.append("")
+                                                hasUnsavedChanges = true
+                                            }) {
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                    Text("Add Exclusion")
+                                                }
+                                                .font(.system(size: 12))
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                    
+                                    Divider()
+                                        .padding(.vertical, 4)
+                                    
+                                    // Sender Whitelist
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Approved Senders")
+                                            .font(.system(size: 12))
+                                        
+                                        Text("Threads from these senders qualify as media-file-delivery")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                        
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            ForEach(settings.grabbedSenderWhitelist.indices, id: \.self) { index in
+                                                HStack(spacing: 8) {
+                                                    TextField("client@example.com", text: Binding(
+                                                        get: { settings.grabbedSenderWhitelist[index] },
+                                                        set: {
+                                                            settings.grabbedSenderWhitelist[index] = $0
+                                                            hasUnsavedChanges = true
+                                                        }
+                                                    ))
+                                                    .textFieldStyle(.roundedBorder)
+                                                    
+                                                    Button(action: {
+                                                        settings.grabbedSenderWhitelist.remove(at: index)
+                                                        hasUnsavedChanges = true
+                                                    }) {
+                                                        Image(systemName: "minus.circle.fill")
+                                                            .foregroundColor(.red)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                            
+                                            Button(action: {
+                                                settings.grabbedSenderWhitelist.append("")
+                                                hasUnsavedChanges = true
+                                            }) {
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "plus.circle.fill")
+                                                    Text("Add Sender")
+                                                }
+                                                .font(.system(size: 12))
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                }
                             }
                             .padding(.leading, 16)
                             .padding(.top, 8)
@@ -2278,6 +2649,27 @@ struct GeneralOptionsSection: View {
                         .padding(.top, 4)
                     }
 
+                    Divider()
+                        .padding(.vertical, 4)
+                    
+                    // Debug Features Toggle
+                    Toggle(isOn: Binding(
+                        get: { settings.showDebugFeatures },
+                        set: {
+                            settings.showDebugFeatures = $0
+                            hasUnsavedChanges = true
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show Debug Features")
+                                .font(.system(size: 13))
+                            Text("Show test notification, debug scan, and cache viewer buttons in notification center")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    
                     Divider()
                         .padding(.vertical, 4)
                     

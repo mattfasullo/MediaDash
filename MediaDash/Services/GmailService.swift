@@ -258,6 +258,43 @@ class GmailService: ObservableObject {
         }
     }
     
+    /// Get full thread by ID
+    /// - Parameter threadId: The thread ID
+    /// - Returns: Full GmailThread object with all messages
+    func getThread(threadId: String) async throws -> GmailThread {
+        isFetching = true
+        lastError = nil
+        defer { isFetching = false }
+        
+        var components = URLComponents(string: "\(baseURL)/users/me/threads/\(threadId)")!
+        components.queryItems = [
+            URLQueryItem(name: "format", value: "full")
+        ]
+        
+        guard let url = components.url else {
+            throw GmailError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
+        
+        if httpResponse.statusCode == 401 {
+            throw GmailError.notAuthenticated
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw GmailError.apiError("HTTP \(httpResponse.statusCode): \(errorMessage)")
+        }
+        
+        do {
+            let thread = try JSONDecoder().decode(GmailThread.self, from: data)
+            return thread
+        } catch {
+            throw GmailError.decodingError(error.localizedDescription)
+        }
+    }
+    
     /// Batch fetch full email messages
     /// - Parameter messageReferences: Array of message references from fetchEmails
     /// - Returns: Array of full GmailMessage objects
