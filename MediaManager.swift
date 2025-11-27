@@ -533,7 +533,6 @@ class MediaManager: ObservableObject {
     init(settingsManager: SettingsManager, metadataManager: DocketMetadataManager) {
         self.config = AppConfig(settings: settingsManager.currentSettings)
         self.metadataManager = metadataManager
-        self.settingsManager = settingsManager
 
         // Check directory access on startup
         checkAllDirectoryAccess()
