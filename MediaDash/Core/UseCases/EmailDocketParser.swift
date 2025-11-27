@@ -52,6 +52,13 @@ struct EmailDocketParser {
         let subjectText = subject ?? ""
         var bodyText = body ?? ""
         
+        // If body is empty but subject contains "Fwd:" or "Re:", try to extract from subject
+        // Forwarded emails might have the docket info in the subject line
+        if bodyText.isEmpty && (subjectText.contains("Fwd:") || subjectText.contains("Re:")) {
+            // Try to extract docket info from subject for forwarded emails
+            print("EmailDocketParser: Body is empty, attempting to parse from subject only")
+        }
+        
         // Clean up HTML/table formatting that might interfere with parsing
         // Remove HTML table tags but preserve cell content
         bodyText = bodyText.replacingOccurrences(of: #"<td[^>]*>"#, with: " | ", options: .regularExpression)

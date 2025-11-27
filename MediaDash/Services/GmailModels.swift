@@ -103,22 +103,69 @@ extension GmailMessagePart {
         return headers?.first(where: { $0.name.lowercased() == name.lowercased() })?.value
     }
     
-    /// Get plain text body content
+    /// Get plain text body content (recursively searches all nested parts)
     func getPlainTextBody() -> String? {
-        if let body = body, let data = body.data {
+        // If this part itself has plain text body data, return it
+        if mimeType == "text/plain", let body = body, let data = body.data {
             return decodeBase64Url(data)
         }
         
-        // Check nested parts
+        // Check nested parts recursively
         if let parts = parts {
+            // First, try to find text/plain
             for part in parts {
-                if part.mimeType == "text/plain" || part.mimeType == "text/html" {
-                    return part.getPlainTextBody()
+                if part.mimeType == "text/plain" {
+                    if let text = part.getPlainTextBody() {
+                        return text
+                    }
+                }
+            }
+            // If no plain text found, try text/html as fallback
+            for part in parts {
+                if part.mimeType == "text/html" {
+                    if let html = part.getHTMLBody() {
+                        // Convert HTML to plain text (simple strip)
+                        return stripHTML(html)
+                    }
+                }
+            }
+            // If still nothing, recursively check all parts (for multipart/alternative, etc.)
+            for part in parts {
+                if let text = part.getPlainTextBody() {
+                    return text
                 }
             }
         }
         
         return nil
+    }
+    
+    /// Simple HTML stripping (removes tags, keeps text)
+    private func stripHTML(_ html: String) -> String {
+        var text = html
+        
+        // Remove script and style tags and their content (using NSRegularExpression for multiline support)
+        if let scriptRegex = try? NSRegularExpression(pattern: #"<script[^>]*>.*?</script>"#, options: [.caseInsensitive, .dotMatchesLineSeparators]) {
+            text = scriptRegex.stringByReplacingMatches(in: text, options: [], range: NSRange(text.startIndex..., in: text), withTemplate: "")
+        }
+        if let styleRegex = try? NSRegularExpression(pattern: #"<style[^>]*>.*?</style>"#, options: [.caseInsensitive, .dotMatchesLineSeparators]) {
+            text = styleRegex.stringByReplacingMatches(in: text, options: [], range: NSRange(text.startIndex..., in: text), withTemplate: "")
+        }
+        
+        // Remove HTML tags
+        text = text.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
+        
+        // Decode HTML entities
+        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
+        text = text.replacingOccurrences(of: "&amp;", with: "&")
+        text = text.replacingOccurrences(of: "&lt;", with: "<")
+        text = text.replacingOccurrences(of: "&gt;", with: ">")
+        text = text.replacingOccurrences(of: "&quot;", with: "\"")
+        text = text.replacingOccurrences(of: "&#39;", with: "'")
+        
+        // Normalize whitespace
+        text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     /// Get HTML body content

@@ -1,0 +1,1146 @@
+{
+  "designSystem": {
+    "name": "Analog CRT Monitor Design System",
+    "version": "1.0.0",
+    "description": "A complete design system inspired by vintage CRT monitors, featuring monochrome glowing displays, pixelated typography, scanlines, and a retro-futuristic terminal aesthetic. This system transforms the entire application into a nostalgic computing experience while maintaining full functionality.",
+    
+    "designPhilosophy": {
+      "corePrinciples": [
+        "CRT Authenticity - Every element should feel like it's displayed on a physical CRT monitor",
+        "Monochrome Glow - Single color schemes (amber, orange, yellow, green) with glowing effects on dark backgrounds",
+        "Visible Pixelation - Embrace low-resolution, blocky, pixelated aesthetics throughout",
+        "Scanline Texture - Horizontal scanlines and visible pixel grids create depth and authenticity",
+        "Terminal Minimalism - Clean, text-heavy interfaces with monospace fonts and command-line aesthetics",
+        "Chunky Geometry - Blocky, thick-bordered UI elements with minimal curves",
+        "Data Visualization - Retro-styled charts, graphs, and progress indicators",
+        "System Feedback - Error states, loading states, and system messages feel like terminal output",
+        "Glowing Typography - Text emits a soft glow, especially in dark areas",
+        "Retro Futurism - Nostalgic computing aesthetic with modern functionality"
+      ],
+      "aesthetic": "Vintage CRT monitor display (circa 1980s-1990s) with monochrome phosphor glow",
+      "mood": "Nostalgic, technical, authentic, retro-futuristic, terminal-like, data-driven",
+      "era": "Early computing era - think TRS-80, Apple II, Commodore 64, early Macintosh terminals"
+    },
+    
+    "colorSystem": {
+      "baseBackground": {
+        "description": "The dark screen background of the CRT monitor",
+        "primary": {
+          "hex": "#0A0A0A",
+          "rgb": [10, 10, 10],
+          "usage": "Main application background, window backgrounds, primary screen surface"
+        },
+        "secondary": {
+          "hex": "#1A1A1A",
+          "rgb": [26, 26, 26],
+          "usage": "Alternating backgrounds, subtle depth variations"
+        },
+        "tertiary": {
+          "hex": "#0F0F0F",
+          "rgb": [15, 15, 15],
+          "usage": "Overlay backgrounds, modal backgrounds"
+        }
+      },
+      "monochromeSchemes": {
+        "amber": {
+          "description": "Classic amber/orange CRT phosphor glow - warm, nostalgic",
+          "primary": {
+            "hex": "#FFB347",
+            "rgb": [255, 179, 71],
+            "usage": "Primary text, main UI elements, active states"
+          },
+          "secondary": {
+            "hex": "#FF8C42",
+            "rgb": [255, 140, 66],
+            "usage": "Secondary text, less prominent elements"
+          },
+          "glow": {
+            "hex": "#FFD700",
+            "rgb": [255, 215, 0],
+            "usage": "Glowing effects, highlights, emphasis"
+          },
+          "dim": {
+            "hex": "#CC8A3A",
+            "rgb": [204, 138, 58],
+            "usage": "Disabled states, inactive elements"
+          }
+        },
+        "orange": {
+          "description": "Bright orange CRT display - energetic, attention-grabbing",
+          "primary": {
+            "hex": "#FF8C42",
+            "rgb": [255, 140, 66],
+            "usage": "Primary actions, important data, alerts"
+          },
+          "secondary": {
+            "hex": "#FF6347",
+            "rgb": [255, 99, 71],
+            "usage": "Secondary actions, warnings"
+          },
+          "glow": {
+            "hex": "#FFA500",
+            "rgb": [255, 165, 0],
+            "usage": "Glowing highlights, active focus"
+          },
+          "dim": {
+            "hex": "#CC7040",
+            "rgb": [204, 112, 64],
+            "usage": "Inactive states"
+          }
+        },
+        "yellow": {
+          "description": "Bright yellow-green CRT phosphor - high contrast, data-focused",
+          "primary": {
+            "hex": "#FFFF00",
+            "rgb": [255, 255, 0],
+            "usage": "Data displays, metrics, numerical information"
+          },
+          "secondary": {
+            "hex": "#CCCC00",
+            "rgb": [204, 204, 0],
+            "usage": "Secondary data, labels"
+          },
+          "glow": {
+            "hex": "#FFFF99",
+            "rgb": [255, 255, 153],
+            "usage": "Glowing effects, highlights"
+          },
+          "dim": {
+            "hex": "#999900",
+            "rgb": [153, 153, 0],
+            "usage": "Disabled, inactive"
+          }
+        },
+        "green": {
+          "description": "Classic green CRT terminal - command-line aesthetic",
+          "primary": {
+            "hex": "#00FF41",
+            "rgb": [0, 255, 65],
+            "usage": "Terminal text, command output, system messages"
+          },
+          "secondary": {
+            "hex": "#00CC33",
+            "rgb": [0, 204, 51],
+            "usage": "Secondary terminal text, prompts"
+          },
+          "glow": {
+            "hex": "#66FF88",
+            "rgb": [102, 255, 136],
+            "usage": "Glowing terminal cursor, active input"
+          },
+          "dim": {
+            "hex": "#009922",
+            "rgb": [0, 153, 34],
+            "usage": "Inactive terminal text"
+          }
+        },
+        "cyan": {
+          "description": "Cyan/blue-green CRT display - technical, data-focused",
+          "primary": {
+            "hex": "#00FFFF",
+            "rgb": [0, 255, 255],
+            "usage": "Technical data, system information, links"
+          },
+          "secondary": {
+            "hex": "#00CCCC",
+            "rgb": [0, 204, 204],
+            "usage": "Secondary technical elements"
+          },
+          "glow": {
+            "hex": "#66FFFF",
+            "rgb": [102, 255, 255],
+            "usage": "Glowing technical highlights"
+          },
+          "dim": {
+            "hex": "#009999",
+            "rgb": [0, 153, 153],
+            "usage": "Inactive technical elements"
+          }
+        }
+      },
+      "semanticColors": {
+        "error": {
+          "hex": "#FF4444",
+          "rgb": [255, 68, 68],
+          "glow": "#FF6666",
+          "usage": "Error messages, system failures, destructive actions",
+          "note": "Display with cassette tape icon or system failure graphics"
+        },
+        "success": {
+          "hex": "#00FF41",
+          "rgb": [0, 255, 65],
+          "glow": "#66FF88",
+          "usage": "Success messages, completion states, positive feedback"
+        },
+        "warning": {
+          "hex": "#FFB347",
+          "rgb": [255, 179, 71],
+          "glow": "#FFD700",
+          "usage": "Warnings, caution states, attention needed"
+        },
+        "info": {
+          "hex": "#00FFFF",
+          "rgb": [0, 255, 255],
+          "glow": "#66FFFF",
+          "usage": "Information messages, system status"
+        }
+      },
+      "usageGuidelines": {
+        "primaryScheme": "Choose one monochrome scheme (amber, orange, yellow, green, or cyan) as the primary color for the entire interface",
+        "accentScheme": "Use a different monochrome scheme for accents, data visualizations, or special states",
+        "background": "Always use dark backgrounds (#0A0A0A to #1A1A1A) to create the CRT screen effect",
+        "contrast": "Ensure high contrast between text/UI elements and background for readability",
+        "glow": "Apply subtle glow effects to all text and interactive elements to simulate phosphor glow"
+      }
+    },
+    
+    "typography": {
+      "philosophy": "Typography should feel pixelated, blocky, and monospaced - like early computer terminals",
+      "fontFamilies": {
+        "primary": {
+          "name": "Monospaced system font (SF Mono, Menlo, Courier New, or similar)",
+          "description": "All body text, labels, and UI elements use monospaced fonts",
+          "fallback": "Courier New, monospace"
+        },
+        "display": {
+          "name": "Blocky, pixelated display font",
+          "description": "Large headings, titles, and prominent text use pixelated/blocky fonts",
+          "fallback": "Monospaced font with letter-spacing adjustments to create blocky effect"
+        },
+        "data": {
+          "name": "Monospaced numeric font",
+          "description": "All numbers, percentages, metrics, and data use monospaced fonts",
+          "fallback": "SF Mono, Menlo, Courier New"
+        }
+      },
+      "fontSizes": {
+        "xxs": { "size": 8, "usage": "Tiny labels, timestamps, fine print" },
+        "xs": { "size": 9, "usage": "Small labels, captions, secondary information" },
+        "sm": { "size": 10, "usage": "Secondary text, track labels, minor UI elements" },
+        "base": { "size": 12, "usage": "Body text, default text size, standard UI elements" },
+        "md": { "size": 14, "usage": "Slightly emphasized text, button labels" },
+        "lg": { "size": 16, "usage": "Subheadings, section titles, important labels" },
+        "xl": { "size": 18, "usage": "Headings, window titles, prominent text" },
+        "xxl": { "size": 24, "usage": "Large headings, display text, major titles" },
+        "display": { "size": 32, "usage": "Hero text, major display elements, system messages" },
+        "jumbo": { "size": 48, "usage": "Extremely large display text, error messages, system failures" }
+      },
+      "fontWeights": {
+        "light": "300 - Rarely used, only for subtle secondary text",
+        "regular": "400 - Default body text, standard UI elements",
+        "medium": "500 - Emphasized text, labels, important information",
+        "semibold": "600 - Headings, section titles, prominent labels",
+        "bold": "700 - Major headings, window titles, critical information",
+        "heavy": "800 - Display text, system messages, error states"
+      },
+      "letterSpacing": {
+        "tight": "-0.5px - For compact displays, data tables",
+        "normal": "0px - Default spacing for body text",
+        "wide": "1px - For headings and display text",
+        "extraWide": "2px - For large display text, creating blocky effect"
+      },
+      "lineHeight": {
+        "tight": 1.1,
+        "normal": 1.3,
+        "relaxed": 1.5,
+        "loose": 1.8
+      },
+      "textEffects": {
+        "glow": {
+          "description": "All text should have a subtle glow effect to simulate CRT phosphor",
+          "implementation": "Text shadow with blur radius 2-4px, color matching text color with opacity 0.6-0.8",
+          "intensity": "Varies by importance - more glow for headings and important text"
+        },
+        "pixelation": {
+          "description": "Text should appear slightly pixelated, especially at larger sizes",
+          "implementation": "Use monospaced fonts, avoid anti-aliasing where possible, use integer pixel sizes"
+        },
+        "scanlineOverlay": {
+          "description": "Text should appear to have scanlines passing over it",
+          "implementation": "Overlay subtle horizontal lines or use scanline texture on text containers"
+        }
+      },
+      "textColors": {
+        "primary": "Primary monochrome color (e.g., amber #FFB347) on dark background",
+        "secondary": "Secondary monochrome color (e.g., amber #FF8C42) for less important text",
+        "dim": "Dim monochrome color (e.g., amber #CC8A3A) for disabled/inactive text",
+        "glow": "Glow color (e.g., amber #FFD700) for emphasis and highlights"
+      }
+    },
+    
+    "visualEffects": {
+      "scanlines": {
+        "description": "Horizontal scanlines that create the CRT monitor effect",
+        "implementation": {
+          "type": "Repeating horizontal lines or gradient overlay",
+          "spacing": "2-4px between lines",
+          "opacity": "0.1-0.2 for subtle effect, 0.3-0.4 for stronger effect",
+          "color": "Black or very dark gray",
+          "blendMode": "Multiply or overlay",
+          "animation": "Optional subtle vertical scrolling animation (very slow, 1-2 seconds per cycle)"
+        },
+        "usage": "Apply to all screen areas, especially text containers and data displays"
+      },
+      "pixelGrid": {
+        "description": "Visible pixel grid pattern that emphasizes the low-resolution aesthetic",
+        "implementation": {
+          "type": "Subtle grid overlay or texture",
+          "spacing": "1-2px grid",
+          "opacity": "0.05-0.1",
+          "color": "Slightly lighter than background",
+          "usage": "Optional, use sparingly on large areas"
+        }
+      },
+      "glow": {
+        "description": "Phosphor glow effect on all text and UI elements",
+        "implementation": {
+          "textGlow": "Text shadow with blur radius 2-6px, color matching text with 0.6-0.9 opacity",
+          "elementGlow": "Box shadow or glow filter on interactive elements",
+          "intensity": "Varies by importance - stronger glow for active/focused elements"
+        },
+        "usage": "Apply to all text, buttons, inputs, and interactive elements"
+      },
+      "screenCurvature": {
+        "description": "Subtle screen curvature effect to simulate CRT monitor",
+        "implementation": {
+          "type": "Optional subtle distortion or gradient overlay",
+          "intensity": "Very subtle, barely noticeable",
+          "usage": "Optional effect for main application background"
+        }
+      },
+      "screenFlicker": {
+        "description": "Optional subtle screen flicker for extreme authenticity",
+        "implementation": {
+          "type": "Very subtle opacity animation",
+          "intensity": "0.98-1.0 opacity variation",
+          "speed": "Random, very slow (5-10 seconds)",
+          "usage": "Optional, use sparingly - can be distracting"
+        }
+      },
+      "vignette": {
+        "description": "Dark edges to simulate CRT monitor bezel and screen edges",
+        "implementation": {
+          "type": "Radial gradient overlay from edges",
+          "opacity": "0.2-0.3 at edges, transparent in center",
+          "radius": "20-30% of screen dimensions",
+          "color": "Pure black"
+        }
+      }
+    },
+    
+    "spacing": {
+      "scale": {
+        "xs": 2,
+        "sm": 4,
+        "md": 8,
+        "lg": 12,
+        "xl": 16,
+        "2xl": 20,
+        "3xl": 24,
+        "4xl": 32,
+        "5xl": 40,
+        "6xl": 48,
+        "7xl": 64
+      },
+      "guidelines": {
+        "chunky": "Use larger spacing than typical - elements should feel blocky and separated",
+        "grid": "Align to 4px or 8px grid for pixel-perfect appearance",
+        "padding": "Generous padding (16-24px) around content areas",
+        "elementSpacing": "12-16px between related elements",
+        "sectionSpacing": "24-32px between major sections",
+        "tight": "Use tight spacing (4-8px) for data displays and terminal output"
+      }
+    },
+    
+    "borders": {
+      "philosophy": "Borders should be thick, blocky, and clearly defined - like early computer interfaces",
+      "width": {
+        "thin": 1,
+        "medium": 2,
+        "thick": 3,
+        "chunky": 4,
+        "description": "Use thick (3px) or chunky (4px) borders for major elements, medium (2px) for standard elements"
+      },
+      "style": {
+        "solid": "Primary border style - all borders are solid",
+        "double": "Optional double border for emphasis (rare)",
+        "description": "Avoid rounded corners - use sharp, blocky corners"
+      },
+      "radius": {
+        "none": 0,
+        "description": "Borders should be sharp and angular - avoid rounded corners to maintain blocky aesthetic"
+      },
+      "color": {
+        "default": "Primary monochrome color (e.g., amber #FFB347) with glow effect",
+        "active": "Glow color (e.g., amber #FFD700) for focused/active borders",
+        "inactive": "Dim monochrome color (e.g., amber #CC8A3A) for disabled borders"
+      },
+      "glow": {
+        "description": "Borders should have a subtle glow effect",
+        "implementation": "Box shadow with blur radius 2-4px, color matching border color with 0.5-0.7 opacity"
+      }
+    },
+    
+    "components": {
+      "window": {
+        "description": "CRT-style windows with blocky borders and monochrome title bars",
+        "structure": {
+          "background": "Dark background (#0A0A0A) with scanline overlay",
+          "border": {
+            "width": "4px",
+            "color": "Primary monochrome color with glow",
+            "style": "Solid, sharp corners",
+            "glow": "Box shadow with blur 4px, opacity 0.6"
+          },
+          "titleBar": {
+            "height": "32-40px",
+            "background": "Slightly lighter dark (#1A1A1A) or primary monochrome color at 20% opacity",
+            "border": "2px bottom border in primary monochrome color",
+            "text": {
+              "color": "Primary monochrome color with glow",
+              "fontSize": "14-16px",
+              "fontWeight": "Bold",
+              "fontFamily": "Monospaced",
+              "letterSpacing": "1px"
+            },
+            "controls": {
+              "style": "Blocky, pixelated symbols",
+              "symbols": "[_], [□], [×] or [O], [□], [X]",
+              "size": "20-24px",
+              "color": "Primary monochrome color",
+              "glow": "Glow effect on hover",
+              "spacing": "8px between controls"
+            }
+          },
+          "content": {
+            "background": "Dark background (#0A0A0A)",
+            "padding": "16-24px",
+            "scanlines": "Apply scanline overlay",
+            "text": "Primary monochrome color with glow"
+          }
+        },
+        "types": {
+          "standard": "Primary monochrome color scheme",
+          "terminal": "Green monochrome scheme for terminal/command windows",
+          "data": "Yellow or cyan monochrome scheme for data visualization windows",
+          "error": "Orange/red monochrome scheme with cassette tape icon for errors"
+        }
+      },
+      
+      "button": {
+        "description": "Blocky, chunky buttons with thick borders and glow effects",
+        "sizes": {
+          "sm": { "padding": "8px 16px", "fontSize": "12px", "height": "32px", "borderWidth": "2px" },
+          "md": { "padding": "12px 24px", "fontSize": "14px", "height": "40px", "borderWidth": "3px" },
+          "lg": { "padding": "16px 32px", "fontSize": "16px", "height": "48px", "borderWidth": "4px" }
+        },
+        "styles": {
+          "primary": {
+            "background": "Dark background (#0A0A0A) or transparent",
+            "border": "Thick border (3-4px) in primary monochrome color with glow",
+            "textColor": "Primary monochrome color with glow",
+            "fontFamily": "Monospaced",
+            "fontWeight": "Bold",
+            "letterSpacing": "1px",
+            "hover": "Increased glow intensity, slightly brighter text",
+            "active": "Inset appearance, reduced glow",
+            "focus": "Thicker border, stronger glow"
+          },
+          "secondary": {
+            "background": "Dark background",
+            "border": "Medium border (2px) in secondary monochrome color",
+            "textColor": "Secondary monochrome color",
+            "hover": "Primary monochrome color, increased glow"
+          },
+          "text": {
+            "background": "Transparent",
+            "border": "None",
+            "textColor": "Primary monochrome color",
+            "hover": "Underline or glow effect",
+            "underline": "2px underline in primary monochrome color"
+          }
+        },
+        "states": {
+          "default": "Normal appearance with standard glow",
+          "hover": "Increased glow intensity (1.2x), slightly brighter",
+          "active": "Reduced glow (0.8x), inset appearance",
+          "disabled": "Dim monochrome color, reduced opacity (0.4), no glow",
+          "focused": "Thicker border, stronger glow, outline effect"
+        },
+        "iconButtons": {
+          "description": "Icon-only buttons with blocky, pixelated icons",
+          "size": "32-40px square",
+          "border": "2-3px border",
+          "icon": "Pixelated, blocky style",
+          "glow": "Glow effect on icon"
+        }
+      },
+      
+      "input": {
+        "description": "Terminal-style text inputs with blocky borders and monospace fonts",
+        "textField": {
+          "background": "Dark background (#0A0A0A)",
+          "border": "3px solid in primary monochrome color with glow",
+          "padding": "12px 16px",
+          "fontSize": "14px",
+          "fontFamily": "Monospaced",
+          "height": "40-44px",
+          "textColor": "Primary monochrome color with glow",
+          "placeholder": {
+            "color": "Dim monochrome color",
+            "style": "Italic, reduced opacity (0.5)"
+          },
+          "cursor": {
+            "style": "Block cursor (█) or thick blinking line",
+            "color": "Primary monochrome color",
+            "blink": "Visible blinking animation",
+            "width": "2-3px"
+          },
+          "focus": {
+            "borderColor": "Glow color",
+            "borderWidth": "4px",
+            "glow": "Stronger glow effect",
+            "scanlines": "Optional scanline overlay"
+          }
+        },
+        "searchBar": {
+          "background": "Dark background",
+          "border": "4px solid in primary monochrome color",
+          "padding": "16px 20px",
+          "icon": {
+            "position": "Left side",
+            "type": "Blocky, pixelated magnifying glass",
+            "size": "18-20px",
+            "color": "Primary monochrome color with glow"
+          },
+          "text": "Monospaced, primary monochrome color",
+          "glow": "Glow effect on border and text"
+        },
+        "terminal": {
+          "description": "Terminal-style input with command prompt",
+          "prompt": {
+            "symbol": "> or $ or #",
+            "color": "Primary monochrome color",
+            "spacing": "4px after prompt"
+          },
+          "background": "Dark background",
+          "font": "Monospaced",
+          "cursor": "Block cursor (█)"
+        }
+      },
+      
+      "dataVisualization": {
+        "description": "Retro-styled charts, graphs, and data displays",
+        "charts": {
+          "barChart": {
+            "style": "Blocky, chunky bars with sharp edges",
+            "spacing": "4-8px between bars",
+            "color": "Primary monochrome color with glow",
+            "border": "1-2px border in darker shade",
+            "background": "Dark background with subtle grid",
+            "grid": {
+              "lines": "Thin (1px) in dim monochrome color",
+              "opacity": "0.2-0.3",
+              "style": "Dashed or dotted"
+            }
+          },
+          "lineGraph": {
+            "style": "Thick lines (3-4px) with blocky data points",
+            "color": "Primary monochrome color with glow",
+            "dataPoints": {
+              "shape": "Square or blocky circle",
+              "size": "6-8px",
+              "glow": "Glow effect on data points"
+            },
+            "background": "Dark with grid overlay",
+            "area": "Optional filled area with 20% opacity"
+          },
+          "progressBar": {
+            "background": "Dark background with border",
+            "fill": {
+              "color": "Primary monochrome color with glow",
+              "style": "Blocky segments or solid fill",
+              "border": "1px border in darker shade",
+              "animation": "Optional pulsing glow effect"
+            },
+            "height": "12-16px",
+            "border": "2px solid in primary monochrome color",
+            "text": {
+              "color": "Primary monochrome color",
+              "font": "Monospaced",
+              "position": "Center or right-aligned"
+            }
+          }
+        },
+        "metrics": {
+          "description": "Numerical data displays",
+          "largeNumbers": {
+            "fontSize": "24-32px",
+            "fontFamily": "Monospaced",
+            "fontWeight": "Bold",
+            "color": "Primary monochrome color with strong glow",
+            "letterSpacing": "2px"
+          },
+          "labels": {
+            "fontSize": "10-12px",
+            "fontFamily": "Monospaced",
+            "color": "Secondary monochrome color",
+            "letterSpacing": "1px",
+            "textTransform": "Uppercase"
+          },
+          "layout": "Grid or list layout with clear separation"
+        }
+      },
+      
+      "list": {
+        "description": "Terminal-style lists with blocky rows",
+        "row": {
+          "background": "Dark background, alternating slightly lighter (#1A1A1A) for odd rows",
+          "padding": "12px 16px",
+          "border": "1px bottom border in dim monochrome color (optional)",
+          "height": "40-48px",
+          "hover": {
+            "background": "Slightly lighter (#1A1A1A)",
+            "border": "2px left border in primary monochrome color with glow",
+            "glow": "Subtle glow on text"
+          },
+          "selected": {
+            "background": "Primary monochrome color at 10% opacity",
+            "border": "3px left border in primary monochrome color with glow",
+            "text": "Brighter monochrome color, stronger glow"
+          }
+        },
+        "text": {
+          "fontFamily": "Monospaced",
+          "fontSize": "12-14px",
+          "color": "Primary monochrome color with glow"
+        },
+        "icon": {
+          "style": "Blocky, pixelated",
+          "size": "16-20px",
+          "color": "Primary monochrome color",
+          "glow": "Glow effect"
+        }
+      },
+      
+      "dialog": {
+        "description": "System-style dialogs with blocky borders and monochrome styling",
+        "structure": {
+          "size": "Medium (400-600px width)",
+          "background": "Dark background (#0A0A0A) with scanline overlay",
+          "border": "4px solid in primary monochrome color with glow",
+          "padding": "24px",
+          "spacing": "20px between elements"
+        },
+        "title": {
+          "fontSize": "18-20px",
+          "fontWeight": "Bold",
+          "fontFamily": "Monospaced",
+          "color": "Primary monochrome color with glow",
+          "letterSpacing": "1px",
+          "marginBottom": "16px"
+        },
+        "content": {
+          "fontSize": "14px",
+          "fontFamily": "Monospaced",
+          "color": "Primary monochrome color",
+          "lineHeight": "1.5"
+        },
+        "icon": {
+          "description": "Large pixelated icon (32-40px) for error/info states",
+          "style": "Blocky, pixelated",
+          "color": "Semantic color (error, success, etc.) with glow",
+          "marginBottom": "12px"
+        },
+        "buttons": {
+          "layout": "Right-aligned, 12px spacing",
+          "style": "Primary button style"
+        },
+        "types": {
+          "error": {
+            "borderColor": "Error color (orange/red)",
+            "icon": "Cassette tape icon or [SYSTEM FAILURE] text",
+            "title": "SYSTEM FAILURE or ERROR",
+            "style": "Bold, uppercase, strong glow"
+          },
+          "info": {
+            "borderColor": "Info color (cyan)",
+            "icon": "Info icon (optional)",
+            "style": "Standard dialog style"
+          },
+          "success": {
+            "borderColor": "Success color (green)",
+            "icon": "Checkmark or success icon",
+            "style": "Standard dialog style"
+          }
+        }
+      },
+      
+      "statusBar": {
+        "description": "Terminal-style status bar at bottom of windows",
+        "background": "Slightly lighter dark (#1A1A1A)",
+        "border": "2px top border in primary monochrome color",
+        "height": "32-40px",
+        "padding": "8px 16px",
+        "text": {
+          "fontSize": "11-12px",
+          "fontFamily": "Monospaced",
+          "color": "Secondary monochrome color",
+          "letterSpacing": "0.5px"
+        },
+        "indicators": {
+          "style": "Blocky, pixelated icons or text",
+          "spacing": "16px between indicators",
+          "glow": "Subtle glow on active indicators"
+        }
+      },
+      
+      "sidebar": {
+        "description": "CRT-style sidebar with blocky navigation",
+        "background": "Dark background (#0A0A0A) with scanline overlay",
+        "border": "2px right border in primary monochrome color",
+        "width": "280-320px",
+        "padding": "16-20px",
+        "sections": {
+          "spacing": "24px between sections",
+          "border": "1px bottom border in dim monochrome color for section dividers"
+        },
+        "navigation": {
+          "item": {
+            "padding": "12px 16px",
+            "fontFamily": "Monospaced",
+            "fontSize": "14px",
+            "color": "Primary monochrome color",
+            "hover": "Background: slightly lighter, border: 2px left border in primary color with glow",
+            "active": "Background: primary color at 15% opacity, stronger glow on text"
+          }
+        }
+      },
+      
+      "terminal": {
+        "description": "Full terminal/command-line interface component",
+        "background": "Dark background (#0A0A0A)",
+        "border": "4px solid in green monochrome color with glow",
+        "font": {
+          "family": "Monospaced",
+          "size": "12-14px",
+          "color": "Green monochrome color with glow",
+          "lineHeight": "1.3"
+        },
+        "prompt": {
+          "symbol": ">",
+          "color": "Green monochrome color",
+          "spacing": "4px"
+        },
+        "cursor": {
+          "style": "Block cursor (█)",
+          "color": "Green monochrome color",
+          "blink": "Visible blinking"
+        },
+        "output": {
+          "color": "Green monochrome color",
+          "glow": "Subtle glow effect"
+        },
+        "input": {
+          "color": "Bright green monochrome color",
+          "glow": "Stronger glow for active input"
+        },
+        "scanlines": "Apply scanline overlay",
+        "scrollbar": {
+          "style": "Blocky, chunky",
+          "color": "Dim green monochrome color"
+        }
+      },
+      
+      "icon": {
+        "description": "Blocky, pixelated icons throughout the interface",
+        "style": {
+          "type": "Pixelated, blocky, low-resolution aesthetic",
+          "edges": "Sharp, angular, no smooth curves",
+          "detail": "Minimal detail, simplified shapes"
+        },
+        "sizes": {
+          "xs": "12px",
+          "sm": "16px",
+          "md": "20-24px",
+          "lg": "32px",
+          "xl": "40-48px"
+        },
+        "colors": {
+          "default": "Primary monochrome color with glow",
+          "secondary": "Secondary monochrome color",
+          "semantic": "Use semantic colors for error, success, etc."
+        },
+        "effects": {
+          "glow": "Glow effect on all icons",
+          "hover": "Increased glow intensity, slightly brighter"
+        }
+      },
+      
+      "loading": {
+        "description": "Retro-style loading indicators",
+        "spinner": {
+          "style": "Blocky, pixelated spinner or progress indicator",
+          "color": "Primary monochrome color with glow",
+          "animation": "Smooth rotation or blocky frame animation",
+          "size": "24-32px"
+        },
+        "progress": {
+          "style": "Blocky progress bar with segments",
+          "color": "Primary monochrome color",
+          "glow": "Glow effect on filled portion",
+          "text": "Monospaced percentage display"
+        },
+        "text": {
+          "content": "LOADING... or [PROCESSING]",
+          "font": "Monospaced, bold",
+          "color": "Primary monochrome color with glow",
+          "animation": "Optional blinking or pulsing glow"
+        }
+      },
+      
+      "error": {
+        "description": "System failure and error displays",
+        "systemFailure": {
+          "background": "Dark background",
+          "border": "4px solid in error color (orange/red) with strong glow",
+          "icon": {
+            "type": "Large pixelated cassette tape icon (48-64px)",
+            "color": "Error color with glow",
+            "position": "Centered top"
+          },
+          "title": {
+            "text": "[SYSTEM FAILURE]",
+            "fontSize": "24-32px",
+            "fontWeight": "Heavy",
+            "fontFamily": "Monospaced",
+            "color": "Error color with strong glow",
+            "letterSpacing": "2px",
+            "textTransform": "Uppercase"
+          },
+          "message": {
+            "fontSize": "14-16px",
+            "fontFamily": "Monospaced",
+            "color": "Error color",
+            "glow": "Glow effect"
+          },
+          "scanlines": "Apply scanline overlay",
+          "style": "Bold, blocky, terminal-like"
+        },
+        "errorMessage": {
+          "background": "Dark background",
+          "border": "3px solid in error color",
+          "text": "Error color with glow",
+          "icon": "Blocky error icon",
+          "style": "Terminal-style error output"
+        }
+      },
+      
+      "notification": {
+        "description": "CRT-style notification popups",
+        "background": "Dark background with scanline overlay",
+        "border": "3px solid in primary monochrome color with glow",
+        "padding": "16px 20px",
+        "text": {
+          "fontFamily": "Monospaced",
+          "fontSize": "13-14px",
+          "color": "Primary monochrome color with glow"
+        },
+        "icon": {
+          "style": "Blocky, pixelated",
+          "size": "20-24px",
+          "color": "Primary monochrome color"
+        },
+        "animation": {
+          "entrance": "Slide in from edge with glow pulse",
+          "exit": "Fade out with glow fade"
+        }
+      },
+      
+      "tooltip": {
+        "description": "Blocky tooltips with glow",
+        "background": "Dark background (#1A1A1A)",
+        "border": "2px solid in primary monochrome color with glow",
+        "padding": "8px 12px",
+        "text": {
+          "fontFamily": "Monospaced",
+          "fontSize": "11-12px",
+          "color": "Primary monochrome color",
+          "glow": "Glow effect"
+        },
+        "arrow": {
+          "style": "Blocky, angular arrow",
+          "color": "Primary monochrome color"
+        }
+      }
+    },
+    
+    "layout": {
+      "philosophy": "Layouts should feel like terminal interfaces or early computer UIs - functional, blocky, grid-based",
+      "grid": {
+        "base": "4px or 8px grid system",
+        "alignment": "Strict alignment to grid for pixel-perfect appearance",
+        "spacing": "Consistent spacing using scale (8px, 12px, 16px, 24px, 32px)"
+      },
+      "structure": {
+        "main": {
+          "background": "Dark background (#0A0A0A) with scanline overlay and optional vignette",
+          "layout": "Flexible - can be sidebar + main content, or full-screen terminal",
+          "padding": "16-24px"
+        },
+        "sidebar": {
+          "width": "280-320px",
+          "position": "Left or right",
+          "border": "2px border in primary monochrome color"
+        },
+        "content": {
+          "padding": "20-24px",
+          "maxWidth": "None or very wide (1200px+)",
+          "background": "Dark background with scanlines"
+        }
+      },
+      "windowManagement": {
+        "overlapping": "Windows can overlap with strong shadows and glow",
+        "zIndex": "Active window on top with stronger glow",
+        "dragging": "Windows are draggable, maintain glow during drag",
+        "resizing": "Windows are resizable with blocky resize handles"
+      }
+    },
+    
+    "interactions": {
+      "hover": {
+        "description": "Hover effects should increase glow and brightness",
+        "effects": {
+          "text": "Increased glow intensity (1.2-1.5x), slightly brighter color",
+          "button": "Increased glow, brighter text, thicker border",
+          "icon": "Increased glow, slightly larger (1.05x)",
+          "link": "Underline with glow or increased text glow"
+        },
+        "duration": "150-200ms transition"
+      },
+      "active": {
+        "description": "Pressed/clicked state",
+        "effects": {
+          "button": "Reduced glow (0.8x), inset appearance, darker background",
+          "icon": "Slight scale down (0.95x), reduced glow"
+        }
+      },
+      "focus": {
+        "description": "Keyboard focus indication with strong glow",
+        "effects": {
+          "input": "Thicker border (4-5px), stronger glow, scanline overlay",
+          "button": "Thicker border, stronger glow, outline effect",
+          "default": "Visible focus ring in primary monochrome color with glow"
+        }
+      },
+      "transitions": {
+        "duration": "150-250ms",
+        "easing": "Ease-in-out or linear",
+        "properties": ["glow", "opacity", "color", "border-width", "transform"]
+      },
+      "animations": {
+        "glow": {
+          "description": "Subtle pulsing glow on active elements",
+          "intensity": "0.8-1.2x glow variation",
+          "speed": "2-3 seconds per cycle",
+          "usage": "Optional, use sparingly on important elements"
+        },
+        "scanlines": {
+          "description": "Optional very slow vertical scrolling scanlines",
+          "speed": "1-2 seconds per cycle",
+          "usage": "Optional, can be distracting"
+        },
+        "cursor": {
+          "description": "Blinking block cursor in inputs",
+          "speed": "500-600ms blink interval",
+          "style": "Block cursor (█) or thick line"
+        }
+      }
+    },
+    
+    "dataDisplay": {
+      "tables": {
+        "description": "Terminal-style data tables",
+        "header": {
+          "background": "Slightly lighter dark (#1A1A1A)",
+          "border": "2px bottom border in primary monochrome color",
+          "text": {
+            "fontFamily": "Monospaced",
+            "fontSize": "12-14px",
+            "fontWeight": "Bold",
+            "color": "Primary monochrome color with glow",
+            "textTransform": "Uppercase",
+            "letterSpacing": "1px"
+          }
+        },
+        "row": {
+          "background": "Dark background, alternating #1A1A1A",
+          "border": "1px bottom border in dim monochrome color",
+          "padding": "12px 16px",
+          "text": {
+            "fontFamily": "Monospaced",
+            "fontSize": "12-13px",
+            "color": "Primary monochrome color"
+          },
+          "hover": {
+            "background": "#1A1A1A",
+            "border": "2px left border in primary monochrome color with glow"
+          }
+        },
+        "cell": {
+          "padding": "8px 12px",
+          "alignment": "Left-aligned text, right-aligned numbers"
+        }
+      },
+      "metrics": {
+        "description": "Large numerical displays",
+        "layout": "Grid or horizontal layout",
+        "value": {
+          "fontSize": "32-48px",
+          "fontFamily": "Monospaced",
+          "fontWeight": "Bold",
+          "color": "Primary monochrome color with strong glow",
+          "letterSpacing": "2-3px"
+        },
+        "label": {
+          "fontSize": "11-12px",
+          "fontFamily": "Monospaced",
+          "color": "Secondary monochrome color",
+          "textTransform": "Uppercase",
+          "letterSpacing": "1px"
+        },
+        "container": {
+          "background": "Dark background",
+          "border": "2px solid in primary monochrome color with glow",
+          "padding": "20px"
+        }
+      }
+    },
+    
+    "accessibility": {
+      "contrast": {
+        "minimum": "WCAG AA compliant - ensure high contrast between monochrome colors and dark background",
+        "textOnBackground": "Primary monochrome color on dark background (#0A0A0A) provides excellent contrast",
+        "focusIndicators": "Strong glow and thick borders provide clear focus indication"
+      },
+      "keyboard": {
+        "navigation": "Full keyboard support - all interactive elements keyboard accessible",
+        "shortcuts": "Standard OS shortcuts plus application-specific shortcuts",
+        "focusManagement": "Logical tab order, visible focus indicators with strong glow"
+      },
+      "screenReaders": {
+        "labels": "All interactive elements have accessible labels",
+        "descriptions": "Complex components have descriptions",
+        "note": "Visual design should not rely solely on color - use icons, borders, and text as well"
+      }
+    },
+    
+    "implementationNotes": {
+      "swiftui": {
+        "colors": "Use Color(hex:) extension or NSColor for custom monochrome colors",
+        "glow": "Use .shadow() modifier with blur radius and matching color for glow effects",
+        "scanlines": "Use overlay with repeating gradient or texture image for scanline effect",
+        "borders": "Use .overlay() with Rectangle and .stroke() for thick, blocky borders",
+        "fonts": "Use .monospaced() modifier or specify monospaced font family",
+        "pixelation": "Use integer pixel sizes, avoid anti-aliasing where possible",
+        "textEffects": "Combine .shadow() for glow with letter spacing for blocky effect"
+      },
+      "consistency": {
+        "colorScheme": "Choose one primary monochrome scheme and use consistently throughout",
+        "spacing": "Use consistent spacing scale (4px, 8px, 12px, 16px, 24px, 32px)",
+        "typography": "Use monospaced fonts throughout, maintain consistent sizes",
+        "glow": "Apply glow effects consistently - all text and interactive elements should glow",
+        "borders": "Use thick, blocky borders consistently - avoid rounded corners",
+        "scanlines": "Apply scanline overlay to all major content areas"
+      },
+      "performance": {
+        "glow": "Glow effects (shadows) can be performance-intensive - use sparingly on large lists",
+        "scanlines": "Scanline overlays should be lightweight - use CSS gradients or simple textures",
+        "animations": "Keep animations subtle and performant",
+        "rendering": "Optimize for smooth interactions despite visual effects"
+      },
+      "authenticity": {
+        "pixelation": "Embrace pixelation - don't try to make everything smooth",
+        "blocky": "Use blocky, chunky elements - avoid smooth curves and rounded corners",
+        "glow": "Glow effects are essential - they create the CRT phosphor effect",
+        "scanlines": "Scanlines add authenticity - apply to all screen areas",
+        "monochrome": "Stick to monochrome color schemes - avoid mixing too many colors",
+        "terminal": "Think terminal/command-line aesthetic - functional, text-heavy, data-driven"
+      }
+    },
+    
+    "examples": {
+      "mainWindow": {
+        "description": "Primary application window with CRT aesthetic",
+        "structure": [
+          "Background: Dark (#0A0A0A) with scanline overlay and optional vignette",
+          "Sidebar: 300px width, dark background, 2px right border in primary monochrome color",
+          "Content: Dark background with scanlines, primary monochrome text with glow",
+          "All text: Monospaced font, primary monochrome color with glow effect",
+          "All borders: Thick (3-4px), blocky, primary monochrome color with glow"
+        ]
+      },
+      "button": {
+        "description": "Primary action button",
+        "structure": [
+          "Background: Dark or transparent",
+          "Border: 3px solid in primary monochrome color with glow (blur 4px, opacity 0.6)",
+          "Text: Monospaced, bold, primary monochrome color with glow",
+          "Padding: 12px 24px",
+          "Height: 40px",
+          "Hover: Increased glow (1.2x), brighter text",
+          "Active: Reduced glow (0.8x), inset appearance"
+        ]
+      },
+      "dataDisplay": {
+        "description": "Metrics display with large numbers",
+        "structure": [
+          "Container: Dark background, 2px border in primary monochrome color with glow",
+          "Value: 32px monospaced, bold, primary monochrome color with strong glow, 2px letter spacing",
+          "Label: 12px monospaced, secondary monochrome color, uppercase, 1px letter spacing",
+          "Scanlines: Overlay on container",
+          "Layout: Grid or horizontal with 24px spacing"
+        ]
+      },
+      "errorDialog": {
+        "description": "System failure error dialog",
+        "structure": [
+          "Background: Dark (#0A0A0A) with scanline overlay",
+          "Border: 4px solid in error color (orange/red) with strong glow",
+          "Icon: Large pixelated cassette tape icon (48px) in error color with glow, centered top",
+          "Title: [SYSTEM FAILURE] in 24px monospaced, heavy weight, error color with strong glow, 2px letter spacing, uppercase",
+          "Message: 14px monospaced, error color with glow",
+          "Buttons: Right-aligned, primary button style",
+          "Padding: 24px"
+        ]
+      },
+      "terminal": {
+        "description": "Terminal/command-line interface",
+        "structure": [
+          "Background: Dark (#0A0A0A)",
+          "Border: 4px solid in green monochrome color with glow",
+          "Font: 12-14px monospaced, green monochrome color with glow",
+          "Prompt: > symbol in green, 4px spacing",
+          "Cursor: Block cursor (█) in green, blinking",
+          "Output: Green monochrome color with subtle glow",
+          "Input: Bright green monochrome color with stronger glow",
+          "Scanlines: Overlay on entire terminal",
+          "Scrollbar: Blocky, chunky, dim green color"
+        ]
+      }
+    },
+    
+    "designPrinciples": {
+      "authenticity": "Every element should feel like it's displayed on a real CRT monitor from the 1980s-1990s",
+      "monochrome": "Stick to single color schemes - don't mix too many colors",
+      "glow": "Glow effects are essential - they create the CRT phosphor aesthetic",
+      "blocky": "Use chunky, blocky elements - avoid smooth curves",
+      "pixelated": "Embrace pixelation and low-resolution aesthetics",
+      "functional": "Maintain full functionality despite the retro aesthetic",
+      "readable": "Ensure text is always readable with high contrast",
+      "consistent": "Apply design principles consistently throughout the application",
+      "nostalgic": "Evoke nostalgia for early computing while remaining modern and functional"
+    }
+  }
+}
+

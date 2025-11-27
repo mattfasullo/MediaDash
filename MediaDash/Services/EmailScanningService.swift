@@ -203,11 +203,21 @@ class EmailScanningService: ObservableObject {
         let parser = patterns.isEmpty ? self.parser : EmailDocketParser(patterns: patterns)
         
         let subject = message.subject ?? ""
-        let body = message.plainTextBody ?? message.htmlBody ?? ""
+        let plainBody = message.plainTextBody ?? ""
+        let htmlBody = message.htmlBody ?? ""
+        let body = !plainBody.isEmpty ? plainBody : htmlBody
         
         print("EmailScanningService: Parsing email:")
         print("  Subject: \(subject)")
-        print("  Body preview: \(body.prefix(200))")
+        print("  Plain body length: \(plainBody.count)")
+        print("  HTML body length: \(htmlBody.count)")
+        print("  Using body: \(!plainBody.isEmpty ? "plain" : (!htmlBody.isEmpty ? "HTML" : "none"))")
+        if !body.isEmpty {
+            print("  Body preview: \(body.prefix(200))")
+        } else {
+            print("  Body: (empty)")
+            print("  Snippet: \(message.snippet ?? "(none)")")
+        }
         
         let parsed = parser.parseEmail(
             subject: message.subject,

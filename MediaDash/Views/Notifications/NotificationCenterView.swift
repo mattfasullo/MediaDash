@@ -531,11 +531,20 @@ struct NotificationCenterView: View {
                     debugMessages.append("     Labels: \(message.labelIds?.joined(separator: ", ") ?? "none")")
                     
                     // Show body preview to check for docket numbers
-                    let bodyPreview = (message.plainTextBody ?? message.htmlBody ?? "").prefix(300)
+                    let plainBody = message.plainTextBody ?? ""
+                    let htmlBody = message.htmlBody ?? ""
+                    let bodyPreview = !plainBody.isEmpty ? plainBody : htmlBody
+                    
                     if !bodyPreview.isEmpty {
-                        debugMessages.append("     Body preview: \(bodyPreview)...")
+                        let preview = String(bodyPreview.prefix(500))
+                        debugMessages.append("     Body preview (\(bodyPreview.count) chars):")
+                        debugMessages.append("     \(preview)")
+                        if bodyPreview.count > 500 {
+                            debugMessages.append("     ... (truncated)")
+                        }
                     } else {
-                        debugMessages.append("     Body: (empty)")
+                        debugMessages.append("     Body: (empty - may need format=full in API request)")
+                        debugMessages.append("     Snippet: \(message.snippet ?? "(none)")")
                     }
                 }
                 debugMessages.append("")

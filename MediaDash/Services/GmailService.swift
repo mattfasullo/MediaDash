@@ -228,7 +228,16 @@ class GmailService: ObservableObject {
         lastError = nil
         defer { isFetching = false }
         
-        let url = URL(string: "\(baseURL)/users/me/messages/\(messageId)")!
+        // Request full format to get body content
+        var components = URLComponents(string: "\(baseURL)/users/me/messages/\(messageId)")!
+        components.queryItems = [
+            URLQueryItem(name: "format", value: "full")
+        ]
+        
+        guard let url = components.url else {
+            throw GmailError.invalidURL
+        }
+        
         var request = URLRequest(url: url)
         let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
         
