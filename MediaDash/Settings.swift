@@ -634,43 +634,6 @@ class SettingsManager: ObservableObject {
         saveCurrentProfile()
     }
     
-    /// Track a recently used docket (adds to front, removes duplicates, caps at 10)
-    func trackRecentDocket(_ docketName: String) {
-        var recents = currentSettings.recentDockets
-        
-        // Remove if already exists (to move it to front)
-        recents.removeAll { $0 == docketName }
-        
-        // Add to front
-        recents.insert(docketName, at: 0)
-        
-        // Cap at 10
-        if recents.count > 10 {
-            recents = Array(recents.prefix(10))
-        }
-        
-        currentSettings.recentDockets = recents
-        saveCurrentProfile()
-    }
-    
-    /// Clear all recent dockets
-    func clearRecentDockets() {
-        currentSettings.recentDockets = []
-        saveCurrentProfile()
-    }
-    
-    /// Toggle recent dockets expanded state
-    func toggleRecentDocketsExpanded() {
-        currentSettings.recentDocketsExpanded.toggle()
-        saveCurrentProfile()
-    }
-    
-    /// Set recent dockets expanded state
-    func setRecentDocketsExpanded(_ expanded: Bool) {
-        currentSettings.recentDocketsExpanded = expanded
-        saveCurrentProfile()
-    }
-    
     private func loadAllProfiles() -> [String: AppSettings] {
         guard let profilesData = userDefaults.data(forKey: profilesKey),
               let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData) else {
