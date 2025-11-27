@@ -54,6 +54,11 @@ struct ContentView: View {
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
     }
+    
+    // Fixed window height
+    private var windowHeight: CGFloat {
+        550
+    }
 
     // Theme-specific text
     private var themeTitleText: String {
@@ -228,12 +233,7 @@ struct ContentView: View {
                 prepDate: prepDate,
                 dateFormatter: dateFormatter,
                 attempt: attempt,
-                cycleTheme: cycleTheme,
-                onRecentDocketSelected: { docketName in
-                    // Open search with the selected docket pre-filled
-                    initialSearchText = docketName
-                    showSearchSheet = true
-                }
+                cycleTheme: cycleTheme
             )
             
             if isStagingAreaVisible {
@@ -245,7 +245,8 @@ struct ContentView: View {
                 .environmentObject(manager)
             }
         }
-        .frame(width: isStagingAreaVisible ? 650 : 300, height: 550)
+        .frame(width: isStagingAreaVisible ? 650 : 300, height: windowHeight)
+        .animation(.easeInOut(duration: 0.2), value: windowHeight)
         .focusable()
         .focused($mainViewFocused)
         .focusEffectDisabled()

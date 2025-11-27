@@ -525,7 +525,6 @@ class MediaManager: ObservableObject {
     private var prepFolderWatcher: DispatchSourceFileSystemObject?
     private var currentPrepFolder: String?
     private var metadataManager: DocketMetadataManager
-    weak var settingsManager: SettingsManager?
     var videoConverter: VideoConverterManager?
     var omfAafValidator: OMFAAFValidatorManager?
     @Published var showOMFAAFValidator: Bool = false
@@ -1118,9 +1117,6 @@ class MediaManager: ObservableObject {
                 if finalFailedFiles.isEmpty {
                     self.statusMessage = "Done!"
                     NSSound(named: "Glass")?.play()
-                    
-                    // Track this docket as recently used
-                    self.settingsManager?.trackRecentDocket(docket)
 
                     // Open prep folder if setting is enabled
                     if let prepFolder = prepFolderToOpen, self.config.settings.openPrepFolderWhenDone {

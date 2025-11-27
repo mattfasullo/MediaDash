@@ -426,9 +426,6 @@ struct AppSettings: Codable, Equatable {
     
     // Browser Preference
     var defaultBrowser: BrowserPreference // Default browser for opening email links
-    
-    // Recent Dockets (max 10, most recent first)
-    var recentDockets: [String]
 
     static var `default`: AppSettings {
         AppSettings(
@@ -489,8 +486,7 @@ struct AppSettings: Codable, Equatable {
             simianWebhookURL: nil,
             simianProjectTemplate: nil,
             notificationWindowLocked: true, // Default to locked (follows main window)
-            defaultBrowser: .chrome, // Default to Chrome
-            recentDockets: [] // Empty by default
+            defaultBrowser: .chrome // Default to Chrome
         )
     }
 }
@@ -660,6 +656,18 @@ class SettingsManager: ObservableObject {
     /// Clear all recent dockets
     func clearRecentDockets() {
         currentSettings.recentDockets = []
+        saveCurrentProfile()
+    }
+    
+    /// Toggle recent dockets expanded state
+    func toggleRecentDocketsExpanded() {
+        currentSettings.recentDocketsExpanded.toggle()
+        saveCurrentProfile()
+    }
+    
+    /// Set recent dockets expanded state
+    func setRecentDocketsExpanded(_ expanded: Bool) {
+        currentSettings.recentDocketsExpanded = expanded
         saveCurrentProfile()
     }
     

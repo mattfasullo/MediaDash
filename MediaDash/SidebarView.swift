@@ -23,7 +23,6 @@ struct SidebarView: View {
     let dateFormatter: DateFormatter
     let attempt: (JobType) -> Void
     let cycleTheme: () -> Void
-    var onRecentDocketSelected: ((String) -> Void)?
     
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
