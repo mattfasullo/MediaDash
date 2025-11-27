@@ -3426,16 +3426,17 @@ struct EmailRefreshButton: View {
                 }
             }
         }) {
-            Image(systemName: isRefreshing ? "arrow.clockwise" : "arrow.clockwise")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.secondary)
-                .frame(width: 24, height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
-                )
-                .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+            ZStack {
+                Circle()
+                    .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
+                    .frame(width: 24, height: 24)
+                
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                    .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+            }
         }
         .buttonStyle(.plain)
         .help("Refresh emails")
