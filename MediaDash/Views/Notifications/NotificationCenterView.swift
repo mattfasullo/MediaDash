@@ -262,6 +262,23 @@ struct NotificationCenterView: View {
             // Footer
             Divider()
             HStack {
+                // Last scan status indicator
+                if let status = lastScanStatus {
+                    HStack(spacing: 4) {
+                        Image(systemName: status.contains("✅") ? "checkmark.circle.fill" : status.contains("⚠️") ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(status.contains("✅") ? .green : status.contains("⚠️") ? .orange : .blue)
+                        Text(status)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(4)
+                }
+                
                 Button("Test Notification") {
                     let testNotification = Notification(
                         type: .newDocket,
@@ -401,7 +418,14 @@ struct NotificationCenterView: View {
         
         debugMessages.append("📋 Settings Check:")
         debugMessages.append("  Gmail Enabled: \(settings.gmailEnabled)")
-        debugMessages.append("  Gmail Query: \(settings.gmailQuery.isEmpty ? "(default)" : settings.gmailQuery)")
+        debugMessages.append("  Gmail Search Terms: \(settings.gmailSearchTerms.isEmpty ? "(none - using default)" : settings.gmailSearchTerms.joined(separator: ", "))")
+        debugMessages.append("  Gmail Query: \(settings.gmailQuery.isEmpty ? "(none)" : settings.gmailQuery)")
+        debugMessages.append("  Custom Parsing Patterns: \(settings.docketParsingPatterns.isEmpty ? "(none - using default)" : "\(settings.docketParsingPatterns.count) pattern(s)")")
+        if !settings.docketParsingPatterns.isEmpty {
+            for (index, pattern) in settings.docketParsingPatterns.enumerated() {
+                debugMessages.append("    \(index + 1). \(pattern)")
+            }
+        }
         debugMessages.append("")
         
         guard settings.gmailEnabled else {
@@ -423,15 +447,31 @@ struct NotificationCenterView: View {
             return
         }
         
-        // Build query
-        let baseQuery = settings.gmailQuery.isEmpty || settings.gmailQuery == "subject:\"New Docket\"" 
-            ? "label:\"New Docket\"" 
-            : settings.gmailQuery
-        let query = "\(baseQuery) is:unread"
+        // Build query (same logic as EmailScanningService)
+        let baseQuery: String
+        if !settings.gmailSearchTerms.isEmpty {
+            // Build OR query for each term
+            let queryParts = settings.gmailSearchTerms.flatMap { term in
+                [
+                    "label:\"\(term)\"",
+                    "subject:\"\(term)\"",
+                    "\"\(term)\""
+                ]
+            }
+            baseQuery = "(\(queryParts.joined(separator: " OR ")))"
+        } else if !settings.gmailQuery.isEmpty {
+            baseQuery = settings.gmailQuery
+        } else {
+            baseQuery = "\"new docket\" OR \"new docket -\" OR \"docket -\""
+        }
         
-        debugMessages.append("🔍 Query:")
-        debugMessages.append("  Base: \(baseQuery)")
-        debugMessages.append("  Full: \(query)")
+        let query = "(\(baseQuery) OR \"new docket\" OR \"new docket -\" OR \"docket -\" OR \"New docket\") is:unread"
+        
+        debugMessages.append("🔍 Query Configuration:")
+        debugMessages.append("  Search Terms: \(settings.gmailSearchTerms.isEmpty ? "(none)" : settings.gmailSearchTerms.joined(separator: ", "))")
+        debugMessages.append("  Custom Query: \(settings.gmailQuery.isEmpty ? "(none)" : settings.gmailQuery)")
+        debugMessages.append("  Base Query: \(baseQuery)")
+        debugMessages.append("  Full Query: \(query)")
         debugMessages.append("")
         
         // Try to fetch emails
@@ -513,6 +553,8 @@ struct NotificationCenterView: View {
             var createdCount = 0
             var skippedCount = 0
             var failedCount = 0
+            var parseFailures: [String] = []
+            var docketExistsCount = 0
             
             for message in unreadMessages {
                 if existingEmailIds.contains(message.id) {
@@ -521,17 +563,56 @@ struct NotificationCenterView: View {
                     continue
                 }
                 
+                // Try to parse the email first to see why it might fail
+                let subject = message.subject ?? ""
+                let body = message.plainTextBody ?? message.htmlBody ?? ""
+                
+                // Use parser with custom patterns if configured
+                let settings = settingsManager.currentSettings
+                let patterns = settings.docketParsingPatterns
+                let parser = patterns.isEmpty ? EmailDocketParser() : EmailDocketParser(patterns: patterns)
+                
+                let parsed = parser.parseEmail(
+                    subject: message.subject,
+                    body: body,
+                    from: message.from
+                )
+                
+                if let parsedDocket = parsed {
+                    // Check if docket already exists
+                    if parsedDocket.docketNumber != "TBD",
+                       mediaManager.dockets.contains("\(parsedDocket.docketNumber)_\(parsedDocket.jobName)") {
+                        docketExistsCount += 1
+                        debugMessages.append("  ⚠️  Email \(message.id): Docket already exists")
+                        debugMessages.append("     Subject: \(subject)")
+                        debugMessages.append("     Docket: \(parsedDocket.docketNumber)_\(parsedDocket.jobName)")
+                        continue
+                    }
+                } else {
+                    parseFailures.append(subject)
+                    debugMessages.append("  ❌ Email \(message.id): Failed to parse")
+                    debugMessages.append("     Subject: \(subject)")
+                    debugMessages.append("     From: \(message.from ?? "(unknown)")")
+                    debugMessages.append("     Body preview: \(body.prefix(100))...")
+                    debugMessages.append("     (No docket pattern matched)")
+                }
+                
                 // Try to process the email
                 let success = await emailScanningService.processEmailAndCreateNotification(message)
                 if success {
                     createdCount += 1
                     debugMessages.append("  ✅ Email \(message.id): Created notification")
-                    debugMessages.append("     Subject: \(message.subject ?? "(no subject)")")
+                    debugMessages.append("     Subject: \(subject)")
+                    if let parsed = parsed {
+                        debugMessages.append("     Docket: \(parsed.docketNumber) - \(parsed.jobName)")
+                    }
                 } else {
                     failedCount += 1
-                    debugMessages.append("  ❌ Email \(message.id): Failed to create notification")
-                    debugMessages.append("     Subject: \(message.subject ?? "(no subject)")")
-                    debugMessages.append("     (May not be a valid docket email or docket already exists)")
+                    if parsed == nil {
+                        debugMessages.append("     (Parse failed - see above)")
+                    } else {
+                        debugMessages.append("     (Processing failed)")
+                    }
                 }
             }
             
@@ -539,10 +620,27 @@ struct NotificationCenterView: View {
             debugMessages.append("📊 Summary:")
             debugMessages.append("  Created: \(createdCount)")
             debugMessages.append("  Skipped: \(skippedCount)")
-            debugMessages.append("  Failed: \(failedCount)")
+            debugMessages.append("  Failed to parse: \(parseFailures.count)")
+            debugMessages.append("  Docket already exists: \(docketExistsCount)")
+            debugMessages.append("  Other failures: \(failedCount)")
             
             let finalCount = notificationCenter.notifications.count
             debugMessages.append("  ✅ Final notification count: \(finalCount)")
+            
+            // Update last scan status
+            await MainActor.run {
+                if createdCount > 0 {
+                    lastScanStatus = "✅ Found \(createdCount) new notification\(createdCount == 1 ? "" : "s")"
+                } else if unreadMessages.isEmpty {
+                    lastScanStatus = "⚠️ No unread emails found"
+                } else if parseFailures.count > 0 {
+                    lastScanStatus = "⚠️ \(parseFailures.count) email\(parseFailures.count == 1 ? "" : "s") couldn't be parsed"
+                } else if docketExistsCount > 0 {
+                    lastScanStatus = "⚠️ \(docketExistsCount) docket\(docketExistsCount == 1 ? "" : "s") already exist"
+                } else {
+                    lastScanStatus = "ℹ️ Scan completed - no new notifications"
+                }
+            }
             
         } catch {
             debugMessages.append("")
