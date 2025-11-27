@@ -7,6 +7,7 @@ struct NotificationCenterView: View {
     @ObservedObject var mediaManager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
     @Binding var isExpanded: Bool
+    @Binding var showSettings: Bool
     
     @State private var processingNotification: UUID?
     @State private var isScanningEmails = false
@@ -77,6 +78,44 @@ struct NotificationCenterView: View {
             
             Divider()
             
+            // Check Gmail connection status
+            let isGmailConnected = emailScanningService.gmailService.isAuthenticated
+            let gmailEnabled = settingsManager.currentSettings.gmailEnabled
+            
+            // Gmail connection warning banner (if Gmail is enabled but not connected)
+            if gmailEnabled && !isGmailConnected {
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.system(size: 14))
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Gmail Not Connected")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("Email notifications are disabled")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Button("Settings") {
+                            showSettings = true
+                            NotificationWindowManager.shared.hideNotificationWindow()
+                            isExpanded = false
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.1))
+                    
+                    Divider()
+                }
+            }
+            
             // Notifications list - filter out completed notifications if docket already exists
             let activeNotifications = notificationCenter.activeNotifications.filter { notification in
                 // If notification is completed, check if docket exists
@@ -101,7 +140,37 @@ struct NotificationCenterView: View {
             }
             let archivedNotifications = notificationCenter.archivedNotifications
             
-            if activeNotifications.isEmpty && archivedNotifications.isEmpty {
+            // Show Gmail connection status if Gmail is enabled but not connected (empty state)
+            if gmailEnabled && !isGmailConnected {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.orange)
+                    
+                    VStack(spacing: 8) {
+                        Text("Gmail Not Connected")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        Text("Connect to Gmail to receive email notifications for new dockets")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                    }
+                    
+                    Button("Open Settings") {
+                        showSettings = true
+                        // Close notification window when opening settings
+                        NotificationWindowManager.shared.hideNotificationWindow()
+                        isExpanded = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else if activeNotifications.isEmpty && archivedNotifications.isEmpty {
                 VStack(spacing: 12) {
                     if isScanningEmails {
                         ProgressView()
@@ -645,6 +714,32 @@ struct NotificationRowView: View {
                     .disabled(true) // Disabled until ready for release
                     .opacity(0.5) // Greyed out
                     
+                    // Project Manager field (only show if Simian Job is enabled)
+                    if notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob == true {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Project Manager")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            
+                            TextField("Project Manager", text: Binding(
+                                get: {
+                                    notificationCenter.notifications.first(where: { $0.id == notificationId })?.projectManager ?? notification.sourceEmail ?? ""
+                                },
+                                set: { newValue in
+                                    if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                                        notificationCenter.updateProjectManager(currentNotification, to: newValue.isEmpty ? nil : newValue)
+                                    }
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 11))
+                            
+                            Text("Defaults to email sender. Edit if needed.")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    
                     HStack(spacing: 8) {
                         Button("Approve") {
                             // Check if docket number is missing
@@ -888,7 +983,15 @@ struct NotificationRowView: View {
                     updateSimianServiceWebhook()
                     
                     do {
-                        try await simianService.createJob(docketNumber: finalDocketNumber, jobName: jobName)
+                        // Get project manager from notification (fallback to sourceEmail)
+                        let projectManager = updatedNotification.projectManager ?? updatedNotification.sourceEmail
+                        
+                        try await simianService.createJob(
+                            docketNumber: finalDocketNumber,
+                            jobName: jobName,
+                            projectManager: projectManager,
+                            projectTemplate: settingsManager.currentSettings.simianProjectTemplate
+                        )
                         print("✅ Simian job creation requested for \(finalDocketNumber): \(jobName)")
                     } catch {
                         // Log error but don't fail the whole approval process

@@ -64,20 +64,33 @@ class EmailScanningService: ObservableObject {
     /// Build Gmail query from search terms (case-insensitive, supports labels and subject)
     private func buildGmailQuery(from searchTerms: [String]) -> String {
         guard !searchTerms.isEmpty else {
-            // Fallback to old gmailQuery if no search terms configured
-            return "label:\"New Docket\""
+            // No search terms - search for "new docket" variations in all emails
+            return "\"new docket\" OR \"new docket -\" OR \"docket -\""
         }
         
-        // Build OR query for each term, trying both label and subject
+        // Build OR query for each term, trying label, subject, AND body
         // Gmail queries are case-insensitive by default, but we'll be explicit
         let queryParts = searchTerms.flatMap { term in
             [
                 "label:\"\(term)\"",
-                "subject:\"\(term)\""
+                "subject:\"\(term)\"",
+                "\"\(term)\""  // This searches in body too
             ]
         }
         
         return "(\(queryParts.joined(separator: " OR ")))"
+    }
+    
+    /// Check if an email is a reply or forward
+    private func isReplyOrForward(_ message: GmailMessage) -> Bool {
+        guard let subject = message.subject else { return false }
+        let trimmedSubject = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Check if subject starts with "Re:" or "Fwd:" (case-insensitive)
+        let lowercased = trimmedSubject.lowercased()
+        return lowercased.hasPrefix("re:") || 
+               lowercased.hasPrefix("fwd:") || 
+               lowercased.hasPrefix("fw:")
     }
     
     /// Perform a manual scan now
@@ -102,18 +115,20 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Build query from search terms (or fallback to old gmailQuery)
+            // Build query from search terms (or fallback to searching for "new docket" in all emails)
             let baseQuery: String
             if !settings.gmailSearchTerms.isEmpty {
                 baseQuery = buildGmailQuery(from: settings.gmailSearchTerms)
             } else if !settings.gmailQuery.isEmpty {
                 baseQuery = settings.gmailQuery
             } else {
-                baseQuery = "label:\"New Docket\""
+                // No specific terms - search for "new docket" variations in all emails
+                baseQuery = "\"new docket\" OR \"new docket -\" OR \"docket -\""
             }
             
             // Only fetch unread emails
-            let query = "\(baseQuery) is:unread"
+            // Search for docket-related content in all unread emails (not just labeled ones)
+            let query = "(\(baseQuery) OR \"new docket\" OR \"new docket -\" OR \"docket -\" OR \"New docket\") is:unread"
             print("EmailScanningService: Scanning with query: \(query)")
             
             // Fetch emails matching query
@@ -133,8 +148,15 @@ class EmailScanningService: ObservableObject {
             
             print("EmailScanningService: Found \(unreadMessages.count) unread emails (out of \(messages.count) total)")
             
+            // Filter out replies and forwards (only process initial emails)
+            let initialEmails = unreadMessages.filter { message in
+                !isReplyOrForward(message)
+            }
+            
+            print("EmailScanningService: \(initialEmails.count) are initial emails (filtered out \(unreadMessages.count - initialEmails.count) replies/forwards)")
+            
             // Filter out already processed emails (unless force rescan)
-            let newMessages = unreadMessages.filter { 
+            let newMessages = initialEmails.filter { 
                 forceRescan || !processedEmailIds.contains($0.id) 
             }
             
@@ -359,18 +381,20 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Build query from search terms (or fallback to old gmailQuery)
+            // Build query from search terms (or fallback to searching for "new docket" in all emails)
             let baseQuery: String
             if !settings.gmailSearchTerms.isEmpty {
                 baseQuery = buildGmailQuery(from: settings.gmailSearchTerms)
             } else if !settings.gmailQuery.isEmpty {
                 baseQuery = settings.gmailQuery
             } else {
-                baseQuery = "label:\"New Docket\""
+                // No specific terms - search for "new docket" variations in all emails
+                baseQuery = "\"new docket\" OR \"new docket -\" OR \"docket -\""
             }
             
             // Only fetch unread emails
-            let query = "\(baseQuery) is:unread"
+            // Search for docket-related content in all unread emails (not just labeled ones)
+            let query = "(\(baseQuery) OR \"new docket\" OR \"new docket -\" OR \"docket -\" OR \"New docket\") is:unread"
             print("EmailScanningService: Scanning unread emails with query: \(query)")
             
             // Fetch unread emails matching query
@@ -397,6 +421,12 @@ class EmailScanningService: ObservableObject {
             }
             print("EmailScanningService: \(unreadMessages.count) emails are actually unread (out of \(messages.count) total)")
             
+            // Filter out replies and forwards (only process initial emails)
+            let initialEmails = unreadMessages.filter { message in
+                !isReplyOrForward(message)
+            }
+            print("EmailScanningService: \(initialEmails.count) are initial emails (filtered out \(unreadMessages.count - initialEmails.count) replies/forwards)")
+            
             // Get existing notification email IDs to avoid duplicates (unless force rescan)
             let existingEmailIds = await MainActor.run {
                 return forceRescan ? Set<String>() : Set(notificationCenter.notifications.compactMap { $0.emailId })
@@ -407,7 +437,7 @@ class EmailScanningService: ObservableObject {
             var createdCount = 0
             var skippedCount = 0
             var failedCount = 0
-            for message in unreadMessages {
+            for message in initialEmails {
                 // Skip if notification already exists for this email (unless force rescan)
                 if !forceRescan && existingEmailIds.contains(message.id) {
                     skippedCount += 1

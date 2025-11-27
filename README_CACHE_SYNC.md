@@ -104,6 +104,68 @@ Add a line to run every hour:
    - Verify Python 3 is installed: `python3 --version`
    - Make sure you have write permissions to the cache path
 
+## Verifying the Sync is Working
+
+### Quick Check
+
+Use the verification script to check if the sync is working:
+
+```bash
+./verify_asana_sync.sh
+```
+
+This will check:
+- ✅ Cache file exists and is readable
+- ✅ JSON structure is valid
+- ✅ Cache statistics (docket count, metadata types, etc.)
+- ✅ Compatibility with MediaDash
+- ✅ Sync script status and recent log entries
+
+### Manual Verification
+
+1. **Check the cache file directly:**
+   ```bash
+   # View cache file info
+   ls -lh "/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache"
+   
+   # View docket count
+   python3 -c "import json; data = json.load(open('/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache')); print(f'Dockets: {len(data[\"dockets\"])}')"
+   ```
+
+2. **Check the sync log:**
+   ```bash
+   tail -f /tmp/mediadash-cache-sync.log
+   ```
+
+3. **Verify MediaDash is using the shared cache:**
+   - Open MediaDash
+   - Open Console.app (Applications > Utilities > Console)
+   - Filter for "MediaDash" or search for "[Cache]"
+   - Look for log messages like:
+     - `🟢 [Cache] Loaded X dockets from SHARED cache` ✅ (using shared cache)
+     - `🟢 [Cache] Loaded X dockets from LOCAL cache` ⚠️ (falling back to local)
+
+4. **Check sync script status:**
+   ```bash
+   ./check_cache_sync.sh
+   ```
+
+### What to Look For
+
+**✅ Signs the sync is working:**
+- Cache file exists and was modified recently (within last few hours)
+- Cache file contains valid JSON with a "dockets" array
+- Docket count matches what you expect from Asana
+- MediaDash console shows "Loaded X dockets from SHARED cache"
+- Sync log shows successful completion messages
+
+**⚠️ Signs there may be issues:**
+- Cache file is very old (days/weeks)
+- Cache file is empty or invalid JSON
+- MediaDash console shows "falling back to local cache"
+- Sync log shows errors or warnings
+- Docket count is 0 or much lower than expected
+
 ## Notes
 
 - The script performs an atomic write (writes to temp file, then moves) to prevent corruption

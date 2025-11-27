@@ -170,7 +170,8 @@ struct ContentView: View {
                             emailScanningService: emailScanningService,
                             mediaManager: manager,
                             settingsManager: settingsManager,
-                            isExpanded: $showNotificationCenter
+                            isExpanded: $showNotificationCenter,
+                            showSettings: $showSettingsSheet
                         )
                     )
                     NotificationWindowManager.shared.showNotificationWindow(content: content, isLocked: isLocked)
@@ -873,10 +874,10 @@ struct DocketSearchView: View {
                                 .font(.title3)
                                 .fontWeight(.medium)
                                 .foregroundColor(.primary)
-                            Text("Server directory is not connected")
+                            Text("Grayson server is not connected")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("Please connect to the server directory in Settings to use search")
+                            Text("Please connect to the Grayson server in Settings to use search")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .multilineTextAlignment(.center)
@@ -2056,10 +2057,10 @@ struct QuickDocketSearchView: View {
                                 .font(.title3)
                                 .fontWeight(.medium)
                                 .foregroundColor(.primary)
-                            Text("Directories are not connected")
+                            Text("Grayson server is not connected")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("Please connect to the server directory to use search")
+                            Text("Please connect to the Grayson server to use search")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .multilineTextAlignment(.center)

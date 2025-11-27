@@ -109,6 +109,14 @@ class NotificationCenter: ObservableObject {
         }
     }
     
+    /// Update notification project manager
+    func updateProjectManager(_ notification: Notification, to projectManager: String?) {
+        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+            notifications[index].projectManager = projectManager
+            saveNotifications()
+        }
+    }
+    
     /// Get pending notifications
     var pendingNotifications: [Notification] {
         notifications.filter { $0.status == .pending }

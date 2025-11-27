@@ -571,26 +571,20 @@ class MediaManager: ObservableObject {
     /// Check if required directories are accessible based on operation type
     func checkDirectoryAccess(for operation: String) -> Bool {
         let fm = FileManager.default
-        var missingPaths: [String] = []
-
-        // Check server base path for work picture and prep operations
-        if operation.contains("Work Picture") || operation.contains("Prep") || operation.contains("Both") {
-            let serverBase = config.settings.serverBasePath
-            if !fm.fileExists(atPath: serverBase) {
-                missingPaths.append("Server: \(serverBase)")
-            }
-        }
-
-        // Check sessions base path for search operations
-        if operation.contains("Search") || operation.contains("Index") {
-            let sessionsBase = config.settings.sessionsBasePath
-            if !fm.fileExists(atPath: sessionsBase) {
-                missingPaths.append("Sessions: \(sessionsBase)")
-            }
-        }
-
-        if !missingPaths.isEmpty {
-            connectionWarning = "Required directories not connected:\n\n" + missingPaths.joined(separator: "\n") + "\n\nPlease connect to these directories and try again."
+        
+        // Check if server is connected (both work picture/prep and sessions are on the same Grayson server)
+        let serverBase = config.settings.serverBasePath
+        let sessionsBase = config.settings.sessionsBasePath
+        let serverConnected = fm.fileExists(atPath: serverBase)
+        let sessionsConnected = fm.fileExists(atPath: sessionsBase)
+        
+        // Determine what operations need what paths
+        let needsServerPath = operation.contains("Work Picture") || operation.contains("Prep") || operation.contains("Both")
+        let needsSessionsPath = operation.contains("Search") || operation.contains("Index")
+        
+        // If either required path is missing, show warning
+        if (needsServerPath && !serverConnected) || (needsSessionsPath && !sessionsConnected) {
+            connectionWarning = "Not connected to Grayson server.\n\nPlease connect to the server and try again."
             showConnectionWarning = true
             return false
         }
@@ -601,20 +595,15 @@ class MediaManager: ObservableObject {
     /// Check general directory access (for startup checks)
     func checkAllDirectoryAccess() {
         let fm = FileManager.default
-        var warnings: [String] = []
 
         let serverBase = config.settings.serverBasePath
-        if !fm.fileExists(atPath: serverBase) {
-            warnings.append("• Server path not connected: \(serverBase)")
-        }
-
         let sessionsBase = config.settings.sessionsBasePath
-        if !fm.fileExists(atPath: sessionsBase) {
-            warnings.append("• Sessions path not connected: \(sessionsBase)")
-        }
+        let serverConnected = fm.fileExists(atPath: serverBase)
+        let sessionsConnected = fm.fileExists(atPath: sessionsBase)
 
-        if !warnings.isEmpty {
-            connectionWarning = "Some directories are not connected:\n\n" + warnings.joined(separator: "\n") + "\n\nSome features may not work until these directories are connected.\n\nYou can update paths in Settings if needed."
+        // Since both paths are on the same Grayson server, report as a single connection issue
+        if !serverConnected || !sessionsConnected {
+            connectionWarning = "Not connected to Grayson server.\n\nSome features may not work until the server is connected.\n\nYou can update paths in Settings if needed."
             showConnectionWarning = true
         }
     }

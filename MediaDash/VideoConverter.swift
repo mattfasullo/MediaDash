@@ -224,7 +224,15 @@ class VideoConverterManager: ObservableObject {
         // Find FFmpeg executable
         guard let ffmpegPath = findFFmpegPath() else {
             job.status = .failed
-            job.error = "FFmpeg not found. Please install FFmpeg using Homebrew: brew install ffmpeg"
+            // Check if Homebrew is installed
+            let hasHomebrew = FileManager.default.fileExists(atPath: "/opt/homebrew/bin/brew") || 
+                             FileManager.default.fileExists(atPath: "/usr/local/bin/brew")
+            
+            if hasHomebrew {
+                job.error = "FFmpeg not found. Install with: brew install ffmpeg"
+            } else {
+                job.error = "FFmpeg not found. Install Homebrew first (brew.sh), then run: brew install ffmpeg"
+            }
             jobs[index] = job
             return
         }
@@ -668,10 +676,27 @@ struct JobRowView: View {
                     }
 
                     if let error = job.error {
-                        Text(error)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .lineLimit(2)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .lineLimit(3)
+                            
+                            // Add install button if it's an FFmpeg error
+                            if error.contains("FFmpeg not found") {
+                                Button(action: {
+                                    installFFmpeg()
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "arrow.down.circle.fill")
+                                        Text("Install FFmpeg")
+                                    }
+                                    .font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
                     }
                 }
 
@@ -747,6 +772,36 @@ struct JobRowView: View {
             return .green
         case .failed:
             return .red
+        }
+    }
+    
+    private func installFFmpeg() {
+        // Check if Homebrew is installed
+        let brewPath = FileManager.default.fileExists(atPath: "/opt/homebrew/bin/brew") ? 
+                      "/opt/homebrew/bin/brew" : 
+                      "/usr/local/bin/brew"
+        
+        if FileManager.default.fileExists(atPath: brewPath) {
+            // Open Terminal and run the install command
+            let script = """
+            tell application "Terminal"
+                activate
+                do script "\(brewPath) install ffmpeg"
+            end tell
+            """
+            
+            if let appleScript = NSAppleScript(source: script) {
+                var error: NSDictionary?
+                appleScript.executeAndReturnError(&error)
+                if let error = error {
+                    print("Failed to open Terminal: \(error)")
+                    // Fallback: open Homebrew website
+                    NSWorkspace.shared.open(URL(string: "https://brew.sh")!)
+                }
+            }
+        } else {
+            // Open Homebrew website if not installed
+            NSWorkspace.shared.open(URL(string: "https://brew.sh")!)
         }
     }
 }

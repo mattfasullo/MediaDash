@@ -419,6 +419,7 @@ struct AppSettings: Codable, Equatable {
     // Simian Integration (via Zapier webhook)
     var simianEnabled: Bool
     var simianWebhookURL: String? // Zapier webhook URL for creating Simian projects (get from Zapier Zap settings)
+    var simianProjectTemplate: String? // Project template name/ID for Simian projects (always the same for all jobs)
     
     // Notification Window Settings
     var notificationWindowLocked: Bool // Whether notification window follows main window
@@ -483,6 +484,7 @@ struct AppSettings: Codable, Equatable {
             docketParsingPatterns: [],
             simianEnabled: false,
             simianWebhookURL: nil,
+            simianProjectTemplate: nil,
             notificationWindowLocked: true, // Default to locked (follows main window)
             defaultBrowser: .chrome // Default to Chrome
         )

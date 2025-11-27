@@ -40,11 +40,13 @@ class SimianService: ObservableObject {
     /// - Parameters:
     ///   - docketNumber: The docket number
     ///   - jobName: The job name
+    ///   - projectManager: The project manager (optional)
+    ///   - projectTemplate: The project template (optional)
     /// - Returns: Success status
     /// 
     /// Sends a POST request to the configured Zapier webhook URL.
     /// The webhook should trigger a Zap that creates a project in Simian.
-    func createJob(docketNumber: String, jobName: String) async throws {
+    func createJob(docketNumber: String, jobName: String, projectManager: String? = nil, projectTemplate: String? = nil) async throws {
         guard let webhookURLString = webhookURL, !webhookURLString.isEmpty,
               let url = URL(string: webhookURLString) else {
             throw SimianError.notConfigured
@@ -62,11 +64,19 @@ class SimianService: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         // Zapier webhook expects JSON payload
-        // Format: { "docket_number": "...", "job_name": "..." }
-        let body: [String: Any] = [
+        // Format: { "docket_number": "...", "job_name": "...", "project_manager": "...", "project_template": "..." }
+        var body: [String: Any] = [
             "docket_number": docketNumber,
             "job_name": jobName
         ]
+        
+        // Add optional fields if provided
+        if let projectManager = projectManager {
+            body["project_manager"] = projectManager
+        }
+        if let projectTemplate = projectTemplate {
+            body["project_template"] = projectTemplate
+        }
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)

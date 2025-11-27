@@ -50,7 +50,18 @@ struct EmailDocketParser {
     /// - Returns: ParsedDocket if successful, nil otherwise
     func parseEmail(subject: String?, body: String?, from: String?) -> ParsedDocket? {
         let subjectText = subject ?? ""
-        let bodyText = body ?? ""
+        var bodyText = body ?? ""
+        
+        // Clean up HTML/table formatting that might interfere with parsing
+        // Remove HTML table tags but preserve cell content
+        bodyText = bodyText.replacingOccurrences(of: #"<td[^>]*>"#, with: " | ", options: .regularExpression)
+        bodyText = bodyText.replacingOccurrences(of: #"</td>"#, with: "", options: .regularExpression)
+        bodyText = bodyText.replacingOccurrences(of: #"<tr[^>]*>"#, with: "\n", options: .regularExpression)
+        bodyText = bodyText.replacingOccurrences(of: #"</tr>"#, with: "", options: .regularExpression)
+        bodyText = bodyText.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression) // Remove remaining HTML tags
+        bodyText = bodyText.replacingOccurrences(of: #"&nbsp;"#, with: " ", options: .regularExpression)
+        bodyText = bodyText.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression) // Normalize whitespace
+        
         let combinedText = "\(subjectText)\n\(bodyText)"
         
         // First, try to extract docket number from body (like "25484-US")
@@ -190,9 +201,22 @@ struct EmailDocketParser {
             )
         }
         
-        // Final fallback: If subject contains "NEW DOCKET" or "New Docket", search for docket numbers anywhere
-        // This handles cases where emails are labeled "NEW DOCKET" and we need to find numbers in subject or body
-        if subjectText.uppercased().contains("NEW DOCKET") || subjectText.uppercased().contains("DOCKET") {
+        // Final fallback: Search for docket numbers anywhere, even without "new docket" text
+        // This handles cases where producers just write the docket info in the body without mentioning "new docket"
+        // Also check if body contains "new docket" (case-insensitive)
+        let hasNewDocketText = subjectText.uppercased().contains("NEW DOCKET") || 
+                               subjectText.uppercased().contains("DOCKET") ||
+                               bodyText.uppercased().contains("NEW DOCKET") ||
+                               bodyText.uppercased().contains("NEW DOCKET -") ||
+                               bodyText.lowercased().contains("new docket") ||
+                               bodyText.lowercased().contains("new docket -")
+        
+        // Be more aggressive: if we find a 5+ digit number that looks like a docket (starts with 25xxx or 26xxx),
+        // treat it as a potential docket even without "new docket" text
+        let hasPotentialDocketNumber = bodyText.range(of: #"\b(25|26)\d{3,}\b"#, options: .regularExpression) != nil ||
+                                      subjectText.range(of: #"\b(25|26)\d{3,}\b"#, options: .regularExpression) != nil
+        
+        if hasNewDocketText || hasPotentialDocketNumber {
             // Search for docket numbers (5+ digits, optionally with country code) anywhere in subject or body
             // Also match 4+ digit numbers at word boundaries (some dockets might be 4 digits)
             let docketPattern = #"\b(\d{4,}(?:-[A-Z]{2})?)\b"#
@@ -234,23 +258,46 @@ struct EmailDocketParser {
             }
             
             // SECOND: If still not found, search all matches in body
+            // Also check for table-like formats (pipe-separated or tab-separated)
             if foundDocketNumber == nil {
-                if let regex = try? NSRegularExpression(pattern: docketPattern, options: []) {
-                    let matches = regex.matches(in: bodyText, range: NSRange(bodyText.startIndex..., in: bodyText))
+                // First, try to find docket numbers in table-like formats
+                // Look for patterns like "25461 | Tims Soccer | Gut" or "25461\tTims Soccer"
+                let tablePattern = #"(\d{5,})\s*[|\t]\s*([^|\t\n]+?)(?:\s*[|\t]|$|\n)"#
+                if let regex = try? NSRegularExpression(pattern: tablePattern, options: []),
+                   let match = regex.firstMatch(in: bodyText, range: NSRange(bodyText.startIndex..., in: bodyText)),
+                   match.numberOfRanges >= 3 {
+                    let docketRange = Range(match.range(at: 1), in: bodyText)!
+                    let jobRange = Range(match.range(at: 2), in: bodyText)!
+                    let docketNum = String(bodyText[docketRange])
+                    let extractedJobName = String(bodyText[jobRange]).trimmingCharacters(in: .whitespacesAndNewlines)
                     
-                    // Prefer 5+ digit numbers, but accept 4+ digit numbers
-                    for match in matches {
-                        guard match.numberOfRanges >= 2 else { continue }
-                        let docketRange = Range(match.range(at: 1), in: bodyText)!
-                        let candidate = String(bodyText[docketRange])
+                    if !extractedJobName.isEmpty && extractedJobName.count > 2 && extractedJobName.count < 100 {
+                        foundDocketNumber = docketNum
+                        if jobName == nil {
+                            jobName = extractedJobName
+                        }
+                    }
+                }
+                
+                // If not found in table format, search all matches in body
+                if foundDocketNumber == nil {
+                    if let regex = try? NSRegularExpression(pattern: docketPattern, options: []) {
+                        let matches = regex.matches(in: bodyText, range: NSRange(bodyText.startIndex..., in: bodyText))
                         
-                        // Prefer 5+ digit numbers
-                        if candidate.count >= 5 {
-                            foundDocketNumber = candidate
-                            break
-                        } else if foundDocketNumber == nil {
-                            // Accept 4 digit numbers as fallback
-                            foundDocketNumber = candidate
+                        // Prefer 5+ digit numbers, but accept 4+ digit numbers
+                        for match in matches {
+                            guard match.numberOfRanges >= 2 else { continue }
+                            let docketRange = Range(match.range(at: 1), in: bodyText)!
+                            let candidate = String(bodyText[docketRange])
+                            
+                            // Prefer 5+ digit numbers
+                            if candidate.count >= 5 {
+                                foundDocketNumber = candidate
+                                break
+                            } else if foundDocketNumber == nil {
+                                // Accept 4 digit numbers as fallback
+                                foundDocketNumber = candidate
+                            }
                         }
                     }
                 }

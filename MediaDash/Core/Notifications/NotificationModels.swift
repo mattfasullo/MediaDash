@@ -31,6 +31,7 @@ struct Notification: Identifiable, Codable, Equatable {
     var jobName: String?
     var emailId: String?
     var sourceEmail: String?
+    var projectManager: String? // Project manager for Simian (defaults to sourceEmail, editable per notification)
     
     // Action flags (mutable for toggling)
     var shouldCreateWorkPicture: Bool = true // Default to true
@@ -47,7 +48,8 @@ struct Notification: Identifiable, Codable, Equatable {
         docketNumber: String? = nil,
         jobName: String? = nil,
         emailId: String? = nil,
-        sourceEmail: String? = nil
+        sourceEmail: String? = nil,
+        projectManager: String? = nil
     ) {
         self.id = id
         self.type = type
@@ -60,6 +62,8 @@ struct Notification: Identifiable, Codable, Equatable {
         self.jobName = jobName
         self.emailId = emailId
         self.sourceEmail = sourceEmail
+        // Default projectManager to sourceEmail if not provided
+        self.projectManager = projectManager ?? sourceEmail
     }
     
     // Equatable conformance

@@ -53,6 +53,33 @@ struct HoverableIconButton: View {
     }
 }
 
+// MARK: - Expandable Settings Header
+
+struct ExpandableSettingsHeader: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    
+    var body: some View {
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isExpanded.toggle()
+            }
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
     @Binding var isPresented: Bool
@@ -65,7 +92,6 @@ struct SettingsView: View {
     @StateObject private var oauthService = OAuthService()
     @State private var isConnecting = false
     @State private var connectionError: String?
-    @State private var showAdvancedSettings = false
     @State private var showManualCodeEntry = false
     @State private var manualAuthCode = ""
     @State private var manualAuthURL: URL?
@@ -246,40 +272,13 @@ struct SettingsView: View {
                         hasUnsavedChanges: $hasUnsavedChanges
                     )
 
-                    // Advanced Settings Toggle
-                    SettingsCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Image(systemName: "gearshape.2")
-                                    .foregroundColor(.secondary)
-                                    .font(.system(size: 16))
-                                Text("Advanced Settings")
-                                    .font(.system(size: 16, weight: .medium))
-                                Spacer()
-                                Toggle("", isOn: $showAdvancedSettings)
-                                    .labelsHidden()
-                            }
-                            Text("Show technical and customization options")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
-                    if showAdvancedSettings {
-                        // Folder Naming
-                        FolderNamingSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
-
-                        // File Categories
-                        FileCategoriesSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
-
                         // CSV Column Mapping (only shown when CSV is selected)
                         if settings.docketSource == .csv {
                             CSVColumnMappingSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
                         }
 
-                        // Advanced Settings
-                        AdvancedSettingsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges, settingsManager: settingsManager)
-                    }
+                    // General Options (Search, Workflow, etc.)
+                    GeneralOptionsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
@@ -439,6 +438,7 @@ struct PathSettingsSection: View {
     @State private var importMessage = ""
     @State private var csvStatus = ""
     @State private var csvExists = false
+    @State private var showAdvancedSettings = false
 
     var body: some View {
         SettingsCard {
@@ -621,12 +621,173 @@ struct PathSettingsSection: View {
                     }
                     }
                 }
+                
+                // Advanced Settings Disclosure
+                Divider()
+                    .padding(.vertical, 8)
+                
+                ExpandableSettingsHeader(title: "Folder & File Organization", isExpanded: $showAdvancedSettings)
+                
+                if showAdvancedSettings {
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Work Picture Folder
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Work Picture Folder")
+                                .font(.system(size: 14, weight: .medium))
+                            Text("The main folder name for work pictures (usually \"WORK PICTURE\")")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            HStack(spacing: 8) {
+                                TextField("WORK PICTURE", text: binding(for: \.workPictureFolderName))
+                                    .textFieldStyle(.roundedBorder)
+                                Button(action: { browseForFolderName(\.workPictureFolderName, basePath: settings.serverBasePath) }) {
+                                    Image(systemName: "folder")
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(.bordered)
+                                .help("Browse to select folder")
+                            }
+                        }
+                        
+                        // Prep Folder
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Prep Folder")
+                                .font(.system(size: 14, weight: .medium))
+                            Text("The main folder name for session prep (usually \"SESSION PREP\")")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            HStack(spacing: 8) {
+                                TextField("SESSION PREP", text: binding(for: \.prepFolderName))
+                                    .textFieldStyle(.roundedBorder)
+                                Button(action: { browseForFolderName(\.prepFolderName, basePath: settings.serverBasePath) }) {
+                                    Image(systemName: "folder")
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(.bordered)
+                                .help("Browse to select folder")
+                            }
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        // Year Prefix
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Year Folder Prefix")
+                                .font(.system(size: 14, weight: .medium))
+                            Text("Prefix added to year folders (like \"GM_2025\")")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            HStack(spacing: 8) {
+                                TextField("GM_", text: binding(for: \.yearPrefix))
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 100)
+                                Text("→ Creates folders like: \(settings.yearPrefix)\(Calendar.current.component(.year, from: Date()))")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        
+                        // Date Format
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Date Format")
+                                .font(.system(size: 14, weight: .medium))
+                            Text("How dates appear in folder names")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            HStack(spacing: 8) {
+                                TextField("MMMd.yy", text: binding(for: \.dateFormat))
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 120)
+                                Text("→ Today would be: \(exampleDate)")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        // File Categories
+                        Text("File Organization")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("MediaDash automatically sorts files into folders based on their type")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        
+                        VStack(alignment: .leading, spacing: 12) {
+                            InlineCategoryRow(
+                                icon: "photo",
+                                title: "Video Files",
+                                folderName: binding(for: \.pictureFolderName),
+                                extensions: bindingArray(for: \.pictureExtensions),
+                                description: "Files like .mp4, .mov, .avi",
+                                hasUnsavedChanges: $hasUnsavedChanges
+                            )
+                            
+                            InlineCategoryRow(
+                                icon: "music.note",
+                                title: "Audio Files",
+                                folderName: binding(for: \.musicFolderName),
+                                extensions: bindingArray(for: \.musicExtensions),
+                                description: "Files like .wav, .mp3, .aiff",
+                                hasUnsavedChanges: $hasUnsavedChanges
+                            )
+                            
+                            InlineCategoryRow(
+                                icon: "doc",
+                                title: "Project Files",
+                                folderName: binding(for: \.aafOmfFolderName),
+                                extensions: bindingArray(for: \.aafOmfExtensions),
+                                description: "ProTools files like .aaf, .omf",
+                                hasUnsavedChanges: $hasUnsavedChanges
+                            )
+                            
+                            Divider()
+                                .padding(.vertical, 4)
+                            
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Everything Else")
+                                    .font(.system(size: 14, weight: .medium))
+                                Text("Files that don't match any category go here")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                                HStack(spacing: 8) {
+                                    Image(systemName: "folder")
+                                        .foregroundColor(.gray)
+                                        .frame(width: 20)
+                                    TextField("OTHER", text: binding(for: \.otherFolderName))
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: 150)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.leading, 16)
+                    .padding(.top, 8)
+                }
                 }
             }
         }
         .onAppear {
             checkCSVStatus()
         }
+    }
+    
+    private var exampleDate: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = settings.dateFormat
+        return formatter.string(from: Date())
+    }
+    
+    private func bindingArray(for keyPath: WritableKeyPath<AppSettings, [String]>) -> Binding<String> {
+        Binding(
+            get: { settings[keyPath: keyPath].joined(separator: ", ") },
+            set: {
+                settings[keyPath: keyPath] = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                hasUnsavedChanges = true
+            }
+        )
     }
 
     private func binding(for keyPath: WritableKeyPath<AppSettings, String>) -> Binding<String> {
@@ -771,6 +932,7 @@ struct AsanaIntegrationSection: View {
     @State private var manualAuthURL: URL?
     @State private var manualAuthState = ""
     @State private var showCacheDetails = false
+    @State private var showAdvancedSettings = false
     
     private func connectToAsana() {
         guard OAuthConfig.isAsanaConfigured else {
@@ -946,6 +1108,121 @@ struct AsanaIntegrationSection: View {
                             .font(.system(size: 11))
                             .foregroundColor(.orange)
                     }
+                    
+                    // Advanced Settings Disclosure
+                    Divider()
+                        .padding(.vertical, 8)
+                    
+                    ExpandableSettingsHeader(title: "Advanced Options", isExpanded: $showAdvancedSettings)
+                    
+                    if showAdvancedSettings {
+                        VStack(alignment: .leading, spacing: 12) {
+                            // Workspace ID
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Workspace ID (optional)")
+                                    .font(.system(size: 13))
+                                TextField("Leave empty to search all workspaces", text: Binding(
+                                    get: { settings.asanaWorkspaceID ?? "" },
+                                    set: {
+                                        settings.asanaWorkspaceID = $0.isEmpty ? nil : $0
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                            }
+                            
+                            // Project ID
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Project ID (optional)")
+                                    .font(.system(size: 13))
+                                TextField("Leave empty to search all projects", text: Binding(
+                                    get: { settings.asanaProjectID ?? "" },
+                                    set: {
+                                        settings.asanaProjectID = $0.isEmpty ? nil : $0
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                            }
+                            
+                            Divider()
+                                .padding(.vertical, 4)
+                            
+                            // Custom Fields
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Custom Fields (optional)")
+                                    .font(.system(size: 13))
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Docket Field Name")
+                                            .font(.system(size: 11))
+                                        TextField("e.g., Docket Number", text: Binding(
+                                            get: { settings.asanaDocketField ?? "" },
+                                            set: {
+                                                settings.asanaDocketField = $0.isEmpty ? nil : $0
+                                                hasUnsavedChanges = true
+                                            }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                    }
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Job Name Field Name")
+                                            .font(.system(size: 11))
+                                        TextField("e.g., Job Name", text: Binding(
+                                            get: { settings.asanaJobNameField ?? "" },
+                                            set: {
+                                                settings.asanaJobNameField = $0.isEmpty ? nil : $0
+                                                hasUnsavedChanges = true
+                                            }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                    }
+                                }
+                                Text("If not specified, will parse from task names (e.g., '12345_Job Name')")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Divider()
+                                .padding(.vertical, 4)
+                            
+                            // Shared Cache
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Shared Cache (Optional)")
+                                    .font(.system(size: 13))
+                                
+                                Toggle("Use Shared Cache", isOn: Binding(
+                                    get: { settings.useSharedCache },
+                                    set: {
+                                        settings.useSharedCache = $0
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .font(.system(size: 12))
+                                
+                                if settings.useSharedCache {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Shared Cache URL")
+                                            .font(.system(size: 11))
+                                        TextField("file:///Volumes/Server/cache.json or /path/to/cache.json", text: Binding(
+                                            get: { settings.sharedCacheURL ?? "" },
+                                            set: {
+                                                settings.sharedCacheURL = $0.isEmpty ? nil : $0
+                                                hasUnsavedChanges = true
+                                            }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                        Text("Enter a file path (e.g., /Volumes/Server/MediaDash/cache.json) or HTTP URL. MediaDash will read from this shared cache file instead of syncing with Asana directly. Falls back to local sync if unavailable.")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.leading, 20)
+                                }
+                            }
+                        }
+                        .padding(.leading, 16)
+                        .padding(.top, 8)
+                    }
                 }
             }
         }
@@ -1008,6 +1285,7 @@ struct GmailIntegrationSection: View {
     @State private var connectedEmail: String?
     @State private var isLoadingEmail = false
     @State private var hasAuthenticated = false
+    @State private var showAdvancedSettings = false
     
     private func connectToGmail() {
         guard OAuthConfig.isGmailConfigured else {
@@ -1325,6 +1603,84 @@ struct GmailIntegrationSection: View {
                                 .font(.system(size: 11))
                                 .foregroundColor(.orange)
                         }
+                        
+                        // Advanced Settings Disclosure
+                        Divider()
+                            .padding(.vertical, 8)
+                        
+                        ExpandableSettingsHeader(title: "Advanced Options", isExpanded: $showAdvancedSettings)
+                        
+                        if showAdvancedSettings {
+                            VStack(alignment: .leading, spacing: 12) {
+                                // Search Terms
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Search Terms / Labels")
+                                        .font(.system(size: 13))
+                                    
+                                    Text("Add terms or labels to search for in email subjects, labels, and body text (case-insensitive)")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                    
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        ForEach(settings.gmailSearchTerms.indices, id: \.self) { index in
+                                            HStack(spacing: 8) {
+                                                TextField("Search term", text: Binding(
+                                                    get: { settings.gmailSearchTerms[index] },
+                                                    set: {
+                                                        settings.gmailSearchTerms[index] = $0
+                                                        hasUnsavedChanges = true
+                                                    }
+                                                ))
+                                                .textFieldStyle(.roundedBorder)
+                                                
+                                                Button(action: {
+                                                    settings.gmailSearchTerms.remove(at: index)
+                                                    hasUnsavedChanges = true
+                                                }) {
+                                                    Image(systemName: "minus.circle.fill")
+                                                        .foregroundColor(.red)
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
+                                        
+                                        Button(action: {
+                                            settings.gmailSearchTerms.append("")
+                                            hasUnsavedChanges = true
+                                        }) {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "plus.circle.fill")
+                                                Text("Add Search Term")
+                                            }
+                                            .font(.system(size: 12))
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                                
+                                // Polling Interval
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Scan Interval (seconds)")
+                                        .font(.system(size: 13))
+                                    
+                                    TextField("300", value: Binding(
+                                        get: { settings.gmailPollInterval },
+                                        set: {
+                                            settings.gmailPollInterval = max(60, $0)
+                                            hasUnsavedChanges = true
+                                        }
+                                    ), format: .number)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 120)
+                                    
+                                    Text("How often to check for new emails (minimum: 60 seconds)")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.leading, 16)
+                            .padding(.top, 8)
+                        }
                     }
                 }
             }
@@ -1409,6 +1765,7 @@ struct SimianIntegrationSection: View {
     @State private var isTesting = false
     @State private var testResult: String?
     @State private var testError: String?
+    @State private var showAdvancedSettings = false
     
     private func testWebhook() {
         guard simianService.isConfigured else {
@@ -1423,7 +1780,12 @@ struct SimianIntegrationSection: View {
         
         Task {
             do {
-                try await simianService.createJob(docketNumber: "TEST", jobName: "Test Job")
+                try await simianService.createJob(
+                    docketNumber: "TEST",
+                    jobName: "Test Job",
+                    projectManager: nil, // Test doesn't need a specific project manager
+                    projectTemplate: settings.simianProjectTemplate
+                )
                 
                 await MainActor.run {
                     testResult = "Webhook test successful! Check your Zapier Zap to confirm it received the test."
@@ -1515,6 +1877,56 @@ struct SimianIntegrationSection: View {
                                 .font(.system(size: 11))
                                 .foregroundColor(.green)
                                 .textSelection(.enabled)
+                        }
+                        
+                        // Advanced Settings Disclosure
+                        Divider()
+                            .padding(.vertical, 8)
+                        
+                        ExpandableSettingsHeader(title: "Advanced Options", isExpanded: $showAdvancedSettings)
+                        
+                        if showAdvancedSettings {
+                            VStack(alignment: .leading, spacing: 12) {
+                                // Webhook URL
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Zapier Webhook URL")
+                                        .font(.system(size: 13))
+                                    
+                                    TextField("https://hooks.zapier.com/hooks/catch/...", text: Binding(
+                                        get: { settings.simianWebhookURL ?? "" },
+                                        set: {
+                                            settings.simianWebhookURL = $0.isEmpty ? nil : $0
+                                            hasUnsavedChanges = true
+                                        }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    
+                                    Text("Get this URL from your Zapier Zap: Webhook by Zapier (Catch Hook) → Simian (Create Project)")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
+                                
+                                // Project Template
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Project Template")
+                                        .font(.system(size: 13))
+                                    
+                                    TextField("Enter project template name or ID", text: Binding(
+                                        get: { settings.simianProjectTemplate ?? "" },
+                                        set: {
+                                            settings.simianProjectTemplate = $0.isEmpty ? nil : $0
+                                            hasUnsavedChanges = true
+                                        }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    
+                                    Text("The project template to use when creating Simian projects")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.leading, 16)
+                            .padding(.top, 8)
                         }
                     }
                 }
@@ -1730,238 +2142,10 @@ struct CacheVisualizationView: View {
     }
 }
 
-// MARK: - Folder Naming Section
 
-struct FolderNamingSection: View {
-    @Binding var settings: AppSettings
-    @Binding var hasUnsavedChanges: Bool
+// MARK: - File Category Row
 
-    var body: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    Image(systemName: "folder.badge.gear")
-                        .foregroundColor(.blue)
-                        .font(.system(size: 18))
-                    Text("Folder Organization")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-
-                Text("Customize how folders are named and organized")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-
-                VStack(alignment: .leading, spacing: 16) {
-                // Work Picture Folder
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Work Picture Folder")
-                        .font(.system(size: 14, weight: .medium))
-                    Text("The main folder name for work pictures (usually \"WORK PICTURE\")")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                    HStack(spacing: 8) {
-                        TextField("WORK PICTURE", text: binding(for: \.workPictureFolderName))
-                            .textFieldStyle(.roundedBorder)
-                        Button(action: { browseForFolderName(\.workPictureFolderName, basePath: settings.serverBasePath) }) {
-                            Image(systemName: "folder")
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.bordered)
-                        .help("Browse to select folder")
-                    }
-                }
-
-                // Prep Folder
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Prep Folder")
-                        .font(.system(size: 14, weight: .medium))
-                    Text("The main folder name for session prep (usually \"SESSION PREP\")")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                    HStack(spacing: 8) {
-                        TextField("SESSION PREP", text: binding(for: \.prepFolderName))
-                            .textFieldStyle(.roundedBorder)
-                        Button(action: { browseForFolderName(\.prepFolderName, basePath: settings.serverBasePath) }) {
-                            Image(systemName: "folder")
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.bordered)
-                        .help("Browse to select folder")
-                    }
-                }
-
-                Divider()
-                    .padding(.vertical, 4)
-
-                // Year Prefix
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Year Folder Prefix")
-                        .font(.system(size: 14, weight: .medium))
-                    Text("Prefix added to year folders (like \"GM_2025\")")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                    HStack(spacing: 8) {
-                        TextField("GM_", text: binding(for: \.yearPrefix))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 100)
-                        Text("→ Creates folders like: \(settings.yearPrefix)\(Calendar.current.component(.year, from: Date()))")
-                            .font(.system(size: 12))
-                            .foregroundColor(.blue)
-                    }
-                }
-
-                // Date Format
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Date Format")
-                        .font(.system(size: 14, weight: .medium))
-                    Text("How dates appear in folder names")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                    HStack(spacing: 8) {
-                        TextField("MMMd.yy", text: binding(for: \.dateFormat))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 120)
-                        Text("→ Today would be: \(exampleDate)")
-                            .font(.system(size: 12))
-                            .foregroundColor(.blue)
-                    }
-                }
-            }
-        }
-        }
-    }
-    
-    private var exampleDate: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = settings.dateFormat
-        return formatter.string(from: Date())
-    }
-
-    private func binding(for keyPath: WritableKeyPath<AppSettings, String>) -> Binding<String> {
-        Binding(
-            get: { settings[keyPath: keyPath] },
-            set: {
-                settings[keyPath: keyPath] = $0
-                hasUnsavedChanges = true
-            }
-        )
-    }
-    
-    private func browseForFolderName(_ keyPath: WritableKeyPath<AppSettings, String>, basePath: String) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Select folder to get its name"
-        
-        // Set initial directory to the base path if it exists
-        if FileManager.default.fileExists(atPath: basePath) {
-            panel.directoryURL = URL(fileURLWithPath: basePath)
-        }
-
-        if panel.runModal() == .OK, let url = panel.url {
-            // Extract just the folder name from the selected path
-            let folderName = url.lastPathComponent
-            settings[keyPath: keyPath] = folderName
-            hasUnsavedChanges = true
-        }
-    }
-}
-
-// MARK: - File Categories Section
-
-struct FileCategoriesSection: View {
-    @Binding var settings: AppSettings
-    @Binding var hasUnsavedChanges: Bool
-
-    var body: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    Image(systemName: "doc.on.doc")
-                        .foregroundColor(.blue)
-                        .font(.system(size: 18))
-                    Text("File Organization")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-
-                Text("MediaDash automatically sorts files into folders based on their type")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-
-                VStack(alignment: .leading, spacing: 12) {
-                    CategoryRow(
-                        icon: "photo",
-                        title: "Video Files",
-                        folderName: binding(for: \.pictureFolderName),
-                        extensions: bindingArray(for: \.pictureExtensions),
-                        description: "Files like .mp4, .mov, .avi",
-                        hasUnsavedChanges: $hasUnsavedChanges
-                    )
-
-                    CategoryRow(
-                        icon: "music.note",
-                        title: "Audio Files",
-                        folderName: binding(for: \.musicFolderName),
-                        extensions: bindingArray(for: \.musicExtensions),
-                        description: "Files like .wav, .mp3, .aiff",
-                        hasUnsavedChanges: $hasUnsavedChanges
-                    )
-
-                    CategoryRow(
-                        icon: "doc",
-                        title: "Project Files",
-                        folderName: binding(for: \.aafOmfFolderName),
-                        extensions: bindingArray(for: \.aafOmfExtensions),
-                        description: "ProTools files like .aaf, .omf",
-                        hasUnsavedChanges: $hasUnsavedChanges
-                    )
-
-                    Divider()
-                        .padding(.vertical, 4)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Everything Else")
-                            .font(.system(size: 14, weight: .medium))
-                        Text("Files that don't match any category go here")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                        HStack(spacing: 8) {
-                            Image(systemName: "folder")
-                                .foregroundColor(.gray)
-                                .frame(width: 20)
-                            TextField("OTHER", text: binding(for: \.otherFolderName))
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 150)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func binding(for keyPath: WritableKeyPath<AppSettings, String>) -> Binding<String> {
-        Binding(
-            get: { settings[keyPath: keyPath] },
-            set: {
-                settings[keyPath: keyPath] = $0
-                hasUnsavedChanges = true
-            }
-        )
-    }
-
-    private func bindingArray(for keyPath: WritableKeyPath<AppSettings, [String]>) -> Binding<String> {
-        Binding(
-            get: { settings[keyPath: keyPath].joined(separator: ", ") },
-            set: {
-                settings[keyPath: keyPath] = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                hasUnsavedChanges = true
-            }
-        )
-    }
-}
-
-struct CategoryRow: View {
+struct InlineCategoryRow: View {
     let icon: String
     let title: String
     @Binding var folderName: String
@@ -1970,69 +2154,93 @@ struct CategoryRow: View {
     @Binding var hasUnsavedChanges: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: icon)
                     .foregroundColor(.blue)
                     .frame(width: 20)
-                    .font(.system(size: 16))
+                    .font(.system(size: 14))
                 Text(title)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
             }
 
             Text(description)
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundColor(.secondary)
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Folder Name:")
-                        .font(.system(size: 12))
+            HStack(spacing: 16) {
+                HStack(spacing: 6) {
+                    Text("Folder:")
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                        .frame(width: 100, alignment: .leading)
                     TextField("PICTURE", text: $folderName)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 150)
+                        .frame(width: 100)
                 }
 
-                HStack {
-                    Text("File Types:")
-                        .font(.system(size: 12))
+                HStack(spacing: 6) {
+                    Text("Types:")
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                        .frame(width: 100, alignment: .leading)
                     TextField("mp4, mov, avi", text: $extensions)
                         .textFieldStyle(.roundedBorder)
                 }
             }
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(8)
+        .padding(10)
+        .background(Color.gray.opacity(0.06))
+        .cornerRadius(6)
     }
 }
 
-// MARK: - Advanced Settings Section
+// MARK: - General Options Section
 
-struct AdvancedSettingsSection: View {
+struct GeneralOptionsSection: View {
     @Binding var settings: AppSettings
     @Binding var hasUnsavedChanges: Bool
-    @ObservedObject var settingsManager: SettingsManager
+    @State private var showAdvancedSettings = false
 
     var body: some View {
         SettingsCard {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Image(systemName: "slider.horizontal.3")
                         .foregroundColor(.blue)
                         .font(.system(size: 18))
-                    Text("Advanced Options")
+                    Text("General Options")
                         .font(.system(size: 18, weight: .semibold))
                 }
 
-                Text("Fine-tune how MediaDash creates folders and searches")
+                Text("Search, workflow, and date preferences")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
 
+                VStack(alignment: .leading, spacing: 12) {
+                    // Workflow Options
+                    Toggle(isOn: Binding(
+                        get: { settings.openPrepFolderWhenDone },
+                        set: {
+                            settings.openPrepFolderWhenDone = $0
+                            hasUnsavedChanges = true
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Open Prep Folder When Done")
+                                .font(.system(size: 13))
+                            Text("Automatically opens the prep folder in Finder after prep completes")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    
+                    // Advanced Settings Disclosure
+                    Divider()
+                        .padding(.vertical, 4)
+                    
+                    ExpandableSettingsHeader(title: "Advanced Options", isExpanded: $showAdvancedSettings)
+                    
+                    if showAdvancedSettings {
                 VStack(alignment: .leading, spacing: 16) {
                     // Folder Templates
                     VStack(alignment: .leading, spacing: 8) {
@@ -2228,259 +2436,14 @@ struct AdvancedSettingsSection: View {
                         }
                         .toggleStyle(.switch)
                     }
-
-                    Divider()
-                        .padding(.vertical, 4)
-
-                    // Workflow Options
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Workflow")
-                            .font(.system(size: 14, weight: .medium))
-
-                        Toggle(isOn: Binding(
-                            get: { settings.openPrepFolderWhenDone },
-                            set: {
-                                settings.openPrepFolderWhenDone = $0
-                                hasUnsavedChanges = true
-                            }
-                        )) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Open Prep Folder When Done")
-                                    .font(.system(size: 13))
-                                Text("Automatically opens the prep folder in Finder after prep completes")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
                         }
-                        .toggleStyle(.switch)
+                        .padding(.leading, 16)
+                        .padding(.top, 8)
                     }
-
-                    // Gmail Advanced Settings
-                    if settings.gmailEnabled {
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Gmail Integration")
-                                .font(.system(size: 14, weight: .medium))
-                            
-                            // Search Terms
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Search Terms / Labels")
-                                    .font(.system(size: 13))
-                                
-                                Text("Add terms or labels to search for in email subjects and labels (case-insensitive)")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                                
-                                VStack(alignment: .leading, spacing: 6) {
-                                    ForEach(settings.gmailSearchTerms.indices, id: \.self) { index in
-                                        HStack(spacing: 8) {
-                                            TextField("Search term", text: Binding(
-                                                get: { settings.gmailSearchTerms[index] },
-                                                set: {
-                                                    settings.gmailSearchTerms[index] = $0
-                                                    hasUnsavedChanges = true
-                                                }
-                                            ))
-                                            .textFieldStyle(.roundedBorder)
-                                            
-                                            Button(action: {
-                                                settings.gmailSearchTerms.remove(at: index)
-                                                hasUnsavedChanges = true
-                                            }) {
-                                                Image(systemName: "minus.circle.fill")
-                                                    .foregroundColor(.red)
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                    }
-                                    
-                                    Button(action: {
-                                        settings.gmailSearchTerms.append("")
-                                        hasUnsavedChanges = true
-                                    }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "plus.circle.fill")
-                                            Text("Add Search Term")
-                                        }
-                                        .font(.system(size: 12))
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                            }
-                            
-                            // Polling Interval
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Scan Interval (seconds)")
-                                    .font(.system(size: 13))
-                                
-                                TextField("300", value: Binding(
-                                    get: { settings.gmailPollInterval },
-                                    set: {
-                                        settings.gmailPollInterval = max(60, $0)
-                                        hasUnsavedChanges = true
-                                    }
-                                ), format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 120)
-                                
-                                Text("How often to check for new emails (minimum: 60 seconds)")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-                    
-                    // Asana Advanced Settings
-                    if settings.docketSource == .asana {
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Asana Integration")
-                                .font(.system(size: 14, weight: .medium))
-                            
-                            // Workspace ID
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Workspace ID (optional)")
-                                    .font(.system(size: 13))
-                                TextField("Leave empty to search all workspaces", text: Binding(
-                                    get: { settings.asanaWorkspaceID ?? "" },
-                                    set: {
-                                        settings.asanaWorkspaceID = $0.isEmpty ? nil : $0
-                                        hasUnsavedChanges = true
-                                    }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                            }
-                            
-                            // Project ID
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Project ID (optional)")
-                                    .font(.system(size: 13))
-                                TextField("Leave empty to search all projects", text: Binding(
-                                    get: { settings.asanaProjectID ?? "" },
-                                    set: {
-                                        settings.asanaProjectID = $0.isEmpty ? nil : $0
-                                        hasUnsavedChanges = true
-                                    }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                            }
-                            
-                            Divider()
-                                .padding(.vertical, 4)
-                            
-                            // Custom Fields
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Custom Fields (optional)")
-                                    .font(.system(size: 13))
-                                HStack(spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text("Docket Field Name")
-                                            .font(.system(size: 11))
-                                        TextField("e.g., Docket Number", text: Binding(
-                                            get: { settings.asanaDocketField ?? "" },
-                                            set: {
-                                                settings.asanaDocketField = $0.isEmpty ? nil : $0
-                                                hasUnsavedChanges = true
-                                            }
-                                        ))
-                                        .textFieldStyle(.roundedBorder)
-                                    }
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text("Job Name Field Name")
-                                            .font(.system(size: 11))
-                                        TextField("e.g., Job Name", text: Binding(
-                                            get: { settings.asanaJobNameField ?? "" },
-                                            set: {
-                                                settings.asanaJobNameField = $0.isEmpty ? nil : $0
-                                                hasUnsavedChanges = true
-                                            }
-                                        ))
-                                        .textFieldStyle(.roundedBorder)
-                                    }
-                                }
-                                Text("If not specified, will parse from task names (e.g., '12345_Job Name')")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            Divider()
-                                .padding(.vertical, 4)
-                            
-                            // Shared Cache
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Shared Cache (Optional)")
-                                    .font(.system(size: 13))
-                                
-                                Toggle("Use Shared Cache", isOn: Binding(
-                                    get: { settings.useSharedCache },
-                                    set: {
-                                        settings.useSharedCache = $0
-                                        hasUnsavedChanges = true
-                                    }
-                                ))
-                                .font(.system(size: 12))
-                                
-                                if settings.useSharedCache {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text("Shared Cache URL")
-                                            .font(.system(size: 11))
-                                        TextField("file:///Volumes/Server/cache.json or /path/to/cache.json", text: Binding(
-                                            get: { settings.sharedCacheURL ?? "" },
-                                            set: {
-                                                settings.sharedCacheURL = $0.isEmpty ? nil : $0
-                                                hasUnsavedChanges = true
-                                            }
-                                        ))
-                                        .textFieldStyle(.roundedBorder)
-                                        Text("Enter a file path (e.g., /Volumes/Server/MediaDash/cache.json) or HTTP URL. MediaDash will read from this shared cache file instead of syncing with Asana directly. Falls back to local sync if unavailable.")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .padding(.leading, 20)
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Simian Advanced Settings
-                    if settings.simianEnabled {
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Simian Integration")
-                                .font(.system(size: 14, weight: .medium))
-                            
-                            // Webhook URL
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Zapier Webhook URL")
-                                    .font(.system(size: 13))
-                                
-                                TextField("https://hooks.zapier.com/hooks/catch/...", text: Binding(
-                                    get: { settings.simianWebhookURL ?? "" },
-                                    set: {
-                                        settings.simianWebhookURL = $0.isEmpty ? nil : $0
-                                        hasUnsavedChanges = true
-                                    }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                                
-                                Text("Get this URL from your Zapier Zap: Webhook by Zapier (Catch Hook) → Simian (Create Project)")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-
                 }
             }
         }
     }
-
 
     private func binding(for keyPath: WritableKeyPath<AppSettings, String>) -> Binding<String> {
         Binding(
