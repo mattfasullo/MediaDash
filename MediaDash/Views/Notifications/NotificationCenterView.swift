@@ -15,9 +15,16 @@ struct NotificationCenterView: View {
     @State private var debugInfo: String?
     @State private var showDebugInfo = false
     @State private var isArchivedExpanded = false
+    @State private var isFileDeliveriesExpanded = true // Default to expanded (keeping for archived section)
+    @State private var selectedTab: NotificationTab = .newDockets // Tab selection
     @State private var cacheInfo: String?
     @State private var showCacheInfo = false
     @State private var isLoadingCache = false // Keep for fallback if file write fails
+    
+    enum NotificationTab {
+        case newDockets
+        case fileDeliveries
+    }
     
     var body: some View {
         let _ = {
@@ -161,6 +168,19 @@ struct NotificationCenterView: View {
             let activeNotifications = allActiveNotifications.filter { $0.type != .mediaFiles }
             let archivedNotifications = notificationCenter.archivedNotifications
             
+            // Auto-select tab if current selection is empty (using onChange would be better but this works for now)
+            let _ = {
+                if selectedTab == .newDockets && activeNotifications.isEmpty && !mediaFileNotifications.isEmpty {
+                    DispatchQueue.main.async {
+                        selectedTab = .fileDeliveries
+                    }
+                } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && !activeNotifications.isEmpty {
+                    DispatchQueue.main.async {
+                        selectedTab = .newDockets
+                    }
+                }
+            }()
+            
             // Show Gmail connection status if Gmail is enabled but not connected (empty state)
             if gmailEnabled && !isGmailConnected {
                 VStack(spacing: 16) {
@@ -217,24 +237,101 @@ struct NotificationCenterView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding()
             } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // Media File Notifications Section
-                        if !mediaFileNotifications.isEmpty {
-                            VStack(alignment: .leading, spacing: 0) {
-                                HStack {
-                                    Image(systemName: "link.circle.fill")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.blue)
-                                    Text("File Deliveries (\(mediaFileNotifications.count))")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(.primary)
-                                    Spacer()
+                VStack(spacing: 0) {
+                    // Tabs for notification types
+                    if !mediaFileNotifications.isEmpty || !activeNotifications.isEmpty {
+                        HStack(spacing: 0) {
+                            // New Dockets tab
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    selectedTab = .newDockets
                                 }
-                                .padding(.horizontal)
-                                .padding(.vertical, 8)
-                                .background(Color.blue.opacity(0.05))
-                                
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "doc.text.fill")
+                                        .font(.system(size: 11))
+                                    Text("New Dockets")
+                                        .font(.system(size: 12, weight: .medium))
+                                    if !activeNotifications.isEmpty {
+                                        Text("(\(activeNotifications.count))")
+                                            .font(.system(size: 11))
+                                            .opacity(0.7)
+                                    }
+                                }
+                                .foregroundColor(selectedTab == .newDockets ? .blue : .secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(
+                                    selectedTab == .newDockets
+                                        ? Color.blue.opacity(0.1)
+                                        : Color.clear
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Divider()
+                                .frame(height: 20)
+                            
+                            // File Deliveries tab
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    selectedTab = .fileDeliveries
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "link.circle.fill")
+                                        .font(.system(size: 11))
+                                    Text("File Deliveries")
+                                        .font(.system(size: 12, weight: .medium))
+                                    if !mediaFileNotifications.isEmpty {
+                                        Text("(\(mediaFileNotifications.count))")
+                                            .font(.system(size: 11))
+                                            .opacity(0.7)
+                                    }
+                                }
+                                .foregroundColor(selectedTab == .fileDeliveries ? .orange : .secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(
+                                    selectedTab == .fileDeliveries
+                                        ? Color.orange.opacity(0.1)
+                                        : Color.clear
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .background(Color(nsColor: .separatorColor).opacity(0.3))
+                        .overlay(
+                            Rectangle()
+                                .frame(height: 1)
+                                .foregroundColor(Color(nsColor: .separatorColor)),
+                            alignment: .bottom
+                        )
+                        
+                        Divider()
+                    }
+                    
+                    // Content for selected tab
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            if selectedTab == .newDockets && !activeNotifications.isEmpty {
+                                ForEach(activeNotifications) { notification in
+                                    NotificationRowView(
+                                        notificationId: notification.id,
+                                        notificationCenter: notificationCenter,
+                                        emailScanningService: emailScanningService,
+                                        mediaManager: mediaManager,
+                                        settingsManager: settingsManager,
+                                        processingNotification: $processingNotification,
+                                        debugInfo: $debugInfo,
+                                        showDebugInfo: $showDebugInfo
+                                    )
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 8)
+                                    
+                                    Divider()
+                                }
+                            } else if selectedTab == .fileDeliveries && !mediaFileNotifications.isEmpty {
                                 ForEach(mediaFileNotifications) { notification in
                                     NotificationRowView(
                                         notificationId: notification.id,
@@ -251,31 +348,18 @@ struct NotificationCenterView: View {
                                     
                                     Divider()
                                 }
-                            }
-                            
-                            if !activeNotifications.isEmpty {
-                                Divider()
-                                    .padding(.vertical, 4)
-                            }
-                        }
-                        
-                        // Regular Docket Notifications Section
-                        if !activeNotifications.isEmpty {
-                            ForEach(activeNotifications) { notification in
-                                NotificationRowView(
-                                    notificationId: notification.id,
-                                    notificationCenter: notificationCenter,
-                                    emailScanningService: emailScanningService,
-                                    mediaManager: mediaManager,
-                                    settingsManager: settingsManager,
-                                    processingNotification: $processingNotification,
-                                    debugInfo: $debugInfo,
-                                    showDebugInfo: $showDebugInfo
-                                )
-                                .padding(.horizontal)
-                                .padding(.vertical, 8)
-                                
-                                Divider()
+                            } else {
+                                // Empty state for selected tab
+                                VStack(spacing: 12) {
+                                    Image(systemName: selectedTab == .newDockets ? "doc.text" : "link.circle")
+                                        .font(.system(size: 40))
+                                        .foregroundColor(.secondary)
+                                    Text("No \(selectedTab == .newDockets ? "new docket" : "file delivery") notifications")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 40)
                             }
                         }
                         
@@ -527,19 +611,35 @@ struct NotificationCenterView: View {
             // Clean up old archived notifications
             notificationCenter.cleanupOldArchivedNotifications()
             
-            // Auto-fetch unread emails when notification window opens (don't force rescan on appear)
-            Task {
-                isScanningEmails = true
-                lastScanStatus = nil
-                await emailScanningService.scanUnreadEmails(forceRescan: false)
-                isScanningEmails = false
-                
-                // Update status message
-                let activeCount = notificationCenter.activeNotifications.count
-                if activeCount == 0 {
-                    lastScanStatus = "No unread docket emails found"
+            // Only auto-scan if last scan was more than 30 seconds ago (debounce to avoid slowdown)
+            let timeSinceLastScan = emailScanningService.lastScanTime.map { Date().timeIntervalSince($0) } ?? Double.infinity
+            let scanThreshold: TimeInterval = 30 // 30 seconds
+            let shouldAutoScan = timeSinceLastScan > scanThreshold
+            
+            if shouldAutoScan {
+                // Auto-fetch unread emails when notification window opens (don't force rescan on appear)
+                Task {
+                    isScanningEmails = true
+                    lastScanStatus = nil
+                    await emailScanningService.scanUnreadEmails(forceRescan: false)
+                    isScanningEmails = false
+                    
+                    // Update status message
+                    let activeCount = notificationCenter.activeNotifications.count
+                    if activeCount == 0 {
+                        lastScanStatus = "No unread docket emails found"
+                    } else {
+                        lastScanStatus = "Found \(activeCount) notification\(activeCount == 1 ? "" : "s")"
+                    }
+                }
+            } else {
+                // Show cached results - scan was recent, no need to rescan
+                let timeAgo = Int(timeSinceLastScan)
+                if timeAgo < 60 {
+                    lastScanStatus = "Last scan: \(timeAgo)s ago"
                 } else {
-                    lastScanStatus = "Found \(activeCount) notification\(activeCount == 1 ? "" : "s")"
+                    let minutesAgo = timeAgo / 60
+                    lastScanStatus = "Last scan: \(minutesAgo)m ago"
                 }
             }
         }
@@ -881,6 +981,10 @@ struct NotificationRowView: View {
     @State private var isEmailPreviewExpanded = false
     @State private var showJobNameEditDialog = false
     @State private var selectedTextFromEmail: String? = nil
+    @State private var isGrabbedBadgeHovered = false
+    @State private var showGrabbedConfirmation = false
+    @State private var pendingEmailIdForReply: String?
+    @State private var isSendingReply = false
     
     // Get current notification from center (always up-to-date)
     private var notification: Notification? {
@@ -937,24 +1041,38 @@ struct NotificationRowView: View {
                         .background(Color.red.opacity(0.1))
                         .cornerRadius(4)
                     } else if notification.isGrabbed {
-                        HStack(spacing: 4) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.green)
-                            if let grabbedBy = notification.grabbedBy {
-                                Text("Grabbed by \(extractProducerName(from: grabbedBy))")
-                                    .font(.system(size: 9))
+                        Button(action: {
+                            notificationCenter.archive(notification)
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 10))
                                     .foregroundColor(.green)
+                                if let grabbedBy = notification.grabbedBy {
+                                    Text("Grabbed by \(extractProducerName(from: grabbedBy))")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.green)
+                                } else {
+                                    Text("Grabbed")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundColor(.green)
+                                }
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(isGrabbedBadgeHovered ? Color.green.opacity(0.2) : Color.green.opacity(0.1))
+                            .cornerRadius(4)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Click to archive notification")
+                        .onHover { hovering in
+                            isGrabbedBadgeHovered = hovering
+                            if hovering {
+                                NSCursor.pointingHand.push()
                             } else {
-                                Text("Grabbed")
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundColor(.green)
+                                NSCursor.pop()
                             }
                         }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.1))
-                        .cornerRadius(4)
                     }
                 }
                 
@@ -1091,49 +1209,157 @@ struct NotificationRowView: View {
             }
         } else if notification.type == .mediaFiles {
             // Media file notification content
+            // Extract links from email body if not already stored (for older notifications)
+            let extractedLinks: [String] = {
+                if let existingLinks = notification.fileLinks, !existingLinks.isEmpty {
+                    print("NotificationCenterView: Using stored fileLinks: \(existingLinks)")
+                    return existingLinks
+                }
+                // Try to extract from email body if available
+                if let emailBody = notification.emailBody {
+                    print("NotificationCenterView: Extracting links from email body (length: \(emailBody.count))")
+                    print("NotificationCenterView: Email body preview: \(emailBody.prefix(500))")
+                    let extracted = FileHostingLinkDetector.extractFileHostingLinks(emailBody)
+                    print("NotificationCenterView: Extracted \(extracted.count) links: \(extracted)")
+                    return extracted
+                }
+                print("NotificationCenterView: No email body available for link extraction")
+                return []
+            }()
+            
             VStack(alignment: .leading, spacing: 8) {
                 Text(notification.message)
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                 
                 // Show file hosting links if available
-                if let fileLinks = notification.fileLinks, !fileLinks.isEmpty {
+                if !extractedLinks.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("File Links:")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(.secondary)
                         
-                        ForEach(Array(fileLinks.enumerated()), id: \.offset) { index, link in
-                            Button(action: {
-                                if let url = URL(string: link) {
-                                    NSWorkspace.shared.open(url)
+                        ForEach(Array(extractedLinks.enumerated()), id: \.offset) { index, link in
+                            // Check if link is valid
+                            let isValidLink = URL(string: link) != nil
+                            
+                            if isValidLink {
+                                // Valid link - show as clickable
+                                Button(action: {
+                                    print("NotificationCenterView: Link button tapped: \(link)")
+                                    openLinkInBrowser(link)
+                                    // Show grabbed confirmation if email ID is available
+                                    if let emailId = notification.emailId {
+                                        pendingEmailIdForReply = emailId
+                                        showGrabbedConfirmation = true
+                                    }
+                                }) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "link.circle.fill")
+                                                .font(.system(size: 11))
+                                                .foregroundColor(.blue)
+                                            Text(link)
+                                                .font(.system(size: 10))
+                                                .foregroundColor(.blue)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                            Spacer()
+                                            Image(systemName: "arrow.up.right.square")
+                                                .font(.system(size: 9))
+                                                .foregroundColor(.blue.opacity(0.7))
+                                        }
+                                        
+                                        // Show sender name if there are multiple links
+                                        if extractedLinks.count > 1, let sourceEmail = notification.sourceEmail {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "person.fill")
+                                                    .font(.system(size: 8))
+                                                    .foregroundColor(.secondary.opacity(0.6))
+                                                Text("From: \(extractProducerName(from: sourceEmail))")
+                                                    .font(.system(size: 9))
+                                                    .foregroundColor(.secondary.opacity(0.7))
+                                            }
+                                        }
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 6)
+                                    .background(Color.blue.opacity(0.1))
+                                    .cornerRadius(6)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                                    )
                                 }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "link.circle.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.blue)
-                                    Text(link)
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.blue)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    Spacer()
-                                    Image(systemName: "arrow.up.right.square")
-                                        .font(.system(size: 9))
-                                        .foregroundColor(.blue.opacity(0.7))
+                                .buttonStyle(.plain)
+                                .help("Click to open link in browser")
+                                .onHover { hovering in
+                                    if hovering {
+                                        NSCursor.pointingHand.push()
+                                    } else {
+                                        NSCursor.pop()
+                                    }
+                                }
+                            } else {
+                                // Invalid link - show error message with option to open email
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.orange)
+                                        Text("Link Invalid")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(.orange)
+                                        Spacer()
+                                    }
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Unable to parse link from email. The link may be malformed or incomplete.")
+                                            .font(.system(size: 9))
+                                            .foregroundColor(.secondary)
+                                        
+                                        Text("Extracted: \(link.prefix(100))")
+                                            .font(.system(size: 8, design: .monospaced))
+                                            .foregroundColor(.secondary.opacity(0.7))
+                                            .lineLimit(2)
+                                    }
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    
+                                    if let emailId = notification.emailId {
+                                        Button(action: {
+                                            openEmailInBrowser(emailId: emailId)
+                                            // Show grabbed confirmation
+                                            pendingEmailIdForReply = emailId
+                                            showGrabbedConfirmation = true
+                                        }) {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "envelope.fill")
+                                                    .font(.system(size: 9))
+                                                Text("Open Email Thread")
+                                                    .font(.system(size: 9, weight: .medium))
+                                            }
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Color.orange.opacity(0.1))
+                                            .cornerRadius(4)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 4)
+                                                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Open the email in your browser to view the link")
+                                    }
                                 }
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 6)
-                                .background(Color.blue.opacity(0.1))
+                                .background(Color.orange.opacity(0.05))
                                 .cornerRadius(6)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 6)
-                                        .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                                        .stroke(Color.orange.opacity(0.3), lineWidth: 1)
                                 )
                             }
-                            .buttonStyle(.plain)
-                            .help("Click to open link in browser")
                         }
                     }
                     .padding(.top, 4)
@@ -1269,19 +1495,30 @@ struct NotificationRowView: View {
         .padding(8)
         .background(
             ZStack {
-                // Background color
+                // Background color - different colors for different notification types
                 Group {
                     if isHovered {
-                        Color.blue.opacity(0.1)
+                        // Hover state - darker for visibility
+                        if notification.type == .mediaFiles {
+                            Color.orange.opacity(0.15)
+                        } else {
+                            Color.blue.opacity(0.1)
+                        }
                     } else if notification.status == .pending {
-                        Color.blue.opacity(0.05)
+                        // Pending state - subtle background
+                        if notification.type == .mediaFiles {
+                            Color.orange.opacity(0.08)
+                        } else {
+                            Color.blue.opacity(0.05)
+                        }
                     } else {
                         Color.clear
                     }
                 }
                 
                 // Tap area (only if email exists) - this captures taps on non-button areas
-                if notification.emailSubject != nil || notification.emailBody != nil {
+                // Note: For mediaFiles notifications, links are clickable and should take priority
+                if (notification.emailSubject != nil || notification.emailBody != nil) && notification.type == .newDocket {
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -1350,6 +1587,128 @@ struct NotificationRowView: View {
                 )
             }
         }
+        .alert("Did you grab it?", isPresented: $showGrabbedConfirmation) {
+            Button("No", role: .cancel) {
+                pendingEmailIdForReply = nil
+            }
+            Button("Yes") {
+                sendGrabbedReply()
+            }
+        } message: {
+            Text("Did you successfully grab the file?")
+        }
+    }
+    
+    private func sendGrabbedReply() {
+        guard let emailId = pendingEmailIdForReply else { return }
+        guard emailScanningService.gmailService.isAuthenticated else {
+            print("NotificationCenterView: Cannot send reply - Gmail not authenticated")
+            return
+        }
+        
+        isSendingReply = true
+        
+        Task {
+            do {
+                let settings = settingsManager.currentSettings
+                var imageURL: URL? = nil
+                
+                // Check if cursed image feature is enabled
+                if settings.enableCursedImageReplies && !settings.cursedImageSubreddit.isEmpty {
+                    print("NotificationCenterView: Fetching random image from r/\(settings.cursedImageSubreddit)...")
+                    
+                    let redditService = RedditImageService()
+                    do {
+                        // Try to fetch image with retries
+                        if let url = try await redditService.fetchRandomImageURLWithRetry(from: settings.cursedImageSubreddit) {
+                            imageURL = url
+                            print("NotificationCenterView: ✅ Found image: \(url.absoluteString)")
+                        } else {
+                            print("NotificationCenterView: ⚠️ No image found, falling back to text")
+                        }
+                    } catch {
+                        // If image fetch fails, log but continue with plain text
+                        print("NotificationCenterView: ⚠️ Failed to fetch image: \(error.localizedDescription), falling back to text")
+                    }
+                }
+                
+                // Send reply with image if available, otherwise plain text
+                _ = try await emailScanningService.gmailService.sendReply(
+                    messageId: emailId,
+                    body: "Grabbed",
+                    to: ["media@graysonmusicgroup.com"],
+                    imageURL: imageURL
+                )
+                
+                print("NotificationCenterView: ✅ Successfully sent 'Grabbed' reply\(imageURL != nil ? " with image" : "")")
+                
+                // Mark notification as grabbed (archive it)
+                await MainActor.run {
+                    if let notification = notification {
+                        notificationCenter.archive(notification)
+                    }
+                    pendingEmailIdForReply = nil
+                    isSendingReply = false
+                }
+            } catch {
+                print("NotificationCenterView: ❌ Failed to send reply: \(error.localizedDescription)")
+                
+                await MainActor.run {
+                    // Show error notification
+                    let errorNotification = Notification(
+                        type: .error,
+                        title: "Failed to Send Reply",
+                        message: "Could not send 'Grabbed' reply: \(error.localizedDescription)"
+                    )
+                    notificationCenter.add(errorNotification)
+                    pendingEmailIdForReply = nil
+                    isSendingReply = false
+                }
+            }
+        }
+    }
+    
+    /// Open a link in the default browser from settings
+    private func openLinkInBrowser(_ link: String) {
+        print("NotificationCenterView: openLinkInBrowser called with link: \(link)")
+        
+        guard let url = URL(string: link) else {
+            print("NotificationCenterView: ❌ Invalid URL: \(link)")
+            return
+        }
+        
+        print("NotificationCenterView: ✅ Valid URL created: \(url.absoluteString)")
+        
+        // Get browser preference from settings
+        let browserPreference = settingsManager.currentSettings.defaultBrowser
+        print("NotificationCenterView: Browser preference: \(browserPreference)")
+        
+        // If a specific browser is selected, try to open with that browser
+        if let bundleId = browserPreference.bundleIdentifier {
+            print("NotificationCenterView: Attempting to open with bundle ID: \(bundleId)")
+            // Check if the browser is installed
+            if let browserURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+                print("NotificationCenterView: ✅ Browser found at: \(browserURL.path)")
+                NSWorkspace.shared.open([url], withApplicationAt: browserURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: { runningApp, error in
+                    if let error = error {
+                        print("NotificationCenterView: ❌ Error opening link in preferred browser: \(error.localizedDescription)")
+                        // Fallback to default browser
+                        print("NotificationCenterView: Falling back to default browser")
+                        NSWorkspace.shared.open(url)
+                    } else {
+                        print("NotificationCenterView: ✅ Successfully opened link in preferred browser")
+                    }
+                })
+                return
+            } else {
+                print("NotificationCenterView: ⚠️ Browser with bundle ID \(bundleId) not found, falling back to default")
+            }
+        }
+        
+        // Fallback to default browser
+        print("NotificationCenterView: Opening with default browser")
+        let success = NSWorkspace.shared.open(url)
+        print("NotificationCenterView: Default browser open result: \(success)")
     }
     
     /// Open email in Gmail browser
@@ -1536,11 +1895,11 @@ struct NotificationRowView: View {
         case .newDocket:
             return .blue
         case .mediaFiles:
-            return .blue
+            return .orange // Different color for file deliveries
         case .error:
             return .red
         case .info:
-            return .orange
+            return .blue
         }
     }
     

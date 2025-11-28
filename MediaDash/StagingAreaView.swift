@@ -217,14 +217,14 @@ struct StagingAreaView: View {
 
             // Status Bar
             HStack {
-                // Left side - Indexing and Asana sync indicators
+                // Left side - Scanning and Asana sync indicators
                 HStack(spacing: 12) {
                     if manager.isIndexing {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .scaleEffect(0.6)
                                 .frame(width: 12, height: 12)
-                            Text("Indexing")
+                            Text("Scanning")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.orange)
                         }
@@ -274,7 +274,7 @@ struct StagingAreaView: View {
                             .foregroundColor(.secondary)
                     }
                 } else {
-                    // Don't show "Ready." when syncing or indexing
+                    // Don't show "Ready." when syncing or scanning
                     if !cacheManager.isSyncing && !manager.isIndexing {
                         Text("Ready.")
                             .font(.caption)

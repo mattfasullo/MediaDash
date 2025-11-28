@@ -171,19 +171,52 @@ class GrabbedIndicatorService: ObservableObject {
                     print("  Thread subject: \(threadSubject)")
                     print("  Combined body preview: \(combinedBody.prefix(200))")
                     
-                    let qualifiesByPatterns = qualifier.qualifiesAsMediaFileDelivery(
+                    // Use debug methods to get detailed qualification information
+                    let patternResult = qualifier.qualifiesAsMediaFileDeliveryWithDebug(
                         subject: threadSubject,
                         body: combinedBody,
                         attachments: attachments,
                         labelIds: message.labelIds,
                         senderEmail: notification.sourceEmail
                     )
-                    let qualifiesByLinks = qualifier.qualifiesByFileHostingLinks(combinedBody)
-                    let qualifies = qualifiesByPatterns || qualifiesByLinks
+                    let linkResult = qualifier.qualifiesByFileHostingLinksWithDebug(combinedBody)
+                    let qualifies = patternResult.qualifies || linkResult.qualifies
                     
-                    print("GrabbedIndicatorService: Qualifies by patterns: \(qualifiesByPatterns)")
-                    print("GrabbedIndicatorService: Qualifies by links: \(qualifiesByLinks)")
-                    print("GrabbedIndicatorService: Overall qualifies: \(qualifies)")
+                    // Log detailed debug information
+                    let separator = String(repeating: "=", count: 80)
+                    print("\n\(separator)")
+                    print("🔍 GRABBED INDICATOR QUALIFICATION DEBUG - Notification ID: \(notification.id)")
+                    print(separator)
+                    print("\n📋 Pattern-based qualification:")
+                    for reason in patternResult.reasons {
+                        print(reason)
+                    }
+                    if patternResult.qualifies {
+                        print("  ✅ QUALIFIED by patterns")
+                        print("  Matched criteria: \(patternResult.matchedCriteria.joined(separator: ", "))")
+                    } else {
+                        print("  ❌ NOT QUALIFIED by patterns")
+                        if !patternResult.exclusionReasons.isEmpty {
+                            print("  Exclusion reasons: \(patternResult.exclusionReasons.joined(separator: ", "))")
+                        }
+                    }
+                    
+                    print("\n🔗 Link-based qualification:")
+                    for reason in linkResult.reasons {
+                        print(reason)
+                    }
+                    if linkResult.qualifies {
+                        print("  ✅ QUALIFIED by links")
+                        print("  Matched criteria: \(linkResult.matchedCriteria.joined(separator: ", "))")
+                    } else {
+                        print("  ❌ NOT QUALIFIED by links")
+                        if !linkResult.exclusionReasons.isEmpty {
+                            print("  Exclusion reasons: \(linkResult.exclusionReasons.joined(separator: ", "))")
+                        }
+                    }
+                    
+                    print("\n📊 OVERALL RESULT: \(qualifies ? "✅ QUALIFIED" : "❌ NOT QUALIFIED")")
+                    print(separator + "\n")
                     
                     guard qualifies else {
                         print("GrabbedIndicatorService: Thread does not qualify as media-file-delivery")

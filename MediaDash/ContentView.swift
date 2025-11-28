@@ -24,7 +24,6 @@ struct ContentView: View {
     @State private var alertMessage = ""
     @State private var hoverInfo: String = "Ready."
     @State private var initialSearchText = ""
-    @State private var isStagingAreaVisible = true
     @State private var showNotificationCenter = false
     @FocusState private var mainViewFocused: Bool
     @EnvironmentObject var notificationCenter: NotificationCenter
@@ -221,7 +220,6 @@ struct ContentView: View {
                 isKeyboardMode: $isKeyboardMode,
                 isCommandKeyHeld: $isCommandKeyHeld,
                 hoverInfo: $hoverInfo,
-                isStagingAreaVisible: $isStagingAreaVisible,
                 showSearchSheet: $showSearchSheet,
                 showQuickSearchSheet: $showQuickSearchSheet,
                 showSettingsSheet: $showSettingsSheet,
@@ -237,7 +235,6 @@ struct ContentView: View {
                 cacheManager: cacheManager
             )
             
-            if isStagingAreaVisible {
                 StagingAreaView(
                     cacheManager: cacheManager,
                     isStagingHovered: $isStagingHovered,
@@ -245,8 +242,7 @@ struct ContentView: View {
                 )
                 .environmentObject(manager)
             }
-        }
-        .frame(width: isStagingAreaVisible ? 650 : 300, height: windowHeight)
+        .frame(width: 650, height: windowHeight)
         .animation(.easeInOut(duration: 0.2), value: windowHeight)
         .focusable()
         .focused($mainViewFocused)
@@ -1348,7 +1344,7 @@ struct SearchView: View {
 
                 NoSelectTextField(
                     text: $searchText,
-                    placeholder: manager.isIndexing ? "Type to search (indexing in progress)..." : "Search sessions...",
+                    placeholder: manager.isIndexing ? "Type to search (scanning folders)..." : "Search server...",
                     isEnabled: true,
                     onSubmit: {
                         openInFinder()
@@ -1392,10 +1388,10 @@ struct SearchView: View {
                                 .font(.title3)
                                 .fontWeight(.medium)
                                 .foregroundColor(.primary)
-                            Text("Sessions directory is not connected")
+                            Text("Server unavailable")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("Please connect to the sessions directory in Settings to use search")
+                            Text("Please connect to the server in Settings to use search")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .multilineTextAlignment(.center)
@@ -1681,7 +1677,7 @@ struct SearchView: View {
 
     // MARK: - Helper Methods
 
-    private func performSearch(immediate: Bool = false) {
+    private func performSearch(immediate: Bool = false, folderOnly: SearchFolder? = nil) {
         // Don't search if index is still building
         guard !manager.isIndexing else {
             return
@@ -1715,37 +1711,53 @@ struct SearchView: View {
                     }
                 }
 
-                // Search all folders simultaneously with error handling
                 let currentSearchText = searchText
+                
+                // If folderOnly is specified (e.g., when switching tabs), only search that folder
+                if let folder = folderOnly {
+                    let results = await manager.searchSessions(term: currentSearchText, folder: folder)
+                    guard !Task.isCancelled else {
+                        await MainActor.run { isSearching = false }
+                        return
+                    }
+                    
+                    await MainActor.run {
+                        // Cache result for this folder only
+                        cachedResults[folder] = (results.exactMatches, results.fuzzyMatches)
+                        
+                        // Display results for currently selected folder
+                        updateDisplayedResults()
+                    }
+                } else {
+                    // Search all folders simultaneously (when user is typing)
+                    let workPictureResults = await manager.searchSessions(term: currentSearchText, folder: .workPicture)
+                    guard !Task.isCancelled else {
+                        await MainActor.run { isSearching = false }
+                        return
+                    }
 
-                // Wrap searches in error handling
-                let workPictureResults = await manager.searchSessions(term: currentSearchText, folder: .workPicture)
-                guard !Task.isCancelled else {
-                    await MainActor.run { isSearching = false }
-                    return
-                }
+                    let mediaPostingsResults = await manager.searchSessions(term: currentSearchText, folder: .mediaPostings)
+                    guard !Task.isCancelled else {
+                        await MainActor.run { isSearching = false }
+                        return
+                    }
 
-                let mediaPostingsResults = await manager.searchSessions(term: currentSearchText, folder: .mediaPostings)
-                guard !Task.isCancelled else {
-                    await MainActor.run { isSearching = false }
-                    return
-                }
+                    let sessionsResults = await manager.searchSessions(term: currentSearchText, folder: .sessions)
+                    guard !Task.isCancelled else {
+                        await MainActor.run { isSearching = false }
+                        return
+                    }
 
-                let sessionsResults = await manager.searchSessions(term: currentSearchText, folder: .sessions)
-                guard !Task.isCancelled else {
-                    await MainActor.run { isSearching = false }
-                    return
-                }
+                    await MainActor.run {
+                        // Cache all results - always update cache even if empty
+                        cachedResults[.workPicture] = (workPictureResults.exactMatches, workPictureResults.fuzzyMatches)
+                        cachedResults[.mediaPostings] = (mediaPostingsResults.exactMatches, mediaPostingsResults.fuzzyMatches)
+                        cachedResults[.sessions] = (sessionsResults.exactMatches, sessionsResults.fuzzyMatches)
 
-                await MainActor.run {
-                    // Cache all results - always update cache even if empty
-                    cachedResults[.workPicture] = (workPictureResults.exactMatches, workPictureResults.fuzzyMatches)
-                    cachedResults[.mediaPostings] = (mediaPostingsResults.exactMatches, mediaPostingsResults.fuzzyMatches)
-                    cachedResults[.sessions] = (sessionsResults.exactMatches, sessionsResults.fuzzyMatches)
-
-                    // Display results for currently selected folder
-                    // isSearching will be set to false inside updateDisplayedResults after results are displayed
-                    updateDisplayedResults()
+                        // Display results for currently selected folder
+                        // isSearching will be set to false inside updateDisplayedResults after results are displayed
+                        updateDisplayedResults()
+                    }
                 }
             } catch {
                 // If there's any error, ensure we reset the state
@@ -1789,9 +1801,10 @@ struct SearchView: View {
                 selectedPath = nil
 
                 // If there's text to search and we're not already searching, trigger a search
+                // Only search the selected folder when switching tabs (not all folders)
                 if !searchText.isEmpty && !isSearching && !manager.isIndexing {
                     print("No cached results for \(selectedFolder.displayName), triggering search")
-                    performSearch(immediate: true)
+                    performSearch(immediate: true, folderOnly: selectedFolder)
                 }
             }
         }
@@ -1858,6 +1871,7 @@ struct QuickDocketSearchView: View {
     @ObservedObject var settingsManager: SettingsManager
     @ObservedObject var cacheManager: AsanaCacheManager
     @EnvironmentObject var manager: MediaManager
+    @EnvironmentObject var sessionManager: SessionManager
     @StateObject private var metadataManager: DocketMetadataManager
 
     @State private var searchText: String
@@ -1896,6 +1910,7 @@ struct QuickDocketSearchView: View {
         .frame(width: 600, height: 500)
         .sheet(isPresented: $showSettingsSheet) {
             SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
+                .environmentObject(sessionManager)
         }
         .sheet(isPresented: $showMetadataEditor) {
             if let docket = selectedDocket {
@@ -3122,6 +3137,11 @@ struct KeyboardHandlersModifier: ViewModifier {
                 guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showVideoConverterSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
                     return .ignored
                 }
+                
+                // Check if a text field is currently focused - if so, don't trigger autosearch
+                if isTextFieldFocused() {
+                    return .ignored
+                }
 
                 // Don't trigger quick search if CMD is held (for keyboard shortcuts)
                 if press.modifiers.contains(.command) {
@@ -3150,6 +3170,39 @@ struct KeyboardHandlersModifier: ViewModifier {
                 }
             }
     }
+    
+    /// Check if any text field is currently focused/active in any window
+    private func isTextFieldFocused() -> Bool {
+        // Check if the current first responder is a text field
+        if let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow {
+            if let firstResponder = window.firstResponder {
+                // Check if first responder is an NSTextView or NSTextField
+                if firstResponder is NSTextView || firstResponder is NSTextField {
+                    return true
+                }
+                // Also check if it's a text field's field editor
+                if let textView = firstResponder as? NSTextView,
+                   textView.isFieldEditor {
+                    return true
+                }
+            }
+        }
+        
+        // Also check all windows for any focused text fields
+        for window in NSApplication.shared.windows {
+            if let firstResponder = window.firstResponder {
+                if firstResponder is NSTextView || firstResponder is NSTextField {
+                    return true
+                }
+                if let textView = firstResponder as? NSTextView,
+                   textView.isFieldEditor {
+                    return true
+                }
+            }
+        }
+        
+        return false
+    }
 }
 
 struct AlertsModifier: ViewModifier {
@@ -3172,16 +3225,8 @@ struct AlertsModifier: ViewModifier {
                     Text(errorMessage)
                 }
             }
-            .alert("Directory Not Connected", isPresented: $manager.showConnectionWarning) {
-                Button("OK", role: .cancel) {}
-                Button("Open Settings") {
-                    showSettingsSheet = true
-                }
-            } message: {
-                if let warning = manager.connectionWarning {
-                    Text(warning)
-                }
-            }
+            // Connection warnings now shown via status indicators in sidebar
+            // Removed alert popup on launch
             .alert("Convert Videos to ProRes Proxy?", isPresented: $manager.showConvertVideosPrompt) {
                 Button("Convert", role: .destructive) {
                     Task {
@@ -3320,8 +3365,19 @@ struct ContentViewLifecycleModifier: ViewModifier {
                 // Update cache manager with new shared cache settings
                 cacheManager.updateCacheSettings(
                     sharedCacheURL: newValue.sharedCacheURL,
-                    useSharedCache: newValue.useSharedCache
+                    useSharedCache: newValue.useSharedCache,
+                    serverBasePath: newValue.serverBasePath,
+                    serverConnectionURL: newValue.serverConnectionURL
                 )
+                // Update sync settings for periodic background sync
+                if newValue.docketSource == .asana {
+                    cacheManager.updateSyncSettings(
+                        workspaceID: newValue.asanaWorkspaceID,
+                        projectID: newValue.asanaProjectID,
+                        docketField: newValue.asanaDocketField,
+                        jobNameField: newValue.asanaJobNameField
+                )
+                }
             }
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -3342,8 +3398,20 @@ struct ContentViewLifecycleModifier: ViewModifier {
                 let settings = settingsManager.currentSettings
                 cacheManager.updateCacheSettings(
                     sharedCacheURL: settings.sharedCacheURL,
-                    useSharedCache: settings.useSharedCache
-                )
+                        useSharedCache: settings.useSharedCache,
+                        serverBasePath: settings.serverBasePath,
+                        serverConnectionURL: settings.serverConnectionURL
+                    )
+                
+                // Update sync settings for periodic background sync
+                if settings.docketSource == .asana {
+                    cacheManager.updateSyncSettings(
+                        workspaceID: settings.asanaWorkspaceID,
+                        projectID: settings.asanaProjectID,
+                        docketField: settings.asanaDocketField,
+                        jobNameField: settings.asanaJobNameField
+                    )
+                }
                 
                 // Auto-sync Asana cache on app launch if using Asana source
                 autoSyncAsanaCache()
@@ -3503,23 +3571,12 @@ struct WorkspaceMenuButton: View {
     @State private var isHovered = false
     
     var body: some View {
-        Menu {
-            Button("Change Workspace...") {
-                // TODO: Implement workspace switching
-                sessionManager.logout()
-            }
-            
-            Divider()
-            
-            Button(role: .destructive) {
-                sessionManager.logout()
-            } label: {
-                Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
-            }
+        Button(role: .destructive) {
+            sessionManager.logout()
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: profile.name == "Grayson Music" ? "cloud.fill" : "desktopcomputer")
-                    .font(.system(size: 10))
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 11))
                     .foregroundColor(.secondary)
 
                 Text(profile.name)
@@ -3528,8 +3585,8 @@ struct WorkspaceMenuButton: View {
                 
                 Spacer()
                 
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8))
+                Text("Log Out")
+                    .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity)
@@ -3538,7 +3595,7 @@ struct WorkspaceMenuButton: View {
             .contentShape(Rectangle())
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
+                    .fill(isHovered ? Color.red.opacity(0.15) : Color.red.opacity(0.1))
             )
         }
         .buttonStyle(.plain)

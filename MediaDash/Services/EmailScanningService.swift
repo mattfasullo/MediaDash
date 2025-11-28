@@ -147,16 +147,21 @@ class EmailScanningService: ObservableObject {
         }
         
         guard gmailService.isAuthenticated else {
-            await MainActor.run {
-                lastError = "Gmail is not authenticated"
+            // Defer state update to next run loop cycle
+            Task { @MainActor in
+                self.lastError = "Gmail is not authenticated"
             }
             return
         }
         
-        await MainActor.run {
-            isScanning = true
-            lastError = nil
+        // Defer state updates to next run loop cycle to avoid SwiftUI warnings
+        Task { @MainActor in
+            self.isScanning = true
+            self.lastError = nil
         }
+        
+        // Small delay to ensure updates happen after current view update cycle
+        try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
         
         do {
             // Build query from search terms (or fallback to searching for "new docket" in all emails)
@@ -408,19 +413,47 @@ class EmailScanningService: ObservableObject {
         // Use the qualifier's file hosting link detection (which uses the whitelist)
         // Check BOTH plain text and HTML body for links (links might be in HTML)
         // or fall back to general detection if whitelist is empty
-        let hasFileHostingLink = !settings.grabbedFileHostingWhitelist.isEmpty
-            ? qualifier.qualifiesByFileHostingLinks(bodyForDetection)
-            : FileHostingLinkDetector.containsFileHostingLink(bodyForDetection)
+        let linkResult: QualificationResult
+        if !settings.grabbedFileHostingWhitelist.isEmpty {
+            linkResult = qualifier.qualifiesByFileHostingLinksWithDebug(bodyForDetection)
+        } else {
+            // Fallback case - create a simple result
+            let hasLink = FileHostingLinkDetector.containsFileHostingLink(bodyForDetection)
+            linkResult = QualificationResult(
+                qualifies: hasLink,
+                reasons: ["Using fallback FileHostingLinkDetector", hasLink ? "✅ Found file hosting link" : "❌ No file hosting link found"],
+                matchedCriteria: hasLink ? ["File hosting link (fallback detector)"] : [],
+                exclusionReasons: []
+            )
+        }
         
-        print("  Has file hosting link: \(hasFileHostingLink)")
+        // Log detailed debug information
+        let separator = String(repeating: "=", count: 80)
+        print("\n\(separator)")
+        print("📧 FILE DELIVERY NOTIFICATION DEBUG - Email ID: \(message.id)")
+        print(separator)
+        for reason in linkResult.reasons {
+            print(reason)
+        }
+        if linkResult.qualifies {
+            print("\n✅ RESULT: QUALIFIED AS FILE DELIVERY")
+            print("  Matched criteria: \(linkResult.matchedCriteria.joined(separator: ", "))")
+        } else {
+            print("\n❌ RESULT: NOT QUALIFIED")
+            if !linkResult.exclusionReasons.isEmpty {
+                print("  Exclusion reasons: \(linkResult.exclusionReasons.joined(separator: ", "))")
+            }
+        }
+        print("\(separator)\n")
         
-        guard hasFileHostingLink else {
+        guard linkResult.qualifies else {
             print("EmailScanningService: Media email \(message.id) does not contain file hosting links from whitelist")
             return false
         }
         
-        // Extract file hosting links
-        let fileLinks = FileHostingLinkDetector.extractFileHostingLinks(body)
+        // Extract file hosting links from the combined body (includes both plain text and HTML)
+        // This ensures we catch links whether they're in plain text or HTML format
+        let fileLinks = FileHostingLinkDetector.extractFileHostingLinks(bodyForDetection)
         
         await MainActor.run {
             guard let notificationCenter = notificationCenter else {
@@ -454,6 +487,9 @@ class EmailScanningService: ObservableObject {
             print("  Title: \(notification.title)")
             print("  Message: \(notification.message)")
             print("  File links found: \(fileLinks.count)")
+            for (index, link) in fileLinks.enumerated() {
+                print("    Link \(index + 1): \(link)")
+            }
             notificationCenter.add(notification)
             print("EmailScanningService: ✅ Notification added. Total notifications: \(notificationCenter.notifications.count)")
             print("  Active notifications: \(notificationCenter.activeNotifications.count)")

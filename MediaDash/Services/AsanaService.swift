@@ -150,7 +150,8 @@ class AsanaService: ObservableObject {
     ///   - workspaceID: The workspace ID
     ///   - projectID: The project ID (if fetching from a specific project)
     ///   - maxTasks: Maximum number of tasks to fetch per project (stops early if reached)
-    func fetchTasks(workspaceID: String?, projectID: String?, maxTasks: Int? = nil) async throws -> [AsanaTask] {
+    ///   - modifiedSince: Optional date to only fetch tasks modified since this date (for incremental sync)
+    func fetchTasks(workspaceID: String?, projectID: String?, maxTasks: Int? = nil, modifiedSince: Date? = nil) async throws -> [AsanaTask] {
         print("🔵 [AsanaService] fetchTasks() called")
         print("   - Workspace ID: \(workspaceID ?? "nil")")
         print("   - Project ID: \(projectID ?? "nil")")
@@ -184,6 +185,16 @@ class AsanaService: ObservableObject {
             
             if let offset = offset {
                 queryItems.append(URLQueryItem(name: "offset", value: offset))
+            }
+            
+            // Add modified_since parameter for incremental sync
+            if let modifiedSince = modifiedSince {
+                // Asana expects ISO 8601 format: YYYY-MM-DDTHH:mm:ssZ
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime]
+                let modifiedSinceString = formatter.string(from: modifiedSince)
+                queryItems.append(URLQueryItem(name: "modified_since", value: modifiedSinceString))
+                print("🔄 [AsanaService] Using incremental sync with modified_since: \(modifiedSinceString)")
             }
             
             // Asana requires exactly one of: project, tag, section, user_task_list, or assignee + workspace
@@ -250,7 +261,13 @@ class AsanaService: ObservableObject {
     }
     
     /// Fetch dockets and job names from Asana
-    func fetchDockets(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?) async throws -> [DocketInfo] {
+    /// - Parameters:
+    ///   - workspaceID: Optional workspace ID
+    ///   - projectID: Optional project ID
+    ///   - docketField: Optional docket field name
+    ///   - jobNameField: Optional job name field name
+    ///   - modifiedSince: Optional date to only fetch tasks modified since this date (for incremental sync)
+    func fetchDockets(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?, modifiedSince: Date? = nil) async throws -> [DocketInfo] {
         print("🔄 [SYNC] Starting Asana sync...")
         
         isFetching = true
@@ -273,10 +290,14 @@ class AsanaService: ObservableObject {
                 }
             }
             
-            // Fetch ALL tasks from specific project (no limit to get all dockets)
-            let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: projectID, maxTasks: nil)
+            // Fetch tasks from specific project (incremental if modifiedSince provided)
+            let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: projectID, maxTasks: nil, modifiedSince: modifiedSince)
             allTasks = tasks
+            if let modifiedSince = modifiedSince {
+                print("🔄 [SYNC] Fetched \(tasks.count) tasks modified since \(modifiedSince) from project")
+            } else {
             print("🔄 [SYNC] Fetched \(tasks.count) tasks from project")
+            }
         } else {
             // Fetch all projects and get tasks from each
             var finalWorkspaceID = workspaceID
@@ -307,11 +328,15 @@ class AsanaService: ObservableObject {
                     }
                     
                     do {
-                        // Fetch ALL tasks (no limit) to ensure we get all dockets including current year
-                        let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: project.gid, maxTasks: nil)
+                        // Fetch tasks (incremental if modifiedSince provided)
+                        let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: project.gid, maxTasks: nil, modifiedSince: modifiedSince)
                         allTasks.append(contentsOf: tasks)
                         if index % 10 == 0 || index == projects.count - 1 {
+                            if let modifiedSince = modifiedSince {
+                                print("   Project \(index + 1): \(tasks.count) tasks modified since \(modifiedSince)")
+                            } else {
                             print("   Project \(index + 1): \(tasks.count) tasks")
+                            }
                         }
                     } catch {
                         // Log error but continue with other projects

@@ -2,72 +2,54 @@ import SwiftUI
 
 struct LoginView: View {
     @ObservedObject var sessionManager: SessionManager
+    @Environment(\.colorScheme) var colorScheme
 
-    @State private var selectedTab: LoginTab = .cloud
     @State private var username = ""
-    @State private var password = ""
-    @State private var workspaceName = ""
+    @State private var showCreateNew = false
     @State private var showError = false
     @State private var errorMessage = ""
-
-    enum LoginTab {
-        case cloud, local
+    @State private var isLoggingIn = false
+    
+    private var existingProfiles: [WorkspaceProfile] {
+        sessionManager.getAllUserProfiles()
+    }
+    
+    private var logoImage: some View {
+        let baseLogo = Image("HeaderLogo")
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .frame(height: 120)
+        
+        if colorScheme == .light {
+            return AnyView(baseLogo.colorInvert())
+        } else {
+            return AnyView(baseLogo)
+        }
     }
 
     var body: some View {
         ZStack {
-            // Background gradient
-            LinearGradient(
-                gradient: Gradient(colors: [Color.blue.opacity(0.6), Color.purple.opacity(0.6)]),
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            // Clean background
+            Color(nsColor: .windowBackgroundColor)
+                .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 Spacer()
 
                 // Logo Section
-                Image("HeaderLogo")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(height: 120)
+                logoImage
                     .shadow(radius: 10)
                     .padding(.bottom, 50)
 
                 // Login Card
                 VStack(spacing: 0) {
-                    // Tab Selector
-                    HStack(spacing: 0) {
-                        TabButton(
-                            title: "Connect to Workspace",
-                            icon: "cloud",
-                            isSelected: selectedTab == .cloud
-                        ) {
-                            selectedTab = .cloud
-                        }
-
-                        TabButton(
-                            title: "Create Local Workspace",
-                            icon: "desktopcomputer",
-                            isSelected: selectedTab == .local
-                        ) {
-                            selectedTab = .local
-                        }
-                    }
-
-                    Divider()
-
                     // Content Area
                     VStack(spacing: 24) {
-                        if selectedTab == .cloud {
-                            cloudLoginContent
-                        } else {
-                            localWorkspaceContent
-                        }
+                        profilePickerContent
                     }
                     .padding(32)
-                    .frame(width: 500, height: 300)
+                    .frame(width: 500)
+                    .frame(minHeight: 300, maxHeight: 500)
                 }
                 .background(Color(nsColor: .windowBackgroundColor))
                 .cornerRadius(12)
@@ -84,145 +66,189 @@ struct LoginView: View {
         }
     }
 
-    // MARK: - Cloud Login Content
+    // MARK: - Profile Picker Content
 
-    private var cloudLoginContent: some View {
+    private var profilePickerContent: some View {
         VStack(spacing: 20) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Sign in to your workspace")
+                Text("Select Your Profile")
                     .font(.headline)
                     .foregroundColor(.primary)
 
-                Text("Use your Grayson Music credentials")
+                Text("Your settings will sync across all computers")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(spacing: 16) {
-                // Username Field
+            if !showCreateNew && !existingProfiles.isEmpty {
+                // Show existing profiles
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(existingProfiles) { profile in
+                            ProfileButton(
+                                profile: profile,
+                                isLoggingIn: isLoggingIn
+                            ) {
+                                selectProfile(profile)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+            }
+
+            if showCreateNew || existingProfiles.isEmpty {
+                // Show create new profile form
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Username")
+                    Text("Username or Email")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    TextField("Enter username", text: $username)
+                    TextField("Enter your username or email", text: $username)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.username)
-                }
-
-                // Password Field
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Password")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    SecureField("Enter password", text: $password)
-                        .textFieldStyle(.roundedBorder)
-                        .textContentType(.password)
+                        .disabled(isLoggingIn)
                         .onSubmit {
-                            attemptCloudLogin()
+                            attemptUserLogin()
                         }
                 }
             }
 
             Spacer()
 
-            // Login Button
-            Button(action: attemptCloudLogin) {
-                HStack {
-                    Image(systemName: "arrow.right.circle.fill")
-                    Text("Sign In")
-                }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(username.isEmpty || password.isEmpty)
-        }
-    }
-
-    // MARK: - Local Workspace Content
-
-    private var localWorkspaceContent: some View {
-        VStack(spacing: 20) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Create a local workspace")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-
-                Text("Work offline with your own settings")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Workspace Name")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField("Enter workspace name", text: $workspaceName)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        createLocalWorkspace()
+            // Action Buttons
+            HStack(spacing: 12) {
+                if !showCreateNew && !existingProfiles.isEmpty {
+                    Button(action: {
+                        showCreateNew = true
+                        username = ""
+                    }) {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                            Text("New Profile")
+                        }
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
                     }
-            }
-
-            Spacer()
-
-            // Create Button
-            Button(action: createLocalWorkspace) {
-                HStack {
-                    Image(systemName: "plus.circle.fill")
-                    Text("Create Workspace")
+                    .buttonStyle(.bordered)
+                    .disabled(isLoggingIn)
                 }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+
+                if showCreateNew || existingProfiles.isEmpty {
+                    Button(action: attemptUserLogin) {
+                        HStack {
+                            if isLoggingIn {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .frame(width: 16, height: 16)
+                            } else {
+                                Image(systemName: "arrow.right.circle.fill")
+                            }
+                            Text(isLoggingIn ? "Signing In..." : "Sign In")
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(username.isEmpty || isLoggingIn)
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(workspaceName.isEmpty)
         }
     }
 
     // MARK: - Actions
 
-    private func attemptCloudLogin() {
-        if sessionManager.authenticateCloud(username: username, password: password) {
-            // Successfully logged in
-        } else {
-            errorMessage = "Invalid credentials. Please try again."
-            showError = true
-            password = ""
+    private func selectProfile(_ profile: WorkspaceProfile) {
+        guard let username = profile.username else { return }
+        
+        isLoggingIn = true
+        
+        Task {
+            // Use loginWithUsername to ensure settings are synced from shared storage
+            await sessionManager.loginWithUsername(username)
+            
+            await MainActor.run {
+                isLoggingIn = false
+                
+                // Check if login was successful
+                if case .loggedIn = sessionManager.authenticationState {
+                    // Successfully logged in
+                } else {
+                    errorMessage = "Failed to load settings. Please check your shared storage connection."
+                    showError = true
+                }
+            }
         }
     }
 
-    private func createLocalWorkspace() {
-        guard !workspaceName.isEmpty else { return }
-        sessionManager.createLocalWorkspace(name: workspaceName)
+    private func attemptUserLogin() {
+        guard !username.isEmpty else { return }
+        
+        isLoggingIn = true
+        
+        Task {
+            await sessionManager.loginWithUsername(username)
+            
+            await MainActor.run {
+                isLoggingIn = false
+                
+                // Check if login was successful
+                if case .loggedIn = sessionManager.authenticationState {
+                    // Successfully logged in
+                } else {
+                    errorMessage = "Failed to load settings. Please check your shared storage connection."
+                    showError = true
+                }
+            }
+        }
     }
 }
 
-// MARK: - Tab Button
+// MARK: - Profile Button
 
-struct TabButton: View {
-    let title: String
-    let icon: String
-    let isSelected: Bool
+struct ProfileButton: View {
+    let profile: WorkspaceProfile
+    let isLoggingIn: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                Text(title)
-                    .font(.subheadline)
+            HStack(spacing: 12) {
+                Image(systemName: "person.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(.blue)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(profile.name)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    if let username = profile.username {
+                        Text(username)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Spacer()
+                
+                if isLoggingIn {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(isSelected ? Color.accentColor : Color.clear)
-            .foregroundColor(isSelected ? .white : .primary)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(8)
         }
         .buttonStyle(.plain)
+        .disabled(isLoggingIn)
     }
 }
 

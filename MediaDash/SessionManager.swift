@@ -7,38 +7,52 @@ import Combine
 struct WorkspaceProfile: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
+    var username: String? // Username/email for user identification
     var settings: AppSettings
     var createdAt: Date
     var lastAccessedAt: Date
+    var isLocal: Bool // Whether this is a local-only workspace (not synced)
 
-    init(id: UUID = UUID(), name: String, settings: AppSettings) {
+    init(id: UUID = UUID(), name: String, username: String? = nil, settings: AppSettings, isLocal: Bool = false) {
         self.id = id
         self.name = name
+        self.username = username
         self.settings = settings
         self.createdAt = Date()
         self.lastAccessedAt = Date()
+        self.isLocal = isLocal
     }
 
-    // Preset for Grayson Music workspace
-    static func graysonMusic() -> WorkspaceProfile {
-        var settings = AppSettings.default
-        settings.sessionsBasePath = "/Volumes/Grayson Assets/SESSIONS"
-        settings.serverBasePath = "/Volumes/Grayson Assets/GM"
-        settings.workPictureFolderName = "WORK PICTURE"
-        settings.prepFolderName = "SESSION PREP"
-        settings.yearPrefix = "GM_"
+    // Create a user workspace that syncs to shared storage
+    static func user(username: String, settings: AppSettings? = nil) -> WorkspaceProfile {
+        // Use provided settings or load from shared storage, or fall back to defaults
+        let userSettings = settings ?? AppSettings.default
+        
+        // Apply Grayson Music defaults if not already set
+        var finalSettings = userSettings
+        if finalSettings.serverBasePath == AppSettings.default.serverBasePath {
+            finalSettings.sessionsBasePath = "/Volumes/Grayson Assets/SESSIONS"
+            finalSettings.serverBasePath = "/Volumes/Grayson Assets/GM"
+            finalSettings.workPictureFolderName = "WORK PICTURE"
+            finalSettings.prepFolderName = "SESSION PREP"
+            finalSettings.yearPrefix = "GM_"
+        }
         
         return WorkspaceProfile(
-            name: "Grayson Music",
-            settings: settings
+            name: username,
+            username: username,
+            settings: finalSettings,
+            isLocal: false
         )
     }
 
-    // Create a local workspace with default settings
+    // Create a local workspace with default settings (not synced)
     static func local(name: String) -> WorkspaceProfile {
         return WorkspaceProfile(
             name: name,
-            settings: AppSettings.default
+            username: nil,
+            settings: AppSettings.default,
+            isLocal: true
         )
     }
 }
@@ -69,9 +83,34 @@ enum AuthenticationState: Equatable {
 @MainActor
 class SessionManager: ObservableObject {
     @Published var authenticationState: AuthenticationState = .loggedOut
+    @Published var syncStatus: SyncStatus = .unknown
+    @Published var lastSyncError: String?
+    @Published var settingsConflict: SettingsConflict? // Conflict detected during sync
 
     private let lastProfileIDKey = "lastActiveProfileID"
+    private let lastUsernameKey = "lastActiveUsername"
     private let profilesKey = "workspaceProfiles"
+    
+    enum SyncStatus {
+        case synced              // Settings successfully synced to shared storage
+        case localOnly           // Using local settings (shared storage unavailable)
+        case syncing             // Currently syncing
+        case syncFailed(String)  // Sync failed with error message
+        case conflict(SettingsConflict) // Conflict detected
+        case unknown             // Status not yet determined
+    }
+    
+    struct SettingsConflict {
+        let localModified: Date
+        let sharedModified: Date
+        let resolution: ConflictResolution
+        
+        enum ConflictResolution {
+            case usedLocal      // Used local settings (local was newer)
+            case usedShared     // Used shared settings (shared was newer)
+            case merged         // Merged both (future enhancement)
+        }
+    }
 
     init() {
         loadLastSession()
@@ -81,31 +120,163 @@ class SessionManager: ObservableObject {
     private func loadLastSession() {
         guard let profileIDString = UserDefaults.standard.string(forKey: lastProfileIDKey),
               let profileID = UUID(uuidString: profileIDString),
-              let profile = loadProfile(id: profileID) else {
+              var profile = loadProfile(id: profileID) else {
             authenticationState = .loggedOut
+            syncStatus = .unknown
             return
         }
 
+        // Set initial state with local profile (will update if shared settings are found)
+        profile.lastAccessedAt = Date()
+        saveProfile(profile)
+        authenticationState = .loggedIn(profile)
+        syncStatus = .localOnly // Start with local, will update if sync succeeds
+        print("SessionManager: Restored session for '\(profile.name)'")
+
+        // If this is a user profile (not local), try to reload settings from shared storage
+        // This ensures settings sync when app starts if they were updated on another machine
+        if !profile.isLocal, let username = profile.username {
+            Task {
+                syncStatus = .syncing
+                let localModified = profile.lastAccessedAt
+                
+                if let (sharedSettings, sharedModified) = await loadSettingsFromSharedStorage(username: username) {
+                    await MainActor.run {
+                        // Check for conflicts: if both exist and are different
+                        let settingsAreDifferent = profile.settings != sharedSettings
+                        let timeDifference = abs(sharedModified.timeIntervalSince(localModified))
+                        
+                        if settingsAreDifferent && timeDifference > 1.0 {
+                            // Conflict detected - settings differ and timestamps are far apart
+                            let conflict: SettingsConflict
+                            
+                            if sharedModified > localModified {
+                                // Shared is newer - use shared settings
+                                conflict = SettingsConflict(
+                                    localModified: localModified,
+                                    sharedModified: sharedModified,
+                                    resolution: .usedShared
+                                )
+                                var updatedProfile = profile
+                                updatedProfile.settings = sharedSettings
+                                updatedProfile.lastAccessedAt = Date()
+                                saveProfile(updatedProfile)
+                                authenticationState = .loggedIn(updatedProfile)
+                                settingsConflict = conflict
+                                syncStatus = .conflict(conflict)
+                                print("SessionManager: Conflict resolved - used shared settings (newer: \(sharedModified) vs \(localModified))")
+                            } else {
+                                // Local is newer - keep local and sync it
+                                conflict = SettingsConflict(
+                                    localModified: localModified,
+                                    sharedModified: sharedModified,
+                                    resolution: .usedLocal
+                                )
+                                // Keep local settings, but sync them to shared storage
+                                settingsConflict = conflict
+                                syncStatus = .conflict(conflict)
+                                Task {
+                                    let saved = await saveSettingsToSharedStorage(profile: profile)
+                                    await MainActor.run {
+                                        if saved {
+                                            syncStatus = .synced
+                                            settingsConflict = nil
+                                        }
+                                    }
+                                }
+                                print("SessionManager: Conflict resolved - kept local settings (newer: \(localModified) vs \(sharedModified)), syncing to shared")
+                            }
+                        } else if settingsAreDifferent {
+                            // Settings differ but timestamps are very close (< 1 second) - likely a race condition
+                            // Prefer shared to be safe (someone else might have just updated)
+                            var updatedProfile = profile
+                            updatedProfile.settings = sharedSettings
+                            updatedProfile.lastAccessedAt = Date()
+                            saveProfile(updatedProfile)
+                            authenticationState = .loggedIn(updatedProfile)
+                            syncStatus = .synced
+                            print("SessionManager: Settings differ but timestamps close - using shared settings")
+                        } else {
+                            // Settings are the same, just update timestamp
         var updatedProfile = profile
         updatedProfile.lastAccessedAt = Date()
         saveProfile(updatedProfile)
-
-        authenticationState = .loggedIn(updatedProfile)
-        print("SessionManager: Restored session for workspace '\(profile.name)'")
-    }
-
-    // Authenticate with cloud workspace (simulated)
-    func authenticateCloud(username: String, password: String) -> Bool {
-        // Simulated cloud authentication
-        if username.lowercased() == "graysonmusic" && password == "gr@ys00n" {
-            let profile = WorkspaceProfile.graysonMusic()
-            login(with: profile)
-            return true
+                            syncStatus = .synced
+                            print("SessionManager: Settings in sync, no changes needed")
+                        }
+                        
+                        lastSyncError = nil
+                    }
+                } else {
+                    await MainActor.run {
+                        // Check if shared storage is configured but unavailable
+                        if let sharedCacheURL = profile.settings.sharedCacheURL, !sharedCacheURL.isEmpty {
+                            syncStatus = .localOnly
+                            lastSyncError = "Shared storage unavailable. Using local settings."
+                        } else {
+                            syncStatus = .localOnly
+                            lastSyncError = nil
+                        }
+                        print("SessionManager: No shared settings found for '\(username)', using local settings")
+                    }
+                }
+            }
+        } else {
+            // Local workspace - no sync needed
+            syncStatus = .localOnly
+            lastSyncError = nil
         }
-        return false
     }
 
-    // Create a local workspace
+    // Log in with username (loads settings from shared storage)
+    func loginWithUsername(_ username: String) async {
+        let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !cleanUsername.isEmpty else { return }
+        
+        syncStatus = .syncing
+        lastSyncError = nil
+        
+        // Try to load settings from shared storage
+        var loadedSettings: AppSettings? = nil
+        var usingSharedStorage = false
+        
+        if let (sharedSettings, _) = await loadSettingsFromSharedStorage(username: cleanUsername) {
+            loadedSettings = sharedSettings
+            usingSharedStorage = true
+            syncStatus = .synced
+            print("SessionManager: Loaded settings from shared storage for '\(cleanUsername)'")
+        } else {
+            // Check if shared storage is configured but unavailable
+            let defaultSettings = AppSettings.default
+            if let sharedCacheURL = defaultSettings.sharedCacheURL, !sharedCacheURL.isEmpty {
+                // Shared storage is configured but unavailable
+                syncStatus = .localOnly
+                lastSyncError = "Shared storage unavailable. Using local settings. Changes will sync when connection is restored."
+                print("SessionManager: Shared storage configured but unavailable for '\(cleanUsername)'")
+            } else {
+                // No shared storage configured
+                syncStatus = .localOnly
+                print("SessionManager: No shared storage configured, using local settings")
+            }
+        }
+        
+        // Create user profile with loaded or default settings
+        let profile = WorkspaceProfile.user(username: cleanUsername, settings: loadedSettings)
+            login(with: profile)
+        
+        // Try to save to shared storage (will fail gracefully if unavailable)
+        if let sharedCacheURL = profile.settings.sharedCacheURL, !sharedCacheURL.isEmpty {
+            let saved = await saveSettingsToSharedStorage(profile: profile)
+            if !saved && !usingSharedStorage {
+                // Failed to save and we didn't load from shared storage
+                syncStatus = .syncFailed("Cannot connect to shared storage")
+            } else if saved {
+                syncStatus = .synced
+            }
+        }
+    }
+
+    // Create a local workspace (not synced)
     func createLocalWorkspace(name: String) {
         let profile = WorkspaceProfile.local(name: name)
         login(with: profile)
@@ -118,6 +289,9 @@ class SessionManager: ObservableObject {
 
         saveProfile(updatedProfile)
         UserDefaults.standard.set(updatedProfile.id.uuidString, forKey: lastProfileIDKey)
+        if let username = updatedProfile.username {
+            UserDefaults.standard.set(username, forKey: lastUsernameKey)
+        }
 
         authenticationState = .loggedIn(updatedProfile)
         print("SessionManager: Logged in to workspace '\(profile.name)'")
@@ -125,7 +299,15 @@ class SessionManager: ObservableObject {
 
     // Log out
     func logout() {
+        // Save current settings to shared storage before logging out
+        if case .loggedIn(let profile) = authenticationState, !profile.isLocal, profile.username != nil {
+            Task {
+                await saveSettingsToSharedStorage(profile: profile)
+            }
+        }
+        
         UserDefaults.standard.removeObject(forKey: lastProfileIDKey)
+        UserDefaults.standard.removeObject(forKey: lastUsernameKey)
         authenticationState = .loggedOut
         print("SessionManager: Logged out")
     }
@@ -137,8 +319,30 @@ class SessionManager: ObservableObject {
         profile.settings = settings
         profile.lastAccessedAt = Date()
 
+        // Always save locally first (works offline)
         saveProfile(profile)
         authenticationState = .loggedIn(profile)
+        
+        // Try to save to shared storage if this is a synced user profile
+        if !profile.isLocal, profile.username != nil {
+            syncStatus = .syncing
+            Task {
+                let saved = await saveSettingsToSharedStorage(profile: profile)
+                await MainActor.run {
+                    if saved {
+                        syncStatus = .synced
+                        lastSyncError = nil
+                    } else {
+                        // Check if shared storage is configured
+                        if let sharedCacheURL = profile.settings.sharedCacheURL, !sharedCacheURL.isEmpty {
+                            syncStatus = .syncFailed("Shared storage unavailable. Settings saved locally and will sync when connection is restored.")
+                        } else {
+                            syncStatus = .localOnly
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Profile Persistence
@@ -163,5 +367,111 @@ class SessionManager: ObservableObject {
             return [:]
         }
         return profiles
+    }
+    
+    /// Get all user profiles (non-local, synced profiles)
+    func getAllUserProfiles() -> [WorkspaceProfile] {
+        let allProfiles = loadAllProfiles()
+        return allProfiles.values
+            .filter { !$0.isLocal && $0.username != nil }
+            .sorted { $0.lastAccessedAt > $1.lastAccessedAt } // Most recently used first
+    }
+    
+    // MARK: - Shared Storage Settings Sync
+    
+    /// Load settings from shared storage for a user
+    /// - Returns: Tuple of (settings, fileModificationDate) or nil if unavailable
+    private func loadSettingsFromSharedStorage(username: String) async -> (AppSettings, Date)? {
+        // First, try to get shared cache URL from default settings
+        let defaultSettings = AppSettings.default
+        guard let sharedCacheURL = defaultSettings.sharedCacheURL, !sharedCacheURL.isEmpty else {
+            print("SessionManager: No shared cache URL configured")
+            return nil
+        }
+        
+        let settingsPath = "\(sharedCacheURL)/MediaDash_Settings"
+        let settingsFile = "\(settingsPath)/\(username).json"
+        
+        // Check if settings directory exists, create if needed
+        let fileManager = FileManager.default
+        let settingsURL = URL(fileURLWithPath: settingsFile)
+        
+        guard fileManager.fileExists(atPath: settingsFile) else {
+            print("SessionManager: Settings file not found at \(settingsFile)")
+            return nil
+        }
+        
+        do {
+            // Get file modification date
+            let attributes = try fileManager.attributesOfItem(atPath: settingsFile)
+            let modificationDate = attributes[.modificationDate] as? Date ?? Date()
+            
+            let data = try Data(contentsOf: settingsURL)
+            let settings = try JSONDecoder().decode(AppSettings.self, from: data)
+            print("SessionManager: Successfully loaded settings from \(settingsFile) (modified: \(modificationDate))")
+            return (settings, modificationDate)
+        } catch {
+            print("SessionManager: Failed to load settings from shared storage: \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
+    /// Get local settings file modification date
+    private func getLocalSettingsModificationDate(username: String) -> Date? {
+        // Get the profile's last accessed date as a proxy for when local settings were last modified
+        // We could also check UserDefaults modification, but lastAccessedAt is close enough
+        guard case .loggedIn(let profile) = authenticationState,
+              profile.username == username else {
+            return nil
+        }
+        return profile.lastAccessedAt
+    }
+    
+    /// Save settings to shared storage for a user
+    /// - Returns: true if successful, false if failed (e.g., server unavailable)
+    private func saveSettingsToSharedStorage(profile: WorkspaceProfile) async -> Bool {
+        guard let username = profile.username else {
+            print("SessionManager: Cannot save to shared storage - no username")
+            return false
+        }
+        
+        guard let sharedCacheURL = profile.settings.sharedCacheURL, !sharedCacheURL.isEmpty else {
+            print("SessionManager: No shared cache URL configured, skipping sync")
+            return false
+        }
+        
+        let settingsPath = "\(sharedCacheURL)/MediaDash_Settings"
+        let settingsFile = "\(settingsPath)/\(username).json"
+        
+        let fileManager = FileManager.default
+        let settingsURL = URL(fileURLWithPath: settingsFile)
+        let settingsDirURL = URL(fileURLWithPath: settingsPath)
+        
+        // Check if the base path exists (server mounted)
+        guard fileManager.fileExists(atPath: sharedCacheURL) else {
+            print("SessionManager: Shared storage path not available: \(sharedCacheURL)")
+            return false
+        }
+        
+        // Create settings directory if it doesn't exist
+        do {
+            try fileManager.createDirectory(at: settingsDirURL, withIntermediateDirectories: true, attributes: nil)
+        } catch {
+            print("SessionManager: Failed to create settings directory: \(error.localizedDescription)")
+            return false
+        }
+        
+        // Save settings to file
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(profile.settings)
+            try data.write(to: settingsURL)
+            print("SessionManager: Successfully saved settings to \(settingsFile)")
+            return true
+        } catch {
+            print("SessionManager: Failed to save settings to shared storage: \(error.localizedDescription)")
+            return false
+        }
     }
 }

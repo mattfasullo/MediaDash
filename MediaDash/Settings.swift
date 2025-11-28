@@ -206,6 +206,29 @@ enum BrowserPreference: String, Codable, CaseIterable {
     }
 }
 
+// MARK: - Appearance Mode
+
+enum AppearanceMode: String, Codable, CaseIterable {
+    case system = "System"
+    case light = "Light"
+    case dark = "Dark"
+    
+    var displayName: String {
+        self.rawValue
+    }
+    
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system:
+            return nil // Use system default
+        case .light:
+            return .light
+        case .dark:
+            return .dark
+        }
+    }
+}
+
 // MARK: - App Theme
 
 enum AppTheme: String, Codable, CaseIterable {
@@ -333,12 +356,16 @@ struct AppSettings: Codable, Equatable {
     // Path Settings
     var serverBasePath: String
     var sessionsBasePath: String
+    var serverConnectionURL: String? // e.g., "smb://192.168.200.200" or "192.168.200.200"
 
     // Job Info Source
     var docketSource: DocketSource
 
     // App Theme
     var appTheme: AppTheme
+    
+    // Appearance (Color Scheme)
+    var appearance: AppearanceMode
 
     // Update Channel
     var updateChannel: UpdateChannel
@@ -442,13 +469,19 @@ struct AppSettings: Codable, Equatable {
     var grabbedSenderWhitelist: [String] // Approved sender email addresses
     var grabbedBodyExclusions: [String] // Body keywords that EXCLUDE from media-file-delivery (e.g., "check out", "review", "options posted")
 
+    // Fun Feature: Cursed Image Replies
+    var enableCursedImageReplies: Bool // Enable fun feature to send random images from Reddit instead of "Grabbed" text
+    var cursedImageSubreddit: String // Subreddit name to fetch images from (e.g., "cursedimages")
+
     static var `default`: AppSettings {
         AppSettings(
             profileName: "Default",
             serverBasePath: "/Volumes/Grayson Assets/GM",
             sessionsBasePath: "/Volumes/Grayson Assets/SESSIONS",
+            serverConnectionURL: "192.168.200.200",
             docketSource: .csv,
             appTheme: .modern,
+            appearance: .system, // Default to system appearance
             updateChannel: .production,
             workPictureFolderName: "WORK PICTURE",
             prepFolderName: "SESSION PREP",
@@ -531,7 +564,9 @@ struct AppSettings: Codable, Equatable {
                 "f.io"                  // Frame.io (delivery links, not review)
             ], // Default file hosting whitelist (based on real examples)
             grabbedSenderWhitelist: [], // Default sender whitelist (empty, user can add)
-            grabbedBodyExclusions: [] // Body exclusions (user-configurable, no defaults)
+            grabbedBodyExclusions: [], // Body exclusions (user-configurable, no defaults)
+            enableCursedImageReplies: false, // Fun feature disabled by default
+            cursedImageSubreddit: "cursedimages" // Default subreddit
         )
     }
 }
@@ -634,8 +669,8 @@ class SettingsManager: ObservableObject {
         if let encoded = try? JSONEncoder().encode(profiles) {
             userDefaults.set(encoded, forKey: profilesKey)
             let profileKeys = Array(profiles.keys).sorted()
-            // Defer state update to avoid SwiftUI warning
-            DispatchQueue.main.async {
+            // Defer state update to avoid SwiftUI warning - use Task to ensure it happens after view update
+            Task { @MainActor in
                 self.availableProfiles = profileKeys
             }
         }

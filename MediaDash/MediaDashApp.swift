@@ -12,6 +12,13 @@ import AppKit
 struct MediaDashApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    init() {
+        // Initialize file logger on app startup
+        // This creates the log file at ~/Library/Logs/MediaDash/mediadash-debug.log
+        // The AI assistant can read this file directly to debug issues
+        _ = FileLogger.shared
+    }
+
     var body: some Scene {
         WindowGroup {
             GatekeeperView()

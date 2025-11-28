@@ -534,10 +534,13 @@ class MediaManager: ObservableObject {
         self.config = AppConfig(settings: settingsManager.currentSettings)
         self.metadataManager = metadataManager
 
-        // Check directory access on startup
-        checkAllDirectoryAccess()
+        // Directory connection status is now shown via status indicators in the sidebar
+        // No need to show popup on launch
 
+        // Start docket scanning (async, non-blocking)
         refreshDockets()
+        
+        // Build session index during startup (essential for smooth UX)
         buildSessionIndex()
 
         // Initialize video converter
@@ -685,8 +688,20 @@ class MediaManager: ObservableObject {
     }
 
     func searchSessions(term: String, folder: SearchFolder = .sessions) async -> SearchResults {
-        // Build index for this folder if not cached
-        if folderCaches[folder] == nil { buildSessionIndex(folder: folder) }
+        // Build index for this folder if not cached (but don't wait if already indexing)
+        if folderCaches[folder] == nil && !indexingFolders.contains(folder) {
+            buildSessionIndex(folder: folder)
+        }
+        
+        // If indexing is in progress, wait a bit for it to complete (max 2 seconds)
+        if indexingFolders.contains(folder) {
+            var attempts = 0
+            while indexingFolders.contains(folder) && attempts < 20 {
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                attempts += 1
+            }
+        }
+        
         if term.isEmpty { return SearchResults(exactMatches: [], fuzzyMatches: []) }
 
         let currentCache = folderCaches[folder] ?? []

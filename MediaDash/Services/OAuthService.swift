@@ -198,7 +198,8 @@ class OAuthService: ObservableObject {
         // Gmail OAuth scopes
         let scopes = [
             "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/gmail.modify"
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send"
         ]
         let scopeString = scopes.joined(separator: " ")
         

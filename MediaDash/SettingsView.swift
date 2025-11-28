@@ -82,6 +82,7 @@ struct ExpandableSettingsHeader: View {
 
 struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
+    @EnvironmentObject var sessionManager: SessionManager
     @Binding var isPresented: Bool
 
     @State private var settings: AppSettings
@@ -233,6 +234,7 @@ struct SettingsView: View {
                     ProfileSection(
                         settings: $settings,
                         settingsManager: settingsManager,
+                        sessionManager: sessionManager,
                         showNewProfileSheet: $showNewProfileSheet,
                         showDeleteAlert: $showDeleteAlert,
                         profileToDelete: $profileToDelete,
@@ -279,6 +281,9 @@ struct SettingsView: View {
 
                     // General Options (Search, Workflow, etc.)
                     GeneralOptionsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                    
+                    // Work Culture Enhancements
+                    WorkCultureEnhancementsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
@@ -329,7 +334,7 @@ struct SettingsView: View {
                 .background(Color(nsColor: .controlBackgroundColor))
             }
         }
-        .frame(width: 720, height: 650)
+        .frame(width: 600, height: 500)
         .sheet(isPresented: $showNewProfileSheet) {
             NewProfileView(
                 settingsManager: settingsManager,
@@ -357,10 +362,18 @@ struct SettingsView: View {
 struct ProfileSection: View {
     @Binding var settings: AppSettings
     @ObservedObject var settingsManager: SettingsManager
+    @ObservedObject var sessionManager: SessionManager
     @Binding var showNewProfileSheet: Bool
     @Binding var showDeleteAlert: Bool
     @Binding var profileToDelete: String?
     @Binding var hasUnsavedChanges: Bool
+    
+    private var currentWorkspaceProfile: WorkspaceProfile? {
+        if case .loggedIn(let profile) = sessionManager.authenticationState {
+            return profile
+        }
+        return nil
+    }
 
     var body: some View {
         SettingsCard {
@@ -373,18 +386,122 @@ struct ProfileSection: View {
                         .font(.system(size: 18, weight: .semibold))
                 }
 
-                HStack(spacing: 12) {
+                // Workspace Profile Info (if logged in)
+                if let workspaceProfile = currentWorkspaceProfile {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: workspaceProfile.isLocal ? "desktopcomputer" : "cloud.fill")
+                                .foregroundColor(workspaceProfile.isLocal ? .orange : .blue)
+                                .font(.system(size: 12))
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(workspaceProfile.name)
+                                    .font(.system(size: 13, weight: .medium))
+                                
+                                if let username = workspaceProfile.username {
+                                    Text(username)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            // Sync Status
+                            syncStatusBadge
+                        }
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 12)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(6)
+                        
+                        // Last accessed info
+                        if !workspaceProfile.isLocal {
+                            HStack {
+                                Image(systemName: "clock")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                                Text("Last accessed: \(formatDate(workspaceProfile.lastAccessedAt))")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.leading, 4)
+                        }
+                    }
+                    .padding(.bottom, 8)
+                    
+                    Divider()
+                        .padding(.vertical, 4)
+                }
+
+                // Mode Selector (Media, Producer, Engineer, Admin)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Mode")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                    
                     Menu {
-                        ForEach(settingsManager.availableProfiles, id: \.self) { profile in
-                            Button(profile) {
-                                settingsManager.loadProfile(name: profile)
-                                settings = settingsManager.currentSettings
-                                hasUnsavedChanges = false
+                        // Media Mode - Enabled
+                        Button {
+                            // Media mode is active, no action needed
+                        } label: {
+                            HStack {
+                                Text("Media")
+                                Spacer()
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
                             }
                         }
+                        
+                        Divider()
+                        
+                        // Producer Mode - Disabled
+                        Button {
+                            // Coming soon
+                        } label: {
+                            HStack {
+                                Text("Producer")
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text("Coming Soon")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .disabled(true)
+                        
+                        // Engineer Mode - Disabled
+                        Button {
+                            // Coming soon
+                        } label: {
+                            HStack {
+                                Text("Engineer")
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text("Coming Soon")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .disabled(true)
+                        
+                        // Admin Mode - Disabled
+                        Button {
+                            // Coming soon
+                        } label: {
+                            HStack {
+                                Text("Admin")
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text("Coming Soon")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .disabled(true)
                     } label: {
                         HStack {
-                            Text(settings.profileName)
+                            Text("Media")
                                 .foregroundColor(.primary)
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 11))
@@ -397,34 +514,69 @@ struct ProfileSection: View {
                         .cornerRadius(6)
                     }
                     .menuStyle(.borderlessButton)
-
-                    Button(action: { showNewProfileSheet = true }) {
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundColor(.blue)
-                            .font(.system(size: 20))
-                    }
-                    .buttonStyle(.plain)
-                    .help("New Profile")
-
-                    if settings.profileName != "Default" {
-                        Button(action: {
-                            profileToDelete = settings.profileName
-                            showDeleteAlert = true
-                        }) {
-                            Image(systemName: "trash.circle.fill")
-                                .foregroundColor(.red)
-                                .font(.system(size: 20))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Delete Profile")
-                    }
+                    
+                    Text("Each mode has different layouts and core features")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
                 }
-
-                Text("Save different configurations for different workflows")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
             }
         }
+    }
+    
+    private var syncStatusBadge: some View {
+        Group {
+            switch sessionManager.syncStatus {
+            case .synced:
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                    Text("Synced")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(.green)
+            case .localOnly:
+                HStack(spacing: 4) {
+                    Image(systemName: "desktopcomputer")
+                        .font(.system(size: 10))
+                    Text("Local")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(.orange)
+            case .syncing:
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 10, height: 10)
+                    Text("Syncing")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(.blue)
+            case .syncFailed:
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                    Text("Failed")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(.red)
+            case .conflict:
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10))
+                    Text("Conflict")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(.yellow)
+            case .unknown:
+                EmptyView()
+            }
+        }
+    }
+    
+    private func formatDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
 
@@ -456,6 +608,20 @@ struct PathSettingsSection: View {
                     .foregroundColor(.secondary)
 
                 VStack(alignment: .leading, spacing: 20) {
+                // Server Connection
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Server Connection")
+                        .font(.system(size: 14, weight: .medium))
+                    Text("Network server IP or hostname (e.g., 192.168.200.200 or smb://192.168.200.200)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    TextField("Example: 192.168.200.200", text: Binding(
+                        get: { settings.serverConnectionURL ?? "" },
+                        set: { settings.serverConnectionURL = $0.isEmpty ? nil : $0 }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                }
+                
                 // Server Base Path
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Work Picture & Prep Storage")
@@ -2869,29 +3035,54 @@ struct ThemeSelectionSection: View {
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Theme")
-                        .font(.system(size: 14, weight: .medium))
+                VStack(alignment: .leading, spacing: 12) {
+                    // Appearance (Light/Dark Mode)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Appearance")
+                            .font(.system(size: 14, weight: .medium))
 
-                    Picker("", selection: Binding(
-                        get: { settings.appTheme },
-                        set: {
-                            settings.appTheme = $0
-                            hasUnsavedChanges = true
+                        Picker("", selection: Binding(
+                            get: { settings.appearance },
+                            set: {
+                                settings.appearance = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
                         }
-                    )) {
-                        ForEach(AppTheme.allCases, id: \.self) { theme in
-                            Text(theme.displayName).tag(theme)
-                        }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.menu)
-                    .frame(width: 250)
+                    
+                    Divider()
+                        .padding(.vertical, 4)
+                    
+                    // Theme
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Theme")
+                            .font(.system(size: 14, weight: .medium))
 
-                    // Theme description
-                    Text(themeDescription(for: settings.appTheme))
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .padding(.top, 2)
+                        Picker("", selection: Binding(
+                            get: { settings.appTheme },
+                            set: {
+                                settings.appTheme = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            ForEach(AppTheme.allCases, id: \.self) { theme in
+                                Text(theme.displayName).tag(theme)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 250)
+
+                        // Theme description
+                        Text(themeDescription(for: settings.appTheme))
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .padding(.top, 2)
+                    }
                 }
             }
         }
@@ -3041,6 +3232,76 @@ struct CSVColumnMappingSection: View {
             ))
             .textFieldStyle(.roundedBorder)
             .frame(width: 280)
+        }
+    }
+}
+
+// MARK: - Work Culture Enhancements Section
+
+struct WorkCultureEnhancementsSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Image(systemName: "sparkles")
+                        .foregroundColor(.purple)
+                        .font(.system(size: 18))
+                    Text("Work Culture Enhancements")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+
+                Text("Fun features to enhance your workflow experience")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    // Cursed Image Grabbed Replies
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(isOn: Binding(
+                            get: { settings.enableCursedImageReplies },
+                            set: {
+                                settings.enableCursedImageReplies = $0
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Cursed Image Grabbed Replies")
+                                    .font(.system(size: 13))
+                                Text("Instead of sending 'Grabbed' text, send a random image from a Reddit subreddit (NSFW subreddits are automatically excluded)")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+                        
+                        if settings.enableCursedImageReplies {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Subreddit Name")
+                                    .font(.system(size: 11))
+                                
+                                TextField("cursedimages", text: Binding(
+                                    get: { settings.cursedImageSubreddit },
+                                    set: {
+                                        settings.cursedImageSubreddit = $0
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                
+                                Text("Enter subreddit name without 'r/' prefix (e.g., 'cursedimages', 'blursedimages')")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.leading, 16)
+                            .padding(.top, 4)
+                        }
+                    }
+                }
+            }
+            .padding(20)
         }
     }
 }

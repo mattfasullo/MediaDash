@@ -372,5 +372,218 @@ class GmailService: ObservableObject {
             throw GmailError.apiError("HTTP \(httpResponse.statusCode)")
         }
     }
+    
+    /// Send a reply email
+    /// - Parameters:
+    ///   - messageId: The ID of the original message to reply to
+    ///   - body: The email body text
+    ///   - to: Array of recipient email addresses (will replace all recipients)
+    ///   - imageURL: Optional image URL to embed in the email (creates HTML email)
+    /// - Returns: The sent message ID
+    func sendReply(messageId: String, body: String, to: [String], imageURL: URL? = nil) async throws -> String {
+        isFetching = true
+        lastError = nil
+        defer { isFetching = false }
+        
+        // Get the original message to extract thread ID and subject
+        let originalMessage = try await getEmail(messageId: messageId)
+        
+        // Build the email message
+        // Gmail API requires messages to be in RFC 2822 format, base64url encoded
+        var emailString = ""
+        
+        // Headers
+        // Get authenticated user's email from original message's "To" or "Cc" headers
+        // (they're replying to their own email, so it should be in the thread)
+        var userEmail: String? = nil
+        if let toHeader = originalMessage.payload?.headers?.first(where: { $0.name.lowercased() == "to" })?.value {
+            userEmail = extractEmailAddress(from: toHeader)
+        } else if let ccHeader = originalMessage.payload?.headers?.first(where: { $0.name.lowercased() == "cc" })?.value {
+            userEmail = extractEmailAddress(from: ccHeader)
+        }
+        
+        // Add From header with display name format for better display in email clients
+        if let email = userEmail {
+            let displayName = formatDisplayName(from: email)
+            emailString += "From: \(displayName) <\(email)>\r\n"
+        }
+        
+        emailString += "To: \(to.joined(separator: ", "))\r\n"
+        
+        // Get original subject and add "Re:" if not already present
+        var subject = originalMessage.subject ?? ""
+        if !subject.lowercased().hasPrefix("re:") {
+            subject = "Re: \(subject)"
+        }
+        emailString += "Subject: \(subject)\r\n"
+        
+        // Add In-Reply-To and References headers for threading
+        if let messageIdHeader = originalMessage.payload?.headers?.first(where: { $0.name.lowercased() == "message-id" })?.value {
+            emailString += "In-Reply-To: \(messageIdHeader)\r\n"
+            emailString += "References: \(messageIdHeader)\r\n"
+        }
+        
+        // Thread ID is automatically handled by Gmail when replying (via In-Reply-To and References headers)
+        
+        // If imageURL is provided, create HTML email, otherwise plain text
+        if let imageURL = imageURL {
+            // Create multipart/alternative email with both HTML and plain text
+            let boundary = "----=_Part_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+            
+            emailString += "MIME-Version: 1.0\r\n"
+            emailString += "Content-Type: multipart/alternative; boundary=\"\(boundary)\"\r\n"
+            emailString += "\r\n"
+            
+            // Plain text version
+            emailString += "--\(boundary)\r\n"
+            emailString += "Content-Type: text/plain; charset=UTF-8\r\n"
+            emailString += "\r\n"
+            emailString += "\(body)\r\n\r\n--\r\nGrabbed via MediaDash\r\n"
+            
+            // HTML version with embedded image
+            emailString += "\r\n--\(boundary)\r\n"
+            emailString += "Content-Type: text/html; charset=UTF-8\r\n"
+            emailString += "\r\n"
+            
+            // Escape HTML in body text
+            let escapedBody = body
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+                .replacingOccurrences(of: "'", with: "&#39;")
+            
+            // Escape image URL for HTML attribute
+            let escapedImageURL = imageURL.absoluteString
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+            
+            let htmlBody = """
+            <html>
+            <body>
+                <p>\(escapedBody)</p>
+                <p><img src="\(escapedImageURL)" alt="Image" style="max-width: 100%; height: auto;" /></p>
+                <hr>
+                <p style="font-size: 12px; color: #666;">Grabbed via MediaDash</p>
+            </body>
+            </html>
+            """
+            
+            emailString += htmlBody
+            emailString += "\r\n--\(boundary)--\r\n"
+        } else {
+            // Plain text email
+        emailString += "Content-Type: text/plain; charset=UTF-8\r\n"
+        emailString += "\r\n"
+        
+        // Always add MediaDash signature
+        let emailBody = "\(body)\n\n--\nGrabbed via MediaDash"
+        emailString += emailBody
+        }
+        
+        // Encode to base64url
+        let emailData = emailString.data(using: .utf8)!
+        let base64String = emailData.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        
+        // Prepare the request
+        let url = URL(string: "\(baseURL)/users/me/messages/send")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let requestBody: [String: Any] = [
+            "raw": base64String,
+            "threadId": originalMessage.threadId
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
+        
+        if httpResponse.statusCode == 401 {
+            throw GmailError.notAuthenticated
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw GmailError.apiError("HTTP \(httpResponse.statusCode): \(errorMessage)")
+        }
+        
+        struct SendResponse: Codable {
+            let id: String
+            let threadId: String?
+        }
+        
+        let response = try JSONDecoder().decode(SendResponse.self, from: data)
+        return response.id
+    }
+    
+    /// Extract email address from "Name <email@example.com>" format
+    private func extractEmailAddress(from text: String) -> String {
+        // Check for angle bracket format
+        if let regex = try? NSRegularExpression(pattern: #"<([^>]+)>"#, options: []),
+           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           match.numberOfRanges >= 2,
+           let emailRange = Range(match.range(at: 1), in: text) {
+            return String(text[emailRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        // If no angle brackets, check if it's already an email
+        if text.contains("@") {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        return text
+    }
+    
+    /// Format display name from email address
+    /// e.g., "mattfasullo@example.com" -> "Matt Fasullo"
+    private func formatDisplayName(from email: String) -> String {
+        // Extract username part (before @)
+        let username = email.components(separatedBy: "@").first ?? email
+        
+        // Split on common separators and capitalize
+        var nameParts: [String] = []
+        
+        // Try splitting on dots first
+        if username.contains(".") {
+            nameParts = username.components(separatedBy: ".")
+        }
+        // Try splitting on underscores
+        else if username.contains("_") {
+            nameParts = username.components(separatedBy: "_")
+        }
+        // Try splitting on camelCase (detect capital letters)
+        else if username.rangeOfCharacter(from: CharacterSet.uppercaseLetters) != nil {
+            // Split on capital letters (e.g., "mattFasullo" -> ["matt", "Fasullo"])
+            let regex = try? NSRegularExpression(pattern: "([a-z]+)([A-Z][a-z]*)", options: [])
+            if let matches = regex?.matches(in: username, range: NSRange(username.startIndex..., in: username)) {
+                for match in matches {
+                    for i in 1..<match.numberOfRanges {
+                        if let range = Range(match.range(at: i), in: username) {
+                            nameParts.append(String(username[range]))
+                        }
+                    }
+                }
+            }
+            if nameParts.isEmpty {
+                nameParts = [username]
+            }
+        }
+        // Single word
+        else {
+            nameParts = [username]
+        }
+        
+        // Capitalize each part
+        let capitalizedParts = nameParts.map { part in
+            part.isEmpty ? "" : part.prefix(1).uppercased() + part.dropFirst().lowercased()
+        }
+        
+        return capitalizedParts.joined(separator: " ")
+    }
 }
 
