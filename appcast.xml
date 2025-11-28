@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.6.0</title>
+            <description><![CDATA[
+                <h2>What's New in 0.6.0</h2><ul><li>Added comprehensive logging infrastructure with file-based logging and debug helpers</li><li>New splash screen with progress tracking and initialization feedback</li><li>Enhanced email qualification system with detailed debug output and improved filtering</li><li>Improved file hosting link detection (excludes images, social media, review platforms)</li><li>New grabbed indicator service to track when media team members reply to emails</li><li>Redesigned login UI with profile selection</li><li>Performance optimizations: company name cache preloading, background initialization</li><li>Better session management with settings sync and conflict detection</li></ul>
+            ]]></description>
+            <pubDate>Fri, 28 Nov 2025 08:50:35 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.6.0/MediaDash.zip"
+                sparkle:version="60"
+                sparkle:shortVersionString="0.6.0"
+                sparkle:edSignature="FMRYuc4tEn1raPzt5fCD4VXhxax4YIHfGR1TjkfMhxMZe/JVHUXtY2Bm+Hky6fmsEBLIZObEBFqv8+pOZnvVBw=="
+                length="4890692"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.5.4</title>
             <description><![CDATA[
                 <p>Fix Gmail authentication persistence and settings Save button</p>
