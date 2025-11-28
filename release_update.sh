@@ -122,6 +122,20 @@ if [ -f "media_validator.py" ]; then
     mkdir -p "$RELEASE_DIR/$APP_NAME.app/Contents/Resources"
     cp "media_validator.py" "$RELEASE_DIR/$APP_NAME.app/Contents/Resources/"
     echo -e "${GREEN}✅ media_validator.py copied to bundle${NC}"
+    
+    # Re-sign the app after adding files (required to maintain code signature seal)
+    echo -e "${BLUE}🔐 Re-signing app after adding media_validator.py...${NC}"
+    # Try Developer ID first, fall back to ad-hoc signing
+    codesign --force --deep --sign "Developer ID Application: Matt Fasullo (9XPBY59H89)" "$RELEASE_DIR/$APP_NAME.app" 2>/dev/null || \
+    codesign --force --deep --sign - "$RELEASE_DIR/$APP_NAME.app" 2>&1
+    
+    # Verify signature
+    if codesign -vv --deep --strict "$RELEASE_DIR/$APP_NAME.app" 2>&1 | grep -q "valid on disk"; then
+        echo -e "${GREEN}✅ App re-signed and verified${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Warning: Signature verification had issues, but continuing...${NC}"
+        codesign -vv --deep --strict "$RELEASE_DIR/$APP_NAME.app" 2>&1 | head -3
+    fi
 else
     echo -e "${RED}❌ WARNING: media_validator.py not found in project root!${NC}"
 fi

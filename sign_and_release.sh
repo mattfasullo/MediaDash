@@ -31,6 +31,20 @@ if [ ! -d "$RELEASE_DIR/$APP_NAME.app" ]; then
     exit 1
 fi
 
+# Re-sign app if media_validator.py was added (maintains code signature seal)
+if [ -f "$RELEASE_DIR/$APP_NAME.app/Contents/Resources/media_validator.py" ]; then
+    echo -e "${BLUE}🔐 Re-signing app after adding media_validator.py...${NC}"
+    codesign --force --deep --sign "Developer ID Application: Matt Fasullo (9XPBY59H89)" "$RELEASE_DIR/$APP_NAME.app" 2>/dev/null || \
+    codesign --force --deep --sign - "$RELEASE_DIR/$APP_NAME.app" 2>&1
+    
+    # Verify signature
+    if codesign -vv --deep --strict "$RELEASE_DIR/$APP_NAME.app" 2>&1 | grep -q "valid on disk"; then
+        echo -e "${GREEN}✓ App re-signed and verified${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Warning: Signature verification had issues${NC}"
+    fi
+fi
+
 # Create ZIP
 echo -e "${BLUE}🗜️  Creating ZIP...${NC}"
 cd "$RELEASE_DIR"

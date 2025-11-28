@@ -103,21 +103,21 @@ else
     echo -e "${RED}❌ WARNING: media_validator.py not found in project root!${NC}"
 fi
 
-# Re-sign with available certificate (in case copying files broke the signature)
-echo -e "${BLUE}🔐 Re-signing app...${NC}"
-# Try Developer ID first, fall back to automatic signing
-codesign --force --deep --sign "Developer ID Application: Matt Fasullo (9XPBY59H89)" "$RELEASE_DIR/$APP_NAME.app" 2>&1 || \
+# Re-sign with available certificate (REQUIRED after copying files to maintain code signature seal)
+echo -e "${BLUE}🔐 Re-signing app after adding media_validator.py...${NC}"
+# Try Developer ID first, fall back to ad-hoc signing
+codesign --force --deep --sign "Developer ID Application: Matt Fasullo (9XPBY59H89)" "$RELEASE_DIR/$APP_NAME.app" 2>/dev/null || \
 codesign --force --deep --sign - "$RELEASE_DIR/$APP_NAME.app" 2>&1 || {
     echo -e "${YELLOW}⚠️  Warning: Re-signing failed, app may need manual signing${NC}"
 }
 
 # Verify signature
 echo -e "${BLUE}🔍 Verifying signature...${NC}"
-codesign -vv --deep --strict "$RELEASE_DIR/$APP_NAME.app" 2>&1
-if [ $? -eq 0 ]; then
+if codesign -vv --deep --strict "$RELEASE_DIR/$APP_NAME.app" 2>&1 | grep -q "valid on disk"; then
     echo -e "${GREEN}✓ App signature verified${NC}"
 else
     echo -e "${RED}❌ WARNING: Signature verification failed!${NC}"
+    codesign -vv --deep --strict "$RELEASE_DIR/$APP_NAME.app" 2>&1 | head -5
 fi
 
 # Create ZIP
