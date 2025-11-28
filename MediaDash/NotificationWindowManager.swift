@@ -99,7 +99,7 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     func setLocked(_ locked: Bool) {
         isLocked = locked
         updateWindowMovability()
-        
+
         if locked {
             // Re-enable monitoring if it was disabled
             setupWindowMonitoring()
@@ -113,13 +113,18 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             // Cancel monitoring when unlocked
             cancellables.removeAll()
             stopContinuousPositionMonitoring()
-            
+
+            // Remove child window relationship
+            if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
+                mainWindow.removeChildWindow(notificationWindow)
+            }
+
             // Remove delegate from main window
             if let mainWindow = mainWindow, isMainWindowDelegate {
                 mainWindow.delegate = nil
                 isMainWindowDelegate = false
             }
-            
+
             lockedPosition = nil
             lastMainWindowFrame = nil
         }
@@ -139,13 +144,18 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     func windowWillClose(_ notification: Foundation.Notification) {
         isVisible = false
         stopContinuousPositionMonitoring()
-        
+
+        // Remove child window relationship
+        if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
+            mainWindow.removeChildWindow(notificationWindow)
+        }
+
         // Remove delegate from main window
         if let mainWindow = mainWindow, isMainWindowDelegate {
             mainWindow.delegate = nil
             isMainWindowDelegate = false
         }
-        
+
         notificationWindow = nil
         lockedPosition = nil
         lastMainWindowFrame = nil
@@ -215,87 +225,71 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         // Only monitor if window is locked
         guard isLocked else {
             print("🔒 NotificationWindowManager: Monitoring not set up - window is unlocked")
+            // Remove child window relationship when unlocked
+            if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
+                mainWindow.removeChildWindow(notificationWindow)
+            }
             return
         }
-        
+
         print("🔒 NotificationWindowManager: Setting up window monitoring...")
-        
+
         // Set up main window as delegate for direct frame tracking
         findMainWindow()
-        if let mainWindow = mainWindow {
+        if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
             print("✅ NotificationWindowManager: Found main window: \(mainWindow.title) at \(mainWindow.frame)")
+
+            // CRITICAL: Make notification window a CHILD of main window
+            // This makes macOS automatically move it with the parent - ZERO overhead!
+            // BUT we'll add a spring animation for elastic feel
+            mainWindow.addChildWindow(notificationWindow, ordered: .below)
+
+            // Enable spring animation for elastic following
+            notificationWindow.animationBehavior = .utilityWindow
+
+            print("✅ NotificationWindowManager: Added notification window as child with elastic animation")
+
             mainWindow.delegate = self
             isMainWindowDelegate = true
             lastMainWindowFrame = mainWindow.frame
             lastUpdateTime = CACurrentMediaTime()
             velocityX = 0
             velocityY = 0
-            print("✅ NotificationWindowManager: Set as delegate for main window")
         } else {
-            print("❌ NotificationWindowManager: Could not find main window!")
+            print("❌ NotificationWindowManager: Could not find main window or notification window!")
         }
-        
-        // Use event-driven updates (window move/resize) for smooth, efficient following
-        // This avoids the overhead of continuous polling and eliminates choppiness
-        setupEventBasedMonitoring()
-        
-        // Also set up notification-based monitoring as backup
+
+        // Still set up monitoring for resize events
         setupNotificationBasedMonitoring()
     }
     
-    private func setupEventBasedMonitoring() {
-        // Stop any continuous monitoring
-        positionUpdateTimer?.invalidate()
-        positionUpdateTimer = nil
-        stopDisplayLink()
-        
-        // Use a high-frequency timer during window movements for smooth following
-        // This provides smooth updates without the overhead of display link
-        startSmoothPositionMonitoring()
-    }
-    
-    private func startSmoothPositionMonitoring() {
-        // Use a timer that runs at 60Hz for smooth following during drags
-        // This is more efficient than display link but still provides smooth motion
-        positionUpdateTimer?.invalidate()
-        positionUpdateTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            Task { @MainActor [self] in
-                guard self.isLocked else { return }
-                self.updateNotificationWindowPositionDirectly()
-            }
-        }
-        RunLoop.main.add(positionUpdateTimer!, forMode: .common)
-    }
-    
     private func updateNotificationWindowPositionDirectly() {
-        guard let mainWindow = mainWindow, let notificationWindow = notificationWindow, isLocked else { return }
-        
+        guard let mainWindow = mainWindow,
+              let notificationWindow = notificationWindow,
+              isLocked,
+              !isAnimating else { return }
+
         let mainFrame = mainWindow.frame
         let notificationFrame = notificationWindow.frame
         let notificationWidth = notificationFrame.width
+        let notificationHeight = notificationFrame.height
+
         let targetX = mainFrame.minX - notificationWidth - 10
-        let targetY = mainFrame.midY - (notificationFrame.height / 2)
+        let targetY = mainFrame.midY - (notificationHeight / 2)
         let targetOrigin = NSPoint(x: targetX, y: targetY)
-        
-        // Direct update - no animation for smooth, responsive following
-        isProgrammaticallyMoving = true
-        notificationWindow.setFrameOrigin(targetOrigin)
+
+        // Direct update for resize events (child window handles move automatically)
+        notificationWindow.setFrame(
+            NSRect(origin: targetOrigin, size: notificationFrame.size),
+            display: false,
+            animate: false
+        )
         lockedPosition = targetOrigin
-        isProgrammaticallyMoving = false
     }
     
     private func setupNotificationBasedMonitoring() {
-        // Set up notification-based monitoring as a backup/complement to delegate methods
-        // This ensures we catch all window movements
-        Foundation.NotificationCenter.default.publisher(for: NSWindow.didMoveNotification)
-            .sink { [weak self] notification in
-                guard let self = self, let window = notification.object as? NSWindow,
-                      window == self.mainWindow, self.isLocked else { return }
-                self.updateNotificationWindowPositionDirectly()
-            }
-            .store(in: &cancellables)
-        
+        // Only monitor resize - child window relationship handles movement automatically!
+        // This is much more efficient than polling and perfectly smooth
         Foundation.NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)
             .sink { [weak self] notification in
                 guard let self = self, let window = notification.object as? NSWindow,
@@ -544,16 +538,24 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             height: notificationHeight
         )
         
-        // Calculate starting position from notification button (genie effect)
+        // Calculate exact position of notification button for genie effect
+        // Sidebar layout: 16px padding + Logo (60px) + 4px bottom padding + 12px VStack spacing + NotificationTab
         let sidebarWidth: CGFloat = 300
-        let buttonX = mainFrame.minX + (sidebarWidth / 2) - 10
-        let buttonY = mainFrame.maxY - 120
-        
-        // Start small (genie effect)
-        let startSize: CGFloat = 20
+        let sidebarPadding: CGFloat = 16
+        let logoHeight: CGFloat = 60
+        let logoBottomPadding: CGFloat = 4
+        let vstackSpacing: CGFloat = 12
+        let buttonHeight: CGFloat = 32 // Approx height of NotificationTabButton
+
+        // Calculate button center position in screen coordinates
+        let buttonCenterX = mainFrame.minX + sidebarWidth / 2
+        let buttonCenterY = mainFrame.maxY - sidebarPadding - logoHeight - logoBottomPadding - vstackSpacing - (buttonHeight / 2)
+
+        // Start as tiny point at button center (true genie effect)
+        let startSize: CGFloat = 1
         let startFrame = NSRect(
-            x: buttonX - (startSize / 2),
-            y: buttonY - (startSize / 2),
+            x: buttonCenterX - (startSize / 2),
+            y: buttonCenterY - (startSize / 2),
             width: startSize,
             height: startSize
         )
@@ -572,11 +574,13 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             // Cancel any existing animation
             manager.currentAnimationContext?.allowsImplicitAnimation = false
             
-            // Genie animation: expand from button while moving to target position
+            // Genie animation: expand from button with spring/elastic feel
             NSAnimationContext.runAnimationGroup({ context in
                 manager.currentAnimationContext = context
-                context.duration = 0.3 // Genie expansion duration
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                context.duration = 0.45 // Slightly longer for spring effect
+                context.allowsImplicitAnimation = true
+                // Use spring timing for elastic/bouncy feel
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.5, 1.8, 0.7, 0.9)
                 // Keep window behind during animation
                 notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
                 // Animate both position and size (genie effect)
@@ -585,7 +589,7 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             }) {
                 // Keep window behind main window after animation
                 notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
-                
+
                 // Update locked position after animation
                 Task { @MainActor in
                     manager.lockedPosition = targetFrame.origin
@@ -818,21 +822,27 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             return
         }
         
-        // Calculate target position (back to notification button - reverse genie effect)
+        // Calculate target position (shrink back into notification button - reverse genie)
         let mainFrame = mainWindow.frame
-        
-        // Button position (same as show animation)
+
+        // Calculate exact notification button position (same as show animation)
         let sidebarWidth: CGFloat = 300
-        let buttonX = mainFrame.minX + (sidebarWidth / 2) - 10
-        let buttonY = mainFrame.maxY - 120
-        
-        // Shrink back to button location
-        let endSize: CGFloat = 20
+        let sidebarPadding: CGFloat = 16
+        let logoHeight: CGFloat = 60
+        let logoBottomPadding: CGFloat = 4
+        let vstackSpacing: CGFloat = 12
+        let buttonHeight: CGFloat = 32
+
+        let buttonCenterX = mainFrame.minX + sidebarWidth / 2
+        let buttonCenterY = mainFrame.maxY - sidebarPadding - logoHeight - logoBottomPadding - vstackSpacing - (buttonHeight / 2)
+
+        // Shrink to tiny point at button center
+        let targetSize: CGFloat = 1
         let targetFrame = NSRect(
-            x: buttonX - (endSize / 2),
-            y: buttonY - (endSize / 2),
-            width: endSize,
-            height: endSize
+            x: buttonCenterX - (targetSize / 2),
+            y: buttonCenterY - (targetSize / 2),
+            width: targetSize,
+            height: targetSize
         )
         
         // Ensure window is behind main window before animation
@@ -842,14 +852,16 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         let manager = self
         currentAnimationContext?.allowsImplicitAnimation = false
         
-        // Reverse genie animation: shrink back to button while moving
+        // Reverse genie animation: shrink back into button with smooth ease
         NSAnimationContext.runAnimationGroup({ context in
             manager.currentAnimationContext = context
-            context.duration = 0.3 // Genie shrink duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            context.duration = 0.35 // Slightly faster shrink
+            context.allowsImplicitAnimation = true
+            // Smooth ease in for collapsing effect
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             // Keep window behind during animation
             notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
-            // Animate both position and size (genie effect) and fade out
+            // Animate both position and size (reverse genie effect) and fade out
             notificationWindow.animator().setFrame(targetFrame, display: true)
             notificationWindow.animator().alphaValue = 0.0
         }) {
