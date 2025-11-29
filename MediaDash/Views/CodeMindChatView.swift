@@ -144,16 +144,7 @@ struct CodeMindChatView: View {
                 case "gemini":
                     provider = .gemini
                 case "grok":
-                    // Grok is not yet supported by the CodeMind package
-                    // For now, fall back to Gemini with a notification
-                    await MainActor.run {
-                        messages.append(ChatMessage(
-                            role: .system,
-                            content: "⚠️ Grok provider is not yet supported by the CodeMind package. Using Gemini instead. Grok support will be available in a future update.",
-                            timestamp: Date()
-                        ))
-                    }
-                    provider = .gemini
+                    provider = .grok
                 default:
                     await MainActor.run {
                         messages.append(ChatMessage(

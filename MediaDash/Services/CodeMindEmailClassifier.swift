@@ -97,13 +97,11 @@ class CodeMindEmailClassifier: ObservableObject {
             case "gemini":
                 cloudProvider = .gemini
             case "grok":
-                // Grok is not yet supported by the CodeMind package
-                // For now, fall back to Gemini with a warning
-                CodeMindLogger.shared.log(.error, "Grok provider selected but not yet supported by CodeMind package. Falling back to Gemini.", category: .initialization)
-                print("⚠️ CodeMind: Grok is not yet supported. Using Gemini instead.")
-                cloudProvider = .gemini
+                cloudProvider = .grok
+                CodeMindLogger.shared.log(.info, "Using Grok (xAI) provider", category: .initialization)
+                print("✅ CodeMind: Using Grok (xAI) provider")
             default:
-                let errorMsg = "Unsupported provider: \(selectedProvider). Supported providers: Gemini (Grok coming soon)"
+                let errorMsg = "Unsupported provider: \(selectedProvider). Supported providers: Gemini, Grok"
                 CodeMindLogger.shared.log(.error, errorMsg, category: .initialization)
                 throw CodeMindError.notConfigured(errorMsg)
             }
