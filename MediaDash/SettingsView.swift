@@ -2493,8 +2493,7 @@ struct CodeMindIntegrationSection: View {
                     // Provider dropdown
                     Picker("AI Provider", selection: $provider) {
                         Text("Gemini").tag("gemini")
-                        // Grok support coming soon - waiting for CodeMind package to add support
-                        // Text("Grok (xAI)").tag("grok")
+                        Text("Grok (xAI)").tag("grok")
                     }
                     .pickerStyle(.menu)
                     .frame(maxWidth: 200)
