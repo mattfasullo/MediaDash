@@ -17,12 +17,15 @@ class AsanaService: ObservableObject {
     
     /// Initialize with access token
     init(accessToken: String? = nil) {
-        self.accessToken = accessToken ?? KeychainService.retrieve(key: "asana_access_token")
+        // Check shared key first (for Grayson employees), then personal key
+        self.accessToken = accessToken ?? SharedKeychainService.getAsanaAccessToken()
     }
     
     /// Set access token
+    /// Note: This stores to personal Keychain. Shared keys are set separately by admins.
     func setAccessToken(_ token: String) {
         self.accessToken = token
+        // Store to personal Keychain (shared keys are managed separately)
         _ = KeychainService.store(key: "asana_access_token", value: token)
     }
     

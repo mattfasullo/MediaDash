@@ -42,6 +42,9 @@ struct Notification: Identifiable, Codable, Equatable {
     var emailBody: String? // Original email body for preview
     var fileLinks: [String]? // File hosting links extracted from email (for File Delivery notifications)
     
+    // CodeMind classification metadata (for feedback/learning)
+    var codeMindClassification: CodeMindClassificationMetadata? // Stores classification result for feedback
+    
     // Original values (for reset functionality)
     var originalDocketNumber: String?
     var originalJobName: String?
@@ -116,5 +119,14 @@ struct ParsedDocketNotification {
     let sourceEmail: String
     let subject: String?
     let body: String?
+}
+
+/// Metadata about CodeMind classification for feedback purposes
+struct CodeMindClassificationMetadata: Codable, Equatable {
+    let wasUsed: Bool // Whether CodeMind was used for this classification
+    let confidence: Double // Confidence score (0.0-1.0)
+    let reasoning: String? // CodeMind's reasoning
+    let classificationType: String // "newDocket" or "fileDelivery"
+    let extractedData: [String: String]? // Extracted fields (docketNumber, jobName, etc.)
 }
 

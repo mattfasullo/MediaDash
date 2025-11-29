@@ -263,7 +263,7 @@ struct ContentView: View {
         }
         
         // Check if we have an access token
-        guard KeychainService.retrieve(key: "asana_access_token") != nil else {
+        guard SharedKeychainService.getAsanaAccessToken() != nil else {
             print("📦 [AutoSync] No Asana access token found, skipping sync")
             return
         }
@@ -327,7 +327,7 @@ struct ContentView: View {
                 }
                 
                 // Check if we have an access token
-                guard KeychainService.retrieve(key: "asana_access_token") != nil else {
+                guard SharedKeychainService.getAsanaAccessToken() != nil else {
                     print("📦 [AutoSync] No Asana access token found, skipping hourly sync")
                     continue
                 }

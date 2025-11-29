@@ -26,7 +26,8 @@ class CompanyNameCache: ObservableObject {
     private var entries: [String: CompanyNameEntry] = [:]
     
     private let localCacheKey = "companyNameCache"
-    private let sharedCacheFileName = "company_names_cache.json"
+    private let sharedCacheFileName = "mediadash_company_cache.json"
+    private let legacyCacheFileName = "company_names_cache.json" // Old filename for migration
     private var sharedCacheURL: URL?
     
     private init() {
@@ -37,7 +38,41 @@ class CompanyNameCache: ObservableObject {
     
     func configure(sharedCacheURL: String?) {
         if let urlString = sharedCacheURL, !urlString.isEmpty {
-            self.sharedCacheURL = URL(fileURLWithPath: urlString)
+            let baseURL = URL(fileURLWithPath: urlString)
+            let fileManager = FileManager.default
+            
+            // Check if the path exists and what it is
+            var isDirectory: ObjCBool = false
+            let pathExists = fileManager.fileExists(atPath: baseURL.path, isDirectory: &isDirectory)
+            
+            if pathExists && isDirectory.boolValue {
+                // It's an existing directory - append our filename
+                self.sharedCacheURL = baseURL.appendingPathComponent(sharedCacheFileName)
+            } else if pathExists && !isDirectory.boolValue {
+                // It's an existing file - check if it's the same name as our cache file
+                if baseURL.lastPathComponent == sharedCacheFileName {
+                    // It IS our cache file - use it directly
+                    self.sharedCacheURL = baseURL
+                } else {
+                    // It's a different file, but the path was configured as a directory path
+                    // This means a file exists where we expect a directory (e.g., MediaDash_Cache file vs MediaDash_Cache directory)
+                    // Use parent directory and append our filename
+                    self.sharedCacheURL = baseURL.deletingLastPathComponent().appendingPathComponent(sharedCacheFileName)
+                }
+            } else {
+                // Path doesn't exist - check if it looks like a directory or file
+                if baseURL.pathExtension.isEmpty {
+                    // No extension, treat as directory - append our filename
+                    self.sharedCacheURL = baseURL.appendingPathComponent(sharedCacheFileName)
+                } else {
+                    // Has extension, but if it matches our filename, use it; otherwise use directory
+                    if baseURL.lastPathComponent == sharedCacheFileName {
+                        self.sharedCacheURL = baseURL
+                    } else {
+                        self.sharedCacheURL = baseURL.deletingLastPathComponent().appendingPathComponent(sharedCacheFileName)
+                    }
+                }
+            }
         } else {
             self.sharedCacheURL = nil
         }
@@ -141,6 +176,19 @@ class CompanyNameCache: ObservableObject {
     /// Sync with shared cache (compare timestamps, use most recent)
     func syncWithSharedCache() {
         guard let sharedURL = sharedCacheURL else { return }
+        
+        // Check for legacy filename and migrate if needed
+        let legacyURL = sharedURL.deletingLastPathComponent().appendingPathComponent(legacyCacheFileName)
+        if FileManager.default.fileExists(atPath: legacyURL.path) && !FileManager.default.fileExists(atPath: sharedURL.path) {
+            // Migrate legacy file to new name
+            do {
+                try FileManager.default.moveItem(at: legacyURL, to: sharedURL)
+                print("CompanyNameCache: Migrated cache file from '\(legacyCacheFileName)' to '\(sharedCacheFileName)'")
+            } catch {
+                print("CompanyNameCache: Failed to migrate legacy cache file: \(error.localizedDescription)")
+            }
+        }
+        
         guard FileManager.default.fileExists(atPath: sharedURL.path) else {
             // Shared cache doesn't exist, save ours
             saveSharedCache()
@@ -214,14 +262,51 @@ class CompanyNameCache: ObservableObject {
     private func saveSharedCache() {
         guard let sharedURL = sharedCacheURL else { return }
         
-        // Ensure directory exists
+        // Ensure directory exists (safely handle file/directory conflicts)
         let directory = sharedURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        do {
+            try safeCreateDirectory(at: directory)
+        } catch {
+            print("CompanyNameCache: Failed to create cache directory: \(error.localizedDescription)")
+            return
+        }
         
         let cache = SharedCompanyCache(entries: entries, lastUpdated: Date())
         if let data = try? JSONEncoder().encode(cache) {
             try? data.write(to: sharedURL)
         }
+    }
+    
+    /// Safely create a directory, handling the case where a file with the same name exists
+    private func safeCreateDirectory(at url: URL) throws {
+        let fileManager = FileManager.default
+        let path = url.path
+        
+        // Check if path exists
+        var isDirectory: ObjCBool = false
+        let exists = fileManager.fileExists(atPath: path, isDirectory: &isDirectory)
+        
+        if exists {
+            if isDirectory.boolValue {
+                // Already a directory, nothing to do
+                return
+            } else {
+                // It's a file - rename it to avoid conflict
+                let backupURL = url.appendingPathExtension("old")
+                print("CompanyNameCache: Found file where directory expected at \(path), renaming to \(backupURL.path)")
+                
+                // Remove old backup if it exists
+                if fileManager.fileExists(atPath: backupURL.path) {
+                    try? fileManager.removeItem(at: backupURL)
+                }
+                
+                // Rename the file
+                try fileManager.moveItem(at: url, to: backupURL)
+            }
+        }
+        
+        // Now create the directory
+        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
     }
 }
 

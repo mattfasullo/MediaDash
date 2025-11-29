@@ -180,10 +180,11 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     private func findMainWindow() {
         // Find the main content window (not the notification window)
         let allWindows = NSApplication.shared.windows
-        print("🔍 NotificationWindowManager: Finding main window from \(allWindows.count) windows")
-        for window in allWindows {
-            print("   Window: '\(window.title)' - visible: \(window.isVisible), width: \(window.frame.width), isNotification: \(window == notificationWindow)")
-        }
+        // DEBUG: Commented out for performance
+        // print("🔍 NotificationWindowManager: Finding main window from \(allWindows.count) windows")
+        // for window in allWindows {
+        //     print("   Window: '\(window.title)' - visible: \(window.isVisible), width: \(window.frame.width), isNotification: \(window == notificationWindow)")
+        // }
         
         let newMainWindow = allWindows.first { window in
             window != notificationWindow && 
@@ -196,10 +197,12 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         
         // If main window changed, update delegate
         if newMainWindow != mainWindow {
-            print("🔄 NotificationWindowManager: Main window changed")
+            // DEBUG: Commented out for performance
+            // print("🔄 NotificationWindowManager: Main window changed")
             // Remove delegate from old main window
             if let oldMainWindow = mainWindow, isMainWindowDelegate {
-                print("   Removing delegate from old main window: \(oldMainWindow.title)")
+                // DEBUG: Commented out for performance
+                // print("   Removing delegate from old main window: \(oldMainWindow.title)")
                 oldMainWindow.delegate = nil
                 isMainWindowDelegate = false
             }
@@ -207,24 +210,29 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             // Set new main window and add as delegate
             mainWindow = newMainWindow
             if let mainWindow = mainWindow, isLocked {
-                print("   Setting delegate for new main window: \(mainWindow.title)")
+                // DEBUG: Commented out for performance
+                // print("   Setting delegate for new main window: \(mainWindow.title)")
                 mainWindow.delegate = self
                 isMainWindowDelegate = true
                 lastMainWindowFrame = mainWindow.frame
             } else {
-                print("   ⚠️ New main window found but not setting delegate - isLocked: \(isLocked)")
+                // DEBUG: Commented out for performance
+                // print("   ⚠️ New main window found but not setting delegate - isLocked: \(isLocked)")
             }
         } else if newMainWindow != nil {
-            print("   ✅ Main window unchanged: \(newMainWindow!.title)")
+            // DEBUG: Commented out for performance
+            // print("   ✅ Main window unchanged: \(newMainWindow!.title)")
         } else {
-            print("   ❌ No main window found!")
+            // DEBUG: Commented out for performance
+            // print("   ❌ No main window found!")
         }
     }
     
     private func setupWindowMonitoring() {
         // Only monitor if window is locked
         guard isLocked else {
-            print("🔒 NotificationWindowManager: Monitoring not set up - window is unlocked")
+            // DEBUG: Commented out for performance
+            // print("🔒 NotificationWindowManager: Monitoring not set up - window is unlocked")
             // Remove child window relationship when unlocked
             if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
                 mainWindow.removeChildWindow(notificationWindow)
@@ -232,12 +240,14 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             return
         }
 
-        print("🔒 NotificationWindowManager: Setting up window monitoring...")
+        // DEBUG: Commented out for performance
+        // print("🔒 NotificationWindowManager: Setting up window monitoring...")
 
         // Set up main window as delegate for direct frame tracking
         findMainWindow()
         if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
-            print("✅ NotificationWindowManager: Found main window: \(mainWindow.title) at \(mainWindow.frame)")
+            // DEBUG: Commented out for performance
+            // print("✅ NotificationWindowManager: Found main window: \(mainWindow.title) at \(mainWindow.frame)")
 
             // CRITICAL: Make notification window a CHILD of main window
             // This makes macOS automatically move it with the parent - ZERO overhead!
@@ -247,7 +257,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             // Enable spring animation for elastic following
             notificationWindow.animationBehavior = .utilityWindow
 
-            print("✅ NotificationWindowManager: Added notification window as child with elastic animation")
+            // DEBUG: Commented out for performance
+            // print("✅ NotificationWindowManager: Added notification window as child with elastic animation")
 
             mainWindow.delegate = self
             isMainWindowDelegate = true
@@ -256,7 +267,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             velocityX = 0
             velocityY = 0
         } else {
-            print("❌ NotificationWindowManager: Could not find main window or notification window!")
+            // DEBUG: Commented out for performance
+            // print("❌ NotificationWindowManager: Could not find main window or notification window!")
         }
 
         // Still set up monitoring for resize events
@@ -317,7 +329,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         let result = CVDisplayLinkCreateWithActiveCGDisplays(&displayLink)
         
         guard result == kCVReturnSuccess, let link = displayLink else {
-            debugLog("Display link creation failed, falling back to timer")
+            // DEBUG: Commented out for performance
+            // debugLog("Display link creation failed, falling back to timer")
             // Fallback to timer if display link fails
             fallbackToTimer()
             return
@@ -331,9 +344,11 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         let startResult = CVDisplayLinkStart(link)
         if startResult == kCVReturnSuccess {
             self.displayLink = link
-            debugLog("Display link started successfully")
+            // DEBUG: Commented out for performance
+            // debugLog("Display link started successfully")
         } else {
-            debugLog("Display link start failed, falling back to timer")
+            // DEBUG: Commented out for performance
+            // debugLog("Display link start failed, falling back to timer")
             fallbackToTimer()
         }
     }
@@ -358,15 +373,17 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     
     private func updatePositionFromDisplayLink() {
         guard isLocked else {
-            if Int.random(in: 0..<120) == 0 {
-                debugLog("updatePositionFromDisplayLink: not locked")
-            }
+            // DEBUG: Commented out for performance (runs ~120 times/sec)
+            // if Int.random(in: 0..<120) == 0 {
+            //     debugLog("updatePositionFromDisplayLink: not locked")
+            // }
             return
         }
         guard let mainWindow = mainWindow, let notificationWindow = notificationWindow else {
-            if Int.random(in: 0..<120) == 0 {
-                debugLog("updatePositionFromDisplayLink: missing windows - main: \(mainWindow != nil), notification: \(notificationWindow != nil)")
-            }
+            // DEBUG: Commented out for performance (runs ~120 times/sec)
+            // if Int.random(in: 0..<120) == 0 {
+            //     debugLog("updatePositionFromDisplayLink: missing windows - main: \(mainWindow != nil), notification: \(notificationWindow != nil)")
+            // }
                     return
                 }
                 
@@ -378,7 +395,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         if lastMainWindowFrame == nil {
             lastMainWindowFrame = currentMainFrame
             lastUpdateTime = currentTime
-            debugLog("updatePositionFromDisplayLink: Initialized lastMainWindowFrame")
+            // DEBUG: Commented out for performance
+            // debugLog("updatePositionFromDisplayLink: Initialized lastMainWindowFrame")
         }
         
         // Always calculate target position and update if needed (don't require frame change)
@@ -413,13 +431,14 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         let velocityMagnitude = hypot(velocityX, velocityY)
         let threshold: CGFloat = velocityMagnitude > 50 ? 0.2 : 0.3  // Lower threshold for smoother updates
         
-        // Debug logging
-        debugLog("updatePositionFromDisplayLink: deltaX=\(String(format: "%.1f", deltaX)), deltaY=\(String(format: "%.1f", deltaY)), threshold=\(String(format: "%.1f", threshold)), velocity=\(String(format: "%.1f", velocityMagnitude))")
-        debugValue("currentOrigin", currentOrigin)
-        debugValue("targetOrigin", targetOrigin)
+        // DEBUG: Commented out for performance (runs ~120 times/sec with expensive string formatting)
+        // debugLog("updatePositionFromDisplayLink: deltaX=\(String(format: "%.1f", deltaX)), deltaY=\(String(format: "%.1f", deltaY)), threshold=\(String(format: "%.1f", threshold)), velocity=\(String(format: "%.1f", velocityMagnitude))")
+        // debugValue("currentOrigin", currentOrigin)
+        // debugValue("targetOrigin", targetOrigin)
                 
                 if deltaX > threshold || deltaY > threshold {
-            debugLog("updatePositionFromDisplayLink: Position update needed, deltaX=\(String(format: "%.1f", deltaX)), deltaY=\(String(format: "%.1f", deltaY))")
+            // DEBUG: Commented out for performance
+            // debugLog("updatePositionFromDisplayLink: Position update needed, deltaX=\(String(format: "%.1f", deltaX)), deltaY=\(String(format: "%.1f", deltaY))")
             // For very fast movements, update directly without animation for immediate response
             // For slower movements, use smooth interpolation
             if velocityMagnitude > 150 {
@@ -457,16 +476,17 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
                     isProgrammaticallyMoving = false
                 } else {
                     // Large movement - use animation to smooth it out
-                    debugLog("updatePositionFromDisplayLink: Large movement, using animation, distance=\(String(format: "%.1f", distance))")
+                    // DEBUG: Commented out for performance
+                    // debugLog("updatePositionFromDisplayLink: Large movement, using animation, distance=\(String(format: "%.1f", distance))")
                     pendingTargetOrigin = nil
                     updateNotificationWindowPositionSmoothly(targetOrigin: targetOrigin)
                 }
             }
         } else {
-            // Debug: log when we're NOT updating
-            if Int.random(in: 0..<120) == 0 {
-                debugLog("updatePositionFromDisplayLink: No update needed - deltaX=\(String(format: "%.1f", deltaX)), deltaY=\(String(format: "%.1f", deltaY)), threshold=\(String(format: "%.1f", threshold))")
-            }
+            // DEBUG: Commented out for performance (runs ~120 times/sec)
+            // if Int.random(in: 0..<120) == 0 {
+            //     debugLog("updatePositionFromDisplayLink: No update needed - deltaX=\(String(format: "%.1f", deltaX)), deltaY=\(String(format: "%.1f", deltaY)), threshold=\(String(format: "%.1f", threshold))")
+            // }
         }
     }
     
@@ -706,7 +726,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         
         // Setup window monitoring based on lock state
         // This will also set up the main window delegate relationship
-        print("🔧 NotificationWindowManager: Setting up window monitoring, isLocked: \(String(describing: isLocked))")
+        // DEBUG: Commented out for performance
+        // print("🔧 NotificationWindowManager: Setting up window monitoring, isLocked: \(String(describing: isLocked))")
         setupWindowMonitoring()
         
         // Calculate target position (normal size)
@@ -752,9 +773,9 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         isAnimating = true
         isVisible = true
         
-        // Small delay to ensure window is ready
+        // Reduced delay for faster response (from 0.05s to 0.01s)
         let manager = self
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
             // Ensure window is behind main window before animation
             notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
             
@@ -910,32 +931,38 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     }
     
     private func updateNotificationWindowPositionSmoothly(targetOrigin: NSPoint) {
-        debugLog("updateNotificationWindowPositionSmoothly: called with targetOrigin=\(targetOrigin)")
+        // DEBUG: Commented out for performance
+        // debugLog("updateNotificationWindowPositionSmoothly: called with targetOrigin=\(targetOrigin)")
         guard let notificationWindow = notificationWindow, isLocked else {
-            debugLog("updateNotificationWindowPositionSmoothly: guard failed - window: \(notificationWindow != nil), locked: \(isLocked)")
+            // DEBUG: Commented out for performance
+            // debugLog("updateNotificationWindowPositionSmoothly: guard failed - window: \(notificationWindow != nil), locked: \(isLocked)")
             return
         }
         
         let currentOrigin = notificationWindow.frame.origin
         let distance = hypot(targetOrigin.x - currentOrigin.x, targetOrigin.y - currentOrigin.y)
-        debugValue("distance", distance)
-        debugValue("currentOrigin", currentOrigin)
-        debugValue("targetOrigin", targetOrigin)
+        // DEBUG: Commented out for performance
+        // debugValue("distance", distance)
+        // debugValue("currentOrigin", currentOrigin)
+        // debugValue("targetOrigin", targetOrigin)
         
         // For very small movements, update directly (no animation needed)
         // Increased threshold for direct updates to reduce animation overhead
         if distance < 3.0 {
-            debugLog("updateNotificationWindowPositionSmoothly: Small movement, updating directly")
+            // DEBUG: Commented out for performance
+            // debugLog("updateNotificationWindowPositionSmoothly: Small movement, updating directly")
             isProgrammaticallyMoving = true
             notificationWindow.setFrameOrigin(targetOrigin)
             lockedPosition = targetOrigin
             isProgrammaticallyMoving = false
-            debugLog("updateNotificationWindowPositionSmoothly: Direct update complete, new position: \(notificationWindow.frame.origin)")
+            // DEBUG: Commented out for performance
+            // debugLog("updateNotificationWindowPositionSmoothly: Direct update complete, new position: \(notificationWindow.frame.origin)")
             return
         }
         
         // For larger movements, use a very short, smooth animation
-        debugLog("updateNotificationWindowPositionSmoothly: Starting animation, distance=\(String(format: "%.1f", distance))")
+        // DEBUG: Commented out for performance
+        // debugLog("updateNotificationWindowPositionSmoothly: Starting animation, distance=\(String(format: "%.1f", distance))")
         isAnimating = true
         
         // Use adaptive duration based on distance
@@ -947,7 +974,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         let manager = self
         let startTime = CACurrentMediaTime()
         lastAnimationStartTime = startTime
-        debugLog("updateNotificationWindowPositionSmoothly: Starting animation at \(startTime), duration=\(duration)")
+        // DEBUG: Commented out for performance
+        // debugLog("updateNotificationWindowPositionSmoothly: Starting animation at \(startTime), duration=\(duration)")
         
         NSAnimationContext.runAnimationGroup({ context in
             manager.currentAnimationContext = context
@@ -956,7 +984,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             // The default timing provides good balance without feeling sluggish
             context.allowsImplicitAnimation = true
             
-            debugLog("updateNotificationWindowPositionSmoothly: Setting frame origin via animator to \(targetOrigin)")
+            // DEBUG: Commented out for performance
+            // debugLog("updateNotificationWindowPositionSmoothly: Setting frame origin via animator to \(targetOrigin)")
             
             // Get current frame and create new frame with target origin
             let currentFrame = notificationWindow.frame
@@ -966,14 +995,16 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             notificationWindow.animator().setFrame(newFrame, display: true)
         }) {
             let endTime = CACurrentMediaTime()
-            let actualDuration = endTime - startTime
-            debugLog("updateNotificationWindowPositionSmoothly: Animation completed after \(String(format: "%.3f", actualDuration))s")
+            _ = endTime - startTime
+            // DEBUG: Commented out for performance
+            // debugLog("updateNotificationWindowPositionSmoothly: Animation completed after \(String(format: "%.3f", actualDuration))s")
             Task { @MainActor in
                 // Check if there's a pending target that's different from what we just animated to
                 if let pending = manager.pendingTargetOrigin, pending != targetOrigin {
                     let pendingDistance = hypot(pending.x - notificationWindow.frame.origin.x, pending.y - notificationWindow.frame.origin.y)
                     if pendingDistance > 5.0 {
-                        debugLog("updateNotificationWindowPositionSmoothly: Pending target detected, continuing animation to \(pending)")
+                        // DEBUG: Commented out for performance
+                        // debugLog("updateNotificationWindowPositionSmoothly: Pending target detected, continuing animation to \(pending)")
                         manager.isAnimating = false  // Reset flag so we can start new animation
                         manager.updateNotificationWindowPositionSmoothly(targetOrigin: pending)
                         return
@@ -987,7 +1018,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
                 manager.isAnimating = false
                 manager.currentAnimationContext = nil
                 manager.pendingTargetOrigin = nil
-                debugLog("updateNotificationWindowPositionSmoothly: Final position: \(notificationWindow.frame.origin), target was: \(targetOrigin)")
+                // DEBUG: Commented out for performance
+                // debugLog("updateNotificationWindowPositionSmoothly: Final position: \(notificationWindow.frame.origin), target was: \(targetOrigin)")
             }
         }
     }
@@ -1012,20 +1044,24 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     }
     
     private func updateNotificationWindowPositionElastically() {
-        debugLog("updateNotificationWindowPositionElastically() called")
+        // DEBUG: Commented out for performance
+        // debugLog("updateNotificationWindowPositionElastically() called")
         guard let notificationWindow = notificationWindow, isLocked else {
-            debugLog("Guard failed - notificationWindow: \(notificationWindow != nil), isLocked: \(isLocked)")
+            // DEBUG: Commented out for performance
+            // debugLog("Guard failed - notificationWindow: \(notificationWindow != nil), isLocked: \(isLocked)")
             return
         }
         
         // Re-find main window in case it changed
         findMainWindow()
         guard let mainWindow = mainWindow else {
-            debugLog("Could not find main window")
+            // DEBUG: Commented out for performance
+            // debugLog("Could not find main window")
             return
         }
         
-        debugLog("Main window found: \(mainWindow.title) at \(mainWindow.frame)")
+        // DEBUG: Commented out for performance
+        // debugLog("Main window found: \(mainWindow.title) at \(mainWindow.frame)")
         
         let mainFrame = mainWindow.frame
         let notificationFrame = notificationWindow.frame
@@ -1041,13 +1077,15 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         // Only animate if position actually changed (with small threshold to avoid jitter)
         let deltaX = abs(currentOrigin.x - targetOrigin.x)
         let deltaY = abs(currentOrigin.y - targetOrigin.y)
-        debugValue("deltaX", deltaX)
-        debugValue("deltaY", deltaY)
-        debugValue("currentOrigin", currentOrigin)
-        debugValue("targetOrigin", targetOrigin)
+        // DEBUG: Commented out for performance
+        // debugValue("deltaX", deltaX)
+        // debugValue("deltaY", deltaY)
+        // debugValue("currentOrigin", currentOrigin)
+        // debugValue("targetOrigin", targetOrigin)
         
         guard deltaX > 0.5 || deltaY > 0.5 else {
-            debugLog("Position change too small to animate: deltaX=\(String(format: "%.2f", deltaX)), deltaY=\(String(format: "%.2f", deltaY))")
+            // DEBUG: Commented out for performance
+            // debugLog("Position change too small to animate: deltaX=\(String(format: "%.2f", deltaX)), deltaY=\(String(format: "%.2f", deltaY))")
             return
         }
         
@@ -1068,7 +1106,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         // Mark as programmatic move
         isProgrammaticallyMoving = true
         
-        debugLog("Calling useSpringAnimation to move from \(currentOrigin) to \(targetOrigin)")
+        // DEBUG: Commented out for performance
+        // debugLog("Calling useSpringAnimation to move from \(currentOrigin) to \(targetOrigin)")
         
         // Use CASpringAnimation for true spring physics
         // This gives us better control over damping and response
@@ -1077,15 +1116,18 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     
     private func useSpringAnimation(to targetOrigin: NSPoint, currentOrigin: NSPoint) {
         guard let notificationWindow = notificationWindow else {
-            debugLog("useSpringAnimation: No notification window")
+            // DEBUG: Commented out for performance
+            // debugLog("useSpringAnimation: No notification window")
             return
         }
         
-        debugLog("useSpringAnimation: Starting animation from \(currentOrigin) to \(targetOrigin)")
+        // DEBUG: Commented out for performance
+        // debugLog("useSpringAnimation: Starting animation from \(currentOrigin) to \(targetOrigin)")
         
         // Cancel any existing animation context to allow smooth updates during drags
         if let existingContext = currentAnimationContext {
-            debugLog("useSpringAnimation: Cancelling existing animation context")
+            // DEBUG: Commented out for performance
+            // debugLog("useSpringAnimation: Cancelling existing animation context")
             existingContext.allowsImplicitAnimation = false
             currentAnimationContext = nil
             isAnimating = false  // Reset flag when cancelling
@@ -1096,9 +1138,10 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         let velocityMagnitude = hypot(velocityX, velocityY)
         let isMovingFast = velocityMagnitude > 50 // pixels per second threshold
         
-        debugValue("distance", distance)
-        debugValue("velocityMagnitude", velocityMagnitude)
-        debugValue("isMovingFast", isMovingFast)
+        // DEBUG: Commented out for performance
+        // debugValue("distance", distance)
+        // debugValue("velocityMagnitude", velocityMagnitude)
+        // debugValue("isMovingFast", isMovingFast)
         
         // Adaptive animation parameters based on movement speed
         let duration: TimeInterval
@@ -1121,14 +1164,16 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             timingFunction = CAMediaTimingFunction(controlPoints: 0.34, 1.2, 0.64, 1.0)
         }
         
-        debugValue("animationDuration", duration)
+        // DEBUG: Commented out for performance
+        // debugValue("animationDuration", duration)
         
         // Mark as animating
         isAnimating = true
         
         // Use NSAnimationContext with spring-like timing
         let manager = self
-        debugLog("useSpringAnimation: Starting NSAnimationContext with duration \(duration)")
+        // DEBUG: Commented out for performance
+        // debugLog("useSpringAnimation: Starting NSAnimationContext with duration \(duration)")
         
         // Store the target for completion handler
         let finalTarget = targetOrigin
@@ -1139,7 +1184,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             context.timingFunction = timingFunction
             context.allowsImplicitAnimation = true
             
-            debugLog("useSpringAnimation: Setting frame origin to \(targetOrigin) via animator")
+            // DEBUG: Commented out for performance
+            // debugLog("useSpringAnimation: Setting frame origin to \(targetOrigin) via animator")
             
             // Get current frame and create new frame with target origin
             let currentFrame = notificationWindow.frame
@@ -1149,7 +1195,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             notificationWindow.animator().setFrame(newFrame, display: true)
         }) {
             // Update locked position after animation
-            debugLog("useSpringAnimation: Animation completed")
+            // DEBUG: Commented out for performance
+            // debugLog("useSpringAnimation: Animation completed")
             Task { @MainActor in
                 // Don't correct position - trust the animation
                 // Position correction was causing jumps and flickering

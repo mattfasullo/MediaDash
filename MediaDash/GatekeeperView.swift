@@ -188,9 +188,9 @@ struct AuthenticatedRootView: View {
                 // Start email scanning if enabled and authenticated
                 if settingsManager.currentSettings.gmailEnabled {
                     // Restore tokens from Keychain
-                    if let accessToken = KeychainService.retrieve(key: "gmail_access_token"), !accessToken.isEmpty {
+                    if let accessToken = SharedKeychainService.getGmailAccessToken(), !accessToken.isEmpty {
                         // Restore refresh token if available
-                        let refreshToken = KeychainService.retrieve(key: "gmail_refresh_token")
+                        let refreshToken = SharedKeychainService.getGmailRefreshToken()
                         print("GmailService: Restoring tokens on app launch")
                         print("  - Access token: \(accessToken.prefix(20))...")
                         print("  - Refresh token: \(refreshToken != nil ? "\(refreshToken!.prefix(20))..." : "nil")")
@@ -232,9 +232,9 @@ struct AuthenticatedRootView: View {
                 
                 // Start/stop scanning based on settings
                 if newSettings.gmailEnabled {
-                    if let accessToken = KeychainService.retrieve(key: "gmail_access_token"), !accessToken.isEmpty {
+                    if let accessToken = SharedKeychainService.getGmailAccessToken(), !accessToken.isEmpty {
                         // Restore refresh token if available
-                        let refreshToken = KeychainService.retrieve(key: "gmail_refresh_token")
+                        let refreshToken = SharedKeychainService.getGmailRefreshToken()
                         emailScanningService.gmailService.setAccessToken(accessToken, refreshToken: refreshToken)
                         if !emailScanningService.isEnabled {
                             emailScanningService.startScanning()

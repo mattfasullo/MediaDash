@@ -443,6 +443,10 @@ struct AppSettings: Codable, Equatable {
     var gmailPollInterval: TimeInterval // Polling interval in seconds (default: 300 = 5 minutes)
     var docketParsingPatterns: [String] // Regex patterns for extracting docket info
     
+    // CodeMind AI Integration
+    var codeMindAPIKey: String? // Stored in Keychain, not in settings - API key for CodeMind AI email classification
+    var codeMindProvider: String? // "gemini" or "grok" - determines which provider to use
+    
     // Simian Integration (via Zapier webhook)
     var simianEnabled: Bool
     var simianWebhookURL: String? // Zapier webhook URL for creating Simian projects (get from Zapier Zap settings)
@@ -530,6 +534,8 @@ struct AppSettings: Codable, Equatable {
             gmailSearchTerms: ["New Docket", "DOCKET"], // Default search terms
             gmailPollInterval: 300, // 5 minutes
             docketParsingPatterns: [],
+            codeMindAPIKey: nil, // Stored in Keychain
+            codeMindProvider: nil, // Defaults to Claude if API key is set
             simianEnabled: false,
             simianWebhookURL: nil,
             simianProjectTemplate: nil,

@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import CodeMind
 
 /// Service for scanning emails and creating notifications for new dockets
 @MainActor
@@ -11,11 +12,47 @@ class EmailScanningService: ObservableObject {
     @Published var totalDocketsCreated = 0
     @Published var lastError: String?
     
+    // CodeMind status tracking
+    @Published var codeMindStatus: CodeMindStatus = .unavailable
+    
+    enum CodeMindStatus {
+        case working          // CodeMind is active and working
+        case disabled         // CodeMind is disabled/not configured
+        case error(String)    // CodeMind failed with error message
+        case unavailable      // CodeMind not available (no API key, etc.)
+        
+        var isActive: Bool {
+            switch self {
+            case .working: return true
+            default: return false
+            }
+        }
+        
+        var displayText: String {
+            switch self {
+            case .working:
+                return "CodeMind Active"
+            case .disabled:
+                return "CodeMind Disabled"
+            case .error(let message):
+                return "CodeMind Error: \(message)"
+            case .unavailable:
+                return "CodeMind Unavailable"
+            }
+        }
+    }
+    
     var gmailService: GmailService
     private var parser: EmailDocketParser
     private var scanningTask: Task<Void, Never>?
     private var processedEmailIds: Set<String> = []
     private let processedEmailsKey = "gmail_processed_email_ids"
+    
+    // CodeMind AI classifier for enhanced email understanding
+    private var codeMindClassifier: CodeMindEmailClassifier?
+    private var useCodeMind: Bool = false
+    // Store CodeMind responses for feedback (keyed by notification ID)
+    private var codeMindResponses: [UUID: CodeMindResponse] = [:]
     
     weak var mediaManager: MediaManager?
     weak var settingsManager: SettingsManager?
@@ -31,16 +68,78 @@ class EmailScanningService: ObservableObject {
         self.gmailService = gmailService
         self.parser = parser
         loadProcessedEmailIds()
+        
+        // Initialize CodeMind classifier if API key is available
+        Task { @MainActor in
+            await initializeCodeMindIfAvailable()
+        }
+    }
+    
+    /// Initialize CodeMind classifier if API key is available
+    private func initializeCodeMindIfAvailable() async {
+        // Get provider from settings or default to Gemini
+        let provider = settingsManager?.currentSettings.codeMindProvider ?? CodeMindConfig.getDefaultProvider()
+        
+        // Get API key for the selected provider
+        let apiKey = CodeMindConfig.getAPIKey(for: provider) ??
+                     (provider == "gemini" ? ProcessInfo.processInfo.environment["GEMINI_API_KEY"] : nil) ??
+                     (provider == "grok" ? ProcessInfo.processInfo.environment["GROK_API_KEY"] : nil)
+        
+        guard let key = apiKey else {
+            let providerName = provider.capitalized
+            print("CodeMindEmailClassifier: No \(providerName) API key found. Add your API key in Settings > CodeMind AI to enable AI classification.")
+            codeMindStatus = .unavailable
+            useCodeMind = false
+            return
+        }
+        
+        do {
+            let classifier = CodeMindEmailClassifier()
+            try await classifier.initialize(apiKey: key, provider: provider)
+            self.codeMindClassifier = classifier
+            self.useCodeMind = true
+            codeMindStatus = .working
+            
+            // Configure pattern bridge to sync learned patterns to rule-based patterns
+            if let settingsManager = settingsManager {
+                CodeMindPatternBridge.shared.configure(
+                    settingsManager: settingsManager,
+                    codeMindClassifier: classifier
+                )
+            }
+            
+            print("CodeMindEmailClassifier: ✅ Initialized and enabled for email classification")
+        } catch {
+            let errorMessage = error.localizedDescription
+            print("CodeMindEmailClassifier: Failed to initialize: \(errorMessage)")
+            codeMindStatus = .error(errorMessage)
+            useCodeMind = false
+            codeMindClassifier = nil
+        }
+    }
+    
+    /// Enable or disable CodeMind classification
+    func setUseCodeMind(_ enabled: Bool) {
+        useCodeMind = enabled && codeMindClassifier != nil
+        if !enabled {
+            codeMindStatus = .disabled
+        } else if codeMindClassifier != nil {
+            codeMindStatus = .working
+        } else {
+            codeMindStatus = .unavailable
+        }
     }
     
     /// Populate company name cache from various sources
     func populateCompanyNameCache() {
         Task { @MainActor in
-            // Configure shared cache URL
+            // Configure shared cache URLs
             if let settings = settingsManager?.currentSettings,
                let sharedCacheURL = settings.sharedCacheURL,
                !sharedCacheURL.isEmpty {
                 companyNameCache.configure(sharedCacheURL: sharedCacheURL)
+                // Configure CodeMind shared cache (uses same directory, different filename)
+                CodeMindSharedCacheManager.shared.configure(sharedCacheURL: sharedCacheURL)
             }
             
             // Get job names from file system (MediaManager.dockets)
@@ -71,7 +170,7 @@ class EmailScanningService: ObservableObject {
         }
     }
     
-    /// Start automatic email scanning
+    /// Start automatic email scanning and pattern syncing
     func startScanning() {
         guard !isScanning else { return }
         guard let settings = settingsManager?.currentSettings, settings.gmailEnabled else {
@@ -95,6 +194,11 @@ class EmailScanningService: ObservableObject {
         
         // Start periodic scanning
         startPeriodicScanning()
+        
+        // Start periodic pattern syncing (every 30 minutes) if CodeMind is active
+        if codeMindStatus.isActive {
+            startPeriodicPatternSync()
+        }
     }
     
     /// Stop automatic email scanning
@@ -276,13 +380,87 @@ class EmailScanningService: ObservableObject {
             print("  Snippet: \(message.snippet ?? "(none)")")
         }
         
-        let parsed = parser.parseEmail(
-            subject: message.subject,
-            body: message.plainTextBody ?? message.htmlBody,
-            from: message.from
-        )
+        // Try CodeMind classification first if enabled
+        var parsedDocket: ParsedDocket? = nil
+        var codeMindMetadata: CodeMindClassificationMetadata? = nil
+        var codeMindResponse: CodeMindResponse? = nil
         
-        guard let parsedDocket = parsed else {
+        if useCodeMind, let classifier = codeMindClassifier {
+            do {
+                print("EmailScanningService: 🤖 Using CodeMind to classify email...")
+                let result = try await classifier.classifyNewDocketEmail(
+                    subject: message.subject,
+                    body: body,
+                    from: message.from
+                )
+                let classification = result.classification
+                codeMindResponse = result.response
+                
+                print("CodeMind Classification Result:")
+                print("  Is New Docket: \(classification.isNewDocket)")
+                print("  Confidence: \(classification.confidence)")
+                print("  Docket Number: \(classification.docketNumber ?? "none")")
+                print("  Job Name: \(classification.jobName ?? "none")")
+                print("  Reasoning: \(classification.reasoning)")
+                
+                // Store classification metadata for feedback
+                var extractedData: [String: String] = [:]
+                if let docketNum = classification.docketNumber {
+                    extractedData["docketNumber"] = docketNum
+                }
+                if let jobName = classification.jobName {
+                    extractedData["jobName"] = jobName
+                }
+                codeMindMetadata = CodeMindClassificationMetadata(
+                    wasUsed: true,
+                    confidence: classification.confidence,
+                    reasoning: classification.reasoning,
+                    classificationType: "newDocket",
+                    extractedData: extractedData.isEmpty ? nil : extractedData
+                )
+                
+                // If CodeMind is confident it's a new docket email, use its extraction
+                if classification.isNewDocket && classification.confidence >= 0.7 {
+                    if let docketNum = classification.docketNumber, let jobName = classification.jobName {
+                        parsedDocket = ParsedDocket(
+                            docketNumber: docketNum,
+                            jobName: jobName,
+                            sourceEmail: message.from ?? "",
+                            confidence: classification.confidence,
+                            rawData: [
+                                "codeMindReasoning": classification.reasoning,
+                                "extractedMetadata": classification.extractedMetadata as Any
+                            ]
+                        )
+                        print("EmailScanningService: ✅ CodeMind successfully extracted docket info")
+                    }
+                } else if !classification.isNewDocket && classification.confidence >= 0.7 {
+                    // CodeMind is confident it's NOT a new docket email
+                    print("EmailScanningService: ❌ CodeMind determined this is NOT a new docket email (confidence: \(classification.confidence))")
+                    return false
+                }
+                // If confidence is low, fall through to regular parser
+            } catch {
+                let errorMessage = error.localizedDescription
+                print("EmailScanningService: CodeMind classification failed: \(errorMessage). Falling back to regular parser.")
+                // Update status to indicate CodeMind has an error, but we'll continue with fallback
+                codeMindStatus = .error(errorMessage)
+                // Don't disable CodeMind permanently - it might be a transient error
+                // Just log it and use fallback for this email
+            }
+        }
+        
+        // Fall back to regular parser if CodeMind didn't provide a result
+        // This happens automatically - no user intervention needed
+        if parsedDocket == nil {
+            parsedDocket = parser.parseEmail(
+                subject: message.subject,
+                body: message.plainTextBody ?? message.htmlBody,
+                from: message.from
+            )
+        }
+        
+        guard let parsedDocket = parsedDocket else {
             print("EmailScanningService: Failed to parse email - no docket information found")
             return false
         }
@@ -322,7 +500,7 @@ class EmailScanningService: ObservableObject {
             let emailSubjectToStore = subject.isEmpty ? nil : subject
             let emailBodyToStore = body.isEmpty ? nil : body
             
-            let notification = Notification(
+            var notification = Notification(
                 type: .newDocket,
                 title: "New Docket Detected",
                 message: messageText,
@@ -333,6 +511,14 @@ class EmailScanningService: ObservableObject {
                 emailSubject: emailSubjectToStore,
                 emailBody: emailBodyToStore
             )
+            
+            // Store CodeMind classification metadata if available
+            notification.codeMindClassification = codeMindMetadata
+            
+            // Store CodeMind response for feedback if available
+            if let response = codeMindResponse {
+                codeMindResponses[notification.id] = response
+            }
             
             print("EmailScanningService: Adding notification for docket \(docketNumber ?? "TBD"): \(parsedDocket.jobName)")
             notificationCenter.add(notification)
@@ -400,31 +586,114 @@ class EmailScanningService: ObservableObject {
         print("  Combined body for detection preview: \(bodyForDetection.prefix(300))")
         print("  File hosting whitelist: \(settings.grabbedFileHostingWhitelist)")
         
-        // Check if email contains file hosting links using the whitelist from settings
-        let qualifier = MediaThreadQualifier(
-            subjectPatterns: settings.grabbedSubjectPatterns,
-            subjectExclusions: settings.grabbedSubjectExclusions,
-            attachmentTypes: settings.grabbedAttachmentTypes,
-            fileHostingWhitelist: settings.grabbedFileHostingWhitelist,
-            senderWhitelist: settings.grabbedSenderWhitelist,
-            bodyExclusions: settings.grabbedBodyExclusions
-        )
+        // Try CodeMind classification first if enabled
+        var linkResult: QualificationResult? = nil
+        var fileLinks: [String] = []
+        var codeMindMetadata: CodeMindClassificationMetadata? = nil
+        var codeMindResponse: CodeMindResponse? = nil
         
-        // Use the qualifier's file hosting link detection (which uses the whitelist)
-        // Check BOTH plain text and HTML body for links (links might be in HTML)
-        // or fall back to general detection if whitelist is empty
-        let linkResult: QualificationResult
-        if !settings.grabbedFileHostingWhitelist.isEmpty {
-            linkResult = qualifier.qualifiesByFileHostingLinksWithDebug(bodyForDetection)
-        } else {
-            // Fallback case - create a simple result
-            let hasLink = FileHostingLinkDetector.containsFileHostingLink(bodyForDetection)
-            linkResult = QualificationResult(
-                qualifies: hasLink,
-                reasons: ["Using fallback FileHostingLinkDetector", hasLink ? "✅ Found file hosting link" : "❌ No file hosting link found"],
-                matchedCriteria: hasLink ? ["File hosting link (fallback detector)"] : [],
-                exclusionReasons: []
+        if useCodeMind, let classifier = codeMindClassifier {
+            do {
+                print("EmailScanningService: 🤖 Using CodeMind to classify file delivery email...")
+                let recipients = message.allRecipients
+                let result = try await classifier.classifyFileDeliveryEmail(
+                    subject: message.subject,
+                    body: bodyForDetection,
+                    from: message.from,
+                    recipients: recipients
+                )
+                let classification = result.classification
+                codeMindResponse = result.response
+                
+                print("CodeMind File Delivery Classification Result:")
+                print("  Is File Delivery: \(classification.isFileDelivery)")
+                print("  Confidence: \(classification.confidence)")
+                print("  File Links: \(classification.fileLinks.count)")
+                print("  Services: \(classification.fileHostingServices.joined(separator: ", "))")
+                print("  Reasoning: \(classification.reasoning)")
+                
+                // Store classification metadata for feedback
+                var extractedData: [String: String] = [:]
+                if !classification.fileLinks.isEmpty {
+                    extractedData["fileLinks"] = classification.fileLinks.joined(separator: ", ")
+                }
+                if !classification.fileHostingServices.isEmpty {
+                    extractedData["services"] = classification.fileHostingServices.joined(separator: ", ")
+                }
+                codeMindMetadata = CodeMindClassificationMetadata(
+                    wasUsed: true,
+                    confidence: classification.confidence,
+                    reasoning: classification.reasoning,
+                    classificationType: "fileDelivery",
+                    extractedData: extractedData.isEmpty ? nil : extractedData
+                )
+                
+                if classification.isFileDelivery && classification.confidence >= 0.7 {
+                    fileLinks = classification.fileLinks
+                    linkResult = QualificationResult(
+                        qualifies: true,
+                        reasons: ["CodeMind classification: \(classification.reasoning)"] + classification.fileHostingServices.map { "Found \($0) link" },
+                        matchedCriteria: ["CodeMind AI classification"] + classification.fileHostingServices,
+                        exclusionReasons: []
+                    )
+                    print("EmailScanningService: ✅ CodeMind confirmed file delivery email")
+                } else if !classification.isFileDelivery && classification.confidence >= 0.7 {
+                    linkResult = QualificationResult(
+                        qualifies: false,
+                        reasons: ["CodeMind determined this is NOT a file delivery email: \(classification.reasoning)"],
+                        matchedCriteria: [],
+                        exclusionReasons: ["CodeMind AI classification: not a file delivery"]
+                    )
+                    print("EmailScanningService: ❌ CodeMind determined this is NOT a file delivery email")
+                }
+            } catch {
+                let errorMessage = error.localizedDescription
+                print("EmailScanningService: CodeMind classification failed: \(errorMessage). Falling back to regular detection.")
+                // Update status to indicate CodeMind has an error, but we'll continue with fallback
+                codeMindStatus = .error(errorMessage)
+                // Don't disable CodeMind permanently - it might be a transient error
+                // Just log it and use fallback for this email
+            }
+        }
+        
+        // Fall back to regular detection if CodeMind didn't provide a result
+        // This happens automatically - no user intervention needed
+        if linkResult == nil {
+            // Check if email contains file hosting links using the whitelist from settings
+            let qualifier = MediaThreadQualifier(
+                subjectPatterns: settings.grabbedSubjectPatterns,
+                subjectExclusions: settings.grabbedSubjectExclusions,
+                attachmentTypes: settings.grabbedAttachmentTypes,
+                fileHostingWhitelist: settings.grabbedFileHostingWhitelist,
+                senderWhitelist: settings.grabbedSenderWhitelist,
+                bodyExclusions: settings.grabbedBodyExclusions
             )
+            
+            // Use the qualifier's file hosting link detection (which uses the whitelist)
+            // Check BOTH plain text and HTML body for links (links might be in HTML)
+            // or fall back to general detection if whitelist is empty
+            if !settings.grabbedFileHostingWhitelist.isEmpty {
+                linkResult = qualifier.qualifiesByFileHostingLinksWithDebug(bodyForDetection)
+            } else {
+                // Fallback case - create a simple result
+                let hasLink = FileHostingLinkDetector.containsFileHostingLink(bodyForDetection)
+                linkResult = QualificationResult(
+                    qualifies: hasLink,
+                    reasons: ["Using fallback FileHostingLinkDetector", hasLink ? "✅ Found file hosting link" : "❌ No file hosting link found"],
+                    matchedCriteria: hasLink ? ["File hosting link (fallback detector)"] : [],
+                    exclusionReasons: []
+                )
+            }
+            
+            // Extract file links using regular detector if CodeMind didn't provide them
+            if fileLinks.isEmpty {
+                fileLinks = FileHostingLinkDetector.extractFileHostingLinks(bodyForDetection)
+            }
+        }
+        
+        guard let linkResult = linkResult else {
+            print("EmailScanningService: Failed to determine file delivery status")
+            return false
         }
         
         // Log detailed debug information
@@ -451,9 +720,7 @@ class EmailScanningService: ObservableObject {
             return false
         }
         
-        // Extract file hosting links from the combined body (includes both plain text and HTML)
-        // This ensures we catch links whether they're in plain text or HTML format
-        let fileLinks = FileHostingLinkDetector.extractFileHostingLinks(bodyForDetection)
+        // File links were already extracted above (either by CodeMind or regular detector)
         
         await MainActor.run {
             guard let notificationCenter = notificationCenter else {
@@ -462,7 +729,7 @@ class EmailScanningService: ObservableObject {
             }
             
             // Create notification for media files
-            let notification = Notification(
+            var notification = Notification(
                 type: .mediaFiles,
                 title: "File Delivery Available",
                 message: subject.isEmpty ? "Files shared via \(settings.companyMediaEmail)" : subject,
@@ -479,6 +746,14 @@ class EmailScanningService: ObservableObject {
                 fileLinks: fileLinks.isEmpty ? nil : fileLinks,
                 threadId: message.threadId // Store thread ID for tracking replies
             )
+            
+            // Store CodeMind classification metadata if available
+            notification.codeMindClassification = codeMindMetadata
+            
+            // Store CodeMind response for feedback if available
+            if let response = codeMindResponse {
+                codeMindResponses[notification.id] = response
+            }
             
             print("EmailScanningService: ✅ Adding media file notification for email \(message.id)")
             print("  Notification ID: \(notification.id)")
@@ -497,6 +772,48 @@ class EmailScanningService: ObservableObject {
         }
         
         return true
+    }
+    
+    /// Provide feedback to CodeMind about a classification
+    /// - Parameters:
+    ///   - notificationId: The notification ID
+    ///   - rating: 1-5 rating (1 = very wrong, 5 = perfect)
+    ///   - wasCorrect: Whether the classification was correct
+    ///   - correction: Optional correction text
+    ///   - comment: Optional additional feedback
+    func provideCodeMindFeedback(
+        for notificationId: UUID,
+        rating: Int,
+        wasCorrect: Bool,
+        correction: String? = nil,
+        comment: String? = nil
+    ) async {
+        guard let response = codeMindResponses[notificationId],
+              let classifier = codeMindClassifier else {
+            print("EmailScanningService: Cannot provide feedback - no CodeMind response found for notification \(notificationId)")
+            return
+        }
+        
+        do {
+            try await classifier.provideFeedback(
+                for: response,
+                rating: rating,
+                wasCorrect: wasCorrect,
+                correction: correction,
+                comment: comment
+            )
+            print("EmailScanningService: ✅ Feedback provided to CodeMind for notification \(notificationId)")
+            
+            // Trigger pattern sync after feedback to check if new patterns should be adopted
+            // Only sync if rating is high (positive feedback) to learn from successes
+            if rating >= 4 {
+                Task {
+                    await CodeMindPatternBridge.shared.triggerSync()
+                }
+            }
+        } catch {
+            print("EmailScanningService: ❌ Failed to provide feedback: \(error.localizedDescription)")
+        }
     }
     
     /// Re-parse an email by emailId and return the parsed values
@@ -595,6 +912,20 @@ class EmailScanningService: ObservableObject {
                 guard let self = self, self.isEnabled else { break }
                 
                 await self.scanNow()
+            }
+        }
+    }
+    
+    /// Start periodic pattern syncing from CodeMind
+    private func startPeriodicPatternSync() {
+        // Sync patterns every 30 minutes (1800 seconds)
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_800_000_000_000) // 30 minutes
+                
+                guard let self = self, self.codeMindStatus.isActive else { continue }
+                
+                await CodeMindPatternBridge.shared.triggerSync()
             }
         }
     }

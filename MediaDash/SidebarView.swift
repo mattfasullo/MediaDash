@@ -11,15 +11,18 @@ struct SidebarView: View {
         let sharedURL = settingsManager.currentSettings.sharedCacheURL
         
         guard let sharedURL = sharedURL, !sharedURL.isEmpty else {
-            print("⚠️ [Cache] No shared cache URL configured in settings")
+            // DEBUG: Commented out for performance
+            // print("⚠️ [Cache] No shared cache URL configured in settings")
             return
         }
         
         do {
             try await cacheManager.saveToSharedCache(dockets: dockets, url: sharedURL)
-            print("🟢 [Cache] Successfully created shared cache from local cache")
+            // DEBUG: Commented out for performance
+            // print("🟢 [Cache] Successfully created shared cache from local cache")
         } catch {
-            print("⚠️ [Cache] Failed to create shared cache: \(error.localizedDescription)")
+            // DEBUG: Commented out for performance
+            // print("⚠️ [Cache] Failed to create shared cache: \(error.localizedDescription)")
         }
     }
     @EnvironmentObject var sessionManager: SessionManager
@@ -81,12 +84,18 @@ struct SidebarView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 4)
 
-                // Info Hub: Notification Tab + Status Indicators
+                // Info Hub: Notification Tab + CodeMind Chat + Status Indicators
                 if let notificationCenter = notificationCenter {
                     HStack(spacing: 8) {
                         NotificationTabButton(
                             notificationCenter: notificationCenter,
                             showNotificationCenter: $showNotificationCenter
+                        )
+                        
+                        // CodeMind Chat Button (left-click: chat, right-click: status)
+                        CodeMindChatButton(
+                            emailScanningService: emailScanningService,
+                            showSettings: $showSettingsSheet
                         )
                         
                         // Separate server and cache status indicators
@@ -340,11 +349,11 @@ struct ServerStatusPopover: View {
         case .serverConnectedUsingShared:
             return "Using shared cache"
         case .serverConnectedUsingLocal:
-            return "Using local cache (shared unavailable)"
+            return "Using local cache"
         case .serverConnectedNoCache:
             return "No cache available"
         case .serverDisconnectedUsingLocal:
-            return "Server disconnected, using local cache"
+            return "Using local cache (server disconnected)"
         case .serverDisconnectedNoCache:
             return "Server disconnected, no cache"
         case .unknown:
@@ -637,7 +646,7 @@ struct ServerStatusPopover: View {
                     
                     // If path doesn't end with .json, assume it's a directory and append cache filename
                     if !fileURL.lastPathComponent.hasSuffix(".json") {
-                        fileURL = fileURL.appendingPathComponent("mediadash_docket_search_cache.json")
+                        fileURL = fileURL.appendingPathComponent("mediadash_docket_cache.json")
                     }
                     
                     sharedCacheExists = FileManager.default.fileExists(atPath: fileURL.path)
@@ -647,7 +656,7 @@ struct ServerStatusPopover: View {
             // Test local cache
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             let appFolder = appSupport.appendingPathComponent("MediaDash", isDirectory: true)
-            let localCachePath = appFolder.appendingPathComponent("mediadash_docket_search_cache.json").path
+            let localCachePath = appFolder.appendingPathComponent("mediadash_docket_cache.json").path
             let localCacheExists = FileManager.default.fileExists(atPath: localCachePath)
             
             // Refresh status
@@ -787,7 +796,7 @@ struct CacheStatusIndicator: View {
             if state.isShared {
                 return "Cache: Using shared cache"
             } else {
-                return "Cache: Using local cache\nClick to refresh or create shared cache"
+                return "Cache: Using local cache"
             }
         } else {
             return "Cache: Not available\nClick to refresh"
@@ -813,12 +822,12 @@ struct CacheStatusIndicator: View {
                     } else {
                 Image(systemName: "internaldrive")
                     .font(.system(size: 11))
-                    .foregroundColor(.orange)
+                    .foregroundColor(.green)
                     }
                 } else {
                     Image(systemName: "externaldrive.badge.exclamationmark")
                     .font(.system(size: 11))
-                        .foregroundColor(.yellow)
+                        .foregroundColor(.red)
                 }
             }
         }
@@ -906,11 +915,11 @@ struct CacheStatusPopover: View {
         case .serverConnectedUsingShared:
             return "Using shared cache"
         case .serverConnectedUsingLocal:
-            return "Using local cache (shared unavailable)"
+            return "Using local cache"
         case .serverConnectedNoCache:
             return "No cache available"
         case .serverDisconnectedUsingLocal:
-            return "Server disconnected, using local cache"
+            return "Using local cache (server disconnected)"
         case .serverDisconnectedNoCache:
             return "Server disconnected, no cache"
         case .unknown:
@@ -931,7 +940,7 @@ struct CacheStatusPopover: View {
     private var localCachePath: String {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let appFolder = appSupport.appendingPathComponent("MediaDash", isDirectory: true)
-        return appFolder.appendingPathComponent("mediadash_docket_search_cache.json").path
+        return appFolder.appendingPathComponent("mediadash_docket_cache.json").path
     }
     
     var body: some View {
@@ -947,12 +956,12 @@ struct CacheStatusPopover: View {
                     } else {
                         Image(systemName: "internaldrive")
                             .font(.system(size: 16))
-                            .foregroundColor(.orange)
+                            .foregroundColor(.green)
                     }
                 } else {
                     Image(systemName: "externaldrive.badge.exclamationmark")
                         .font(.system(size: 16))
-                        .foregroundColor(.yellow)
+                        .foregroundColor(.red)
                 }
                 
                 Text("Cache Status")
@@ -961,7 +970,7 @@ struct CacheStatusPopover: View {
                 Spacer()
                 
                 Circle()
-                    .fill(cacheState.available ? (cacheState.isShared ? Color.green : Color.orange) : Color.yellow)
+                    .fill(cacheState.available ? Color.green : Color.red)
                     .frame(width: 8, height: 8)
             }
             
@@ -1094,7 +1103,8 @@ struct CacheStatusPopover: View {
             // If server is connected but using local cache, try to create/switch to shared cache
             if cacheManager.cacheStatus == .serverConnectedUsingLocal {
                         // Try to seed shared cache from local cache
-                        print("🔄 [Cache] Attempting to seed shared cache from local cache...")
+                        // DEBUG: Commented out for performance
+                        // print("🔄 [Cache] Attempting to seed shared cache from local cache...")
                         
                         // Get local cache dockets
                         let localDockets = cacheManager.loadCachedDockets()
@@ -1104,12 +1114,15 @@ struct CacheStatusPopover: View {
                     if let sharedURL = settingsManager.currentSettings.sharedCacheURL, !sharedURL.isEmpty {
                                 do {
                                     try await cacheManager.saveToSharedCache(dockets: localDockets, url: sharedURL)
-                                    print("🟢 [Cache] Successfully created shared cache from local cache")
+                                    // DEBUG: Commented out for performance
+                                    // print("🟢 [Cache] Successfully created shared cache from local cache")
                                 } catch {
-                                    print("⚠️ [Cache] Failed to create shared cache: \(error.localizedDescription)")
+                                    // DEBUG: Commented out for performance
+                                    // print("⚠️ [Cache] Failed to create shared cache: \(error.localizedDescription)")
                                 }
                             } else {
-                                print("⚠️ [Cache] No shared cache URL configured in settings")
+                                // DEBUG: Commented out for performance
+                                // print("⚠️ [Cache] No shared cache URL configured in settings")
                             }
                         }
                         
@@ -1136,14 +1149,277 @@ struct CacheStatusPopover: View {
                     sharedCacheURL: settings.sharedCacheURL,
                     useSharedCache: settings.useSharedCache
                 )
-                print("🟢 [Cache] Manual sync complete")
+                // DEBUG: Commented out for performance
+                // print("🟢 [Cache] Manual sync complete")
                 
                 // Refresh status after sync
                 cacheManager.refreshCacheStatus()
             } catch {
-                print("⚠️ [Cache] Manual sync failed: \(error.localizedDescription)")
+                // DEBUG: Commented out for performance
+                // print("⚠️ [Cache] Manual sync failed: \(error.localizedDescription)")
             }
         }
     }
 }
 
+
+// MARK: - CodeMind Status Indicator
+
+// MARK: - CodeMind Chat Button (Left-click: Chat, Right-click: Status)
+
+struct CodeMindChatButton: View {
+    @ObservedObject var emailScanningService: EmailScanningService
+    @Binding var showSettings: Bool
+    @State private var isHovered = false
+    @State private var showStatusPopover = false
+    
+    private var statusColor: Color {
+        switch emailScanningService.codeMindStatus {
+        case .working:
+            return .green
+        case .disabled:
+            return .gray
+        case .error:
+            return .orange
+        case .unavailable:
+            return .yellow
+        }
+    }
+    
+    private var tooltipText: String {
+        switch emailScanningService.codeMindStatus {
+        case .working:
+            return "CodeMind AI Chat (Left-click) / Status (Right-click)\nActive - AI classification enabled"
+        case .disabled:
+            return "CodeMind AI Chat (Left-click) / Status (Right-click)\nDisabled - Using rule-based classification"
+        case .error(let message):
+            return "CodeMind AI Chat (Left-click) / Status (Right-click)\nError - Using rule-based classification\n\(message)"
+        case .unavailable:
+            return "CodeMind AI Chat (Left-click) / Status (Right-click)\nUnavailable - Configure in Settings > CodeMind AI"
+        }
+    }
+    
+    var body: some View {
+        RightClickableButton(
+            action: {
+                // Left-click: Open chat
+                CodeMindChatWindowManager.shared.toggleChatWindow()
+            },
+            rightClickAction: {
+                // Right-click: Show status popover
+                showStatusPopover = true
+            }
+        ) {
+            ZStack {
+                Circle()
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                
+                // Status indicator ring (outer border)
+                Circle()
+                    .stroke(statusColor, lineWidth: emailScanningService.codeMindStatus.isActive ? 2 : 1.5)
+                    .opacity(emailScanningService.codeMindStatus.isActive ? 1.0 : 0.6)
+                
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.primary)
+            }
+            .frame(width: 28, height: 28)
+        }
+        .help(tooltipText)
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .popover(isPresented: $showStatusPopover, arrowEdge: .bottom) {
+            CodeMindStatusPopover(
+                emailScanningService: emailScanningService,
+                showSettings: $showSettings
+            )
+            .frame(width: 350)
+        }
+    }
+}
+
+// MARK: - CodeMind Status Popover
+
+struct CodeMindStatusPopover: View {
+    @ObservedObject var emailScanningService: EmailScanningService
+    @Binding var showSettings: Bool
+    
+    private var statusDescription: String {
+        switch emailScanningService.codeMindStatus {
+        case .working:
+            return "CodeMind is active and enhancing email classification with AI"
+        case .disabled:
+            return "CodeMind is disabled. Using rule-based classification patterns"
+        case .error(let message):
+            return "CodeMind encountered an error. Using rule-based classification.\n\nError: \(message)"
+        case .unavailable:
+            return "CodeMind is not configured. Configure an API key in Settings > CodeMind AI to enable AI-powered email classification"
+        }
+    }
+    
+    private var statusColor: Color {
+        switch emailScanningService.codeMindStatus {
+        case .working:
+            return .green
+        case .disabled:
+            return .gray
+        case .error:
+            return .orange
+        case .unavailable:
+            return .yellow
+        }
+    }
+    
+    private var statusIcon: String {
+        switch emailScanningService.codeMindStatus {
+        case .working:
+            return "brain.head.profile"
+        case .disabled:
+            return "brain.head.profile"
+        case .error:
+            return "brain.head.profile.fill"
+        case .unavailable:
+            return "brain.head.profile"
+        }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack {
+                Image(systemName: statusIcon)
+                    .font(.system(size: 16))
+                    .foregroundColor(statusColor)
+                
+                Text("CodeMind AI Status")
+                    .font(.system(size: 14, weight: .semibold))
+                
+                Spacer()
+                
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+            }
+            
+            Divider()
+            
+            // Status
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Status")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                
+                Text(statusDescription)
+                    .font(.system(size: 12))
+                    .foregroundColor(.primary)
+            }
+            
+            // Classification Method
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Current Classification Method")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                
+                if emailScanningService.codeMindStatus.isActive {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 12))
+                            .foregroundColor(.green)
+                        Text("AI-Powered Classification")
+                            .font(.system(size: 12))
+                            .foregroundColor(.primary)
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        Image(systemName: "list.bullet.rectangle")
+                            .font(.system(size: 12))
+                            .foregroundColor(.blue)
+                        Text("Rule-Based Classification")
+                            .font(.system(size: 12))
+                            .foregroundColor(.primary)
+                    }
+                }
+            }
+            
+            Divider()
+            
+            // Actions
+            Button(action: {
+                showSettings = true
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "gear")
+                        .font(.system(size: 10))
+                    Text("Open CodeMind Settings")
+                        .font(.system(size: 11))
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(12)
+    }
+}
+
+// MARK: - Right-Clickable Button Helper
+
+struct RightClickableButton<Content: View>: NSViewRepresentable {
+    let action: () -> Void
+    let rightClickAction: () -> Void
+    let content: Content
+    
+    init(action: @escaping () -> Void, rightClickAction: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.action = action
+        self.rightClickAction = rightClickAction
+        self.content = content()
+    }
+    
+    func makeNSView(context: Context) -> NSHostingView<Content> {
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Add click gesture recognizer for left-click
+        let clickGesture = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleClick(_:)))
+        clickGesture.buttonMask = 0x1 // Left button
+        hostingView.addGestureRecognizer(clickGesture)
+        
+        // Add right-click gesture recognizer
+        let rightClickGesture = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleRightClick(_:)))
+        rightClickGesture.buttonMask = 0x2 // Right button
+        hostingView.addGestureRecognizer(rightClickGesture)
+        
+        return hostingView
+    }
+    
+    func updateNSView(_ nsView: NSHostingView<Content>, context: Context) {
+        nsView.rootView = content
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator {
+        let parent: RightClickableButton
+        
+        init(_ parent: RightClickableButton) {
+            self.parent = parent
+        }
+        
+        @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
+            parent.action()
+        }
+        
+        @objc func handleRightClick(_ gesture: NSClickGestureRecognizer) {
+            parent.rightClickAction()
+        }
+    }
+}

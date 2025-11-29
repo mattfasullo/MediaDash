@@ -12,7 +12,8 @@ class AsanaCacheManager: ObservableObject {
     @Published var cacheStatus: CacheStatus = .unknown
     
     // Cache file name - stores Asana docket data for fast offline search
-    private let cacheFileName = "mediadash_docket_search_cache.json"
+    private let cacheFileName = "mediadash_docket_cache.json"
+    private let legacyCacheFileName = "mediadash_docket_search_cache.json" // Old filename for migration
     
     // Store current settings for cache access
     private var sharedCacheURL: String?
@@ -64,26 +65,34 @@ class AsanaCacheManager: ObservableObject {
     
     /// Migrate cache file from old name to new name if old file exists
     private func migrateOldCacheFileIfNeeded() {
-        let oldCacheFileName = "asana_dockets_cache.json"
-        let oldCacheURL = cacheURL.deletingLastPathComponent().appendingPathComponent(oldCacheFileName)
         let fm = FileManager.default
+        let directory = cacheURL.deletingLastPathComponent()
         
-        // Check if old cache file exists and new one doesn't
-        if fm.fileExists(atPath: oldCacheURL.path) && !fm.fileExists(atPath: cacheURL.path) {
-            do {
-                // Try to read and validate old cache file
-                let data = try Data(contentsOf: oldCacheURL)
-                if let _ = try? JSONDecoder().decode(CachedDockets.self, from: data) {
-                    // Valid cache file, migrate it
-                    try fm.moveItem(at: oldCacheURL, to: cacheURL)
-                    print("✅ [Cache] Migrated cache file from '\(oldCacheFileName)' to '\(cacheFileName)'")
-                } else {
-                    // Invalid cache file, remove old one
-                    try? fm.removeItem(at: oldCacheURL)
-                    print("⚠️ [Cache] Old cache file was invalid, removed it")
+        // List of legacy filenames to check (in order of preference)
+        let legacyFilenames = [legacyCacheFileName, "asana_dockets_cache.json"]
+        
+        // Check each legacy filename
+        for oldCacheFileName in legacyFilenames {
+            let oldCacheURL = directory.appendingPathComponent(oldCacheFileName)
+            
+            // Check if old cache file exists and new one doesn't
+            if fm.fileExists(atPath: oldCacheURL.path) && !fm.fileExists(atPath: cacheURL.path) {
+                do {
+                    // Try to read and validate old cache file
+                    let data = try Data(contentsOf: oldCacheURL)
+                    if let _ = try? JSONDecoder().decode(CachedDockets.self, from: data) {
+                        // Valid cache file, migrate it
+                        try fm.moveItem(at: oldCacheURL, to: cacheURL)
+                        print("✅ [Cache] Migrated cache file from '\(oldCacheFileName)' to '\(cacheFileName)'")
+                        return // Successfully migrated, no need to check other legacy names
+                    } else {
+                        // Invalid cache file, remove old one
+                        try? fm.removeItem(at: oldCacheURL)
+                        print("⚠️ [Cache] Old cache file '\(oldCacheFileName)' was invalid, removed it")
+                    }
+                } catch {
+                    print("⚠️ [Cache] Failed to migrate old cache file '\(oldCacheFileName)': \(error.localizedDescription)")
                 }
-            } catch {
-                print("⚠️ [Cache] Failed to migrate old cache file: \(error.localizedDescription)")
             }
         }
     }
@@ -133,7 +142,7 @@ class AsanaCacheManager: ObservableObject {
         self.syncJobNameField = jobNameField
         
         // Start periodic sync if settings are valid and authenticated
-        if (workspaceID != nil || projectID != nil) && KeychainService.retrieve(key: "asana_access_token") != nil {
+        if (workspaceID != nil || projectID != nil) && SharedKeychainService.getAsanaAccessToken() != nil {
             startPeriodicSync()
         } else {
             stopPeriodicSync()
@@ -228,7 +237,7 @@ class AsanaCacheManager: ObservableObject {
         }
         
         // Don't sync if not authenticated
-        guard KeychainService.retrieve(key: "asana_access_token") != nil else {
+        guard SharedKeychainService.getAsanaAccessToken() != nil else {
             print("🔄 [Background Sync] Skipping - not authenticated")
             return
         }
@@ -545,15 +554,30 @@ class AsanaCacheManager: ObservableObject {
             var isDirectory: ObjCBool = false
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
                 if isDirectory.boolValue {
-                    // It's a directory, append filename
+                    // It's a directory, append filename (check for legacy first)
+                    let newFileURL = url.appendingPathComponent(cacheFileName)
+                    let legacyFileURL = url.appendingPathComponent(legacyCacheFileName)
+                    
+                    // If legacy file exists and new one doesn't, migrate it
+                    if FileManager.default.fileExists(atPath: legacyFileURL.path) && !FileManager.default.fileExists(atPath: newFileURL.path) {
+                        try? FileManager.default.moveItem(at: legacyFileURL, to: newFileURL)
+                        print("✅ [Cache] Migrated shared cache from '\(legacyCacheFileName)' to '\(cacheFileName)'")
+                    }
+                    
                     print("📁 [Cache] Path is a directory, appending filename: \(cacheFileName)")
-                    return url.appendingPathComponent(cacheFileName)
+                    return newFileURL
                 } else {
                     // It's a file - check if it's the right type
                     if url.pathExtension == "json" && url.lastPathComponent == cacheFileName {
                         // It's the correct JSON file, use it as-is
                         print("📄 [Cache] Path is the correct cache file, using as-is")
                         return url
+                    } else if url.pathExtension == "json" && url.lastPathComponent == legacyCacheFileName {
+                        // It's the legacy file - migrate it
+                        let newURL = url.deletingLastPathComponent().appendingPathComponent(cacheFileName)
+                        try? FileManager.default.moveItem(at: url, to: newURL)
+                        print("✅ [Cache] Migrated shared cache from '\(legacyCacheFileName)' to '\(cacheFileName)'")
+                        return newURL
                     } else {
                         // It's a file but not the right one - use parent directory instead
                         print("⚠️ [Cache] Path is a file (not the cache file), using parent directory: \(url.deletingLastPathComponent().path)")
@@ -845,7 +869,7 @@ class AsanaCacheManager: ObservableObject {
         print("🔵 [Cache] Starting local sync with Asana...")
         
         // Check if token exists
-        guard let token = KeychainService.retrieve(key: "asana_access_token") else {
+        guard let token = SharedKeychainService.getAsanaAccessToken() else {
             throw AsanaError.notAuthenticated
         }
         

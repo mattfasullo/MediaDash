@@ -42,6 +42,13 @@ struct MediaDashApp: App {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView()
             }
+            
+            CommandGroup(after: .toolbar) {
+                Button("CodeMind Debug Window") {
+                    CodeMindDebugWindowManager.shared.toggleDebugWindow()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+            }
         }
     }
     

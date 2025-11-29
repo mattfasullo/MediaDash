@@ -26,19 +26,45 @@ struct NotificationCenterView: View {
         case fileDeliveries
     }
     
+    // Computed properties for filtered notifications (cached to avoid repeated filtering)
+    private var allActiveNotifications: [Notification] {
+        notificationCenter.activeNotifications.filter { notification in
+            // If notification is completed, check if docket exists
+            if notification.status == .completed,
+               notification.type == .newDocket,
+               let docketNumber = notification.docketNumber,
+               docketNumber != "TBD",
+               let jobName = notification.jobName {
+                // Don't show completed notification if docket already exists
+                let docketName = "\(docketNumber)_\(jobName)"
+                let exists = mediaManager.dockets.contains(docketName)
+                if exists {
+                    // Remove the notification asynchronously to avoid blocking view updates
+                    Task { @MainActor in
+                        notificationCenter.remove(notification)
+                    }
+                }
+                return !exists
+            }
+            // Show all other notifications (including media files)
+            return true
+        }
+    }
+    
+    private var mediaFileNotifications: [Notification] {
+        allActiveNotifications.filter { $0.type == .mediaFiles }
+    }
+    
+    private var activeNotifications: [Notification] {
+        allActiveNotifications.filter { $0.type != .mediaFiles }
+    }
+    
+    private var archivedNotifications: [Notification] {
+        notificationCenter.archivedNotifications
+    }
+    
     var body: some View {
-        let _ = {
-            // Debug: Print notification counts when view updates
-            print("NotificationCenterView: Total notifications: \(notificationCenter.notifications.count)")
-            print("NotificationCenterView: Active notifications: \(notificationCenter.activeNotifications.count)")
-            let mediaFiles = notificationCenter.activeNotifications.filter { $0.type == .mediaFiles }
-            let regular = notificationCenter.activeNotifications.filter { $0.type != .mediaFiles }
-            print("NotificationCenterView: Media file notifications: \(mediaFiles.count)")
-            print("NotificationCenterView: Regular notifications: \(regular.count)")
-            print("NotificationCenterView: Archived notifications: \(notificationCenter.archivedNotifications.count)")
-        }()
-        
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             // Header (double-click to toggle lock)
             HStack {
                 Text("Notifications")
@@ -140,47 +166,6 @@ struct NotificationCenterView: View {
                 }
             }
             
-            // Notifications list - filter out completed notifications if docket already exists
-            let allActiveNotifications = notificationCenter.activeNotifications.filter { notification in
-                // If notification is completed, check if docket exists
-                if notification.status == .completed,
-                   notification.type == .newDocket,
-                   let docketNumber = notification.docketNumber,
-                   docketNumber != "TBD",
-                   let jobName = notification.jobName {
-                    // Don't show completed notification if docket already exists
-                    let docketName = "\(docketNumber)_\(jobName)"
-                    let exists = mediaManager.dockets.contains(docketName)
-                    if exists {
-                        // Also remove the notification from the center since it's no longer needed
-                        DispatchQueue.main.async {
-                            notificationCenter.remove(notification)
-                        }
-                    }
-                    return !exists
-                }
-                // Show all other notifications (including media files)
-                return true
-            }
-            
-            // Separate media file notifications from regular docket notifications
-            let mediaFileNotifications = allActiveNotifications.filter { $0.type == .mediaFiles }
-            let activeNotifications = allActiveNotifications.filter { $0.type != .mediaFiles }
-            let archivedNotifications = notificationCenter.archivedNotifications
-            
-            // Auto-select tab if current selection is empty (using onChange would be better but this works for now)
-            let _ = {
-                if selectedTab == .newDockets && activeNotifications.isEmpty && !mediaFileNotifications.isEmpty {
-                    DispatchQueue.main.async {
-                        selectedTab = .fileDeliveries
-                    }
-                } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && !activeNotifications.isEmpty {
-                    DispatchQueue.main.async {
-                        selectedTab = .newDockets
-                    }
-                }
-            }()
-            
             // Show Gmail connection status if Gmail is enabled but not connected (empty state)
             if gmailEnabled && !isGmailConnected {
                 VStack(spacing: 16) {
@@ -211,7 +196,7 @@ struct NotificationCenterView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding()
-            } else if mediaFileNotifications.isEmpty && activeNotifications.isEmpty && archivedNotifications.isEmpty {
+            } else if mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
                 VStack(spacing: 12) {
                     if isScanningEmails {
                         ProgressView()
@@ -607,9 +592,32 @@ struct NotificationCenterView: View {
         .cornerRadius(12)
         .clipShape(RoundedRectangle(cornerRadius: 12)) // Ensure content is clipped to rounded corners
         .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
+        .onChange(of: activeNotifications.count) { oldCount, newCount in
+            // Auto-select tab if current selection is empty
+            if selectedTab == .newDockets && newCount == 0 && !mediaFileNotifications.isEmpty {
+                selectedTab = .fileDeliveries
+            } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && newCount > 0 {
+                selectedTab = .newDockets
+            }
+        }
+        .onChange(of: mediaFileNotifications.count) { oldCount, newCount in
+            // Auto-select tab if current selection is empty
+            if selectedTab == .fileDeliveries && newCount == 0 && !activeNotifications.isEmpty {
+                selectedTab = .newDockets
+            } else if selectedTab == .newDockets && activeNotifications.isEmpty && newCount > 0 {
+                selectedTab = .fileDeliveries
+            }
+        }
         .onAppear {
             // Clean up old archived notifications
             notificationCenter.cleanupOldArchivedNotifications()
+            
+            // Auto-select tab if current selection is empty
+            if selectedTab == .newDockets && activeNotifications.isEmpty && !mediaFileNotifications.isEmpty {
+                selectedTab = .fileDeliveries
+            } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && !activeNotifications.isEmpty {
+                selectedTab = .newDockets
+            }
             
             // Only auto-scan if last scan was more than 30 seconds ago (debounce to avoid slowdown)
             let timeSinceLastScan = emailScanningService.lastScanTime.map { Date().timeIntervalSince($0) } ?? Double.infinity
@@ -947,9 +955,10 @@ struct NotificationCenterView: View {
                 await MainActor.run {
                     _ = NSWorkspace.shared.open(tempFile)
                 }
-            } catch {
-                print("Failed to write cache file: \(error.localizedDescription)")
-                await MainActor.run {
+                } catch {
+                    // DEBUG: Commented out for performance
+                    // print("Failed to write cache file: \(error.localizedDescription)")
+                    await MainActor.run {
                     // Fallback: show in panel if file write fails
                     showCacheInfo = true
                     cacheInfo = finalCacheText
@@ -985,6 +994,11 @@ struct NotificationRowView: View {
     @State private var showGrabbedConfirmation = false
     @State private var pendingEmailIdForReply: String?
     @State private var isSendingReply = false
+    @State private var showFeedbackDialog = false
+    @State private var feedbackCorrection = ""
+    @State private var feedbackComment = ""
+    @State private var isSubmittingFeedback = false
+    @State private var feedbackSubmitted = false
     
     // Get current notification from center (always up-to-date)
     private var notification: Notification? {
@@ -1206,24 +1220,85 @@ struct NotificationRowView: View {
                         .padding(.top, 4)
                     }
                 }
+                
+                // CodeMind feedback UI (if CodeMind was used)
+                if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
+                    Divider()
+                        .padding(.vertical, 4)
+                    
+                    HStack(spacing: 8) {
+                        Image(systemName: "brain.head.profile")
+                            .font(.system(size: 10))
+                            .foregroundColor(.purple)
+                        Text("AI Classification")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.secondary)
+                        
+                        Text("(\(Int(codeMindMeta.confidence * 100))% confidence)")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary.opacity(0.7))
+                        
+                        Spacer()
+                        
+                        if !feedbackSubmitted {
+                            HStack(spacing: 4) {
+                                Button(action: {
+                                    Task {
+                                        await submitFeedback(notificationId: notification.id, wasCorrect: true, rating: 5)
+                                    }
+                                }) {
+                                    Image(systemName: "hand.thumbsup.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.green)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Classification was correct")
+                                
+                                Button(action: {
+                                    showFeedbackDialog = true
+                                }) {
+                                    Image(systemName: "hand.thumbsdown.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.red)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Classification was incorrect")
+                            }
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.green)
+                                Text("Feedback submitted")
+                                    .font(.system(size: 8))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
+                }
             }
         } else if notification.type == .mediaFiles {
             // Media file notification content
             // Extract links from email body if not already stored (for older notifications)
             let extractedLinks: [String] = {
                 if let existingLinks = notification.fileLinks, !existingLinks.isEmpty {
-                    print("NotificationCenterView: Using stored fileLinks: \(existingLinks)")
+                    // DEBUG: Commented out for performance
+                    // print("NotificationCenterView: Using stored fileLinks: \(existingLinks)")
                     return existingLinks
                 }
                 // Try to extract from email body if available
                 if let emailBody = notification.emailBody {
-                    print("NotificationCenterView: Extracting links from email body (length: \(emailBody.count))")
-                    print("NotificationCenterView: Email body preview: \(emailBody.prefix(500))")
+                    // DEBUG: Commented out for performance
+                    // print("NotificationCenterView: Extracting links from email body (length: \(emailBody.count))")
+                    // print("NotificationCenterView: Email body preview: \(emailBody.prefix(500))")
                     let extracted = FileHostingLinkDetector.extractFileHostingLinks(emailBody)
-                    print("NotificationCenterView: Extracted \(extracted.count) links: \(extracted)")
+                    // DEBUG: Commented out for performance
+                    // print("NotificationCenterView: Extracted \(extracted.count) links: \(extracted)")
                     return extracted
                 }
-                print("NotificationCenterView: No email body available for link extraction")
+                // DEBUG: Commented out for performance
+                // print("NotificationCenterView: No email body available for link extraction")
                 return []
             }()
             
@@ -1246,7 +1321,8 @@ struct NotificationRowView: View {
                             if isValidLink {
                                 // Valid link - show as clickable
                                 Button(action: {
-                                    print("NotificationCenterView: Link button tapped: \(link)")
+                                    // DEBUG: Commented out for performance
+                                    // print("NotificationCenterView: Link button tapped: \(link)")
                                     openLinkInBrowser(link)
                                     // Show grabbed confirmation if email ID is available
                                     if let emailId = notification.emailId {
@@ -1376,6 +1452,63 @@ struct NotificationRowView: View {
                             .foregroundColor(.red)
                     }
                     .padding(.top, 2)
+                }
+                
+                // CodeMind feedback UI (if CodeMind was used)
+                if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
+                    Divider()
+                        .padding(.vertical, 4)
+                    
+                    HStack(spacing: 8) {
+                        Image(systemName: "brain.head.profile")
+                            .font(.system(size: 10))
+                            .foregroundColor(.purple)
+                        Text("AI Classification")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.secondary)
+                        
+                        Text("(\(Int(codeMindMeta.confidence * 100))% confidence)")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary.opacity(0.7))
+                        
+                        Spacer()
+                        
+                        if !feedbackSubmitted {
+                            HStack(spacing: 4) {
+                                Button(action: {
+                                    Task {
+                                        await submitFeedback(notificationId: notification.id, wasCorrect: true, rating: 5)
+                                    }
+                                }) {
+                                    Image(systemName: "hand.thumbsup.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.green)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Classification was correct")
+                                
+                                Button(action: {
+                                    showFeedbackDialog = true
+                                }) {
+                                    Image(systemName: "hand.thumbsdown.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.red)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Classification was incorrect")
+                            }
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.green)
+                                Text("Feedback submitted")
+                                    .font(.system(size: 8))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
                 }
             }
         } else {
@@ -1597,12 +1730,54 @@ struct NotificationRowView: View {
         } message: {
             Text("Did you successfully grab the file?")
         }
+        .sheet(isPresented: $showFeedbackDialog) {
+            CodeMindFeedbackDialog(
+                isPresented: $showFeedbackDialog,
+                correction: $feedbackCorrection,
+                comment: $feedbackComment,
+                onSubmit: {
+                    Task {
+                        await submitFeedback(
+                            notificationId: notificationId,
+                            wasCorrect: false,
+                            rating: 1,
+                            correction: feedbackCorrection.isEmpty ? nil : feedbackCorrection,
+                            comment: feedbackComment.isEmpty ? nil : feedbackComment
+                        )
+                    }
+                }
+            )
+        }
+    }
+    
+    private func submitFeedback(
+        notificationId: UUID,
+        wasCorrect: Bool,
+        rating: Int,
+        correction: String? = nil,
+        comment: String? = nil
+    ) async {
+        await emailScanningService.provideCodeMindFeedback(
+            for: notificationId,
+            rating: rating,
+            wasCorrect: wasCorrect,
+            correction: correction,
+            comment: comment
+        )
+        
+        await MainActor.run {
+            feedbackSubmitted = true
+            showFeedbackDialog = false
+            feedbackCorrection = ""
+            feedbackComment = ""
+        }
     }
     
     private func sendGrabbedReply() {
         guard let emailId = pendingEmailIdForReply else { return }
         guard emailScanningService.gmailService.isAuthenticated else {
-            print("NotificationCenterView: Cannot send reply - Gmail not authenticated")
+            // DEBUG: Commented out for performance
+            // print("NotificationCenterView: Cannot send reply - Gmail not authenticated")
             return
         }
         
@@ -1615,20 +1790,24 @@ struct NotificationRowView: View {
                 
                 // Check if cursed image feature is enabled
                 if settings.enableCursedImageReplies && !settings.cursedImageSubreddit.isEmpty {
-                    print("NotificationCenterView: Fetching random image from r/\(settings.cursedImageSubreddit)...")
+                    // DEBUG: Commented out for performance
+                    // print("NotificationCenterView: Fetching random image from r/\(settings.cursedImageSubreddit)...")
                     
                     let redditService = RedditImageService()
                     do {
                         // Try to fetch image with retries
                         if let url = try await redditService.fetchRandomImageURLWithRetry(from: settings.cursedImageSubreddit) {
                             imageURL = url
-                            print("NotificationCenterView: ✅ Found image: \(url.absoluteString)")
+                            // DEBUG: Commented out for performance
+                            // print("NotificationCenterView: ✅ Found image: \(url.absoluteString)")
                         } else {
-                            print("NotificationCenterView: ⚠️ No image found, falling back to text")
+                            // DEBUG: Commented out for performance
+                            // print("NotificationCenterView: ⚠️ No image found, falling back to text")
                         }
                     } catch {
                         // If image fetch fails, log but continue with plain text
-                        print("NotificationCenterView: ⚠️ Failed to fetch image: \(error.localizedDescription), falling back to text")
+                        // DEBUG: Commented out for performance
+                        // print("NotificationCenterView: ⚠️ Failed to fetch image: \(error.localizedDescription), falling back to text")
                     }
                 }
                 
@@ -1640,7 +1819,8 @@ struct NotificationRowView: View {
                     imageURL: imageURL
                 )
                 
-                print("NotificationCenterView: ✅ Successfully sent 'Grabbed' reply\(imageURL != nil ? " with image" : "")")
+                // DEBUG: Commented out for performance
+                // print("NotificationCenterView: ✅ Successfully sent 'Grabbed' reply\(imageURL != nil ? " with image" : "")")
                 
                 // Mark notification as grabbed (archive it)
                 await MainActor.run {
@@ -1651,7 +1831,8 @@ struct NotificationRowView: View {
                     isSendingReply = false
                 }
             } catch {
-                print("NotificationCenterView: ❌ Failed to send reply: \(error.localizedDescription)")
+                // DEBUG: Commented out for performance
+                // print("NotificationCenterView: ❌ Failed to send reply: \(error.localizedDescription)")
                 
                 await MainActor.run {
                     // Show error notification
@@ -1670,45 +1851,57 @@ struct NotificationRowView: View {
     
     /// Open a link in the default browser from settings
     private func openLinkInBrowser(_ link: String) {
-        print("NotificationCenterView: openLinkInBrowser called with link: \(link)")
+        // DEBUG: Commented out for performance
+        // print("NotificationCenterView: openLinkInBrowser called with link: \(link)")
         
         guard let url = URL(string: link) else {
-            print("NotificationCenterView: ❌ Invalid URL: \(link)")
+            // DEBUG: Commented out for performance
+            // print("NotificationCenterView: ❌ Invalid URL: \(link)")
             return
         }
         
-        print("NotificationCenterView: ✅ Valid URL created: \(url.absoluteString)")
+        // DEBUG: Commented out for performance
+        // print("NotificationCenterView: ✅ Valid URL created: \(url.absoluteString)")
         
         // Get browser preference from settings
         let browserPreference = settingsManager.currentSettings.defaultBrowser
-        print("NotificationCenterView: Browser preference: \(browserPreference)")
+        // DEBUG: Commented out for performance
+        // print("NotificationCenterView: Browser preference: \(browserPreference)")
         
         // If a specific browser is selected, try to open with that browser
         if let bundleId = browserPreference.bundleIdentifier {
-            print("NotificationCenterView: Attempting to open with bundle ID: \(bundleId)")
+            // DEBUG: Commented out for performance
+            // print("NotificationCenterView: Attempting to open with bundle ID: \(bundleId)")
             // Check if the browser is installed
             if let browserURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
-                print("NotificationCenterView: ✅ Browser found at: \(browserURL.path)")
+                // DEBUG: Commented out for performance
+                // print("NotificationCenterView: ✅ Browser found at: \(browserURL.path)")
                 NSWorkspace.shared.open([url], withApplicationAt: browserURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: { runningApp, error in
-                    if let error = error {
-                        print("NotificationCenterView: ❌ Error opening link in preferred browser: \(error.localizedDescription)")
+                    if error != nil {
+                        // DEBUG: Commented out for performance
+                        // print("NotificationCenterView: ❌ Error opening link in preferred browser: \(error.localizedDescription)")
                         // Fallback to default browser
-                        print("NotificationCenterView: Falling back to default browser")
+                        // DEBUG: Commented out for performance
+                        // print("NotificationCenterView: Falling back to default browser")
                         NSWorkspace.shared.open(url)
                     } else {
-                        print("NotificationCenterView: ✅ Successfully opened link in preferred browser")
+                        // DEBUG: Commented out for performance
+                        // print("NotificationCenterView: ✅ Successfully opened link in preferred browser")
                     }
                 })
                 return
             } else {
-                print("NotificationCenterView: ⚠️ Browser with bundle ID \(bundleId) not found, falling back to default")
+                // DEBUG: Commented out for performance
+                // print("NotificationCenterView: ⚠️ Browser with bundle ID \(bundleId) not found, falling back to default")
             }
         }
         
         // Fallback to default browser
-        print("NotificationCenterView: Opening with default browser")
-        let success = NSWorkspace.shared.open(url)
-        print("NotificationCenterView: Default browser open result: \(success)")
+        // DEBUG: Commented out for performance
+        // print("NotificationCenterView: Opening with default browser")
+        _ = NSWorkspace.shared.open(url)
+        // DEBUG: Commented out for performance
+        // print("NotificationCenterView: Default browser open result: \(success)")
     }
     
     /// Open email in Gmail browser
@@ -1830,10 +2023,12 @@ struct NotificationRowView: View {
                             projectManager: projectManager,
                             projectTemplate: settingsManager.currentSettings.simianProjectTemplate
                         )
-                        print("✅ Simian job creation requested for \(finalDocketNumber): \(jobName)")
+                        // DEBUG: Commented out for performance
+                        // print("✅ Simian job creation requested for \(finalDocketNumber): \(jobName)")
                     } catch {
                         // Log error but don't fail the whole approval process
-                        print("⚠️ Failed to create Simian job: \(error.localizedDescription)")
+                        // DEBUG: Commented out for performance
+                        // print("⚠️ Failed to create Simian job: \(error.localizedDescription)")
                         // Optionally show a warning notification
                         await MainActor.run {
                             let warningNotification = Notification(
@@ -2045,36 +2240,38 @@ struct NotificationRowView: View {
             debugMessages.append("❌ ERROR: Could not find notification after reset!")
         }
         
+        // DEBUG: Commented out for performance
         // Print to console only (don't auto-open debug panel)
-        let debugOutput = debugMessages.joined(separator: "\n")
-        print(debugOutput)
+        // let debugOutput = debugMessages.joined(separator: "\n")
+        // print(debugOutput)
     }
     
     /// Debug function for email expansion
     private func debugEmailExpansion(_ notification: Notification, currentState: Bool) {
-        var debugMessages: [String] = []
-        debugMessages.append("=== Email Expansion Debug ===")
-        debugMessages.append("")
-        debugMessages.append("📋 Notification ID: \(notification.id)")
-        debugMessages.append("")
-        debugMessages.append("🔍 Current State:")
-        debugMessages.append("  isEmailPreviewExpanded (before): \(currentState)")
-        debugMessages.append("  Will toggle to: \(!currentState)")
-        debugMessages.append("")
-        debugMessages.append("📧 Email Content Check:")
-        debugMessages.append("  emailSubject exists: \(notification.emailSubject != nil)")
-        debugMessages.append("  emailSubject value: \(notification.emailSubject?.prefix(50) ?? "nil")")
-        debugMessages.append("  emailBody exists: \(notification.emailBody != nil)")
-        debugMessages.append("  emailBody length: \(notification.emailBody?.count ?? 0) chars")
-        debugMessages.append("  Has email content: \(notification.emailSubject != nil || notification.emailBody != nil)")
-        debugMessages.append("")
-        debugMessages.append("🎯 Tap Gesture Conditions:")
-        debugMessages.append("  Tap area should be visible: \(notification.emailSubject != nil || notification.emailBody != nil)")
-        debugMessages.append("")
-        
+        // DEBUG: Commented out for performance
+        // var debugMessages: [String] = []
+        // debugMessages.append("=== Email Expansion Debug ===")
+        // debugMessages.append("")
+        // debugMessages.append("📋 Notification ID: \(notification.id)")
+        // debugMessages.append("")
+        // debugMessages.append("🔍 Current State:")
+        // debugMessages.append("  isEmailPreviewExpanded (before): \(currentState)")
+        // debugMessages.append("  Will toggle to: \(!currentState)")
+        // debugMessages.append("")
+        // debugMessages.append("📧 Email Content Check:")
+        // debugMessages.append("  emailSubject exists: \(notification.emailSubject != nil)")
+        // debugMessages.append("  emailSubject value: \(notification.emailSubject?.prefix(50) ?? "nil")")
+        // debugMessages.append("  emailBody exists: \(notification.emailBody != nil)")
+        // debugMessages.append("  emailBody length: \(notification.emailBody?.count ?? 0) chars")
+        // debugMessages.append("  Has email content: \(notification.emailSubject != nil || notification.emailBody != nil)")
+        // debugMessages.append("")
+        // debugMessages.append("🎯 Tap Gesture Conditions:")
+        // debugMessages.append("  Tap area should be visible: \(notification.emailSubject != nil || notification.emailBody != nil)")
+        // debugMessages.append("")
+        //
         // Print to console only (don't auto-open debug panel)
-        let debugOutput = debugMessages.joined(separator: "\n")
-        print(debugOutput)
+        // let debugOutput = debugMessages.joined(separator: "\n")
+        // print(debugOutput)
     }
     
     private func extractProducerName(from sourceEmail: String) -> String {

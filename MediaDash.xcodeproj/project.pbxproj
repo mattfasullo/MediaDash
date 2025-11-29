@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A8C1786D0D0047CD8E98469A /* CodeMind in Frameworks */ = {isa = PBXBuildFile; productRef = 450CBDF0A6724CD088E650F9 /* CodeMind */; };
 		EF7B667D2ECD49B80002FEED /* MediaManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7B667C2ECD49B10002FEED /* MediaManager.swift */; };
 		EF9222E22ECFA7D500DD3992 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = EF9222E12ECFA7D500DD3992 /* Sparkle */; };
 /* End PBXBuildFile section */
@@ -72,6 +73,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EF9222E22ECFA7D500DD3992 /* Sparkle in Frameworks */,
+				A8C1786D0D0047CD8E98469A /* CodeMind in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -134,6 +136,7 @@
 			name = MediaDash;
 			packageProductDependencies = (
 				EF9222E12ECFA7D500DD3992 /* Sparkle */,
+				450CBDF0A6724CD088E650F9 /* CodeMind */,
 			);
 			productName = MediaDash;
 			productReference = EF7B66522ECD48C80002FEED /* MediaDash.app */;
@@ -219,6 +222,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				EF9222E02ECFA7D500DD3992 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				5E8623462EEE46D48E1AFA7B /* XCLocalSwiftPackageReference "../Packages/CodeMind" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = EF7B66532ECD48C80002FEED /* Products */;
@@ -606,6 +610,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		5E8623462EEE46D48E1AFA7B /* XCLocalSwiftPackageReference "../Packages/CodeMind" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/CodeMind;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		EF9222E02ECFA7D500DD3992 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -618,6 +629,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		450CBDF0A6724CD088E650F9 /* CodeMind */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5E8623462EEE46D48E1AFA7B /* XCLocalSwiftPackageReference "../Packages/CodeMind" */;
+			productName = CodeMind;
+		};
 		EF9222E12ECFA7D500DD3992 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = EF9222E02ECFA7D500DD3992 /* XCRemoteSwiftPackageReference "Sparkle" */;

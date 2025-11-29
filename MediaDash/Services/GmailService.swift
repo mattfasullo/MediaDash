@@ -14,15 +14,16 @@ class GmailService: ObservableObject {
     
     /// Initialize with access token
     init(accessToken: String? = nil) {
-        self.accessToken = accessToken ?? KeychainService.retrieve(key: "gmail_access_token")
+        // Check shared key first (for Grayson employees), then personal key
+        self.accessToken = accessToken ?? SharedKeychainService.getGmailAccessToken()
         // Refresh token is loaded lazily via computed property when needed
         // This ensures it's always available from Keychain
     }
     
-    /// Get refresh token from keychain
+    /// Get refresh token from keychain (shared or personal)
     private var refreshToken: String? {
         get {
-            return KeychainService.retrieve(key: "gmail_refresh_token")
+            return SharedKeychainService.getGmailRefreshToken()
         }
         set {
             if let token = newValue {
@@ -34,8 +35,10 @@ class GmailService: ObservableObject {
     }
     
     /// Set access token and optionally refresh token
+    /// Note: This stores to personal Keychain. Shared keys are set separately by admins.
     func setAccessToken(_ token: String, refreshToken: String? = nil) {
         self.accessToken = token
+        // Store to personal Keychain (shared keys are managed separately)
         _ = KeychainService.store(key: "gmail_access_token", value: token)
         
         if let refreshToken = refreshToken {

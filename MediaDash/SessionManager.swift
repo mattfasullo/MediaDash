@@ -389,22 +389,24 @@ class SessionManager: ObservableObject {
             return nil
         }
         
-        let settingsPath = "\(sharedCacheURL)/MediaDash_Settings"
-        let settingsFile = "\(settingsPath)/\(username).json"
+        // Use MediaDash_Cache as base directory, with Settings as subdirectory
+        let cacheBaseURL = URL(fileURLWithPath: sharedCacheURL)
+        let settingsDirURL = cacheBaseURL.appendingPathComponent("MediaDash_Settings")
+        let settingsFile = settingsDirURL.appendingPathComponent("\(username).json")
         
         // Check if settings directory exists, create if needed
         let fileManager = FileManager.default
-        let settingsURL = URL(fileURLWithPath: settingsFile)
+        let settingsURL = settingsFile
         
-        guard fileManager.fileExists(atPath: settingsFile) else {
+        guard fileManager.fileExists(atPath: settingsFile.path) else {
             print("SessionManager: Settings file not found at \(settingsFile)")
             return nil
         }
         
         do {
             // Get file modification date
-            let attributes = try fileManager.attributesOfItem(atPath: settingsFile)
-            let modificationDate = attributes[.modificationDate] as? Date ?? Date()
+            let attributes = try fileManager.attributesOfItem(atPath: settingsFile.path)
+            let modificationDate = attributes[FileAttributeKey.modificationDate] as? Date ?? Date()
             
             let data = try Data(contentsOf: settingsURL)
             let settings = try JSONDecoder().decode(AppSettings.self, from: data)
@@ -427,6 +429,38 @@ class SessionManager: ObservableObject {
         return profile.lastAccessedAt
     }
     
+    /// Safely create a directory, handling the case where a file with the same name exists
+    /// If a file exists, it will be renamed with a .old extension before creating the directory
+    private func safeCreateDirectory(at url: URL, fileManager: FileManager) throws {
+        let path = url.path
+        
+        // Check if path exists
+        var isDirectory: ObjCBool = false
+        let exists = fileManager.fileExists(atPath: path, isDirectory: &isDirectory)
+        
+        if exists {
+            if isDirectory.boolValue {
+                // Already a directory, nothing to do
+                return
+            } else {
+                // It's a file - rename it to avoid conflict
+                let backupURL = url.appendingPathExtension("old")
+                print("SessionManager: Found file where directory expected at \(path), renaming to \(backupURL.path)")
+                
+                // Remove old backup if it exists
+                if fileManager.fileExists(atPath: backupURL.path) {
+                    try? fileManager.removeItem(at: backupURL)
+                }
+                
+                // Rename the file
+                try fileManager.moveItem(at: url, to: backupURL)
+            }
+        }
+        
+        // Now create the directory
+        try fileManager.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+    }
+    
     /// Save settings to shared storage for a user
     /// - Returns: true if successful, false if failed (e.g., server unavailable)
     private func saveSettingsToSharedStorage(profile: WorkspaceProfile) async -> Bool {
@@ -440,12 +474,13 @@ class SessionManager: ObservableObject {
             return false
         }
         
-        let settingsPath = "\(sharedCacheURL)/MediaDash_Settings"
-        let settingsFile = "\(settingsPath)/\(username).json"
+        // Use MediaDash_Cache as base directory, with Settings as subdirectory
+        let cacheBaseURL = URL(fileURLWithPath: sharedCacheURL)
+        let settingsDirURL = cacheBaseURL.appendingPathComponent("MediaDash_Settings")
+        let settingsFile = settingsDirURL.appendingPathComponent("\(username).json")
         
         let fileManager = FileManager.default
-        let settingsURL = URL(fileURLWithPath: settingsFile)
-        let settingsDirURL = URL(fileURLWithPath: settingsPath)
+        let settingsURL = settingsFile
         
         // Check if the base path exists (server mounted)
         guard fileManager.fileExists(atPath: sharedCacheURL) else {
@@ -453,9 +488,9 @@ class SessionManager: ObservableObject {
             return false
         }
         
-        // Create settings directory if it doesn't exist
+        // Create settings directory if it doesn't exist (safely handle file conflicts)
         do {
-            try fileManager.createDirectory(at: settingsDirURL, withIntermediateDirectories: true, attributes: nil)
+            try safeCreateDirectory(at: settingsDirURL, fileManager: fileManager)
         } catch {
             print("SessionManager: Failed to create settings directory: \(error.localizedDescription)")
             return false
