@@ -212,41 +212,41 @@ struct ContentView: View {
     }
     
     private var mainContentView: some View {
-        ZStack(alignment: .topLeading) {
-            HStack(spacing: 0) {
-                SidebarView(
-                    focusedButton: $focusedButton,
-                    mainViewFocused: $mainViewFocused,
-                    isKeyboardMode: $isKeyboardMode,
-                    isCommandKeyHeld: $isCommandKeyHeld,
-                    hoverInfo: $hoverInfo,
-                    showSearchSheet: $showSearchSheet,
-                    showQuickSearchSheet: $showQuickSearchSheet,
-                    showSettingsSheet: $showSettingsSheet,
-                    showVideoConverterSheet: $showVideoConverterSheet,
-                    logoClickCount: $logoClickCount,
-                    notificationCenter: notificationCenter,
-                    showNotificationCenter: $showNotificationCenter,
-                    wpDate: wpDate,
-                    prepDate: prepDate,
-                    dateFormatter: dateFormatter,
-                    attempt: attempt,
-                    cycleTheme: cycleTheme,
-                    cacheManager: cacheManager
-                )
-                
-                StagingAreaView(
-                    cacheManager: cacheManager,
-                    isStagingHovered: $isStagingHovered,
-                    isStagingPressed: $isStagingPressed
-                )
-                .environmentObject(manager)
-            }
+            ZStack(alignment: .topLeading) {
+                    HStack(spacing: 0) {
+                        SidebarView(
+                            focusedButton: $focusedButton,
+                            mainViewFocused: $mainViewFocused,
+                            isKeyboardMode: $isKeyboardMode,
+                            isCommandKeyHeld: $isCommandKeyHeld,
+                            hoverInfo: $hoverInfo,
+                            showSearchSheet: $showSearchSheet,
+                            showQuickSearchSheet: $showQuickSearchSheet,
+                            showSettingsSheet: $showSettingsSheet,
+                            showVideoConverterSheet: $showVideoConverterSheet,
+                            logoClickCount: $logoClickCount,
+                            notificationCenter: notificationCenter,
+                            showNotificationCenter: $showNotificationCenter,
+                            wpDate: wpDate,
+                            prepDate: prepDate,
+                            dateFormatter: dateFormatter,
+                            attempt: attempt,
+                            cycleTheme: cycleTheme,
+                            cacheManager: cacheManager
+                        )
+                        
+                        StagingAreaView(
+                            cacheManager: cacheManager,
+                            isStagingHovered: $isStagingHovered,
+                            isStagingPressed: $isStagingPressed
+                        )
+                        .environmentObject(manager)
+        }
             .frame(width: LayoutMode.minWidth, height: windowHeight)
-            .animation(.easeInOut(duration: 0.2), value: windowHeight)
-            .focusable()
-            .focused($mainViewFocused)
-            .focusEffectDisabled()
+        .animation(.easeInOut(duration: 0.2), value: windowHeight)
+        .focusable()
+        .focused($mainViewFocused)
+        .focusEffectDisabled()
             
             // CodeMind Activity Overlay
             CodeMindActivityOverlay()
@@ -1098,9 +1098,10 @@ struct DocketSearchView: View {
         }
         .onKeyPress { press in
             // Any letter/character refocuses search field
+            // Exclude newlines to let the .return handler process Enter key
             if isListFocused && press.characters.count == 1 {
                 let char = press.characters.first!
-                if char.isLetter || char.isNumber || char.isWhitespace || char.isPunctuation {
+                if char.isLetter || char.isNumber || (char.isWhitespace && !char.isNewline) || char.isPunctuation {
                     isSearchFieldFocused = true
                     isListFocused = false
                     return .handled
@@ -1659,7 +1660,9 @@ struct SearchView: View {
             // Any letter/character refocuses search field and adds the character
             if isListFocused && press.characters.count == 1 {
                 let char = press.characters.first!
-                if char.isLetter || char.isNumber || char.isWhitespace || char.isPunctuation {
+                // Exclude newlines - they should not be added to search text
+                // (isWhitespace includes newlines, which would break exact matching)
+                if char.isLetter || char.isNumber || (char.isWhitespace && !char.isNewline) || char.isPunctuation {
                     // Defer state updates to avoid publishing during view updates
                     Task { @MainActor in
                         // Append the character to search text
@@ -1977,9 +1980,10 @@ struct QuickDocketSearchView: View {
         }
         .onKeyPress { press in
             // Any letter/character refocuses search field
+            // Exclude newlines to let the .return handler process Enter key
             if isListFocused && press.characters.count == 1 {
                 let char = press.characters.first!
-                if char.isLetter || char.isNumber || char.isWhitespace || char.isPunctuation {
+                if char.isLetter || char.isNumber || (char.isWhitespace && !char.isNewline) || char.isPunctuation {
                     isSearchFocused = true
                     isListFocused = false
                     return .handled
