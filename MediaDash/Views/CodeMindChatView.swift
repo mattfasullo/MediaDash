@@ -127,16 +127,13 @@ struct CodeMindChatView: View {
                                  switch selectedProvider {
                                  case "grok":
                                      keychainKey = "codemind_grok_api_key"
-                                 case "groq":
-                                     keychainKey = "codemind_groq_api_key"
                                  default:
                                      keychainKey = "codemind_gemini_api_key"
                                  }
                                  return KeychainService.retrieve(key: keychainKey)
                              }() ??
                              (selectedProvider == "gemini" ? ProcessInfo.processInfo.environment["GEMINI_API_KEY"] : nil) ??
-                             (selectedProvider == "grok" ? ProcessInfo.processInfo.environment["GROK_API_KEY"] : nil) ??
-                             (selectedProvider == "groq" ? ProcessInfo.processInfo.environment["GROQ_API_KEY"] : nil)
+                             (selectedProvider == "grok" ? ProcessInfo.processInfo.environment["GROK_API_KEY"] : nil)
                 
                 guard let key = apiKey else {
                     let providerDisplayName = selectedProvider.capitalized

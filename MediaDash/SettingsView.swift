@@ -2322,8 +2322,6 @@ struct CodeMindIntegrationSection: View {
             switch provider {
             case "grok":
                 keychainKeyForProvider = "codemind_grok_api_key"
-            case "groq":
-                keychainKeyForProvider = "codemind_groq_api_key"
             default:
                 keychainKeyForProvider = "codemind_gemini_api_key"
             }
@@ -2397,8 +2395,6 @@ struct CodeMindIntegrationSection: View {
                     switch provider {
                     case "grok":
                         hasSharedKey = SharedKeychainService.hasSharedKey(.codemindGrok)
-                    case "groq":
-                        hasSharedKey = SharedKeychainService.hasSharedKey(.codemindGroq)
                     default:
                         hasSharedKey = SharedKeychainService.hasSharedKey(.codemindGemini)
                     }
@@ -2516,7 +2512,6 @@ struct CodeMindIntegrationSection: View {
                     Picker("AI Provider", selection: $provider) {
                         Text("Gemini").tag("gemini")
                         Text("Grok (xAI)").tag("grok")
-                        Text("Groq").tag("groq")
                     }
                     .pickerStyle(.menu)
                     .frame(maxWidth: 200)
@@ -2723,8 +2718,6 @@ struct CodeMindIntegrationSection: View {
             switch provider {
             case "grok":
                 keychainKeyForProvider = "codemind_grok_api_key"
-            case "groq":
-                keychainKeyForProvider = "codemind_groq_api_key"
             default:
                 keychainKeyForProvider = "codemind_gemini_api_key"
             }
@@ -2754,7 +2747,6 @@ struct SharedKeySetupView: View {
     @State private var sharedOpenAIKey: String = ""
     @State private var sharedGeminiKey: String = ""
     @State private var sharedGrokKey: String = ""
-    @State private var sharedGroqKey: String = ""
 
     // Gmail keys
     @State private var sharedGmailAccessToken: String = ""
@@ -2782,10 +2774,6 @@ struct SharedKeySetupView: View {
 
                     KeyField(label: "Grok API Key", value: $sharedGrokKey) {
                         saveSharedKey(sharedGrokKey, for: .codemindGrok, name: "Grok")
-                    }
-
-                    KeyField(label: "Groq API Key", value: $sharedGroqKey) {
-                        saveSharedKey(sharedGroqKey, for: .codemindGroq, name: "Groq")
                     }
                 }
             }

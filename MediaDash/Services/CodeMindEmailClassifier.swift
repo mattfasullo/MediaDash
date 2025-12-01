@@ -72,11 +72,6 @@ class CodeMindEmailClassifier: ObservableObject {
                     if finalApiKey != nil {
                         keySource = "Environment (GROK_API_KEY)"
                     }
-                } else if selectedProvider == "groq" {
-                    finalApiKey = ProcessInfo.processInfo.environment["GROQ_API_KEY"]
-                    if finalApiKey != nil {
-                        keySource = "Environment (GROQ_API_KEY)"
-                    }
                 }
             }
             
@@ -87,8 +82,6 @@ class CodeMindEmailClassifier: ObservableObject {
                 switch selectedProvider {
                 case "grok":
                     envVarName = "GROK_API_KEY"
-                case "groq":
-                    envVarName = "GROQ_API_KEY"
                 default:
                     envVarName = "GEMINI_API_KEY"
                 }
@@ -113,13 +106,8 @@ class CodeMindEmailClassifier: ObservableObject {
                 cloudProvider = .grok
                 CodeMindLogger.shared.log(.info, "Using Grok (xAI) provider", category: .initialization)
                 print("✅ CodeMind: Using Grok (xAI) provider")
-            case "groq":
-                // Groq uses OpenAI-compatible API, mapped to .grok CloudProvider
-                cloudProvider = .grok
-                CodeMindLogger.shared.log(.info, "Using Groq provider (OpenAI-compatible)", category: .initialization)
-                print("✅ CodeMind: Using Groq provider (OpenAI-compatible)")
             default:
-                let errorMsg = "Unsupported provider: \(selectedProvider). Supported providers: Gemini, Grok, Groq"
+                let errorMsg = "Unsupported provider: \(selectedProvider). Supported providers: Gemini, Grok"
                 CodeMindLogger.shared.log(.error, errorMsg, category: .initialization)
                 throw CodeMindError.notConfigured(errorMsg)
             }
