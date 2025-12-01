@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.7.1</title>
+            <description><![CDATA[
+                <h2>What's New in 0.7.1</h2><ul><li>Fixed search results disappearing after pressing Enter</li><li>Excluded newlines from key handlers to prevent exact match filtering from breaking</li></ul>
+            ]]></description>
+            <pubDate>Mon, 01 Dec 2025 19:36:04 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.7.1/MediaDash.zip"
+                sparkle:version="71"
+                sparkle:shortVersionString="0.7.1"
+                sparkle:edSignature="Z+1xmsN8tNWtyhrVDiLx7M6C7aAzk/CHZ35TeK6DXPcvuroASZH2Bzh++MiuvHzLNqQ+PvJ+ExmRWuJSV1PsBw=="
+                length="14969682"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.7.0</title>
             <description><![CDATA[
                 <h2>What's New in 0.7.0</h2><ul><li>CodeMind Brain Visualization: Interactive mind map editor for viewing and editing classification rules</li><li>CodeMind Rules Manager: Create custom classification rules with pattern matching (subject, sender, body, docket format)</li><li>CodeMind Classification History: Track and learn from past classification decisions</li><li>CodeMind Activity Monitor: Real-time monitoring of classification activity and anomaly detection</li><li>Enhanced notification system with context menu actions (View in MindMap, Create Rule, Re-classify)</li><li>Fixed compact UI layout to restore original design and spacing</li><li>Improved CodeMind integration with email classification</li><li>Better notification context menu with classification feedback options</li><li>CodeMind service registry for centralized service management</li><li>Pattern suggester for intelligent rule creation from email patterns</li></ul>
