@@ -2393,17 +2393,23 @@ struct CodeMindIntegrationSection: View {
                 if !apiKey.isEmpty {
                     keySource = "personal"
                 } else if isGraysonEmployee {
-                    let hasSharedKey = provider == "grok" 
-                        ? SharedKeychainService.hasSharedKey(.codemindGrok)
-                        : SharedKeychainService.hasSharedKey(.codemindGemini)
+                    let hasSharedKey: Bool
+                    switch provider {
+                    case "grok":
+                        hasSharedKey = SharedKeychainService.hasSharedKey(.codemindGrok)
+                    case "groq":
+                        hasSharedKey = SharedKeychainService.hasSharedKey(.codemindGroq)
+                    default:
+                        hasSharedKey = SharedKeychainService.hasSharedKey(.codemindGemini)
+                    }
                     keySource = hasSharedKey ? "shared team key" : "personal key from Keychain"
                 } else {
                     keySource = "personal key from Keychain"
                 }
-                
+
                 // Initialize CodeMind
                 let classifier = CodeMindEmailClassifier()
-                try await classifier.initialize(apiKey: key)
+                try await classifier.initialize(apiKey: key, provider: provider)
                 
                 // Make a simple test query to verify the API actually works
                 let classificationResult = try await classifier.classifyNewDocketEmail(
