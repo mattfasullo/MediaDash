@@ -344,7 +344,7 @@ class VideoConverterManager: ObservableObject {
 
         // Read progress updates continuously
         while true {
-            guard let line = try? fileHandle.availableData else { break }
+            let line = fileHandle.availableData
             if line.isEmpty { break }
 
             guard let output = String(data: line, encoding: .utf8) else { continue }
