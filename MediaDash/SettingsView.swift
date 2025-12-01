@@ -2318,18 +2318,34 @@ struct CodeMindIntegrationSection: View {
     private func saveAPIKey() {
         if apiKey.isEmpty {
             // Clear from Keychain (provider-specific key)
-            let keychainKeyForProvider = provider == "grok" ? "codemind_grok_api_key" : "codemind_gemini_api_key"
+            let keychainKeyForProvider: String
+            switch provider {
+            case "grok":
+                keychainKeyForProvider = "codemind_grok_api_key"
+            case "groq":
+                keychainKeyForProvider = "codemind_groq_api_key"
+            default:
+                keychainKeyForProvider = "codemind_gemini_api_key"
+            }
             KeychainService.delete(key: keychainKeyForProvider)
             // Also clear legacy key if exists
             KeychainService.delete(key: keychainKey)
-            
+
             settings.codeMindAPIKey = nil // Just a flag, not the actual key
             settings.codeMindProvider = nil
             UserDefaults.standard.removeObject(forKey: "codemind_provider")
             isInitialized = false
         } else {
             // Store in Keychain using provider-specific key
-            let keychainKeyForProvider = provider == "grok" ? "codemind_grok_api_key" : "codemind_gemini_api_key"
+            let keychainKeyForProvider: String
+            switch provider {
+            case "grok":
+                keychainKeyForProvider = "codemind_grok_api_key"
+            case "groq":
+                keychainKeyForProvider = "codemind_groq_api_key"
+            default:
+                keychainKeyForProvider = "codemind_gemini_api_key"
+            }
             if KeychainService.store(key: keychainKeyForProvider, value: apiKey) {
                 // Store flag and provider in settings (not the actual key)
                 settings.codeMindAPIKey = "***" // Flag that key exists, but not the actual key
@@ -2494,6 +2510,7 @@ struct CodeMindIntegrationSection: View {
                     Picker("AI Provider", selection: $provider) {
                         Text("Gemini").tag("gemini")
                         Text("Grok (xAI)").tag("grok")
+                        Text("Groq").tag("groq")
                     }
                     .pickerStyle(.menu)
                     .frame(maxWidth: 200)

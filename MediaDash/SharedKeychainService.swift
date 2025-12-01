@@ -24,20 +24,22 @@ struct SharedKeychainService {
         case codemindOpenAI
         case codemindGemini
         case codemindGrok
-        
+        case codemindGroq
+
         // Gmail
         case gmailAccessToken
         case gmailRefreshToken
-        
+
         // Asana
         case asanaAccessToken
-        
+
         var keychainKey: String {
             switch self {
             case .codemindClaude: return "codemind_shared_claude_key"
             case .codemindOpenAI: return "codemind_shared_openai_key"
             case .codemindGemini: return "codemind_shared_gemini_key"
             case .codemindGrok: return "codemind_shared_grok_key"
+            case .codemindGroq: return "codemind_shared_groq_key"
             case .gmailAccessToken: return "gmail_shared_access_token"
             case .gmailRefreshToken: return "gmail_shared_refresh_token"
             case .asanaAccessToken: return "asana_shared_access_token"
@@ -125,15 +127,17 @@ struct SharedKeychainService {
     }
     
     /// Get CodeMind API key for a provider (shared or personal)
-    /// Supports Gemini and Grok
+    /// Supports Gemini, Grok, and Groq
     static func getCodeMindAPIKey(for provider: String) -> String? {
         let providerLower = provider.lowercased()
-        
+
         switch providerLower {
         case "gemini":
             return getKey(shared: .codemindGemini, personalKey: "codemind_gemini_api_key")
         case "grok":
             return getKey(shared: .codemindGrok, personalKey: "codemind_grok_api_key")
+        case "groq":
+            return getKey(shared: .codemindGroq, personalKey: "codemind_groq_api_key")
         default:
             return nil
         }

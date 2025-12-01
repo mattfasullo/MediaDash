@@ -72,13 +72,26 @@ class CodeMindEmailClassifier: ObservableObject {
                     if finalApiKey != nil {
                         keySource = "Environment (GROK_API_KEY)"
                     }
+                } else if selectedProvider == "groq" {
+                    finalApiKey = ProcessInfo.processInfo.environment["GROQ_API_KEY"]
+                    if finalApiKey != nil {
+                        keySource = "Environment (GROQ_API_KEY)"
+                    }
                 }
             }
             
             // If no key found, provide clear error message
             guard let key = finalApiKey else {
                 let providerName = selectedProvider.capitalized
-                let envVarName = selectedProvider == "grok" ? "GROK_API_KEY" : "GEMINI_API_KEY"
+                let envVarName: String
+                switch selectedProvider {
+                case "grok":
+                    envVarName = "GROK_API_KEY"
+                case "groq":
+                    envVarName = "GROQ_API_KEY"
+                default:
+                    envVarName = "GEMINI_API_KEY"
+                }
                 let errorMsg = "\(providerName) API key not found. Configure an API key in Settings > CodeMind AI or set the \(envVarName) environment variable."
                 CodeMindLogger.shared.log(.error, errorMsg, category: .initialization, metadata: ["provider": selectedProvider])
                 print("❌ CodeMind: \(errorMsg)")
@@ -100,8 +113,12 @@ class CodeMindEmailClassifier: ObservableObject {
                 cloudProvider = .grok
                 CodeMindLogger.shared.log(.info, "Using Grok (xAI) provider", category: .initialization)
                 print("✅ CodeMind: Using Grok (xAI) provider")
+            case "groq":
+                cloudProvider = .groq
+                CodeMindLogger.shared.log(.info, "Using Groq provider", category: .initialization)
+                print("✅ CodeMind: Using Groq provider")
             default:
-                let errorMsg = "Unsupported provider: \(selectedProvider). Supported providers: Gemini, Grok"
+                let errorMsg = "Unsupported provider: \(selectedProvider). Supported providers: Gemini, Grok, Groq"
                 CodeMindLogger.shared.log(.error, errorMsg, category: .initialization)
                 throw CodeMindError.notConfigured(errorMsg)
             }
