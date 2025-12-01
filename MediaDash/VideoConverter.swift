@@ -43,6 +43,8 @@ struct ConversionJob: Identifiable, Hashable {
     var progress: Double = 0
     var status: ConversionStatus = .pending
     var error: String?
+    var encodingSpeed: Double? = nil // Frames per second
+    var estimatedTimeRemaining: TimeInterval? = nil
 
     enum ConversionStatus: Hashable {
         case pending
@@ -57,6 +59,22 @@ struct ConversionJob: Identifiable, Hashable {
 
     var destinationName: String {
         destinationURL.lastPathComponent
+    }
+
+    var timeRemainingFormatted: String? {
+        guard let timeRemaining = estimatedTimeRemaining, timeRemaining > 0 else { return nil }
+
+        let hours = Int(timeRemaining) / 3600
+        let minutes = (Int(timeRemaining) % 3600) / 60
+        let seconds = Int(timeRemaining) % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d remaining", hours, minutes, seconds)
+        } else if minutes > 0 {
+            return String(format: "%d:%02d remaining", minutes, seconds)
+        } else {
+            return String(format: "%ds remaining", seconds)
+        }
     }
 }
 
@@ -225,9 +243,9 @@ class VideoConverterManager: ObservableObject {
         guard let ffmpegPath = findFFmpegPath() else {
             job.status = .failed
             // Check if Homebrew is installed
-            let hasHomebrew = FileManager.default.fileExists(atPath: "/opt/homebrew/bin/brew") || 
+            let hasHomebrew = FileManager.default.fileExists(atPath: "/opt/homebrew/bin/brew") ||
                              FileManager.default.fileExists(atPath: "/usr/local/bin/brew")
-            
+
             if hasHomebrew {
                 job.error = "FFmpeg not found. Install with: brew install ffmpeg"
             } else {
@@ -236,16 +254,18 @@ class VideoConverterManager: ObservableObject {
             jobs[index] = job
             return
         }
-        
+
         // Build FFmpeg command for ProRes Proxy with 23.976fps
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
 
         var arguments = [
+            "-progress", "pipe:2",       // Output progress to stderr
             "-i", job.sourceURL.path,
             "-c:v", "prores_ks",        // ProRes encoder
             "-profile:v", "0",           // Profile 0 = ProRes Proxy
             "-c:a", "pcm_s16le",         // PCM audio
+            "-threads", "0",             // Use all available CPU cores
         ]
 
         // Build video filter chain
@@ -284,7 +304,12 @@ class VideoConverterManager: ObservableObject {
                 await monitorFFmpegProgress(pipe: pipe, jobIndex: index, jobId: job.id)
             }
 
-            process.waitUntilExit()
+            // Wait for process to complete asynchronously
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                process.terminationHandler = { _ in
+                    continuation.resume()
+                }
+            }
 
             // Check exit status
             if process.terminationStatus == 0 {
@@ -311,32 +336,102 @@ class VideoConverterManager: ObservableObject {
 
     // Monitor FFmpeg progress from stderr output
     private func monitorFFmpegProgress(pipe: Pipe, jobIndex: Int, jobId: UUID) async {
-        let data = pipe.fileHandleForReading
-        var buffer = Data()
+        let fileHandle = pipe.fileHandleForReading
+        var totalDuration: Double?
+        var currentTime: Double = 0
+        var encodingSpeed: Double = 0
+        var startTime = Date()
 
+        // Read progress updates continuously
         while true {
-            let chunk = data.availableData
-            if chunk.isEmpty { break }
+            guard let line = try? fileHandle.availableData else { break }
+            if line.isEmpty { break }
 
-            buffer.append(chunk)
-            if let output = String(data: buffer, encoding: .utf8) {
-                // Parse duration and time from FFmpeg output
-                // FFmpeg outputs progress like: "time=00:00:05.23"
-                if output.range(of: "time=(\\d+):(\\d+):(\\d+\\.\\d+)", options: .regularExpression) != nil {
-                    // Extract and calculate progress (simplified)
+            guard let output = String(data: line, encoding: .utf8) else { continue }
+
+            // Parse FFmpeg progress output format (key=value pairs)
+            let lines = output.components(separatedBy: .newlines)
+
+            for progressLine in lines {
+                let trimmed = progressLine.trimmingCharacters(in: .whitespaces)
+
+                // Parse duration from initial output: "Duration: HH:MM:SS.ms"
+                if trimmed.contains("Duration:"), totalDuration == nil {
+                    if let durationStr = trimmed.components(separatedBy: "Duration: ").last?.components(separatedBy: ",").first {
+                        totalDuration = parseDuration(durationStr.trimmingCharacters(in: .whitespaces))
+                        startTime = Date() // Reset start time when we get duration
+                    }
+                }
+
+                // Parse current time from progress output: "out_time_ms=microseconds"
+                if trimmed.hasPrefix("out_time_ms=") {
+                    let timeStr = trimmed.replacingOccurrences(of: "out_time_ms=", with: "")
+                    if let microseconds = Double(timeStr) {
+                        currentTime = microseconds / 1_000_000.0 // Convert to seconds
+                    }
+                }
+
+                // Parse current time from alternative format: "out_time=HH:MM:SS.ms"
+                if trimmed.hasPrefix("out_time=") {
+                    let timeStr = trimmed.replacingOccurrences(of: "out_time=", with: "")
+                    currentTime = parseDuration(timeStr) ?? currentTime
+                }
+
+                // Parse encoding speed: "speed=1.23x"
+                if trimmed.hasPrefix("speed=") {
+                    let speedStr = trimmed.replacingOccurrences(of: "speed=", with: "").replacingOccurrences(of: "x", with: "")
+                    if let speed = Double(speedStr) {
+                        encodingSpeed = speed
+                    }
+                }
+
+                // Update progress when we have both duration and current time
+                if let duration = totalDuration, duration > 0 {
+                    let progress = min(currentTime / duration, 0.99)
+
+                    // Calculate time remaining based on encoding speed
+                    let remainingSeconds = duration - currentTime
+                    let estimatedTimeRemaining: TimeInterval?
+                    if encodingSpeed > 0.1 {
+                        estimatedTimeRemaining = remainingSeconds / encodingSpeed
+                    } else {
+                        // Fallback to elapsed time calculation
+                        let elapsed = Date().timeIntervalSince(startTime)
+                        if progress > 0.01 {
+                            let totalEstimated = elapsed / progress
+                            estimatedTimeRemaining = totalEstimated - elapsed
+                        } else {
+                            estimatedTimeRemaining = nil
+                        }
+                    }
+
                     await MainActor.run {
                         guard jobIndex < self.jobs.count else { return }
                         var job = self.jobs[jobIndex]
-                        // Increment progress gradually (actual duration parsing would be more accurate)
-                        job.progress = min(0.95, job.progress + 0.05)
+                        job.progress = progress
+                        job.encodingSpeed = encodingSpeed > 0 ? encodingSpeed : nil
+                        job.estimatedTimeRemaining = estimatedTimeRemaining
                         self.jobs[jobIndex] = job
                     }
                 }
-                buffer.removeAll()
             }
 
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
         }
+    }
+
+    // Parse duration string (HH:MM:SS.ms) to seconds
+    private func parseDuration(_ durationStr: String) -> Double? {
+        let components = durationStr.components(separatedBy: ":")
+        guard components.count == 3 else { return nil }
+
+        guard let hours = Double(components[0]),
+              let minutes = Double(components[1]),
+              let seconds = Double(components[2]) else {
+            return nil
+        }
+
+        return hours * 3600 + minutes * 60 + seconds
     }
 
 }
@@ -673,6 +768,31 @@ struct JobRowView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .lineLimit(1)
+                    }
+
+                    // Show encoding speed and time remaining during conversion
+                    if job.status == .converting {
+                        HStack(spacing: 12) {
+                            if let speed = job.encodingSpeed {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "speedometer")
+                                        .font(.caption2)
+                                    Text(String(format: "%.2fx", speed))
+                                        .font(.caption)
+                                }
+                                .foregroundColor(.blue)
+                            }
+
+                            if let timeRemaining = job.timeRemainingFormatted {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "clock")
+                                        .font(.caption2)
+                                    Text(timeRemaining)
+                                        .font(.caption)
+                                }
+                                .foregroundColor(.secondary)
+                            }
+                        }
                     }
 
                     if let error = job.error {
