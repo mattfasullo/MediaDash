@@ -162,8 +162,8 @@ class DocketMetadataManager: ObservableObject {
             print("Column map: \(columnMap)")
 
             // Get column names from settings or use defaults
-            let docketCol = settings?.csvDocketColumn ?? "Docket"
-            let projectCol = settings?.csvProjectTitleColumn ?? "Licensor/Project Title"
+            let docketCol = settings?.csvDocketColumn ?? "docket_number"
+            let projectCol = settings?.csvProjectTitleColumn ?? "job_name"
 
             print("Looking for columns: '\(docketCol)' and '\(projectCol)'")
             if let numIdx = columnMap[docketCol] {
