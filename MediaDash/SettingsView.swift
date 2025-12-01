@@ -2719,7 +2719,15 @@ struct CodeMindIntegrationSection: View {
             }
             
             // Load API key from Keychain (provider-specific or legacy)
-            let keychainKeyForProvider = provider == "grok" ? "codemind_grok_api_key" : "codemind_gemini_api_key"
+            let keychainKeyForProvider: String
+            switch provider {
+            case "grok":
+                keychainKeyForProvider = "codemind_grok_api_key"
+            case "groq":
+                keychainKeyForProvider = "codemind_groq_api_key"
+            default:
+                keychainKeyForProvider = "codemind_gemini_api_key"
+            }
             if let storedKey = KeychainService.retrieve(key: keychainKeyForProvider) {
                 apiKey = storedKey
                 isInitialized = true
@@ -2746,7 +2754,8 @@ struct SharedKeySetupView: View {
     @State private var sharedOpenAIKey: String = ""
     @State private var sharedGeminiKey: String = ""
     @State private var sharedGrokKey: String = ""
-    
+    @State private var sharedGroqKey: String = ""
+
     // Gmail keys
     @State private var sharedGmailAccessToken: String = ""
     @State private var sharedGmailRefreshToken: String = ""
@@ -2770,9 +2779,13 @@ struct SharedKeySetupView: View {
                     KeyField(label: "Gemini API Key", value: $sharedGeminiKey) {
                         saveSharedKey(sharedGeminiKey, for: .codemindGemini, name: "Gemini")
                     }
-                    
+
                     KeyField(label: "Grok API Key", value: $sharedGrokKey) {
                         saveSharedKey(sharedGrokKey, for: .codemindGrok, name: "Grok")
+                    }
+
+                    KeyField(label: "Groq API Key", value: $sharedGroqKey) {
+                        saveSharedKey(sharedGroqKey, for: .codemindGroq, name: "Groq")
                     }
                 }
             }
