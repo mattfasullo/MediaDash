@@ -1,0 +1,1028 @@
+import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
+
+// MARK: - Desktop Layout View
+/// A proper desktop-style layout with toolbar, narrow sidebar, main content, and details panel
+
+struct DesktopLayoutView: View {
+    @EnvironmentObject var settingsManager: SettingsManager
+    @EnvironmentObject var metadataManager: DocketMetadataManager
+    @EnvironmentObject var manager: MediaManager
+    @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var notificationCenter: NotificationCenter
+    @EnvironmentObject var emailScanningService: EmailScanningService
+    @Environment(\.colorScheme) var colorScheme
+    
+    // Bindings from ContentView
+    var focusedButton: FocusState<ActionButtonFocus?>.Binding
+    var mainViewFocused: FocusState<Bool>.Binding
+    @Binding var isKeyboardMode: Bool
+    @Binding var isCommandKeyHeld: Bool
+    @Binding var hoverInfo: String
+    @Binding var showSearchSheet: Bool
+    @Binding var showQuickSearchSheet: Bool
+    @Binding var showSettingsSheet: Bool
+    @Binding var showVideoConverterSheet: Bool
+    @Binding var showNotificationCenter: Bool
+    
+    let wpDate: Date
+    let prepDate: Date
+    let dateFormatter: DateFormatter
+    let attempt: (JobType) -> Void
+    let cacheManager: AsanaCacheManager?
+    
+    // State for details panel
+    @State private var selectedFileIndex: Int? = nil
+    @State private var showDetailsPanel: Bool = true
+    
+    private var currentTheme: AppTheme {
+        settingsManager.currentSettings.appTheme
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Top Toolbar
+            DesktopToolbar(
+                showSearchSheet: $showSearchSheet,
+                showQuickSearchSheet: $showQuickSearchSheet,
+                showSettingsSheet: $showSettingsSheet,
+                showVideoConverterSheet: $showVideoConverterSheet,
+                showNotificationCenter: $showNotificationCenter,
+                showDetailsPanel: $showDetailsPanel,
+                wpDate: wpDate,
+                prepDate: prepDate,
+                dateFormatter: dateFormatter,
+                attempt: attempt,
+                cacheManager: cacheManager
+            )
+            
+            Divider()
+            
+            // Main Content Area
+            HStack(spacing: 0) {
+                // Narrow Icon Rail (left sidebar)
+                DesktopIconRail(
+                    showNotificationCenter: $showNotificationCenter,
+                    showSettingsSheet: $showSettingsSheet
+                )
+                
+                Divider()
+                
+                // Main Staging Area (center)
+                DesktopStagingArea(
+                    cacheManager: cacheManager,
+                    selectedFileIndex: $selectedFileIndex
+                )
+                
+                // Details Panel (right) - only show when toggled and files exist
+                if showDetailsPanel && !manager.selectedFiles.isEmpty {
+                    Divider()
+                    
+                    DesktopDetailsPanel(
+                        selectedFileIndex: $selectedFileIndex
+                    )
+                    .frame(width: 280)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: showDetailsPanel)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+// MARK: - Desktop Toolbar
+
+struct DesktopToolbar: View {
+    @EnvironmentObject var settingsManager: SettingsManager
+    @EnvironmentObject var manager: MediaManager
+    @Environment(\.colorScheme) var colorScheme
+    
+    @Binding var showSearchSheet: Bool
+    @Binding var showQuickSearchSheet: Bool
+    @Binding var showSettingsSheet: Bool
+    @Binding var showVideoConverterSheet: Bool
+    @Binding var showNotificationCenter: Bool
+    @Binding var showDetailsPanel: Bool
+    
+    let wpDate: Date
+    let prepDate: Date
+    let dateFormatter: DateFormatter
+    let attempt: (JobType) -> Void
+    let cacheManager: AsanaCacheManager?
+    
+    private var currentTheme: AppTheme {
+        settingsManager.currentSettings.appTheme
+    }
+    
+    private var logoImage: some View {
+        let baseLogo = Image("HeaderLogo")
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .frame(height: 32)
+        
+        if colorScheme == .light {
+            return AnyView(baseLogo.colorInvert())
+        } else {
+            return AnyView(baseLogo)
+        }
+    }
+    
+    var body: some View {
+        HStack(spacing: 16) {
+            // Logo
+            logoImage
+                .padding(.leading, 8)
+            
+            Divider()
+                .frame(height: 28)
+            
+            // Main Actions as toolbar buttons
+            HStack(spacing: 8) {
+                ToolbarActionButton(
+                    title: "File",
+                    subtitle: "Work Picture",
+                    icon: "folder.fill",
+                    color: currentTheme.buttonColors.file,
+                    shortcut: "⌘1",
+                    disabled: manager.selectedFiles.isEmpty
+                ) {
+                    attempt(.workPicture)
+                }
+                
+                ToolbarActionButton(
+                    title: "Prep",
+                    subtitle: "Session Prep",
+                    icon: "list.clipboard.fill",
+                    color: currentTheme.buttonColors.prep,
+                    shortcut: "⌘2",
+                    disabled: manager.selectedFiles.isEmpty
+                ) {
+                    attempt(.prep)
+                }
+                
+                ToolbarActionButton(
+                    title: "Both",
+                    subtitle: "File + Prep",
+                    icon: "doc.on.doc.fill",
+                    color: currentTheme.buttonColors.both,
+                    shortcut: "⌘3",
+                    disabled: manager.selectedFiles.isEmpty
+                ) {
+                    attempt(.both)
+                }
+                
+                Divider()
+                    .frame(height: 28)
+                
+                ToolbarActionButton(
+                    title: "Convert",
+                    subtitle: "Video",
+                    icon: "film.fill",
+                    color: Color(red: 0.50, green: 0.25, blue: 0.25),
+                    shortcut: "⌘4",
+                    disabled: false
+                ) {
+                    showVideoConverterSheet = true
+                }
+            }
+            
+            Spacer()
+            
+            // Right-side toolbar items
+            HStack(spacing: 12) {
+                // Toggle details panel
+                Button(action: { showDetailsPanel.toggle() }) {
+                    Image(systemName: showDetailsPanel ? "sidebar.trailing" : "sidebar.trailing")
+                        .font(.system(size: 14))
+                        .foregroundColor(showDetailsPanel ? .accentColor : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(showDetailsPanel ? "Hide Details Panel" : "Show Details Panel")
+                
+                Divider()
+                    .frame(height: 20)
+                
+                // Search
+                Button(action: { showSearchSheet = true }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 12))
+                        Text("Search")
+                            .font(.system(size: 12))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                .help("Search (⌘F)")
+                
+                // Job Info
+                Button(action: { showQuickSearchSheet = true }) {
+                    Image(systemName: "number.circle")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Job Info (⌘D)")
+                
+                // Settings
+                Button(action: { showSettingsSheet = true }) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Settings (⌘,)")
+            }
+            .padding(.trailing, 16)
+        }
+        .frame(height: 52)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+    }
+}
+
+// MARK: - Toolbar Action Button
+
+struct ToolbarActionButton: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let color: Color
+    let shortcut: String
+    let disabled: Bool
+    let action: () -> Void
+    
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 28, height: 28)
+                    .background(disabled ? Color.gray.opacity(0.5) : color)
+                    .cornerRadius(6)
+                
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(disabled ? .secondary : .primary)
+                    Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(isHovered && !disabled ? color.opacity(0.1) : Color.clear)
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering && !disabled {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .help("\(title) (\(shortcut))")
+    }
+}
+
+// MARK: - Desktop Icon Rail
+
+struct DesktopIconRail: View {
+    @EnvironmentObject var settingsManager: SettingsManager
+    @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var notificationCenter: NotificationCenter
+    @EnvironmentObject var emailScanningService: EmailScanningService
+    @Environment(\.colorScheme) var colorScheme
+    
+    @Binding var showNotificationCenter: Bool
+    @Binding var showSettingsSheet: Bool
+    
+    private var currentTheme: AppTheme {
+        settingsManager.currentSettings.appTheme
+    }
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            // Notifications
+            IconRailButton(
+                icon: "bell.fill",
+                label: "Notifications",
+                badge: notificationCenter.unreadCount > 0 ? notificationCenter.unreadCount : nil,
+                isActive: showNotificationCenter
+            ) {
+                showNotificationCenter.toggle()
+            }
+            
+            // CodeMind Chat
+            IconRailButton(
+                icon: "brain.head.profile",
+                label: "CodeMind",
+                badge: nil,
+                isActive: false
+            ) {
+                CodeMindChatWindowManager.shared.toggleChatWindow()
+            }
+            
+            Spacer()
+            
+            Divider()
+                .padding(.horizontal, 12)
+            
+            // Profile/Workspace
+            if case .loggedIn(let profile) = sessionManager.authenticationState {
+                IconRailProfileButton(profile: profile, sessionManager: sessionManager)
+            }
+        }
+        .padding(.vertical, 16)
+        .frame(width: 64)
+        .background(currentTheme.sidebarBackground)
+    }
+}
+
+// MARK: - Icon Rail Button
+
+struct IconRailButton: View {
+    let icon: String
+    let label: String
+    let badge: Int?
+    let isActive: Bool
+    let action: () -> Void
+    
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .topTrailing) {
+                VStack(spacing: 4) {
+                    Image(systemName: icon)
+                        .font(.system(size: 18))
+                        .foregroundColor(isActive ? .accentColor : (isHovered ? .primary : .secondary))
+                    
+                    Text(label)
+                        .font(.system(size: 9))
+                        .foregroundColor(isHovered ? .primary : .secondary)
+                        .lineLimit(1)
+                }
+                .frame(width: 52, height: 48)
+                .background(isActive ? Color.accentColor.opacity(0.15) : (isHovered ? Color.gray.opacity(0.1) : Color.clear))
+                .cornerRadius(8)
+                
+                // Badge
+                if let badge = badge, badge > 0 {
+                    Text(badge > 99 ? "99+" : "\(badge)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Color.red)
+                        .cornerRadius(8)
+                        .offset(x: 4, y: -4)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .help(label)
+    }
+}
+
+// MARK: - Icon Rail Profile Button
+
+struct IconRailProfileButton: View {
+    let profile: WorkspaceProfile
+    let sessionManager: SessionManager
+    
+    @State private var isHovered = false
+    @State private var showMenu = false
+    
+    // Compute initials from profile name
+    private var initials: String {
+        let components = profile.name.components(separatedBy: " ")
+        if components.count >= 2 {
+            let first = components[0].prefix(1)
+            let last = components[1].prefix(1)
+            return "\(first)\(last)".uppercased()
+        }
+        return String(profile.name.prefix(2)).uppercased()
+    }
+    
+    // Display name - first name or full name
+    private var displayName: String {
+        profile.name.components(separatedBy: " ").first ?? profile.name
+    }
+    
+    var body: some View {
+        Button(action: { showMenu.toggle() }) {
+            VStack(spacing: 4) {
+                // Avatar
+                ZStack {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.2))
+                        .frame(width: 32, height: 32)
+                    
+                    Text(initials)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.accentColor)
+                }
+                
+                Text(displayName)
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 52, height: 52)
+            .background(isHovered ? Color.gray.opacity(0.1) : Color.clear)
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .popover(isPresented: $showMenu, arrowEdge: .trailing) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    ZStack {
+                        Circle()
+                            .fill(Color.accentColor.opacity(0.2))
+                            .frame(width: 40, height: 40)
+                        
+                        Text(initials)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.accentColor)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(profile.name)
+                            .font(.system(size: 13, weight: .semibold))
+                        if let username = profile.username {
+                            Text(username)
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
+                Divider()
+                
+                Button(action: {
+                    showMenu = false
+                    sessionManager.logout()
+                }) {
+                    HStack {
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                        Text("Log Out")
+                    }
+                    .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(16)
+            .frame(width: 250)
+        }
+    }
+}
+
+// MARK: - Desktop Staging Area
+
+struct DesktopStagingArea: View {
+    @EnvironmentObject var manager: MediaManager
+    @EnvironmentObject var settingsManager: SettingsManager
+    let cacheManager: AsanaCacheManager?
+    @Binding var selectedFileIndex: Int?
+    
+    @State private var isDragTargeted = false
+    @State private var showBatchRenameSheet = false
+    @State private var filesToRename: [FileItem] = []
+    
+    private var totalFileCount: Int {
+        manager.selectedFiles.reduce(0) { $0 + $1.fileCount }
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                HStack(spacing: 10) {
+                    Image(systemName: "tray.2.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.blue)
+                    
+                    Text("Staging Area")
+                        .font(.system(size: 15, weight: .semibold))
+                    
+                    if !manager.selectedFiles.isEmpty {
+                        Text("\(totalFileCount) files")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.blue)
+                            .cornerRadius(10)
+                    }
+                }
+                
+                Spacer()
+                
+                HStack(spacing: 8) {
+                    Button(action: { manager.pickFiles() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                            Text("Add Files")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut("o", modifiers: .command)
+                    
+                    if !manager.selectedFiles.isEmpty {
+                        Button(action: { manager.clearFiles() }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "trash")
+                                Text("Clear All")
+                            }
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.red)
+                        }
+                        .buttonStyle(.bordered)
+                        .keyboardShortcut("w", modifiers: .command)
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+            
+            Divider()
+            
+            // File List or Empty State
+            if manager.selectedFiles.isEmpty {
+                DesktopEmptyState(isDragTargeted: $isDragTargeted)
+            } else {
+                DesktopFileList(
+                    selectedFileIndex: $selectedFileIndex,
+                    showBatchRenameSheet: $showBatchRenameSheet,
+                    filesToRename: $filesToRename
+                )
+            }
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onDrop(of: [UTType.fileURL], isTargeted: $isDragTargeted) { providers in
+            handleDrop(providers: providers)
+            return true
+        }
+        .sheet(isPresented: $showBatchRenameSheet) {
+            BatchRenameSheet(manager: manager, filesToRename: filesToRename)
+        }
+    }
+    
+    private func handleDrop(providers: [NSItemProvider]) {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                    if let data = item as? Data,
+                       let url = URL(dataRepresentation: data, relativeTo: nil) {
+                        DispatchQueue.main.async {
+                            let fileItem = FileItem(url: url)
+                            let currentIDs = Set(self.manager.selectedFiles.map { $0.url })
+                            if !currentIDs.contains(fileItem.url) {
+                                self.manager.selectedFiles.append(fileItem)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Desktop Empty State
+
+struct DesktopEmptyState: View {
+    @EnvironmentObject var manager: MediaManager
+    @Binding var isDragTargeted: Bool
+    @State private var pulsePhase: CGFloat = 0
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            ZStack {
+                // Animated ring when dragging
+                if isDragTargeted {
+                    Circle()
+                        .stroke(Color.blue.opacity(0.4), lineWidth: 3)
+                        .frame(width: 120, height: 120)
+                        .scaleEffect(1 + pulsePhase * 0.1)
+                }
+                
+                Circle()
+                    .fill(isDragTargeted ? Color.blue.opacity(0.15) : Color.gray.opacity(0.1))
+                    .frame(width: 100, height: 100)
+                
+                Image(systemName: isDragTargeted ? "arrow.down.doc.fill" : "doc.badge.plus")
+                    .font(.system(size: 40))
+                    .foregroundColor(isDragTargeted ? .blue : .secondary)
+            }
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulsePhase)
+            .onAppear {
+                pulsePhase = 1
+            }
+            
+            VStack(spacing: 8) {
+                Text(isDragTargeted ? "Drop files here" : "No files staged")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(isDragTargeted ? .blue : .primary)
+                
+                Text("Drag & drop files or click Add Files to get started")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            
+            Button(action: { manager.pickFiles() }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus.circle.fill")
+                    Text("Add Files")
+                }
+                .font(.system(size: 14, weight: .medium))
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(
+                    isDragTargeted ? Color.blue : Color.gray.opacity(0.2),
+                    style: StrokeStyle(lineWidth: 2, dash: [8, 4])
+                )
+                .padding(20)
+        )
+    }
+}
+
+// MARK: - Desktop File List
+
+struct DesktopFileList: View {
+    @EnvironmentObject var manager: MediaManager
+    @Binding var selectedFileIndex: Int?
+    @Binding var showBatchRenameSheet: Bool
+    @Binding var filesToRename: [FileItem]
+    
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 2) {
+                ForEach(Array(manager.selectedFiles.enumerated()), id: \.element.id) { index, file in
+                    DesktopFileRow(
+                        file: file,
+                        isSelected: selectedFileIndex == index,
+                        onSelect: { selectedFileIndex = index },
+                        onRemove: { manager.removeFile(withId: file.id) }
+                    )
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+        }
+    }
+}
+
+// MARK: - Desktop File Row
+
+struct DesktopFileRow: View {
+    let file: FileItem
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onRemove: () -> Void
+    
+    @State private var isHovered = false
+    
+    private var fileIcon: String {
+        let ext = file.url.pathExtension.lowercased()
+        switch ext {
+        case "mp4", "mov", "avi", "mxf", "m4v":
+            return "film"
+        case "wav", "mp3", "aiff", "aif", "flac", "m4a":
+            return "waveform"
+        case "aaf", "omf":
+            return "doc.text"
+        default:
+            return file.isDirectory ? "folder.fill" : "doc"
+        }
+    }
+    
+    private var fileIconColor: Color {
+        let ext = file.url.pathExtension.lowercased()
+        switch ext {
+        case "mp4", "mov", "avi", "mxf", "m4v":
+            return .purple
+        case "wav", "mp3", "aiff", "aif", "flac", "m4a":
+            return .orange
+        case "aaf", "omf":
+            return .green
+        default:
+            return file.isDirectory ? .blue : .gray
+        }
+    }
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            // File icon
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(fileIconColor.opacity(0.15))
+                    .frame(width: 40, height: 40)
+                
+                Image(systemName: fileIcon)
+                    .font(.system(size: 18))
+                    .foregroundColor(fileIconColor)
+            }
+            
+            // File info
+            VStack(alignment: .leading, spacing: 2) {
+                Text(file.displayName)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                
+                HStack(spacing: 8) {
+                    if file.isDirectory {
+                        Text("\(file.fileCount) items")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Text(file.url.pathExtension.uppercased())
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(fileIconColor.opacity(0.8))
+                        .cornerRadius(4)
+                    
+                    if let size = file.formattedSize {
+                        Text(size)
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            
+            Spacer()
+            
+            // Remove button (visible on hover)
+            if isHovered {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove from staging")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.accentColor.opacity(0.15) : (isHovered ? Color.gray.opacity(0.08) : Color.clear))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onSelect()
+        }
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+}
+
+// MARK: - Desktop Details Panel
+
+struct DesktopDetailsPanel: View {
+    @EnvironmentObject var manager: MediaManager
+    @Binding var selectedFileIndex: Int?
+    
+    private var selectedFile: FileItem? {
+        guard let index = selectedFileIndex,
+              index >= 0,
+              index < manager.selectedFiles.count else {
+            return nil
+        }
+        return manager.selectedFiles[index]
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Details")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+            
+            Divider()
+            
+            if let file = selectedFile {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        // File preview/icon
+                        VStack(spacing: 12) {
+                            FilePreviewView(file: file)
+                                .frame(height: 140)
+                                .frame(maxWidth: .infinity)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(8)
+                            
+                            Text(file.displayName)
+                                .font(.system(size: 14, weight: .semibold))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                        }
+                        
+                        Divider()
+                        
+                        // File details
+                        VStack(alignment: .leading, spacing: 12) {
+                            DetailRow(label: "Type", value: file.url.pathExtension.uppercased())
+                            
+                            if file.isDirectory {
+                                DetailRow(label: "Items", value: "\(file.fileCount)")
+                            }
+                            
+                            if let size = file.formattedSize {
+                                DetailRow(label: "Size", value: size)
+                            }
+                            
+                            DetailRow(label: "Location", value: file.url.deletingLastPathComponent().path)
+                        }
+                        
+                        Divider()
+                        
+                        // Quick actions
+                        VStack(spacing: 8) {
+                            Button(action: {
+                                NSWorkspace.shared.activateFileViewerSelecting([file.url])
+                            }) {
+                                HStack {
+                                    Image(systemName: "folder")
+                                    Text("Show in Finder")
+                                    Spacer()
+                                }
+                                .font(.system(size: 12))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.bordered)
+                            
+                            Button(action: {
+                                NSWorkspace.shared.open(file.url)
+                            }) {
+                                HStack {
+                                    Image(systemName: "arrow.up.forward.square")
+                                    Text("Open File")
+                                    Spacer()
+                                }
+                                .font(.system(size: 12))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(16)
+                }
+            } else {
+                // No selection
+                VStack(spacing: 12) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 32))
+                        .foregroundColor(.secondary)
+                    
+                    Text("Select a file to view details")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+    }
+}
+
+// MARK: - File Preview View
+
+struct FilePreviewView: View {
+    let file: FileItem
+    
+    private var fileIcon: String {
+        let ext = file.url.pathExtension.lowercased()
+        switch ext {
+        case "mp4", "mov", "avi", "mxf", "m4v":
+            return "film.fill"
+        case "wav", "mp3", "aiff", "aif", "flac", "m4a":
+            return "waveform.circle.fill"
+        case "aaf", "omf":
+            return "doc.text.fill"
+        default:
+            return file.isDirectory ? "folder.fill" : "doc.fill"
+        }
+    }
+    
+    private var fileIconColor: Color {
+        let ext = file.url.pathExtension.lowercased()
+        switch ext {
+        case "mp4", "mov", "avi", "mxf", "m4v":
+            return .purple
+        case "wav", "mp3", "aiff", "aif", "flac", "m4a":
+            return .orange
+        case "aaf", "omf":
+            return .green
+        default:
+            return file.isDirectory ? .blue : .gray
+        }
+    }
+    
+    var body: some View {
+        ZStack {
+            // Gradient background
+            LinearGradient(
+                colors: [fileIconColor.opacity(0.3), fileIconColor.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            Image(systemName: fileIcon)
+                .font(.system(size: 48))
+                .foregroundColor(fileIconColor)
+        }
+    }
+}
+
+// MARK: - Detail Row
+
+struct DetailRow: View {
+    let label: String
+    let value: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+            
+            Text(value)
+                .font(.system(size: 12))
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+// MARK: - Preview
+
+#Preview {
+    DesktopLayoutView(
+        focusedButton: FocusState<ActionButtonFocus?>().projectedValue,
+        mainViewFocused: FocusState<Bool>().projectedValue,
+        isKeyboardMode: .constant(false),
+        isCommandKeyHeld: .constant(false),
+        hoverInfo: .constant("Ready"),
+        showSearchSheet: .constant(false),
+        showQuickSearchSheet: .constant(false),
+        showSettingsSheet: .constant(false),
+        showVideoConverterSheet: .constant(false),
+        showNotificationCenter: .constant(false),
+        wpDate: Date(),
+        prepDate: Date(),
+        dateFormatter: DateFormatter(),
+        attempt: { _ in },
+        cacheManager: nil
+    )
+    .frame(width: 1000, height: 700)
+}
+

@@ -2681,6 +2681,65 @@ struct CodeMindIntegrationSection: View {
                 }
                 .padding(.top, 4)
                 
+                Divider()
+                
+                // Activity Overlay Settings
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "circle.hexagongrid.fill")
+                            .foregroundColor(.purple)
+                        Text("Activity Overlay")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    
+                    Text("Show a floating bubble that displays CodeMind activity in real-time")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    
+                    Toggle("Enable Activity Bubble", isOn: Binding(
+                        get: { settings.codeMindOverlayEnabled },
+                        set: { newValue in
+                            settings.codeMindOverlayEnabled = newValue
+                            CodeMindActivityManager.shared.setEnabled(newValue)
+                            hasUnsavedChanges = true
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    
+                    if settings.codeMindOverlayEnabled {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Detail Level")
+                                .font(.system(size: 12, weight: .medium))
+                            
+                            Picker("Detail Level", selection: Binding(
+                                get: { settings.codeMindOverlayDetailLevel },
+                                set: { newValue in
+                                    settings.codeMindOverlayDetailLevel = newValue
+                                    if let level = ActivityDetailLevel(rawValue: newValue) {
+                                        CodeMindActivityManager.shared.setDetailLevel(level)
+                                    }
+                                    hasUnsavedChanges = true
+                                }
+                            )) {
+                                Text("Minimal - Subtle pulse indicator").tag("minimal")
+                                Text("Medium - Brief activity summaries").tag("medium")
+                                Text("Detailed - Full activity stream").tag("detailed")
+                            }
+                            .pickerStyle(.radioGroup)
+                            .labelsHidden()
+                        }
+                        .padding(.leading, 12)
+                        
+                        HStack(spacing: 6) {
+                            Image(systemName: "keyboard")
+                                .foregroundColor(.secondary)
+                            Text("Toggle with ⌘⇧O")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
                 // Shared Key Section (for Grayson Music Group employees only)
                 if SharedKeychainService.isCurrentUserGraysonEmployee() {
                     Divider()

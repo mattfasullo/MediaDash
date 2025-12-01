@@ -44,6 +44,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
     let name: String
     let isDirectory: Bool
     let fileCount: Int // For directories, counts files recursively; for files, always 1
+    let fileSize: Int64? // File size in bytes (nil for directories)
 
     init(url: URL) {
         self.url = url
@@ -55,9 +56,38 @@ struct FileItem: Identifiable, Hashable, Sendable {
 
         if self.isDirectory {
             self.fileCount = Self.countFilesRecursively(in: url)
+            self.fileSize = nil
         } else {
             self.fileCount = 1
+            // Get file size
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+               let size = attributes[.size] as? Int64 {
+                self.fileSize = size
+            } else {
+                self.fileSize = nil
+            }
         }
+    }
+    
+    /// Display name (file name without extension for readability, or folder name)
+    var displayName: String {
+        if isDirectory {
+            return name
+        } else {
+            // Return name without extension if it has one
+            let baseName = url.deletingPathExtension().lastPathComponent
+            return baseName.isEmpty ? name : baseName
+        }
+    }
+    
+    /// Formatted file size string (e.g., "1.2 MB", "350 KB")
+    var formattedSize: String? {
+        guard let size = fileSize else { return nil }
+        
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: size)
     }
 
     private static func countFilesRecursively(in directory: URL) -> Int {

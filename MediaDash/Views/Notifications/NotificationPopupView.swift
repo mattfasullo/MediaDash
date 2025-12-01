@@ -52,6 +52,12 @@ struct NotificationPopupView: View {
             return "exclamationmark.triangle.fill"
         case .info:
             return "info.circle.fill"
+        case .junk:
+            return "trash.fill"
+        case .skipped:
+            return "forward.fill"
+        case .custom:
+            return "tag.fill"
         }
     }
 }

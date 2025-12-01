@@ -501,8 +501,8 @@ class AsanaCacheManager: ObservableObject {
             }
         }
         
-        // Update Published property asynchronously to avoid SwiftUI warnings
-        Task { @MainActor in
+        // Update Published property using DispatchQueue to ensure we're outside view update cycle
+        DispatchQueue.main.async {
             self.cacheStatus = newStatus
         }
     }

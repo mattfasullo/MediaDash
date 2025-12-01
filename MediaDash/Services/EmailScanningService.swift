@@ -244,28 +244,28 @@ class EmailScanningService: ObservableObject {
     /// Perform a manual scan now
     func scanNow(forceRescan: Bool = false) async {
         guard let settings = settingsManager?.currentSettings, settings.gmailEnabled else {
-            await MainActor.run {
-                lastError = "Gmail integration is not enabled"
+            DispatchQueue.main.async {
+                self.lastError = "Gmail integration is not enabled"
             }
             return
         }
         
         guard gmailService.isAuthenticated else {
-            // Defer state update to next run loop cycle
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 self.lastError = "Gmail is not authenticated"
             }
             return
         }
         
         // Defer state updates to next run loop cycle to avoid SwiftUI warnings
-        Task { @MainActor in
-            self.isScanning = true
-            self.lastError = nil
+        // Use DispatchQueue.main.async to ensure we're outside the view update cycle
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                self.isScanning = true
+                self.lastError = nil
+                continuation.resume()
+            }
         }
-        
-        // Small delay to ensure updates happen after current view update cycle
-        try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
         
         do {
             // Build query from search terms (or fallback to searching for "new docket" in all emails)
@@ -328,15 +328,23 @@ class EmailScanningService: ObservableObject {
             // Save processed email IDs
             saveProcessedEmailIds()
             
-            await MainActor.run {
-                lastScanTime = Date()
-                isScanning = false
+            // Use DispatchQueue to avoid SwiftUI view update cycle conflicts
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async {
+                    self.lastScanTime = Date()
+                    self.isScanning = false
+                    continuation.resume()
+                }
             }
             
         } catch {
-            await MainActor.run {
-                lastError = error.localizedDescription
-                isScanning = false
+            let errorMessage = error.localizedDescription
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async {
+                    self.lastError = errorMessage
+                    self.isScanning = false
+                    continuation.resume()
+                }
             }
         }
     }
@@ -422,17 +430,41 @@ class EmailScanningService: ObservableObject {
                 // If CodeMind is confident it's a new docket email, use its extraction
                 if classification.isNewDocket && classification.confidence >= 0.7 {
                     if let docketNum = classification.docketNumber, let jobName = classification.jobName {
-                        parsedDocket = ParsedDocket(
-                            docketNumber: docketNum,
-                            jobName: jobName,
-                            sourceEmail: message.from ?? "",
-                            confidence: classification.confidence,
-                            rawData: [
-                                "codeMindReasoning": classification.reasoning,
-                                "extractedMetadata": classification.extractedMetadata as Any
-                            ]
-                        )
-                        print("EmailScanningService: ✅ CodeMind successfully extracted docket info")
+                        // Check for multiple docket numbers (comma, slash, or "and" separated)
+                        let multipleDockets = parseMultipleDocketNumbers(docketNum)
+                        
+                        if multipleDockets.count > 1 {
+                            // Multiple dockets detected - create notifications for each
+                            print("EmailScanningService: ✅ CodeMind detected \(multipleDockets.count) docket numbers: \(multipleDockets)")
+                            
+                            await MainActor.run {
+                                for docket in multipleDockets {
+                                    createNotificationForDocket(
+                                        docketNumber: docket,
+                                        jobName: jobName,
+                                        message: message,
+                                        subject: subject,
+                                        body: body,
+                                        classification: classification,
+                                        codeMindMetadata: codeMindMetadata
+                                    )
+                                }
+                            }
+                            return true // All notifications created
+                        } else {
+                            // Single docket - use normal flow
+                            parsedDocket = ParsedDocket(
+                                docketNumber: multipleDockets.first ?? docketNum,
+                                jobName: jobName,
+                                sourceEmail: message.from ?? "",
+                                confidence: classification.confidence,
+                                rawData: [
+                                    "codeMindReasoning": classification.reasoning,
+                                    "extractedMetadata": classification.extractedMetadata as Any
+                                ]
+                            )
+                            print("EmailScanningService: ✅ CodeMind successfully extracted docket info")
+                        }
                     }
                 } else if !classification.isNewDocket && classification.confidence >= 0.7 {
                     // CodeMind is confident it's NOT a new docket email
@@ -1080,29 +1112,37 @@ class EmailScanningService: ObservableObject {
                     }
                 }
                 
-                // Check if this is a media email (sent to company media email)
-                let isMediaEmail = checkIfMediaEmail(message, mediaEmail: settings.companyMediaEmail)
+                // IMPORTANT: Try to process as new docket email FIRST
+                // This ensures emails with docket numbers are classified correctly,
+                // even if they're also sent to the media email address
+                print("EmailScanningService: Email \(message.id) - attempting to process as new docket email first...")
+                let isNewDocket = await processEmailAndCreateNotification(message)
                 
-                print("EmailScanningService: Email \(message.id) - isMediaEmail: \(isMediaEmail)")
-                
-                if isMediaEmail {
-                    // Process as media email
-                    print("EmailScanningService: Attempting to process as media email...")
-                    if await processMediaEmailAndCreateNotification(message) {
-                        mediaEmailCount += 1
-                        print("EmailScanningService: ✅ Created media file notification for email \(message.id)")
-                    } else {
-                        print("EmailScanningService: ❌ Failed to create media file notification for email \(message.id)")
-                    }
+                if isNewDocket {
+                    // Successfully processed as new docket email
+                    createdCount += 1
+                    print("EmailScanningService: ✅ Created new docket notification for email \(message.id)")
+                    // Don't mark as processed - we want to keep showing it until it's read/approved
                 } else {
-                    // Process as regular docket email
-                    if await processEmailAndCreateNotification(message) {
-                        createdCount += 1
-                        print("EmailScanningService: Created notification for email \(message.id)")
-                        // Don't mark as processed - we want to keep showing it until it's read/approved
+                    // Not a new docket email - check if it's a media email (file delivery)
+                    let isMediaEmail = checkIfMediaEmail(message, mediaEmail: settings.companyMediaEmail)
+                    
+                    print("EmailScanningService: Email \(message.id) - not a new docket, isMediaEmail: \(isMediaEmail)")
+                    
+                    if isMediaEmail {
+                        // Process as media email (file delivery)
+                        print("EmailScanningService: Attempting to process as media email...")
+                        if await processMediaEmailAndCreateNotification(message) {
+                            mediaEmailCount += 1
+                            print("EmailScanningService: ✅ Created media file notification for email \(message.id)")
+                        } else {
+                            failedCount += 1
+                            print("EmailScanningService: ❌ Failed to create media file notification for email \(message.id)")
+                        }
                     } else {
+                        // Not a new docket and not a media email - skip it
                         failedCount += 1
-                        print("EmailScanningService: Failed to create notification for email \(message.id) - likely not a valid docket email")
+                        print("EmailScanningService: Email \(message.id) - not a new docket and not a media email, skipping")
                     }
                 }
             }
@@ -1120,10 +1160,120 @@ class EmailScanningService: ObservableObject {
             
         } catch {
             print("EmailScanningService: Error scanning unread emails: \(error.localizedDescription)")
-            await MainActor.run {
-                lastError = error.localizedDescription
+            let errorMessage = error.localizedDescription
+            DispatchQueue.main.async {
+                self.lastError = errorMessage
             }
         }
+    }
+    
+    // MARK: - Multi-Docket Parsing Helpers
+    
+    /// Parse a docket number string that may contain multiple docket numbers
+    /// Handles formats like: "25493, 25495", "25493/25495", "25493 and 25495", "25493 & 25495"
+    /// Valid docket numbers: exactly 5 digits, optionally with "-US" suffix
+    private func parseMultipleDocketNumbers(_ docketString: String) -> [String] {
+        // Normalize the string - replace separators with comma
+        let normalizedString = docketString
+            .replacingOccurrences(of: " and ", with: ",", options: .caseInsensitive)
+            .replacingOccurrences(of: " & ", with: ",")
+            .replacingOccurrences(of: "&", with: ",")
+            .replacingOccurrences(of: "/", with: ",")
+            .replacingOccurrences(of: ";", with: ",")
+        
+        // Split by comma
+        let parts = normalizedString.split(separator: ",").map { 
+            String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        // Filter to only valid docket numbers (5 digits, optionally with -US suffix)
+        let validDockets = parts.filter { isValidDocketNumber($0) }
+        
+        return validDockets
+    }
+    
+    /// Validate a docket number: must be exactly 5 digits, optionally with "-US" suffix
+    private func isValidDocketNumber(_ docketNumber: String) -> Bool {
+        let trimmed = docketNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Check for -US suffix
+        let baseNumber: String
+        if trimmed.uppercased().hasSuffix("-US") {
+            baseNumber = String(trimmed.dropLast(3)) // Remove "-US"
+        } else {
+            baseNumber = trimmed
+        }
+        
+        // Must be exactly 5 digits
+        guard baseNumber.count == 5 else { return false }
+        guard baseNumber.allSatisfy({ $0.isNumber }) else { return false }
+        
+        return true
+    }
+    
+    /// Create a notification for a single docket number
+    @MainActor
+    private func createNotificationForDocket(
+        docketNumber: String,
+        jobName: String,
+        message: GmailMessage,
+        subject: String,
+        body: String,
+        classification: DocketEmailClassification,
+        codeMindMetadata: CodeMindClassificationMetadata?
+    ) {
+        guard let notificationCenter = notificationCenter else {
+            print("EmailScanningService: ERROR - notificationCenter is nil when trying to add notification")
+            return
+        }
+        
+        // Check if docket already exists
+        if let manager = mediaManager,
+           manager.dockets.contains("\(docketNumber)_\(jobName)") {
+            print("EmailScanningService: Docket already exists: \(docketNumber)_\(jobName)")
+            return
+        }
+        
+        // Check if notification already exists for this docket + email combo
+        let existingNotification = notificationCenter.notifications.first { notification in
+            notification.emailId == message.id && notification.docketNumber == docketNumber
+        }
+        
+        if existingNotification != nil {
+            print("EmailScanningService: Notification already exists for docket \(docketNumber) from email \(message.id)")
+            return
+        }
+        
+        let messageText = "Docket \(docketNumber): \(jobName)"
+        let emailSubjectToStore = subject.isEmpty ? nil : subject
+        let emailBodyToStore = body.isEmpty ? nil : body
+        
+        var notification = Notification(
+            type: .newDocket,
+            title: "New Docket Detected",
+            message: messageText,
+            docketNumber: docketNumber,
+            jobName: jobName,
+            emailId: message.id,
+            sourceEmail: message.from ?? "",
+            emailSubject: emailSubjectToStore,
+            emailBody: emailBodyToStore
+        )
+        
+        // Add CodeMind classification metadata if available
+        if let metadata = codeMindMetadata {
+            notification.codeMindClassification = metadata
+        }
+        
+        notificationCenter.add(notification)
+        print("EmailScanningService: ✅ Created notification for docket \(docketNumber) - \(jobName)")
+        totalDocketsCreated += 1
+        
+        // Show system notification
+        NotificationService.shared.showNewDocketNotification(
+            docketNumber: docketNumber,
+            jobName: jobName
+        )
     }
 }
 

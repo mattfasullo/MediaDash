@@ -213,28 +213,28 @@ struct ContentView: View {
     
     private var mainContentView: some View {
         ZStack(alignment: .topLeading) {
-        HStack(spacing: 0) {
-            SidebarView(
-                focusedButton: $focusedButton,
-                mainViewFocused: $mainViewFocused,
-                isKeyboardMode: $isKeyboardMode,
-                isCommandKeyHeld: $isCommandKeyHeld,
-                hoverInfo: $hoverInfo,
-                showSearchSheet: $showSearchSheet,
-                showQuickSearchSheet: $showQuickSearchSheet,
-                showSettingsSheet: $showSettingsSheet,
-                showVideoConverterSheet: $showVideoConverterSheet,
-                logoClickCount: $logoClickCount,
-                notificationCenter: notificationCenter,
-                showNotificationCenter: $showNotificationCenter,
-                wpDate: wpDate,
-                prepDate: prepDate,
-                dateFormatter: dateFormatter,
-                attempt: attempt,
-                cycleTheme: cycleTheme,
-                cacheManager: cacheManager
-            )
-            
+            HStack(spacing: 0) {
+                SidebarView(
+                    focusedButton: $focusedButton,
+                    mainViewFocused: $mainViewFocused,
+                    isKeyboardMode: $isKeyboardMode,
+                    isCommandKeyHeld: $isCommandKeyHeld,
+                    hoverInfo: $hoverInfo,
+                    showSearchSheet: $showSearchSheet,
+                    showQuickSearchSheet: $showQuickSearchSheet,
+                    showSettingsSheet: $showSettingsSheet,
+                    showVideoConverterSheet: $showVideoConverterSheet,
+                    logoClickCount: $logoClickCount,
+                    notificationCenter: notificationCenter,
+                    showNotificationCenter: $showNotificationCenter,
+                    wpDate: wpDate,
+                    prepDate: prepDate,
+                    dateFormatter: dateFormatter,
+                    attempt: attempt,
+                    cycleTheme: cycleTheme,
+                    cacheManager: cacheManager
+                )
+                
                 StagingAreaView(
                     cacheManager: cacheManager,
                     isStagingHovered: $isStagingHovered,
@@ -242,12 +242,14 @@ struct ContentView: View {
                 )
                 .environmentObject(manager)
             }
-        .frame(width: 650, height: windowHeight)
-        .animation(.easeInOut(duration: 0.2), value: windowHeight)
-        .focusable()
-        .focused($mainViewFocused)
-        .focusEffectDisabled()
+            .frame(width: LayoutMode.minWidth, height: windowHeight)
+            .animation(.easeInOut(duration: 0.2), value: windowHeight)
+            .focusable()
+            .focused($mainViewFocused)
+            .focusEffectDisabled()
             
+            // CodeMind Activity Overlay
+            CodeMindActivityOverlay()
         }
     }
     

@@ -206,6 +206,99 @@ class NotificationCenter: ObservableObject {
         }
     }
     
+    /// Reclassify a notification to a different type
+    /// - Parameters:
+    ///   - notification: The notification to reclassify
+    ///   - newType: The new notification type
+    ///   - autoArchive: Whether to automatically archive junk/skipped notifications
+    func reclassify(_ notification: Notification, to newType: NotificationType, autoArchive: Bool = true) {
+        guard let index = notifications.firstIndex(where: { $0.id == notification.id }) else {
+            return
+        }
+        
+        let oldType = notifications[index].type
+        notifications[index].type = newType
+        
+        // Clear custom type name if not using custom type
+        if newType != .custom {
+            notifications[index].customTypeName = nil
+        }
+        
+        // Update title to reflect new type
+        switch newType {
+        case .newDocket:
+            notifications[index].title = "New Docket"
+        case .mediaFiles:
+            notifications[index].title = "File Delivery"
+        case .junk:
+            notifications[index].title = "Junk"
+        case .skipped:
+            notifications[index].title = "Skipped"
+        case .info:
+            notifications[index].title = "Info"
+        case .error:
+            notifications[index].title = "Error"
+        case .custom:
+            // Title will be set by the custom reclassify function
+            break
+        }
+        
+        // Auto-archive junk and skipped notifications
+        if autoArchive && (newType == .junk || newType == .skipped) {
+            notifications[index].status = .dismissed
+            notifications[index].archivedAt = Date()
+        }
+        
+        print("📋 [NotificationCenter] Reclassified notification from \(oldType.displayName) to \(newType.displayName)")
+        
+        updateUnreadCount()
+        saveNotifications()
+    }
+    
+    /// Reclassify a notification to a custom type
+    /// - Parameters:
+    ///   - notification: The notification to reclassify
+    ///   - customTypeName: The custom classification name
+    ///   - autoArchive: Whether to automatically archive the notification
+    func reclassify(_ notification: Notification, toCustomType customTypeName: String, autoArchive: Bool = false) {
+        guard let index = notifications.firstIndex(where: { $0.id == notification.id }) else {
+            return
+        }
+        
+        let trimmedName = customTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        
+        let oldType = notifications[index].type
+        notifications[index].type = .custom
+        notifications[index].customTypeName = trimmedName
+        notifications[index].title = trimmedName
+        
+        // Add to recent custom classifications
+        RecentCustomClassificationsManager.shared.add(trimmedName)
+        
+        // Auto-archive if requested
+        if autoArchive {
+            notifications[index].status = .dismissed
+            notifications[index].archivedAt = Date()
+        }
+        
+        let oldTypeName = oldType == .custom ? (notifications[index].customTypeName ?? "Custom") : oldType.displayName
+        print("📋 [NotificationCenter] Reclassified notification from \(oldTypeName) to custom type '\(trimmedName)'")
+        
+        updateUnreadCount()
+        saveNotifications()
+    }
+    
+    /// Skip a notification (removes from active list without classification)
+    func skip(_ notification: Notification) {
+        reclassify(notification, to: .skipped, autoArchive: true)
+    }
+    
+    /// Mark a notification as junk (ads, promos, spam)
+    func markAsJunk(_ notification: Notification) {
+        reclassify(notification, to: .junk, autoArchive: true)
+    }
+    
     /// Reset notification to original values by re-fetching and re-parsing the email
     func resetToDefaults(_ notification: Notification, emailScanningService: EmailScanningService?) async {
         guard let index = notifications.firstIndex(where: { $0.id == notification.id }),

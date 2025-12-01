@@ -9,6 +9,8 @@ struct StagingAreaView: View {
     @ObservedObject var cacheManager: AsanaCacheManager
     @Binding var isStagingHovered: Bool
     @Binding var isStagingPressed: Bool
+    @Environment(\.layoutMode) var layoutMode
+    @Environment(\.windowSize) var windowSize
     
     // Drag and drop state
     @State private var isDragTargeted: Bool = false
@@ -22,10 +24,26 @@ struct StagingAreaView: View {
         manager.selectedFiles.reduce(0) { $0 + $1.fileCount }
     }
     
+    // Fixed padding for compact mode
+    private var contentPadding: CGFloat {
+        return 20
+    }
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
-            VStack(spacing: 0) {
+            stagingHeader
+            stagingContent
+            statusBar
+        }
+        .frame(width: 350)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(isPresented: $showBatchRenameSheet) {
+            BatchRenameSheet(manager: manager, filesToRename: filesToRename)
+        }
+    }
+    
+    private var stagingHeader: some View {
+        VStack(spacing: 0) {
                 HStack {
                     HStack(spacing: 8) {
                         Image(systemName: "tray.2")
@@ -77,7 +95,7 @@ struct StagingAreaView: View {
                         .keyboardShortcut("w", modifiers: .command)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, contentPadding)
                 .padding(.top, 16)
                 .padding(.bottom, 16)
                 .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
@@ -85,9 +103,10 @@ struct StagingAreaView: View {
                 Divider()
                     .opacity(0.3)
             }
-            
-            // File List or Empty State
-            ZStack {
+    }
+    
+    private var stagingContent: some View {
+        ZStack {
                 if manager.selectedFiles.isEmpty {
                     // Empty State with enhanced drag feedback
                     VStack(spacing: 16) {
@@ -214,9 +233,10 @@ struct StagingAreaView: View {
                     NSCursor.pop()
                 }
             }
-
-            // Status Bar
-            HStack {
+    }
+    
+    private var statusBar: some View {
+        HStack {
                 // Left side - Scanning and Asana sync indicators
                 HStack(spacing: 12) {
                     if manager.isIndexing {
@@ -284,12 +304,6 @@ struct StagingAreaView: View {
             }
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
-        }
-        .frame(width: 350)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .sheet(isPresented: $showBatchRenameSheet) {
-            BatchRenameSheet(manager: manager, filesToRename: filesToRename)
-        }
     }
     
     private func handleFileDrop(providers: [NSItemProvider]) -> Bool {

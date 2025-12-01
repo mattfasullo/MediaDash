@@ -120,15 +120,30 @@ class CodeMindEmailClassifier: ObservableObject {
             let config = Configuration(
                 llmMode: .cloud(cloudProvider),
                 apiKey: key,
-                codebasePath: nil  // Don't include codebase context for email classification
+                codebasePath: nil,  // Don't include codebase context for email classification
+                customSystemPrompt: """
+                You are an email classification assistant for MediaDash.
+                
+                IMPORTANT: You must ONLY respond with valid JSON. Do NOT use any tools. Do NOT call any functions.
+                
+                Your task is to analyze emails and return a JSON classification:
+                1. Identify "new docket" emails - emails announcing new docket/job for media production
+                2. Identify "file delivery" emails - emails with file sharing links or attachments
+                3. Extract docket numbers, job names, and other metadata
+                4. Provide confidence scores (0.0 to 1.0)
+                
+                ALWAYS respond with ONLY the JSON object requested. No tool calls, no function calls, no additional text.
+                Start your response with { and end with }. Nothing else.
+                """
             )
             
             CodeMindLogger.shared.log(.info, "Creating CodeMind instance (without codebase context)", category: .initialization)
             
             // Try to create CodeMind instance - catch DecodingError specifically as it indicates API response issues
             do {
+            // NOTE: Do NOT register tools for the classifier - it should only return JSON
             self.codeMind = try await CodeMind.create(config: config)
-            CodeMindLogger.shared.log(.success, "CodeMind instance created", category: .initialization)
+            CodeMindLogger.shared.log(.success, "CodeMind instance created (no tools registered for classifier)", category: .initialization)
             } catch let error as DecodingError {
                 // DecodingError during CodeMind.create() suggests the API returned malformed/large response
                 CodeMindLogger.shared.log(.error, "CodeMind.create() failed with DecodingError", category: .initialization, metadata: [
@@ -179,6 +194,76 @@ class CodeMindEmailClassifier: ObservableObject {
         }
     }
     
+    /// Process a prompt with automatic retry for rate limit errors
+    /// - Parameters:
+    ///   - prompt: The prompt to send
+    ///   - maxRetries: Maximum number of retries (default: 1)
+    /// - Returns: The CodeMind response
+    private func processWithRetry(prompt: String, maxRetries: Int = 1) async throws -> CodeMindResponse {
+        guard let codeMind = codeMind else {
+            throw CodeMindError.notInitialized
+        }
+        
+        var lastError: Error?
+        
+        for attempt in 0...maxRetries {
+            do {
+                return try await codeMind.process(prompt)
+            } catch let error {
+                lastError = error
+                let errorString = "\(error)"
+                let errorDesc = error.localizedDescription
+                
+                // Check if this is a rate limit error
+                let isRateLimit = errorString.contains("429") ||
+                                 errorDesc.contains("429") ||
+                                 errorDesc.contains("RESOURCE_EXHAUSTED") ||
+                                 errorDesc.contains("quota") ||
+                                 errorDesc.contains("Quota") ||
+                                 errorString.contains("rateLimited") ||
+                                 errorDesc.contains("rate limit") ||
+                                 errorDesc.contains("Rate limit")
+                
+                // Only retry for rate limit errors and if we have retries left
+                if isRateLimit && attempt < maxRetries {
+                    // Extract retry delay from error message
+                    var retryDelay: TimeInterval = 35.0 // Default to 35 seconds
+                    
+                    if let regex = try? NSRegularExpression(pattern: "(\\d+(?:\\.\\d+)?)s", options: []),
+                       let match = regex.firstMatch(in: errorDesc, range: NSRange(errorDesc.startIndex..., in: errorDesc)),
+                       let secondsRange = Range(match.range(at: 1), in: errorDesc) {
+                        let seconds = String(errorDesc[secondsRange])
+                        if let secondsDouble = Double(seconds) {
+                            retryDelay = secondsDouble
+                            // Add a small buffer (2 seconds) to ensure quota resets
+                            retryDelay += 2.0
+                        }
+                    }
+                    
+                    CodeMindLogger.shared.log(.warning, "⏳ Rate limit hit, waiting \(Int(retryDelay))s before retry", category: .llm, metadata: [
+                        "attempt": "\(attempt + 1)/\(maxRetries + 1)",
+                        "retryDelay": "\(retryDelay)"
+                    ])
+                    
+                    // Wait for the retry delay
+                    try await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                    
+                    // Retry
+                    continue
+                } else {
+                    // Not a rate limit error, or no retries left - throw the error
+                    throw error
+                }
+            }
+        }
+        
+        // Should never reach here, but just in case
+        if let error = lastError {
+            throw error
+        }
+        throw CodeMindError.apiError("Unknown error during retry")
+    }
+    
     /// Classify an email to determine if it's a new docket email
     /// - Parameters:
     ///   - subject: Email subject
@@ -194,13 +279,46 @@ class CodeMindEmailClassifier: ObservableObject {
         print("🚀 classifyNewDocketEmail START - Function called")
         CodeMindLogger.shared.log(.info, "🚀 classifyNewDocketEmail START", category: .classification)
         
-        guard let codeMind = codeMind else {
+        // Check custom rules first for overrides
+        let rulesResult = CodeMindRulesManager.shared.getClassificationOverride(
+            subject: subject,
+            body: body,
+            from: from
+        )
+        
+        // If rules say to ignore this email, return a non-docket classification
+        if rulesResult.shouldIgnore {
+            CodeMindLogger.shared.log(.info, "Email ignored by custom rule", category: .classification, metadata: [
+                "subject": subject ?? "nil"
+            ])
+            let emptyResponse = CodeMindResponse(content: "{}", toolResults: [])
+            let ignoredClassification = DocketEmailClassification(
+                isNewDocket: false,
+                confidence: 1.0,
+                docketNumber: nil,
+                jobName: nil,
+                reasoning: "Ignored by custom classification rule",
+                extractedMetadata: nil
+            )
+            return (ignoredClassification, emptyResponse)
+        }
+        
+        // If rules explicitly classify as new docket, boost that classification
+        let forceNewDocket = rulesResult.shouldClassifyAs == "newDocket"
+        let confidenceModifier = rulesResult.confidenceModifier
+        
+        guard codeMind != nil else {
             print("❌ CodeMind not initialized")
             CodeMindLogger.shared.log(.error, "❌ CodeMind not initialized", category: .classification)
             throw CodeMindError.notInitialized
         }
         
         print("✅ CodeMind instance exists, proceeding with classification")
+        
+        // Report activity to overlay
+        Task { @MainActor in
+            CodeMindActivityManager.shared.startClassifying(subject: subject ?? "Unknown")
+        }
         
         let emailContent = buildEmailContext(subject: subject, body: body, from: from)
         
@@ -224,7 +342,9 @@ class CodeMindEmailClassifier: ObservableObject {
         Instructions:
         1. Determine if this email is announcing a new docket/job (not a reply, not a file delivery, not a status update)
         2. If it IS a new docket email, extract:
-           - Docket number (format: usually numbers/letters like "12345" or "ABC-123")
+           - Docket number: MUST be exactly 5 digits (e.g., "25493"), optionally with "-US" suffix (e.g., "25493-US")
+             Numbers with fewer or more than 5 digits are NOT valid docket numbers - return null for those
+           - If multiple docket numbers are mentioned, include ALL of them separated by comma (e.g., "25493, 25495")
            - Job name/Client name (the project or client name)
            - Any other relevant metadata
         3. Respond with ONLY this JSON object, nothing else:
@@ -248,7 +368,8 @@ class CodeMindEmailClassifier: ObservableObject {
         
         let response: CodeMindResponse
         do {
-            response = try await codeMind.process(prompt)
+            // Try with automatic retry for rate limit errors
+            response = try await processWithRetry(prompt: prompt, maxRetries: 1)
             CodeMindLogger.shared.log(.success, "✅ CodeMind.process() completed", category: .llm, metadata: ["responseLength": "\(response.content.count)"])
         } catch let error as DecodingError {
             // Handle JSON decoding errors that occur inside CodeMind.process()
@@ -282,8 +403,42 @@ class CodeMindEmailClassifier: ObservableObject {
             let errorString = "\(llmError)"
             let errorDesc = llmError.localizedDescription
             
+            // Check for quota/rate limit errors first (429, RESOURCE_EXHAUSTED, quota exceeded)
+            if errorString.contains("429") || 
+               errorDesc.contains("429") ||
+               errorDesc.contains("RESOURCE_EXHAUSTED") ||
+               errorDesc.contains("quota") ||
+               errorDesc.contains("Quota") ||
+               errorString.contains("rateLimited") || 
+               errorDesc.contains("rate limit") ||
+               errorDesc.contains("Rate limit") {
+                // Extract quota details if available
+                var message = "API quota/rate limit exceeded."
+                
+                // Try to extract retry delay from error message (look for patterns like "33s" or "33.72s")
+                if let regex = try? NSRegularExpression(pattern: "(\\d+(?:\\.\\d+)?)s", options: []),
+                   let match = regex.firstMatch(in: errorDesc, range: NSRange(errorDesc.startIndex..., in: errorDesc)),
+                   let secondsRange = Range(match.range(at: 1), in: errorDesc) {
+                    let seconds = String(errorDesc[secondsRange])
+                    if let secondsDouble = Double(seconds) {
+                        let roundedSeconds = Int(secondsDouble.rounded())
+                        message += " Please wait \(roundedSeconds) seconds and try again."
+                    } else {
+                        message += " Please wait a moment and try again."
+                    }
+                } else {
+                    message += " Please wait a moment and try again."
+                }
+                
+                // Add helpful context about free tier limits
+                if errorDesc.contains("free_tier") || errorDesc.contains("FreeTier") {
+                    message += "\n\nNote: You're using the free tier which has limited requests per minute. Consider upgrading your API plan for higher limits."
+                }
+                
+                throw CodeMindError.apiError(message)
+            }
             // Check for API errors (most common - invalid API key, service errors, etc.)
-            if errorString.contains("apiError") || errorDesc.contains("API error:") || errorDesc.contains("API key") {
+            else if errorString.contains("apiError") || errorDesc.contains("API error:") || errorDesc.contains("API key") {
                 // Extract error message - LLMError.apiError format is "API error: {message}"
                 let message: String
                 if let apiErrorRange = errorDesc.range(of: "API error:") {
@@ -297,9 +452,6 @@ class CodeMindEmailClassifier: ObservableObject {
             } else if errorString.contains("parseError") || errorDesc.contains("parse") {
                 // Parse errors from LLM responses
                 throw CodeMindError.invalidResponse("Failed to parse API response: \(errorDesc)")
-            } else if errorString.contains("rateLimited") || errorDesc.contains("rate limit") {
-                // Rate limiting
-                throw CodeMindError.apiError("Rate limit exceeded. Please try again later.")
             } else if errorString.contains("timeout") || errorDesc.contains("timeout") {
                 // Timeout errors
                 throw CodeMindError.apiError("Request timed out. Please try again.")
@@ -376,14 +528,113 @@ class CodeMindEmailClassifier: ObservableObject {
             }
         }
         
+        // Apply custom rule modifiers to classification
+        var finalClassification = classification
+        
+        // Apply confidence modifier from custom rules
+        if confidenceModifier != 0 {
+            let newConfidence = max(0, min(1.0, classification.confidence + confidenceModifier))
+            finalClassification = DocketEmailClassification(
+                isNewDocket: classification.isNewDocket,
+                confidence: newConfidence,
+                docketNumber: classification.docketNumber,
+                jobName: classification.jobName,
+                reasoning: classification.reasoning + (confidenceModifier > 0 ? " (boosted by custom rule)" : " (reduced by custom rule)"),
+                extractedMetadata: classification.extractedMetadata
+            )
+            CodeMindLogger.shared.log(.info, "Applied custom rule confidence modifier", category: .classification, metadata: [
+                "originalConfidence": String(format: "%.2f", classification.confidence),
+                "modifier": String(format: "%.2f", confidenceModifier),
+                "newConfidence": String(format: "%.2f", newConfidence)
+            ])
+        }
+        
+        // If custom rules force new docket classification
+        if forceNewDocket && !finalClassification.isNewDocket {
+            finalClassification = DocketEmailClassification(
+                isNewDocket: true,
+                confidence: max(finalClassification.confidence, 0.85),
+                docketNumber: finalClassification.docketNumber,
+                jobName: finalClassification.jobName,
+                reasoning: "Classified as new docket by custom rule",
+                extractedMetadata: finalClassification.extractedMetadata
+            )
+            CodeMindLogger.shared.log(.info, "Custom rule forced new docket classification", category: .classification)
+        }
+        
         CodeMindLogger.shared.log(.success, "Classification complete", category: .classification, metadata: [
-            "isNewDocket": "\(classification.isNewDocket)",
-            "confidence": String(format: "%.2f", classification.confidence),
-            "hasDocketNumber": classification.docketNumber != nil,
-            "hasJobName": classification.jobName != nil
+            "isNewDocket": "\(finalClassification.isNewDocket)",
+            "confidence": String(format: "%.2f", finalClassification.confidence),
+            "hasDocketNumber": finalClassification.docketNumber != nil,
+            "hasJobName": finalClassification.jobName != nil,
+            "rulesApplied": confidenceModifier != 0 || forceNewDocket
         ])
         
-        return (classification, response)
+        // Verify docket number if extracted and determine if it exists
+        var wasVerified = false
+        var verificationSource = ""
+        if let docketNumber = finalClassification.docketNumber {
+            // Report verification activity
+            Task { @MainActor in
+                CodeMindActivityManager.shared.startVerifying(docket: docketNumber)
+            }
+            
+            // Check if docket exists in metadata/Asana/filesystem
+            if let metadataManager = CodeMindServiceRegistry.shared.metadataManager {
+                let matches = metadataManager.metadata.values.filter { $0.docketNumber == docketNumber }
+                if !matches.isEmpty {
+                    wasVerified = true
+                    verificationSource = "metadata"
+                }
+            }
+            if !wasVerified, let asanaCache = CodeMindServiceRegistry.shared.asanaCacheManager {
+                let dockets = asanaCache.loadCachedDockets()
+                if dockets.contains(where: { $0.number == docketNumber }) {
+                    wasVerified = true
+                    verificationSource = "Asana"
+                }
+            }
+            
+            // Report verification result
+            let finalSource = verificationSource
+            let finalVerified = wasVerified
+            Task { @MainActor in
+                CodeMindActivityManager.shared.finishVerifying(
+                    docket: docketNumber,
+                    source: finalSource,
+                    found: finalVerified
+                )
+            }
+        }
+        
+        // Report classification complete to overlay
+        let classType = finalClassification.isNewDocket ? "New Docket" : "Not Docket"
+        let finalWasVerified = wasVerified
+        Task { @MainActor in
+            CodeMindActivityManager.shared.finishClassifying(
+                subject: subject ?? "Unknown",
+                type: classType,
+                confidence: finalClassification.confidence,
+                verified: finalWasVerified
+            )
+        }
+        
+        // Record classification to history for learning and analysis
+        // Generate a unique email ID from the content hash
+        let emailId = "\(subject?.hashValue ?? 0)_\(from?.hashValue ?? 0)_\(Date().timeIntervalSince1970)"
+        CodeMindClassificationHistory.shared.recordNewDocketClassification(
+            emailId: emailId,
+            threadId: nil,
+            subject: subject ?? "",
+            fromEmail: from ?? "",
+            confidence: finalClassification.confidence,
+            docketNumber: finalClassification.docketNumber,
+            jobName: finalClassification.jobName,
+            wasVerified: wasVerified,
+            rawResponse: response.content
+        )
+        
+        return (finalClassification, response)
     }
     
     /// Classify an email to determine if it's a file delivery email
@@ -399,8 +650,41 @@ class CodeMindEmailClassifier: ObservableObject {
         from: String?,
         recipients: [String] = []
     ) async throws -> (classification: FileDeliveryClassification, response: CodeMindResponse) {
-        guard let codeMind = codeMind else {
+        // Check custom rules first for overrides
+        let rulesResult = CodeMindRulesManager.shared.getClassificationOverride(
+            subject: subject,
+            body: body,
+            from: from
+        )
+        
+        // If rules say to ignore this email, return a non-file-delivery classification
+        if rulesResult.shouldIgnore {
+            CodeMindLogger.shared.log(.info, "Email ignored by custom rule (file delivery check)", category: .classification, metadata: [
+                "subject": subject ?? "nil"
+            ])
+            let emptyResponse = CodeMindResponse(content: "{}", toolResults: [])
+            let ignoredClassification = FileDeliveryClassification(
+                isFileDelivery: false,
+                confidence: 1.0,
+                fileLinks: [],
+                fileHostingServices: [],
+                reasoning: "Ignored by custom classification rule",
+                hasAttachments: false
+            )
+            return (ignoredClassification, emptyResponse)
+        }
+        
+        // If rules explicitly classify as file delivery, boost that classification
+        let forceFileDelivery = rulesResult.shouldClassifyAs == "fileDelivery"
+        let confidenceModifier = rulesResult.confidenceModifier
+        
+        guard codeMind != nil else {
             throw CodeMindError.notInitialized
+        }
+        
+        // Report activity to overlay
+        Task { @MainActor in
+            CodeMindActivityManager.shared.startClassifying(subject: subject ?? "Unknown")
         }
         
         let emailContent = buildEmailContext(subject: subject, body: body, from: from, recipients: recipients)
@@ -441,7 +725,7 @@ class CodeMindEmailClassifier: ObservableObject {
         """
         
         CodeMindLogger.shared.log(.debug, "Sending prompt to LLM", category: .llm, metadata: ["promptLength": "\(prompt.count)"])
-        let response = try await codeMind.process(prompt)
+        let response = try await processWithRetry(prompt: prompt, maxRetries: 1)
         CodeMindLogger.shared.log(.success, "Received LLM response", category: .llm, metadata: ["responseLength": "\(response.content.count)"])
         
         // Log actual response content for debugging (first 1000 chars for better diagnosis)
@@ -509,14 +793,75 @@ class CodeMindEmailClassifier: ObservableObject {
             }
         }
         
+        // Apply custom rule modifiers to classification
+        var finalClassification = classification
+        
+        // Apply confidence modifier from custom rules
+        if confidenceModifier != 0 {
+            let newConfidence = max(0, min(1.0, classification.confidence + confidenceModifier))
+            finalClassification = FileDeliveryClassification(
+                isFileDelivery: classification.isFileDelivery,
+                confidence: newConfidence,
+                fileLinks: classification.fileLinks,
+                fileHostingServices: classification.fileHostingServices,
+                reasoning: classification.reasoning + (confidenceModifier > 0 ? " (boosted by custom rule)" : " (reduced by custom rule)"),
+                hasAttachments: classification.hasAttachments
+            )
+            CodeMindLogger.shared.log(.info, "Applied custom rule confidence modifier to file delivery", category: .classification, metadata: [
+                "originalConfidence": String(format: "%.2f", classification.confidence),
+                "modifier": String(format: "%.2f", confidenceModifier),
+                "newConfidence": String(format: "%.2f", newConfidence)
+            ])
+        }
+        
+        // If custom rules force file delivery classification
+        if forceFileDelivery && !finalClassification.isFileDelivery {
+            finalClassification = FileDeliveryClassification(
+                isFileDelivery: true,
+                confidence: max(finalClassification.confidence, 0.85),
+                fileLinks: finalClassification.fileLinks,
+                fileHostingServices: finalClassification.fileHostingServices,
+                reasoning: "Classified as file delivery by custom rule",
+                hasAttachments: finalClassification.hasAttachments
+            )
+            CodeMindLogger.shared.log(.info, "Custom rule forced file delivery classification", category: .classification)
+        }
+        
         CodeMindLogger.shared.log(.success, "File delivery classification complete", category: .classification, metadata: [
-            "isFileDelivery": "\(classification.isFileDelivery)",
-            "confidence": String(format: "%.2f", classification.confidence),
-            "fileLinksCount": "\(classification.fileLinks.count)",
-            "services": classification.fileHostingServices.joined(separator: ", ")
+            "isFileDelivery": "\(finalClassification.isFileDelivery)",
+            "confidence": String(format: "%.2f", finalClassification.confidence),
+            "fileLinksCount": "\(finalClassification.fileLinks.count)",
+            "services": finalClassification.fileHostingServices.joined(separator: ", "),
+            "rulesApplied": confidenceModifier != 0 || forceFileDelivery
         ])
         
-        return (classification, response)
+        // Report classification complete to overlay
+        let classType = finalClassification.isFileDelivery ? "File Delivery" : "Not File"
+        let subjectForOverlay = subject ?? "Unknown"
+        let confidenceForOverlay = finalClassification.confidence
+        Task { @MainActor in
+            CodeMindActivityManager.shared.finishClassifying(
+                subject: subjectForOverlay,
+                type: classType,
+                confidence: confidenceForOverlay,
+                verified: false
+            )
+        }
+        
+        // Record file delivery classification to history
+        let emailId = "\(subject?.hashValue ?? 0)_\(from?.hashValue ?? 0)_\(Date().timeIntervalSince1970)"
+        CodeMindClassificationHistory.shared.recordFileDeliveryClassification(
+            emailId: emailId,
+            threadId: nil,
+            subject: subject ?? "",
+            fromEmail: from ?? "",
+            confidence: finalClassification.confidence,
+            isFileDelivery: finalClassification.isFileDelivery,
+            fileLinks: finalClassification.fileLinks,
+            rawResponse: response.content
+        )
+        
+        return (finalClassification, response)
     }
     
     /// Provide feedback to CodeMind about a classification result

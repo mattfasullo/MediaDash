@@ -2,11 +2,58 @@ import Foundation
 import SwiftUI
 
 /// Types of notifications
-enum NotificationType: String, Codable {
+enum NotificationType: String, Codable, CaseIterable {
     case newDocket = "new_docket"
     case mediaFiles = "media_files" // Internal name kept for compatibility, displayed as "File Deliveries"
     case error = "error"
     case info = "info"
+    case junk = "junk" // Ads, promos, spam mistakenly classified
+    case skipped = "skipped" // User chose to skip/ignore this notification
+    case custom = "custom" // Custom classification type with user-defined name
+    
+    /// Display name for the notification type
+    var displayName: String {
+        switch self {
+        case .newDocket: return "New Docket"
+        case .mediaFiles: return "File Delivery"
+        case .error: return "Error"
+        case .info: return "Info"
+        case .junk: return "Junk"
+        case .skipped: return "Skipped"
+        case .custom: return "Custom"
+        }
+    }
+    
+    /// Icon for the notification type
+    var icon: String {
+        switch self {
+        case .newDocket: return "doc.badge.plus"
+        case .mediaFiles: return "arrow.down.doc"
+        case .error: return "exclamationmark.triangle"
+        case .info: return "info.circle"
+        case .junk: return "trash"
+        case .skipped: return "forward"
+        case .custom: return "tag"
+        }
+    }
+    
+    /// Color for the notification type
+    var color: Color {
+        switch self {
+        case .newDocket: return .blue
+        case .mediaFiles: return .green
+        case .error: return .red
+        case .info: return .orange
+        case .junk: return .gray
+        case .skipped: return .secondary
+        case .custom: return .purple
+        }
+    }
+    
+    /// Types available for manual reclassification
+    static var reclassifiableTypes: [NotificationType] {
+        [.newDocket, .mediaFiles, .junk, .skipped]
+    }
 }
 
 /// Status of a notification
@@ -20,8 +67,8 @@ enum NotificationStatus: String, Codable {
 /// Notification model
 struct Notification: Identifiable, Codable, Equatable {
     let id: UUID
-    let type: NotificationType
-    let title: String
+    var type: NotificationType // Mutable to allow reclassification
+    var title: String
     var message: String
     let timestamp: Date
     var status: NotificationStatus
@@ -55,6 +102,9 @@ struct Notification: Identifiable, Codable, Equatable {
     var shouldCreateWorkPicture: Bool = true // Default to true
     var shouldCreateSimianJob: Bool = false
     
+    // Custom classification type name (used when type is .custom)
+    var customTypeName: String?
+    
     init(
         id: UUID = UUID(),
         type: NotificationType,
@@ -75,7 +125,8 @@ struct Notification: Identifiable, Codable, Equatable {
         isGrabbed: Bool = false,
         isPriorityAssist: Bool = false,
         grabbedBy: String? = nil,
-        grabbedAt: Date? = nil
+        grabbedAt: Date? = nil,
+        customTypeName: String? = nil
     ) {
         self.id = id
         self.type = type
@@ -98,6 +149,7 @@ struct Notification: Identifiable, Codable, Equatable {
         self.isPriorityAssist = isPriorityAssist
         self.grabbedBy = grabbedBy
         self.grabbedAt = grabbedAt
+        self.customTypeName = customTypeName
         // Store original values for reset
         self.originalDocketNumber = docketNumber
         self.originalJobName = jobName

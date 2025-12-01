@@ -4,6 +4,8 @@ import AppKit
 struct SidebarView: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @Environment(\.colorScheme) var colorScheme
+    @Environment(\.layoutMode) var layoutMode
+    @Environment(\.windowSize) var windowSize
     
     /// Helper function to seed shared cache from local cache
     private func seedSharedCacheFromLocal(cacheManager: AsanaCacheManager, dockets: [DocketInfo]) async {
@@ -50,6 +52,11 @@ struct SidebarView: View {
     
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
+    }
+    
+    // Sidebar width - fixed for compact mode only
+    private var sidebarWidth: CGFloat {
+        return 300 // Fixed width for compact mode
     }
     
     private var logoImage: some View {
@@ -203,6 +210,8 @@ struct SidebarView: View {
             .padding(16)
             .frame(width: 300)
             .background(currentTheme.sidebarBackground)
+            .clipped() // Prevent overflow
+            .animation(.easeInOut(duration: 0.2), value: layoutMode)
 
             // Staging area indicator (no toggle - always visible)
             HStack(spacing: 4) {

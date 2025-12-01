@@ -32,9 +32,18 @@ class CodeMindChatWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             return
         }
         
-        // Create chat window
+        // Create chat view - it will try to access services from environment
+        // If environment isn't available (standalone window), email tool won't work but chat will
         let chatView = CodeMindChatView()
         let chatWindowController = NSHostingController(rootView: chatView)
+        
+        // Try to inject environment objects from main window
+        if let mainWindow = NSApplication.shared.windows.first(where: { $0.isMainWindow }),
+           let _ = mainWindow.contentViewController as? NSHostingController<AnyView> {
+            // Try to extract environment from main window's view hierarchy
+            // This is tricky - for now, CodeMindChatView will use @EnvironmentObject
+            // which should work if the window is created within the same view hierarchy
+        }
         
         chatWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 700, height: 800),

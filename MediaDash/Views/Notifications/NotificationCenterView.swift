@@ -1,5 +1,23 @@
 import SwiftUI
 
+/// Information about where a docket already exists
+struct DocketExistenceInfo {
+    var existsInWorkPicture: Bool = false
+    var existsInAsana: Bool = false
+    var asanaDocketInfo: DocketInfo? = nil // The matching docket from Asana if found
+    
+    var existsAnywhere: Bool {
+        existsInWorkPicture || existsInAsana
+    }
+    
+    var existenceDescription: String {
+        var locations: [String] = []
+        if existsInWorkPicture { locations.append("Work Picture") }
+        if existsInAsana { locations.append("Asana") }
+        return locations.isEmpty ? "" : locations.joined(separator: " & ")
+    }
+}
+
 /// Expandable notification center view
 struct NotificationCenterView: View {
     @ObservedObject var notificationCenter: NotificationCenter
@@ -999,6 +1017,8 @@ struct NotificationRowView: View {
     @State private var feedbackComment = ""
     @State private var isSubmittingFeedback = false
     @State private var feedbackSubmitted = false
+    @State private var showCustomClassificationDialog = false
+    @State private var customClassificationText = ""
     
     // Get current notification from center (always up-to-date)
     private var notification: Notification? {
@@ -1106,15 +1126,55 @@ struct NotificationRowView: View {
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                         
-                        // Check if docket already exists
-                        if docketExists(docketNumber: docketNumber, jobName: jobName) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.orange)
-                                Text("Docket already exists in Work Picture")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.orange)
+                        // Comprehensive check for docket existence
+                        let existenceInfo = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
+                        
+                        if existenceInfo.existsAnywhere {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.orange)
+                                    Text("Docket already exists in \(existenceInfo.existenceDescription)")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.orange)
+                                }
+                                
+                                // Show existence badges
+                                HStack(spacing: 6) {
+                                    if existenceInfo.existsInWorkPicture {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: "folder.fill")
+                                                .font(.system(size: 8))
+                                            Text("Work Picture")
+                                                .font(.system(size: 9, weight: .medium))
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.8))
+                                        .cornerRadius(4)
+                                    }
+                                    
+                                    if existenceInfo.existsInAsana {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: "list.bullet.rectangle")
+                                                .font(.system(size: 8))
+                                            Text("Asana")
+                                                .font(.system(size: 9, weight: .medium))
+                                            if let asanaInfo = existenceInfo.asanaDocketInfo {
+                                                Text("(\(asanaInfo.jobName))")
+                                                    .font(.system(size: 8))
+                                                    .opacity(0.8)
+                                            }
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.purple.opacity(0.8))
+                                        .cornerRadius(4)
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -1748,6 +1808,20 @@ struct NotificationRowView: View {
                 }
             )
         }
+        .sheet(isPresented: $showCustomClassificationDialog) {
+            CustomClassificationDialog(
+                isPresented: $showCustomClassificationDialog,
+                classificationText: $customClassificationText,
+                onConfirm: {
+                    guard let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }),
+                          !customClassificationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        return
+                    }
+                    notificationCenter.reclassify(currentNotification, toCustomType: customClassificationText, autoArchive: false)
+                    customClassificationText = ""
+                }
+            )
+        }
     }
     
     private func submitFeedback(
@@ -2082,6 +2156,12 @@ struct NotificationRowView: View {
             return "exclamationmark.triangle.fill"
         case .info:
             return "info.circle.fill"
+        case .junk:
+            return "trash.fill"
+        case .skipped:
+            return "forward.fill"
+        case .custom:
+            return "tag.fill"
         }
     }
     
@@ -2095,6 +2175,12 @@ struct NotificationRowView: View {
             return .red
         case .info:
             return .blue
+        case .junk:
+            return .gray
+        case .skipped:
+            return .secondary
+        case .custom:
+            return .purple
         }
     }
     
@@ -2104,10 +2190,90 @@ struct NotificationRowView: View {
         return formatter.localizedString(for: date, relativeTo: Date())
     }
     
-    /// Check if a docket already exists in Work Picture
+    /// Check if a docket already exists in Work Picture (simple check)
     private func docketExists(docketNumber: String, jobName: String) -> Bool {
+        let info = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
+        return info.existsAnywhere
+    }
+    
+    /// Comprehensive check of where a docket exists across all known databases
+    /// Note: This function is called from within view body, so it must NOT trigger any @Published updates
+    private func checkDocketExistence(docketNumber: String, jobName: String) -> DocketExistenceInfo {
+        var info = DocketExistenceInfo()
+        
+        // Check Work Picture
         let docketName = "\(docketNumber)_\(jobName)"
-        return mediaManager.dockets.contains(docketName)
+        if mediaManager.dockets.contains(docketName) {
+            info.existsInWorkPicture = true
+        }
+        
+        // Check Asana cache by directly loading the cache file (no @Published updates)
+        let settings = settingsManager.currentSettings
+        if settings.docketSource == .asana {
+            // Load cache directly from file without going through AsanaCacheManager
+            // This avoids triggering updateCacheStatus() which updates @Published properties
+            let cachedDockets = loadAsanaCacheDirectly(
+                sharedCacheURL: settings.sharedCacheURL,
+                useSharedCache: settings.useSharedCache
+            )
+            
+            // Check if docket number matches any cached docket
+            if let matchingDocket = cachedDockets.first(where: { $0.number == docketNumber }) {
+                info.existsInAsana = true
+                info.asanaDocketInfo = matchingDocket
+            }
+        }
+        
+        return info
+    }
+    
+    /// Load Asana cache directly from file without triggering any @Published updates
+    /// This is safe to call from within view body
+    private func loadAsanaCacheDirectly(sharedCacheURL: String?, useSharedCache: Bool) -> [DocketInfo] {
+        // Try shared cache first if enabled
+        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+            if let dockets = loadCacheFromPath(sharedURL) {
+                return dockets
+            }
+        }
+        
+        // Fall back to local cache
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let appFolder = appSupport.appendingPathComponent("MediaDash", isDirectory: true)
+        let localCacheURL = appFolder.appendingPathComponent("mediadash_docket_cache.json")
+        
+        if let dockets = loadCacheFromURL(localCacheURL) {
+            return dockets
+        }
+        
+        return []
+    }
+    
+    /// Load cache from a path string
+    private func loadCacheFromPath(_ path: String) -> [DocketInfo]? {
+        var fileURL: URL
+        if path.hasPrefix("file://") {
+            fileURL = URL(string: path) ?? URL(fileURLWithPath: path)
+        } else {
+            fileURL = URL(fileURLWithPath: path)
+        }
+        
+        // If path doesn't end with .json, assume it's a directory
+        if !fileURL.lastPathComponent.hasSuffix(".json") {
+            fileURL = fileURL.appendingPathComponent("mediadash_docket_cache.json")
+        }
+        
+        return loadCacheFromURL(fileURL)
+    }
+    
+    /// Load cache from a URL
+    private func loadCacheFromURL(_ url: URL) -> [DocketInfo]? {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) else {
+            return nil
+        }
+        return cached.dockets
     }
     
     /// Generate auto docket number in YYXXX format
@@ -2166,6 +2332,29 @@ struct NotificationRowView: View {
         
         Divider()
         
+        // CodeMind MindMap options
+        if notification.codeMindClassification?.wasUsed == true {
+            Button(action: {
+                // Navigate to this classification in the brain view
+                CodeMindBrainNavigator.shared.navigateToClassification(subject: notification.emailSubject ?? notification.title)
+            }) {
+                Label("View in MindMap", systemImage: "brain")
+            }
+            
+            Button(action: {
+                // Create a rule based on this email
+                CodeMindBrainNavigator.shared.createRuleForEmail(
+                    subject: notification.emailSubject ?? notification.title,
+                    from: notification.sourceEmail,
+                    classificationType: notification.type == .newDocket ? "newDocket" : "fileDelivery"
+                )
+            }) {
+                Label("Create Classification Rule", systemImage: "plus.circle")
+            }
+            
+            Divider()
+        }
+        
         // Open email in browser
         if let emailId = notification.emailId {
             Button(action: {
@@ -2183,6 +2372,66 @@ struct NotificationRowView: View {
             }) {
                 Label("Add Docket Number", systemImage: "number")
             }
+        }
+        
+        Divider()
+        
+        // Re-classify submenu
+        Menu {
+            Button(action: {
+                notificationCenter.reclassify(notification, to: .newDocket, autoArchive: false)
+            }) {
+                Label("New Docket", systemImage: "doc.badge.plus")
+            }
+            .disabled(notification.type == .newDocket)
+            
+            Button(action: {
+                notificationCenter.reclassify(notification, to: .mediaFiles, autoArchive: false)
+            }) {
+                Label("File Delivery", systemImage: "arrow.down.doc")
+            }
+            .disabled(notification.type == .mediaFiles)
+            
+            Divider()
+            
+            Button(action: {
+                notificationCenter.markAsJunk(notification)
+            }) {
+                Label("Junk (Ads/Promos)", systemImage: "trash")
+            }
+            
+            Button(action: {
+                notificationCenter.skip(notification)
+            }) {
+                Label("Skip (Remove)", systemImage: "forward")
+            }
+            
+            Divider()
+            
+            // Recent custom classifications
+            let recentCustomTypes = RecentCustomClassificationsManager.shared.getRecent()
+            if !recentCustomTypes.isEmpty {
+                ForEach(recentCustomTypes, id: \.self) { customType in
+                    Button(action: {
+                        notificationCenter.reclassify(notification, toCustomType: customType, autoArchive: false)
+                    }) {
+                        Label(customType, systemImage: "tag")
+                    }
+                    .disabled(notification.type == .custom && notification.customTypeName == customType)
+                }
+                
+                Divider()
+            }
+            
+            // Other option
+            Button(action: {
+                customClassificationText = ""
+                showCustomClassificationDialog = true
+            }) {
+                Label("Other...", systemImage: "plus.circle")
+            }
+        } label: {
+            Label("Re-classify", systemImage: "arrow.triangle.2.circlepath")
         }
         
         Divider()
@@ -2302,6 +2551,58 @@ struct NotificationRowView: View {
         
         // Fallback: return as-is if we can't parse it
         return sourceEmail
+    }
+}
+
+/// Dialog for entering custom classification type
+struct CustomClassificationDialog: View {
+    @Binding var isPresented: Bool
+    @Binding var classificationText: String
+    let onConfirm: () -> Void
+    
+    @FocusState private var isTextFieldFocused: Bool
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Custom Classification")
+                .font(.headline)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Enter a custom classification name:")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                TextField("Classification name", text: $classificationText)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isTextFieldFocused)
+                    .onSubmit {
+                        if !classificationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            onConfirm()
+                            isPresented = false
+                        }
+                    }
+            }
+            
+            HStack {
+                Button("Cancel") {
+                    classificationText = ""
+                    isPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+                
+                Button("OK") {
+                    onConfirm()
+                    isPresented = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(classificationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+        .onAppear {
+            isTextFieldFocused = true
+        }
     }
 }
 

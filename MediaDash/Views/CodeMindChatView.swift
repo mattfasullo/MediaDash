@@ -10,6 +10,9 @@ struct CodeMindChatView: View {
     @State private var isInitialized = false
     @FocusState private var isInputFocused: Bool
     
+    // Access services from environment (optional - may not be available in standalone window)
+    @EnvironmentObject var emailScanningService: EmailScanningService
+    
     var body: some View {
         VStack(spacing: 0) {
             // Chat messages
@@ -181,20 +184,84 @@ struct CodeMindChatView: View {
                     apiKey: key,
                     codebasePath: projectPath,
                     knowledgeStoragePath: chatKnowledgePath,
-                    learningStoragePath: chatLearningPath
+                    learningStoragePath: chatLearningPath,
+                    customSystemPrompt: """
+                    You are CodeMind, an AI assistant for email classification in MediaDash.
+                    Your role is to help users by:
+                    1. Understanding how emails are classified (new docket emails, file delivery emails)
+                    2. Answering questions about the email classification system and how it works
+                    3. Learning from user feedback to improve classification accuracy
+                    4. Explaining classification decisions and patterns
+                    5. Accessing and analyzing actual emails when users ask about specific emails
+                    6. Providing insights about classification accuracy and system health
+                    7. Suggesting pattern improvements based on classification history
+                    
+                    IMPORTANT GUIDELINES:
+                    - For questions about specific emails (e.g., "why isn't this email showing up", "what did CodeMind think about this email"): Use the mediadash_email tool to search for and examine actual emails.
+                    - For questions about docket verification or metadata: Use the mediadash_data tool to verify dockets and get metadata.
+                    - For questions about how the system works, email notifications, or classification behavior: Answer directly based on your knowledge.
+                    - Only use tools (filesystem, code_analysis) when the user explicitly asks you to analyze specific code files.
+                    - Be conversational and helpful. Focus on email classification and MediaDash functionality.
+                    
+                    You have access to the mediadash_email tool which can:
+                    - Search emails using Gmail queries (e.g., "subject:New Docket", "is:unread", "from:client@example.com")
+                    - Get full email details including subject, body, sender, etc.
+                    - Get recent classifications with confidence scores and feedback
+                    - Check email scanning status
+                    
+                    You have access to the mediadash_data tool which can:
+                    - Verify if docket numbers exist in metadata, Asana, or the filesystem
+                    - Get docket metadata (client, producer, job name, etc.)
+                    - Search for dockets by number, job name, or client
+                    - Access classification history for similar emails
+                    - Get classification statistics and accuracy metrics
+                    
+                    When users ask about classification accuracy, system health, or why classifications might be wrong, use these tools to investigate and provide data-driven answers.
+                    """
                 )
                 
                 CodeMindLogger.shared.log(.info, "Creating CodeMind instance for chat", category: .general)
                 let codeMindInstance = try await CodeMind.create(config: config)
                 
+                // Register custom MediaDash tools
+                // Tools access services from shared registry automatically
+                await MainActor.run {
+                    // Email tool for searching and examining emails
+                    let emailTool = MediaDashEmailTool() // Uses CodeMindServiceRegistry.shared
+                    codeMindInstance.registerTool(emailTool)
+                    
+                    // Data tool for docket verification and classification history
+                    let dataTool = MediaDashDataTool()
+                    codeMindInstance.registerTool(dataTool)
+                    
+                    CodeMindLogger.shared.log(.info, "Registered MediaDash email and data tools", category: .general)
+                }
+                
                 await MainActor.run {
                     self.codeMind = codeMindInstance
                     self.isInitialized = true
-                    messages.append(ChatMessage(
-                        role: .assistant,
-                        content: "👋 Hello! I'm CodeMind, your AI assistant for email classification. I can help you understand how I classify emails, answer questions about the codebase, and learn from your feedback. What would you like to know?",
-                        timestamp: Date()
-                    ))
+                    // Let the LLM introduce itself naturally instead of hardcoded message
+                    Task {
+                        do {
+                            let greeting = try await codeMindInstance.process("Hello! Please introduce yourself and explain what you can help with.")
+                            await MainActor.run {
+                                messages.append(ChatMessage(
+                                    role: .assistant,
+                                    content: greeting.content,
+                                    timestamp: Date()
+                                ))
+                            }
+                        } catch {
+                            // Fallback to simple greeting if LLM call fails
+                            await MainActor.run {
+                                messages.append(ChatMessage(
+                                    role: .assistant,
+                                    content: "👋 Hello! I'm CodeMind, ready to help.",
+                                    timestamp: Date()
+                                ))
+                            }
+                        }
+                    }
                 }
                 
                 CodeMindLogger.shared.log(.success, "CodeMind initialized for chat", category: .general)

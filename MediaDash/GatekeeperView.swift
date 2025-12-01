@@ -121,6 +121,16 @@ struct AuthenticatedRootView: View {
         _asanaCacheManager = StateObject(wrappedValue: asanaCache)
         _grabbedIndicatorService = StateObject(wrappedValue: grabbedService)
         
+        // Register all services with CodeMind registry so tools can access them
+        // This enables docket verification, classification history, and more
+        CodeMindServiceRegistry.shared.registerAll(
+            gmailService: gmailService,
+            emailScanningService: emailService,
+            metadataManager: metadata,
+            asanaCacheManager: asanaCache,
+            settingsManager: settings
+        )
+        
         // Company name cache and other preloading will happen during splash screen
     }
 
@@ -146,6 +156,9 @@ struct AuthenticatedRootView: View {
         .onAppear {
                 // Sync settings manager with profile settings
                 settingsManager.currentSettings = profile.settings
+                
+                // Sync CodeMind activity overlay with settings
+                CodeMindActivityManager.shared.syncWithSettings(profile.settings)
                 
                 // Update email scanning service references
                 emailScanningService.mediaManager = manager

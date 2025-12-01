@@ -6,7 +6,7 @@ struct CodeMindDebugView: View {
     @State private var selectedLevel: CodeMindLogLevel? = nil
     @State private var searchText = ""
     @State private var autoScroll = true
-    @State private var selectedTab: DebugTab = .logs
+    @State private var selectedTab: DebugTab = .brain
     
     var filteredLogs: [CodeMindLogEntry] {
         var logs = logger.logs
@@ -37,6 +37,7 @@ struct CodeMindDebugView: View {
         VStack(spacing: 0) {
             // Tab selector
             Picker("View", selection: $selectedTab) {
+                Text("🧠 Brain").tag(DebugTab.brain)
                 Text("Logs").tag(DebugTab.logs)
                 Text("Chat").tag(DebugTab.chat)
             }
@@ -46,9 +47,12 @@ struct CodeMindDebugView: View {
             Divider()
             
             // Content based on selected tab
-            if selectedTab == .logs {
+            switch selectedTab {
+            case .brain:
+                CodeMindBrainView()
+            case .logs:
                 logsView
-            } else {
+            case .chat:
                 CodeMindChatView()
             }
         }
@@ -170,6 +174,7 @@ struct CodeMindDebugView: View {
 }
 
 enum DebugTab {
+    case brain
     case logs
     case chat
 }

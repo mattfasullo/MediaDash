@@ -2,6 +2,52 @@ import Foundation
 import SwiftUI
 import Combine
 
+// MARK: - Layout Mode
+
+enum LayoutMode: String, CaseIterable {
+    case compact = "Compact"
+    case desktop = "Desktop"
+    
+    var displayName: String {
+        self.rawValue
+    }
+    
+    // Threshold widths for layout changes
+    static let compactMaxWidth: CGFloat = 750 // Below this = compact
+    static let desktopMinWidth: CGFloat = 750 // Above this = desktop
+    
+    // Minimum window size (compact mode)
+    static let minWidth: CGFloat = 650
+    static let minHeight: CGFloat = 550
+    
+    // Determine layout mode from window size
+    static func from(windowWidth: CGFloat) -> LayoutMode {
+        return windowWidth >= desktopMinWidth ? .desktop : .compact
+    }
+}
+
+// Environment key for layout mode
+struct LayoutModeKey: EnvironmentKey {
+    static let defaultValue: LayoutMode = .compact
+}
+
+// Environment key for window size
+struct WindowSizeKey: EnvironmentKey {
+    static let defaultValue: CGSize = CGSize(width: 650, height: 550)
+}
+
+extension EnvironmentValues {
+    var layoutMode: LayoutMode {
+        get { self[LayoutModeKey.self] }
+        set { self[LayoutModeKey.self] = newValue }
+    }
+    
+    var windowSize: CGSize {
+        get { self[WindowSizeKey.self] }
+        set { self[WindowSizeKey.self] = newValue }
+    }
+}
+
 // MARK: - Business Day Calculator
 
 struct BusinessDayCalculator {
@@ -446,6 +492,8 @@ struct AppSettings: Codable, Equatable {
     // CodeMind AI Integration
     var codeMindAPIKey: String? // Stored in Keychain, not in settings - API key for CodeMind AI email classification
     var codeMindProvider: String? // "gemini" or "grok" - determines which provider to use
+    var codeMindOverlayEnabled: Bool // Show activity overlay on main window
+    var codeMindOverlayDetailLevel: String // "minimal", "medium", or "detailed"
     
     // Simian Integration (via Zapier webhook)
     var simianEnabled: Bool
@@ -536,6 +584,8 @@ struct AppSettings: Codable, Equatable {
             docketParsingPatterns: [],
             codeMindAPIKey: nil, // Stored in Keychain
             codeMindProvider: nil, // Defaults to Claude if API key is set
+            codeMindOverlayEnabled: false, // Activity overlay disabled by default
+            codeMindOverlayDetailLevel: "medium", // Default detail level
             simianEnabled: false,
             simianWebhookURL: nil,
             simianProjectTemplate: nil,
