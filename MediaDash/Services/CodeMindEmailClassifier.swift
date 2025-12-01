@@ -114,9 +114,10 @@ class CodeMindEmailClassifier: ObservableObject {
                 CodeMindLogger.shared.log(.info, "Using Grok (xAI) provider", category: .initialization)
                 print("✅ CodeMind: Using Grok (xAI) provider")
             case "groq":
-                cloudProvider = .groq
-                CodeMindLogger.shared.log(.info, "Using Groq provider", category: .initialization)
-                print("✅ CodeMind: Using Groq provider")
+                // Groq uses OpenAI-compatible API, mapped to .grok CloudProvider
+                cloudProvider = .grok
+                CodeMindLogger.shared.log(.info, "Using Groq provider (OpenAI-compatible)", category: .initialization)
+                print("✅ CodeMind: Using Groq provider (OpenAI-compatible)")
             default:
                 let errorMsg = "Unsupported provider: \(selectedProvider). Supported providers: Gemini, Grok, Groq"
                 CodeMindLogger.shared.log(.error, errorMsg, category: .initialization)
