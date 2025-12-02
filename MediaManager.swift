@@ -1176,7 +1176,7 @@ class MediaManager: ObservableObject {
     }
     
     nonisolated private func formatDate(_ d: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "MMMd.yy"; return f.string(from: d)
+        let f = DateFormatter(); f.dateFormat = "MMMdd.yy"; return f.string(from: d)
     }
     
     nonisolated private func getNextFolder(base: URL, date: String) -> URL {
@@ -1197,7 +1197,18 @@ class MediaManager: ObservableObject {
             }
             let name = item.lastPathComponent
             // Must end with the date (format: "01_date" or "1_date")
-            return name.hasSuffix("_\(date)")
+            // Also handle old date formats that might not have zero-padded days
+            if name.hasSuffix("_\(date)") {
+                return true
+            }
+            // Check if it matches when normalized (handles "Dec2.25" vs "Dec02.25")
+            if let underscoreIndex = name.firstIndex(of: "_") {
+                let datePart = String(name[name.index(after: underscoreIndex)...])
+                if normalizeDateString(datePart) == normalizeDateString(date) {
+                    return true
+                }
+            }
+            return false
         }
         
         // Extract numbers from folder names (format: "01_date" -> 1)
@@ -1217,6 +1228,26 @@ class MediaManager: ObservableObject {
         }
         
         return base.appendingPathComponent(String(format: "%02d_%@", p, date))
+    }
+    
+    // Helper to normalize date strings for comparison (handles both old and new formats)
+    nonisolated private func normalizeDateString(_ dateStr: String) -> String {
+        // Convert "Dec02.25" to "Dec2.25" for comparison
+        // This handles matching old folders with new format
+        if let dotIndex = dateStr.firstIndex(of: ".") {
+            let monthDay = String(dateStr[..<dotIndex])
+            let year = String(dateStr[dateStr.index(after: dotIndex)...])
+            
+            // Extract month (first 3 letters) and day (rest)
+            if monthDay.count > 3 {
+                let month = String(monthDay.prefix(3))
+                let dayStr = String(monthDay.dropFirst(3))
+                // Remove leading zero from day if present
+                let day = dayStr.hasPrefix("0") && dayStr.count > 1 ? String(dayStr.dropFirst()) : dayStr
+                return "\(month)\(day).\(year)"
+            }
+        }
+        return dateStr
     }
     
     nonisolated private func getCategory(_ u: URL, config: AppConfig) -> String {

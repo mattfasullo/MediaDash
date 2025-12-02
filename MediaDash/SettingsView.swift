@@ -1484,6 +1484,12 @@ struct GmailIntegrationSection: View {
                         hasAuthenticated = true // Mark as authenticated
                         // Store in UserDefaults for persistence
                         UserDefaults.standard.set(email, forKey: "gmail_connected_email")
+                        
+                        // Add to Grayson employee whitelist if it's a Grayson email
+                        if email.lowercased().hasSuffix("@graysonmusicgroup.com") {
+                            _ = GraysonEmployeeWhitelist.shared.addEmail(email)
+                            print("✅ Added \(email) to Grayson employee whitelist")
+                        }
                     }
                 } catch {
                     print("Failed to fetch user email: \(error.localizedDescription)")
@@ -1537,6 +1543,12 @@ struct GmailIntegrationSection: View {
                         hasAuthenticated = true // Mark as authenticated
                         // Store in UserDefaults for persistence
                         UserDefaults.standard.set(email, forKey: "gmail_connected_email")
+                        
+                        // Add to Grayson employee whitelist if it's a Grayson email
+                        if email.lowercased().hasSuffix("@graysonmusicgroup.com") {
+                            _ = GraysonEmployeeWhitelist.shared.addEmail(email)
+                            print("✅ Added \(email) to Grayson employee whitelist")
+                        }
                     }
                 } catch {
                     print("Failed to fetch user email: \(error.localizedDescription)")
@@ -1570,6 +1582,13 @@ struct GmailIntegrationSection: View {
             await MainActor.run {
                 connectedEmail = email
                 UserDefaults.standard.set(email, forKey: "gmail_connected_email")
+                
+                // Add to Grayson employee whitelist if it's a Grayson email
+                if email.lowercased().hasSuffix("@graysonmusicgroup.com") {
+                    _ = GraysonEmployeeWhitelist.shared.addEmail(email)
+                    print("✅ Added \(email) to Grayson employee whitelist")
+                }
+                
                 isLoadingEmail = false
             }
         } catch {

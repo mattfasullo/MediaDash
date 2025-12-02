@@ -122,7 +122,7 @@ struct FileJobUseCase {
     
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMMd.yy"
+        formatter.dateFormat = "MMMdd.yy"
         return formatter.string(from: date)
     }
     
@@ -142,7 +142,20 @@ struct FileJobUseCase {
                   itemIsDir.boolValue else {
                 return false
             }
-            return item.lastPathComponent.hasSuffix("_\(date)")
+            let name = item.lastPathComponent
+            // Must end with the date (format: "01_date" or "1_date")
+            // Also handle old date formats that might not have zero-padded days
+            if name.hasSuffix("_\(date)") {
+                return true
+            }
+            // Check if it matches when normalized (handles "Dec2.25" vs "Dec02.25")
+            if let underscoreIndex = name.firstIndex(of: "_") {
+                let datePart = String(name[name.index(after: underscoreIndex)...])
+                if normalizeDateString(datePart) == normalizeDateString(date) {
+                    return true
+                }
+            }
+            return false
         }
         
         // Extract numbers and find max
@@ -160,6 +173,26 @@ struct FileJobUseCase {
         }
         
         return base.appendingPathComponent(String(format: "%02d_%@", p, date))
+    }
+    
+    // Helper to normalize date strings for comparison (handles both old and new formats)
+    private func normalizeDateString(_ dateStr: String) -> String {
+        // Convert "Dec02.25" to "Dec2.25" for comparison
+        // This handles matching old folders with new format
+        if let dotIndex = dateStr.firstIndex(of: ".") {
+            let monthDay = String(dateStr[..<dotIndex])
+            let year = String(dateStr[dateStr.index(after: dotIndex)...])
+            
+            // Extract month (first 3 letters) and day (rest)
+            if monthDay.count > 3 {
+                let month = String(monthDay.prefix(3))
+                let dayStr = String(monthDay.dropFirst(3))
+                // Remove leading zero from day if present
+                let day = dayStr.hasPrefix("0") && dayStr.count > 1 ? String(dayStr.dropFirst()) : dayStr
+                return "\(month)\(day).\(year)"
+            }
+        }
+        return dateStr
     }
     
     private func getCategory(_ url: URL, config: AppConfig) -> String {

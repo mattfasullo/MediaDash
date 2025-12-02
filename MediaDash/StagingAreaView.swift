@@ -43,7 +43,7 @@ struct StagingAreaView: View {
     }
     
     private var stagingHeader: some View {
-        VStack(spacing: 0) {
+            VStack(spacing: 0) {
                 HStack {
                     HStack(spacing: 8) {
                         Image(systemName: "tray.2")
@@ -103,10 +103,10 @@ struct StagingAreaView: View {
                 Divider()
                     .opacity(0.3)
             }
-    }
-    
+            }
+            
     private var stagingContent: some View {
-        ZStack {
+            ZStack {
                 if manager.selectedFiles.isEmpty {
                     // Empty State with enhanced drag feedback
                     VStack(spacing: 16) {
@@ -232,11 +232,11 @@ struct StagingAreaView: View {
                 } else {
                     NSCursor.pop()
                 }
+                }
             }
-    }
-    
+
     private var statusBar: some View {
-        HStack {
+            HStack {
                 // Left side - Scanning and Asana sync indicators
                 HStack(spacing: 12) {
                     if manager.isIndexing {

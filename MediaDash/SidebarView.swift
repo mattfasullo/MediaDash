@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 struct SidebarView: View {
     @EnvironmentObject var settingsManager: SettingsManager
@@ -39,7 +40,6 @@ struct SidebarView: View {
     @Binding var showQuickSearchSheet: Bool
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
-    @Binding var logoClickCount: Int
     var notificationCenter: NotificationCenter?
     @Binding var showNotificationCenter: Bool
     
@@ -47,7 +47,6 @@ struct SidebarView: View {
     let prepDate: Date
     let dateFormatter: DateFormatter
     let attempt: (JobType) -> Void
-    let cycleTheme: () -> Void
     let cacheManager: AsanaCacheManager?
     
     private var currentTheme: AppTheme {
@@ -75,19 +74,10 @@ struct SidebarView: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: 12) {
-                // App Logo (clickable Easter egg)
+                // App Logo
                 logoImage
                     .rotationEffect(.degrees(0))
                     .shadow(color: .clear, radius: 5, x: 2, y: 2)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        // Easter egg: 10 clicks cycles through themes
-                        logoClickCount += 1
-                        if logoClickCount >= 2 {
-                            cycleTheme()
-                            logoClickCount = 0
-                        }
-                    }
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 4)
 
@@ -99,7 +89,7 @@ struct SidebarView: View {
                             showNotificationCenter: $showNotificationCenter
                         )
                         
-                        // CodeMind Chat Button (left-click: chat, right-click: status)
+                        // CodeMind Chat Button (right-click: chat, left-click: status)
                         CodeMindChatButton(
                             emailScanningService: emailScanningService,
                             showSettings: $showSettingsSheet
@@ -1174,7 +1164,7 @@ struct CacheStatusPopover: View {
 
 // MARK: - CodeMind Status Indicator
 
-// MARK: - CodeMind Chat Button (Left-click: Chat, Right-click: Status)
+// MARK: - CodeMind Chat Button (Right-click: Chat, Left-click: Status)
 
 struct CodeMindChatButton: View {
     @ObservedObject var emailScanningService: EmailScanningService
@@ -1190,6 +1180,8 @@ struct CodeMindChatButton: View {
             return .gray
         case .error:
             return .orange
+        case .quotaExceeded:
+            return .orange
         case .unavailable:
             return .yellow
         }
@@ -1198,25 +1190,27 @@ struct CodeMindChatButton: View {
     private var tooltipText: String {
         switch emailScanningService.codeMindStatus {
         case .working:
-            return "CodeMind AI Chat (Left-click) / Status (Right-click)\nActive - AI classification enabled"
+            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nActive - AI classification enabled"
         case .disabled:
-            return "CodeMind AI Chat (Left-click) / Status (Right-click)\nDisabled - Using rule-based classification"
+            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nDisabled - Using rule-based classification"
         case .error(let message):
-            return "CodeMind AI Chat (Left-click) / Status (Right-click)\nError - Using rule-based classification\n\(message)"
+            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nError - Using rule-based classification\n\(message)"
+        case .quotaExceeded(_, let userMessage):
+            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nRate Limit Exceeded - \(userMessage)"
         case .unavailable:
-            return "CodeMind AI Chat (Left-click) / Status (Right-click)\nUnavailable - Configure in Settings > CodeMind AI"
+            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nUnavailable - Configure in Settings > CodeMind AI"
         }
     }
     
     var body: some View {
         RightClickableButton(
             action: {
-                // Left-click: Open chat
-                CodeMindChatWindowManager.shared.toggleChatWindow()
+                // Left-click: Show status popover
+                showStatusPopover = true
             },
             rightClickAction: {
-                // Right-click: Show status popover
-                showStatusPopover = true
+                // Right-click: Open chat
+                CodeMindChatWindowManager.shared.toggleChatWindow()
             }
         ) {
             ZStack {
@@ -1259,6 +1253,7 @@ struct CodeMindChatButton: View {
 struct CodeMindStatusPopover: View {
     @ObservedObject var emailScanningService: EmailScanningService
     @Binding var showSettings: Bool
+    @State private var timeRemaining: TimeInterval = 0
     
     private var statusDescription: String {
         switch emailScanningService.codeMindStatus {
@@ -1267,10 +1262,37 @@ struct CodeMindStatusPopover: View {
         case .disabled:
             return "CodeMind is disabled. Using rule-based classification patterns"
         case .error(let message):
-            return "CodeMind encountered an error. Using rule-based classification.\n\nError: \(message)"
+            // Only show user-friendly message, not raw JSON
+            let cleanMessage = cleanErrorMessage(message)
+            return "CodeMind encountered an error. Using rule-based classification.\n\n\(cleanMessage)"
+        case .quotaExceeded(_, let userMessage):
+            return userMessage
         case .unavailable:
             return "CodeMind is not configured. Configure an API key in Settings > CodeMind AI to enable AI-powered email classification"
         }
+    }
+    
+    private func cleanErrorMessage(_ message: String) -> String {
+        // Remove JSON formatting and extract user-friendly message
+        // If it contains quota/rate limit info, show simplified message
+        if message.contains("429") || message.contains("quota") || message.contains("rate limit") {
+            return "API rate limit exceeded. CodeMind is temporarily paused. The system will automatically retry when the limit resets."
+        }
+        
+        // Remove JSON-like formatting
+        var cleaned = message
+        cleaned = cleaned.replacingOccurrences(of: "\"error\":", with: "")
+        cleaned = cleaned.replacingOccurrences(of: "\"message\":", with: "")
+        cleaned = cleaned.replacingOccurrences(of: "{", with: "")
+        cleaned = cleaned.replacingOccurrences(of: "}", with: "")
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // If message is still too long or looks like JSON, show a simple message
+        if cleaned.count > 200 || cleaned.contains("\"code\"") {
+            return "CodeMind encountered an error. The system is using rule-based classification as a fallback."
+        }
+        
+        return cleaned
     }
     
     private var statusColor: Color {
@@ -1280,6 +1302,8 @@ struct CodeMindStatusPopover: View {
         case .disabled:
             return .gray
         case .error:
+            return .orange
+        case .quotaExceeded:
             return .orange
         case .unavailable:
             return .yellow
@@ -1294,6 +1318,8 @@ struct CodeMindStatusPopover: View {
             return "brain.head.profile"
         case .error:
             return "brain.head.profile.fill"
+        case .quotaExceeded:
+            return "hourglass"
         case .unavailable:
             return "brain.head.profile"
         }
@@ -1325,9 +1351,17 @@ struct CodeMindStatusPopover: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.secondary)
                 
-                Text(statusDescription)
-                    .font(.system(size: 12))
-                    .foregroundColor(.primary)
+                VStack(alignment: .leading, spacing: 6) {
+                    // User-friendly message
+                    Text(statusDescription)
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                    
+                    // Countdown timer for quota errors
+                    if case .quotaExceeded(let retryAfter, _) = emailScanningService.codeMindStatus {
+                        QuotaCountdownTimer(retryAfter: retryAfter)
+                    }
+                }
             }
             
             // Classification Method
@@ -1375,6 +1409,85 @@ struct CodeMindStatusPopover: View {
             .controlSize(.small)
         }
         .padding(12)
+        .onChange(of: emailScanningService.codeMindStatus) { _, newStatus in
+            if case .quotaExceeded(let retryAfter, _) = newStatus {
+                timeRemaining = retryAfter.timeIntervalSinceNow
+            }
+        }
+        .onReceive(Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()) { _ in
+            // Update countdown when quota exceeded
+            if case .quotaExceeded(let retryAfter, _) = emailScanningService.codeMindStatus {
+                let timeUntil = retryAfter.timeIntervalSinceNow
+                if timeUntil > 0 {
+                    timeRemaining = timeUntil
+                } else {
+                    timeRemaining = 0
+                    // Retry time has expired - attempt to re-initialize CodeMind
+                    Task { @MainActor in
+                        await emailScanningService.reinitializeCodeMindIfNeeded()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Quota Countdown Timer Component
+
+struct QuotaCountdownTimer: View {
+    let retryAfter: Date
+    @State private var timeRemaining: TimeInterval = 0
+    @State private var timer: Timer?
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock.fill")
+                .font(.system(size: 11))
+                .foregroundColor(.orange)
+            
+            Text(formatTimeRemaining(timeRemaining))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.orange)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.orange.opacity(0.1))
+        .cornerRadius(6)
+        .onAppear {
+            updateTime()
+            startTimer()
+        }
+        .onDisappear {
+            stopTimer()
+        }
+    }
+    
+    private func formatTimeRemaining(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds))
+        let minutes = totalSeconds / 60
+        let secs = totalSeconds % 60
+        
+        if minutes > 0 {
+            return "Resuming in \(minutes)m \(secs)s"
+        } else {
+            return "Resuming in \(secs)s"
+        }
+    }
+    
+    private func updateTime() {
+        timeRemaining = retryAfter.timeIntervalSinceNow
+    }
+    
+    private func startTimer() {
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            updateTime()
+        }
+    }
+    
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
     }
 }
 

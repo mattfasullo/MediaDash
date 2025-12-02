@@ -7,6 +7,7 @@ struct CodeMindDebugView: View {
     @State private var searchText = ""
     @State private var autoScroll = true
     @State private var selectedTab: DebugTab = .brain
+    @State private var copiedAll = false
     
     var filteredLogs: [CodeMindLogEntry] {
         var logs = logger.logs
@@ -144,6 +145,35 @@ struct CodeMindDebugView: View {
                     Text("\(filteredLogs.count) logs")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
+                    
+                    Button(action: {
+                        let allText = logger.getAllLogsAsText(filtered: filteredLogs)
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(allText, forType: .string)
+                        copiedAll = true
+                        
+                        // Reset copied state after 2 seconds
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            copiedAll = false
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            if copiedAll {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Copied!")
+                                    .foregroundColor(.green)
+                            } else {
+                                Image(systemName: "doc.on.doc")
+                                Text("Copy All")
+                            }
+                        }
+                        .font(.system(size: 12))
+                    }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .help("Copy all logs as text (⌘⇧C)")
                 }
                 .padding()
                 .background(Color(nsColor: .separatorColor).opacity(0.1))

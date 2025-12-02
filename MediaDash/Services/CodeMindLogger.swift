@@ -84,6 +84,136 @@ class CodeMindLogger: ObservableObject {
     func logs(for level: CodeMindLogLevel) -> [CodeMindLogEntry] {
         logs.filter { $0.level == level }
     }
+    
+    /// Get all logs as a formatted string for copying
+    func getAllLogsAsText(filtered: [CodeMindLogEntry]) -> String {
+        var output = "=== CodeMind Debug Logs ===\n"
+        output += "Generated: \(Date().formatted(date: .complete, time: .complete))\n"
+        output += "Total Logs: \(filtered.count)\n"
+        output += String(repeating: "=", count: 50) + "\n\n"
+        
+        for log in filtered {
+            output += "[\(log.timestamp.formatted(date: .omitted, time: .standard))] "
+            output += "\(log.level.rawValue) [\(log.category.rawValue)]\n"
+            output += "\(log.message)\n"
+            
+            if let metadata = log.metadata, !metadata.isEmpty {
+                for (key, value) in metadata.sorted(by: { $0.key < $1.key }) {
+                    output += "  \(key): \(value)\n"
+                }
+            }
+            
+            output += "\n"
+        }
+        
+        return output
+    }
+    
+    /// Log detailed classification information for debugging
+    func logDetailedClassification(
+        emailId: String,
+        subject: String?,
+        from: String?,
+        threadId: String?,
+        classificationType: String, // "newDocket" or "fileDelivery"
+        isFileDelivery: Bool?,
+        confidence: Double?,
+        reasoning: String?,
+        threadContext: String?,
+        prompt: String?,
+        llmResponse: String?,
+        recipients: [String]?,
+        emailBody: String?
+    ) {
+        var debugMessage = "📊 DETAILED CLASSIFICATION DEBUG\n"
+        debugMessage += String(repeating: "=", count: 80) + "\n\n"
+        
+        debugMessage += "EMAIL INFORMATION:\n"
+        debugMessage += "- Email ID: \(emailId)\n"
+        debugMessage += "- Subject: \(subject ?? "nil")\n"
+        debugMessage += "- From: \(from ?? "unknown")\n"
+        debugMessage += "- Thread ID: \(threadId ?? "none (single email)")\n"
+        if let recipients = recipients, !recipients.isEmpty {
+            debugMessage += "- Recipients: \(recipients.joined(separator: ", "))\n"
+        }
+        debugMessage += "- Classification Type: \(classificationType)\n\n"
+        
+        // Check if from company domain
+        if let from = from {
+            let domain = from.split(separator: "@").last.map(String.init) ?? ""
+            let isCompany = domain.lowercased().contains("grayson")
+            debugMessage += "SENDER ANALYSIS:\n"
+            debugMessage += "- Domain: \(domain)\n"
+            debugMessage += "- Is Company Domain: \(isCompany ? "YES ⚠️" : "NO") (graysonmusicgroup.com or graysonmusic.com)\n"
+            if let recipients = recipients, !recipients.isEmpty {
+                let hasExternal = recipients.contains { email in
+                    let recDomain = email.split(separator: "@").last.map(String.init) ?? ""
+                    return !recDomain.lowercased().contains("grayson")
+                }
+                debugMessage += "- Has External Recipients: \(hasExternal ? "YES (likely outgoing)" : "NO (likely internal)")\n"
+            }
+            debugMessage += "\n"
+        }
+        
+        if let threadContext = threadContext, !threadContext.isEmpty {
+            debugMessage += "THREAD CONTEXT:\n"
+            debugMessage += threadContext
+            debugMessage += "\n"
+        }
+        
+        if let emailBody = emailBody, !emailBody.isEmpty {
+            debugMessage += "EMAIL BODY (FULL):\n"
+            debugMessage += String(repeating: "-", count: 80) + "\n"
+            debugMessage += emailBody
+            debugMessage += "\n"
+            debugMessage += String(repeating: "-", count: 80) + "\n\n"
+        }
+        
+        if let prompt = prompt, !prompt.isEmpty {
+            debugMessage += "LLM PROMPT (FULL):\n"
+            debugMessage += String(repeating: "-", count: 80) + "\n"
+            debugMessage += prompt
+            debugMessage += "\n"
+            debugMessage += String(repeating: "-", count: 80) + "\n\n"
+        }
+        
+        debugMessage += "CLASSIFICATION RESULT:\n"
+        if let isFileDelivery = isFileDelivery {
+            debugMessage += "- Is File Delivery: \(isFileDelivery)\n"
+        }
+        if let confidence = confidence {
+            debugMessage += "- Confidence: \(String(format: "%.2f", confidence)) (\(Int(confidence * 100))%)\n"
+            if confidence < 0.7 {
+                debugMessage += "  ⚠️ Low confidence - would go to 'For Review'\n"
+            } else {
+                debugMessage += "  ✓ High confidence - would be shown normally\n"
+            }
+        }
+        if let reasoning = reasoning {
+            debugMessage += "- Reasoning: \(reasoning)\n"
+        }
+        debugMessage += "\n"
+        
+        if let llmResponse = llmResponse, !llmResponse.isEmpty {
+            debugMessage += "LLM RESPONSE (FULL):\n"
+            debugMessage += String(repeating: "-", count: 80) + "\n"
+            debugMessage += llmResponse
+            debugMessage += "\n"
+            debugMessage += String(repeating: "-", count: 80) + "\n\n"
+        }
+        
+        debugMessage += String(repeating: "=", count: 80) + "\n"
+        
+        // Log as a single entry with the full debug info
+        self.log(.debug, debugMessage, category: .classification, metadata: [
+            "emailId": emailId,
+            "subject": subject ?? "nil",
+            "from": from ?? "unknown",
+            "classificationType": classificationType,
+            "isFileDelivery": isFileDelivery.map { "\($0)" } ?? "nil",
+            "confidence": confidence.map { String(format: "%.2f", $0) } ?? "nil"
+        ])
+    }
 }
 
 // MARK: - Log Entry

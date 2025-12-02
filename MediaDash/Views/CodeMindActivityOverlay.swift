@@ -11,36 +11,16 @@ struct CodeMindActivityOverlay: View {
     }
 }
 
-// MARK: - Floating Activity Bubble
+// MARK: - Static Activity Bubble
 
 struct FloatingActivityBubble: View {
     @ObservedObject var activityManager = CodeMindActivityManager.shared
     
-    // Position state - where the bubble actually is (the "anchor" position)
-    @State private var position: CGPoint = CGPoint(x: 580, y: 480)
-    // Target position during drag (where the cursor is)
-    @State private var targetOffset: CGSize = .zero
-    // Display offset - lerps toward target for elastic feel
-    @State private var displayOffset: CGSize = .zero
-    @State private var isDragging = false
-    @State private var updateCounter: Int = 0 // Force SwiftUI to detect state changes
-    
-    // Timer for elastic animation
-    @State private var elasticTimer: Timer?
-    
     // Expansion state
     @State private var isExpanded = false
     
-    // Subtle wobble for liquid feel
-    @State private var wobbleAngle: Double = 0
+    // Pulse animation for active state
     @State private var pulseScale: CGFloat = 1.0
-    
-    // Window size for constraints
-    @State private var windowSize: CGSize = .zero
-    
-    // Elastic follow settings
-    private let lerpFactor: CGFloat = 0.35 // How fast it catches up (0.1 = slow, 0.5 = fast) - increased significantly for better catch-up
-    private let settleThreshold: CGFloat = 0.5 // Stop animating when this close
     
     private let bubbleSize: CGFloat = 56
     private let expandedWidth: CGFloat = 300
@@ -48,12 +28,14 @@ struct FloatingActivityBubble: View {
     private let edgePadding: CGFloat = 15
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                
                 if isExpanded {
                     expandedView
                         .frame(width: expandedWidth, height: expandedHeight)
-                        .position(effectivePosition(for: geometry.size, expanded: true))
                         .transition(.asymmetric(
                             insertion: .scale(scale: 0.5).combined(with: .opacity),
                             removal: .scale(scale: 0.8).combined(with: .opacity)
@@ -61,111 +43,12 @@ struct FloatingActivityBubble: View {
                 } else {
                     bubbleView
                         .frame(width: bubbleSize, height: bubbleSize)
-                        .position(effectivePosition(for: geometry.size, expanded: false))
-                        .rotationEffect(.degrees(wobbleAngle))
                 }
             }
-            .animation(.spring(response: 0.5, dampingFraction: 0.7), value: isExpanded)
-            // Reference updateCounter in the view to ensure SwiftUI detects state changes
-            .onChange(of: updateCounter) { _, _ in
-                // This ensures SwiftUI knows to re-evaluate the view when counter changes
-            }
-            .onAppear {
-                windowSize = geometry.size
-                // Start with a valid position
-                position = CGPoint(
-                    x: geometry.size.width - bubbleSize - edgePadding,
-                    y: geometry.size.height - bubbleSize - edgePadding
-                )
-            }
-            .onChange(of: geometry.size) { _, newSize in
-                windowSize = newSize
-                // Re-constrain position when window resizes
-                position = constrainPosition(position, for: newSize, expanded: isExpanded)
-            }
-            .onDisappear {
-                stopElasticTimer()
-            }
+            .padding(.trailing, edgePadding)
+            .padding(.bottom, edgePadding)
         }
-    }
-    
-    // MARK: - Effective Position (with elastic display offset)
-    
-    private func effectivePosition(for size: CGSize, expanded: Bool) -> CGPoint {
-        let basePosition = CGPoint(
-            x: position.x + displayOffset.width,
-            y: position.y + displayOffset.height
-        )
-        return constrainPosition(basePosition, for: size, expanded: expanded)
-    }
-    
-    // Start the elastic follow timer
-    private func startElasticTimer() {
-        stopElasticTimer()
-        // Create timer that will update state and trigger view refreshes
-        elasticTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
-            // Update happens on main thread (Timer already runs on main)
-            self.updateElasticPosition()
-        }
-        // Add to common run loop modes so it runs even during UI interactions
-        if let timer = elasticTimer {
-            RunLoop.main.add(timer, forMode: .common)
-        }
-    }
-    
-    // Stop the elastic timer
-    private func stopElasticTimer() {
-        elasticTimer?.invalidate()
-        elasticTimer = nil
-    }
-    
-    // Update display offset to chase target offset
-    private func updateElasticPosition() {
-        let dx = targetOffset.width - displayOffset.width
-        let dy = targetOffset.height - displayOffset.height
-        let distance = sqrt(dx * dx + dy * dy)
-        
-        // If close enough and not dragging, settle and stop timer
-        if distance < settleThreshold && !isDragging {
-            displayOffset = targetOffset
-            wobbleAngle = 0
-            updateCounter += 1 // Force view update
-            stopElasticTimer()
-            return
-        }
-        
-        // Lerp toward target - use a slightly higher lerp factor for better responsiveness
-        let effectiveLerp = isDragging ? lerpFactor * 1.2 : lerpFactor
-        
-        // Calculate new display offset
-        let newDisplayOffset = CGSize(
-            width: displayOffset.width + dx * effectiveLerp,
-            height: displayOffset.height + dy * effectiveLerp
-        )
-        
-        // Update state - increment counter to force SwiftUI to detect the change
-        displayOffset = newDisplayOffset
-        updateCounter += 1 // This forces SwiftUI to re-render the view
-        
-        // Calculate wobble based on movement speed
-        let speed = distance * effectiveLerp
-        let wobble = min(speed / 8, 2.5) * (dx > 0 ? 1 : -1)
-        wobbleAngle = wobble
-    }
-    
-    private func constrainPosition(_ pos: CGPoint, for size: CGSize, expanded: Bool) -> CGPoint {
-        let itemWidth = expanded ? expandedWidth : bubbleSize
-        let itemHeight = expanded ? expandedHeight : bubbleSize
-        
-        let minX = itemWidth / 2 + edgePadding
-        let maxX = size.width - itemWidth / 2 - edgePadding
-        let minY = itemHeight / 2 + edgePadding
-        let maxY = size.height - itemHeight / 2 - edgePadding
-        
-        return CGPoint(
-            x: max(minX, min(maxX, pos.x)),
-            y: max(minY, min(maxY, pos.y))
-        )
+        .animation(.spring(response: 0.5, dampingFraction: 0.7), value: isExpanded)
     }
     
     // MARK: - Bubble View (Collapsed)
@@ -232,9 +115,6 @@ struct FloatingActivityBubble: View {
                 }
             }
         }
-        .scaleEffect(isDragging ? 1.08 : 1.0)
-        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isDragging)
-        .gesture(bubbleDragGesture)
         .onTapGesture {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
                 isExpanded = true
@@ -251,59 +131,6 @@ struct FloatingActivityBubble: View {
                 }
             }
         }
-    }
-    
-    // MARK: - Drag Gesture (Elastic Follow)
-    
-    private var bubbleDragGesture: some Gesture {
-        DragGesture(minimumDistance: 5)
-            .onChanged { value in
-                if !isDragging {
-                    isDragging = true
-                    startElasticTimer()
-                }
-                
-                // Update target - the display will chase it elastically
-                targetOffset = value.translation
-            }
-            .onEnded { value in
-                isDragging = false
-                
-                // Calculate where the cursor ended (unconstrained)
-                let cursorEndPosition = CGPoint(
-                    x: position.x + value.translation.width,
-                    y: position.y + value.translation.height
-                )
-                
-                // Constrain to window bounds
-                let constrainedFinal = constrainPosition(cursorEndPosition, for: windowSize, expanded: false)
-                
-                // Calculate the actual translation that was applied (may be different due to constraints)
-                let actualTranslation = CGSize(
-                    width: constrainedFinal.x - position.x,
-                    height: constrainedFinal.y - position.y
-                )
-                
-                // Current visual position: position + displayOffset
-                // Target visual position: position + actualTranslation
-                // To keep visual position the same when we move the anchor:
-                // newDisplayOffset = displayOffset - actualTranslation
-                displayOffset = CGSize(
-                    width: displayOffset.width - actualTranslation.width,
-                    height: displayOffset.height - actualTranslation.height
-                )
-                
-                // Update anchor position to where cursor ended (constrained)
-                position = constrainedFinal
-                
-                // Set target to zero so displayOffset lerps to zero (catches up to cursor)
-                targetOffset = .zero
-                
-                // Ensure timer keeps running to animate the catch-up
-                if elasticTimer == nil || !elasticTimer!.isValid {
-                    startElasticTimer()
-                }
-            }
     }
     
     // MARK: - Expanded View
@@ -441,58 +268,6 @@ struct FloatingActivityBubble: View {
             }
         )
         .shadow(color: .black.opacity(0.4), radius: 25, x: 0, y: 15)
-        .gesture(expandedDragGesture)
-    }
-    
-    private var expandedDragGesture: some Gesture {
-        DragGesture(minimumDistance: 5)
-            .onChanged { value in
-                if !isDragging {
-                    isDragging = true
-                    startElasticTimer()
-                }
-                
-                // Update target - the display will chase it elastically
-                targetOffset = value.translation
-            }
-            .onEnded { value in
-                isDragging = false
-                
-                // Calculate where the cursor ended (unconstrained)
-                let cursorEndPosition = CGPoint(
-                    x: position.x + value.translation.width,
-                    y: position.y + value.translation.height
-                )
-                
-                // Constrain to window bounds
-                let constrainedFinal = constrainPosition(cursorEndPosition, for: windowSize, expanded: true)
-                
-                // Calculate the actual translation that was applied (may be different due to constraints)
-                let actualTranslation = CGSize(
-                    width: constrainedFinal.x - position.x,
-                    height: constrainedFinal.y - position.y
-                )
-                
-                // Current visual position: position + displayOffset
-                // Target visual position: position + actualTranslation
-                // To keep visual position the same when we move the anchor:
-                // newDisplayOffset = displayOffset - actualTranslation
-                displayOffset = CGSize(
-                    width: displayOffset.width - actualTranslation.width,
-                    height: displayOffset.height - actualTranslation.height
-                )
-                
-                // Update anchor position to where cursor ended (constrained)
-                position = constrainedFinal
-                
-                // Set target to zero so displayOffset lerps to zero (catches up to cursor)
-                targetOffset = .zero
-                
-                // Ensure timer keeps running to animate the catch-up
-                if elasticTimer == nil || !elasticTimer!.isValid {
-                    startElasticTimer()
-                }
-            }
     }
     
     private func confidenceColor(_ confidence: Double) -> Color {

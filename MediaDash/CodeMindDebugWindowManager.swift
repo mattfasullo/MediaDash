@@ -51,6 +51,12 @@ class CodeMindDebugWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         debugWindow.isReleasedWhenClosed = false
         debugWindow.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         
+        // Set minimum size to prevent window from being too small
+        debugWindow.minSize = NSSize(width: 600, height: 400)
+        
+        // Ensure the window content size is set properly
+        debugWindow.setContentSize(NSSize(width: 800, height: 600))
+        
         // Center window on screen
         if let screen = NSScreen.main {
             let screenRect = screen.visibleFrame

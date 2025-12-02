@@ -35,6 +35,7 @@ struct NotificationCenterView: View {
     @State private var isArchivedExpanded = false
     @State private var isFileDeliveriesExpanded = true // Default to expanded (keeping for archived section)
     @State private var selectedTab: NotificationTab = .newDockets // Tab selection
+    @State private var isForReviewExpanded = true // Default to expanded for visibility
     @State private var cacheInfo: String?
     @State private var showCacheInfo = false
     @State private var isLoadingCache = false // Keep for fallback if file write fails
@@ -75,6 +76,42 @@ struct NotificationCenterView: View {
     
     private var activeNotifications: [Notification] {
         allActiveNotifications.filter { $0.type != .mediaFiles }
+    }
+    
+    // Notifications that need review (low confidence)
+    private var notificationsForReview: [Notification] {
+        let threshold = settingsManager.currentSettings.codeMindReviewThreshold
+        return allActiveNotifications.filter { notification in
+            guard let codeMindMeta = notification.codeMindClassification,
+                  codeMindMeta.wasUsed else {
+                return false // Only show CodeMind-classified notifications
+            }
+            return codeMindMeta.confidence < threshold
+        }
+    }
+    
+    // Regular notifications (above confidence threshold)
+    private var regularNotifications: [Notification] {
+        let threshold = settingsManager.currentSettings.codeMindReviewThreshold
+        return allActiveNotifications.filter { notification in
+            // For CodeMind-classified notifications, check confidence
+            if let codeMindMeta = notification.codeMindClassification,
+               codeMindMeta.wasUsed {
+                return codeMindMeta.confidence >= threshold
+            }
+            // For non-CodeMind notifications, include them in regular list
+            return true
+        }
+    }
+    
+    // Regular new docket notifications (excluding media files and low confidence)
+    private var regularNewDocketNotifications: [Notification] {
+        regularNotifications.filter { $0.type != .mediaFiles }
+    }
+    
+    // Regular file delivery notifications
+    private var regularFileDeliveryNotifications: [Notification] {
+        regularNotifications.filter { $0.type == .mediaFiles }
     }
     
     private var archivedNotifications: [Notification] {
@@ -150,8 +187,41 @@ struct NotificationCenterView: View {
             let isGmailConnected = emailScanningService.gmailService.isAuthenticated
             let gmailEnabled = settingsManager.currentSettings.gmailEnabled
             
+            // Gmail disabled banner (if Gmail is disabled)
+            if !gmailEnabled {
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "envelope.slash.fill")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 14))
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Gmail Integration Disabled")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("Email notifications are disabled. Enable in Settings to receive new docket and file delivery notifications")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Button("Settings") {
+                            showSettings = true
+                            NotificationWindowManager.shared.hideNotificationWindow()
+                            isExpanded = false
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.secondary.opacity(0.1))
+                    
+                    Divider()
+                }
+            }
             // Gmail connection warning banner (if Gmail is enabled but not connected)
-            if gmailEnabled && !isGmailConnected {
+            else if gmailEnabled && !isGmailConnected {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -214,7 +284,37 @@ struct NotificationCenterView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding()
-            } else if mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
+            } else if !gmailEnabled && notificationsForReview.isEmpty && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
+                // Show message when Gmail is disabled
+                VStack(spacing: 16) {
+                    Image(systemName: "envelope.slash.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+                    
+                    VStack(spacing: 8) {
+                        Text("Gmail Integration Disabled")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        Text("Enable Gmail integration in Settings to receive email notifications for new dockets and file deliveries")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                    }
+                    
+                    Button("Open Settings") {
+                        showSettings = true
+                        // Close notification window when opening settings
+                        NotificationWindowManager.shared.hideNotificationWindow()
+                        isExpanded = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else if notificationsForReview.isEmpty && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
                 VStack(spacing: 12) {
                     if isScanningEmails {
                         ProgressView()
@@ -242,7 +342,7 @@ struct NotificationCenterView: View {
             } else {
                 VStack(spacing: 0) {
                     // Tabs for notification types
-                    if !mediaFileNotifications.isEmpty || !activeNotifications.isEmpty {
+                    if !mediaFileNotifications.isEmpty || !activeNotifications.isEmpty || !notificationsForReview.isEmpty {
                         HStack(spacing: 0) {
                             // New Dockets tab
                             Button(action: {
@@ -255,8 +355,8 @@ struct NotificationCenterView: View {
                                         .font(.system(size: 11))
                                     Text("New Dockets")
                                         .font(.system(size: 12, weight: .medium))
-                                    if !activeNotifications.isEmpty {
-                                        Text("(\(activeNotifications.count))")
+                                    if !regularNewDocketNotifications.isEmpty {
+                                        Text("(\(regularNewDocketNotifications.count))")
                                             .font(.system(size: 11))
                                             .opacity(0.7)
                                     }
@@ -286,8 +386,8 @@ struct NotificationCenterView: View {
                                         .font(.system(size: 11))
                                     Text("File Deliveries")
                                         .font(.system(size: 12, weight: .medium))
-                                    if !mediaFileNotifications.isEmpty {
-                                        Text("(\(mediaFileNotifications.count))")
+                                    if !regularFileDeliveryNotifications.isEmpty {
+                                        Text("(\(regularFileDeliveryNotifications.count))")
                                             .font(.system(size: 11))
                                             .opacity(0.7)
                                     }
@@ -317,8 +417,60 @@ struct NotificationCenterView: View {
                     // Content for selected tab
                     ScrollView {
                         VStack(spacing: 0) {
-                            if selectedTab == .newDockets && !activeNotifications.isEmpty {
-                                ForEach(activeNotifications) { notification in
+                            // "For Review" section (low confidence notifications)
+                            if !notificationsForReview.isEmpty {
+                                Button(action: {
+                                    withAnimation {
+                                        isForReviewExpanded.toggle()
+                                    }
+                                }) {
+                                    HStack {
+                                        Image(systemName: isForReviewExpanded ? "chevron.down" : "chevron.right")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.orange)
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.orange)
+                                        Text("For Review")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundColor(.orange)
+                                        Text("(\(notificationsForReview.count))")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.orange.opacity(0.7))
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 10)
+                                    .background(Color.orange.opacity(0.1))
+                                }
+                                .buttonStyle(.plain)
+                                
+                                if isForReviewExpanded {
+                                    ForEach(notificationsForReview) { notification in
+                                    NotificationRowView(
+                                        notificationId: notification.id,
+                                        notificationCenter: notificationCenter,
+                                        emailScanningService: emailScanningService,
+                                        mediaManager: mediaManager,
+                                        settingsManager: settingsManager,
+                                        processingNotification: $processingNotification,
+                                        debugInfo: $debugInfo,
+                                        showDebugInfo: $showDebugInfo
+                                    )
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 8)
+                                        .background(Color.orange.opacity(0.05))
+                                    
+                                    Divider()
+                                }
+                                }
+                                
+                                Divider()
+                                    .padding(.vertical, 4)
+                            }
+                            
+                            if selectedTab == .newDockets && !regularNewDocketNotifications.isEmpty {
+                                ForEach(regularNewDocketNotifications) { notification in
                                     NotificationRowView(
                                         notificationId: notification.id,
                                         notificationCenter: notificationCenter,
@@ -334,8 +486,8 @@ struct NotificationCenterView: View {
                                     
                                     Divider()
                                 }
-                            } else if selectedTab == .fileDeliveries && !mediaFileNotifications.isEmpty {
-                                ForEach(mediaFileNotifications) { notification in
+                            } else if selectedTab == .fileDeliveries && !regularFileDeliveryNotifications.isEmpty {
+                                ForEach(regularFileDeliveryNotifications) { notification in
                                     NotificationRowView(
                                         notificationId: notification.id,
                                         notificationCenter: notificationCenter,
@@ -351,8 +503,8 @@ struct NotificationCenterView: View {
                                     
                                     Divider()
                                 }
-                            } else {
-                                // Empty state for selected tab
+                            } else if notificationsForReview.isEmpty {
+                                // Empty state for selected tab (only show if no review items)
                                 VStack(spacing: 12) {
                                     Image(systemName: selectedTab == .newDockets ? "doc.text" : "link.circle")
                                         .font(.system(size: 40))
@@ -1205,6 +1357,28 @@ struct NotificationRowView: View {
                     }
                 }
                 
+                // Show CodeMind confidence indicator
+                if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
+                    let confidence = codeMindMeta.confidence
+                    let threshold = settingsManager.currentSettings.codeMindReviewThreshold
+                    let isLowConfidence = confidence < threshold
+                    
+                    HStack(spacing: 4) {
+                        Image(systemName: isLowConfidence ? "exclamationmark.triangle.fill" : "brain.head.profile")
+                            .font(.system(size: 9))
+                            .foregroundColor(isLowConfidence ? .orange : .blue.opacity(0.7))
+                        Text("Confidence: \(Int(confidence * 100))%")
+                            .font(.system(size: 10, weight: isLowConfidence ? .semibold : .regular))
+                            .foregroundColor(isLowConfidence ? .orange : .secondary.opacity(0.8))
+                        if isLowConfidence {
+                            Text("(Needs Review)")
+                                .font(.system(size: 9))
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+                
                 // Email preview (expands on click)
                 if notification.emailSubject != nil || notification.emailBody != nil {
                     // Visual indicator that notification is expandable
@@ -1286,6 +1460,9 @@ struct NotificationRowView: View {
                     Divider()
                         .padding(.vertical, 4)
                     
+                    // Check if feedback already exists for this email
+                    let hasExistingFeedback = notification.emailId != nil && EmailFeedbackTracker.shared.hasFeedback(for: notification.emailId!)
+                    
                     HStack(spacing: 8) {
                         Image(systemName: "brain.head.profile")
                             .font(.system(size: 10))
@@ -1300,7 +1477,7 @@ struct NotificationRowView: View {
                         
                         Spacer()
                         
-                        if !feedbackSubmitted {
+                        if !feedbackSubmitted && !hasExistingFeedback {
                             HStack(spacing: 4) {
                                 Button(action: {
                                     Task {
@@ -1329,7 +1506,7 @@ struct NotificationRowView: View {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 10))
                                     .foregroundColor(.green)
-                                Text("Feedback submitted")
+                                Text(hasExistingFeedback ? "Feedback already submitted" : "Feedback submitted")
                                     .font(.system(size: 8))
                                     .foregroundColor(.secondary)
                             }
@@ -1519,6 +1696,9 @@ struct NotificationRowView: View {
                     Divider()
                         .padding(.vertical, 4)
                     
+                    // Check if feedback already exists for this email
+                    let hasExistingFeedback = notification.emailId != nil && EmailFeedbackTracker.shared.hasFeedback(for: notification.emailId!)
+                    
                     HStack(spacing: 8) {
                         Image(systemName: "brain.head.profile")
                             .font(.system(size: 10))
@@ -1533,7 +1713,7 @@ struct NotificationRowView: View {
                         
                         Spacer()
                         
-                        if !feedbackSubmitted {
+                        if !feedbackSubmitted && !hasExistingFeedback {
                             HStack(spacing: 4) {
                                 Button(action: {
                                     Task {
@@ -1562,7 +1742,7 @@ struct NotificationRowView: View {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 10))
                                     .foregroundColor(.green)
-                                Text("Feedback submitted")
+                                Text(hasExistingFeedback ? "Feedback already submitted" : "Feedback submitted")
                                     .font(.system(size: 8))
                                     .foregroundColor(.secondary)
                             }
@@ -1817,10 +1997,31 @@ struct NotificationRowView: View {
                           !customClassificationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         return
                     }
-                    notificationCenter.reclassify(currentNotification, toCustomType: customClassificationText, autoArchive: false)
+                    Task {
+                        await notificationCenter.reclassify(
+                            currentNotification,
+                            toCustomType: customClassificationText,
+                            autoArchive: false,
+                            emailScanningService: emailScanningService
+                        )
+                    }
                     customClassificationText = ""
                 }
             )
+        }
+    }
+    
+    /// Mark email as read if notification has an emailId
+    private func markEmailAsReadIfNeeded(_ notification: Notification) {
+        guard let emailId = notification.emailId else { return }
+        
+        Task {
+            do {
+                try await emailScanningService.gmailService.markAsRead(messageId: emailId)
+                print("NotificationCenterView: Marked email \(emailId) as read")
+            } catch {
+                print("NotificationCenterView: Failed to mark email as read: \(error.localizedDescription)")
+            }
         }
     }
     
@@ -1838,6 +2039,12 @@ struct NotificationRowView: View {
             correction: correction,
             comment: comment
         )
+        
+        // Mark email as read only when submitting negative feedback (thumbs down)
+        // Thumbs up should NOT mark the email as read
+        if !wasCorrect, let notification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+            markEmailAsReadIfNeeded(notification)
+        }
         
         await MainActor.run {
             feedbackSubmitted = true
@@ -1885,11 +2092,12 @@ struct NotificationRowView: View {
                     }
                 }
                 
-                // Send reply with image if available, otherwise plain text
+                // CRITICAL: Send reply ONLY to media email - NEVER to clients or other recipients
+                // This removes all other recipients from the original email thread
                 _ = try await emailScanningService.gmailService.sendReply(
                     messageId: emailId,
                     body: "Grabbed",
-                    to: ["media@graysonmusicgroup.com"],
+                    to: ["media@graysonmusicgroup.com"], // ONLY this recipient - all others removed
                     imageURL: imageURL
                 )
                 
@@ -1899,6 +2107,17 @@ struct NotificationRowView: View {
                 // Mark notification as grabbed (archive it)
                 await MainActor.run {
                     if let notification = notification {
+                        // Mark email as read when grabbing file delivery
+                        markEmailAsReadIfNeeded(notification)
+                        
+                        // Track grab interaction by email ID
+                        if let emailId = notification.emailId {
+                            EmailFeedbackTracker.shared.recordInteraction(
+                                emailId: emailId,
+                                type: .grabbed
+                            )
+                        }
+                        
                         notificationCenter.archive(notification)
                     }
                     pendingEmailIdForReply = nil
@@ -2117,6 +2336,28 @@ struct NotificationRowView: View {
                 
                 await MainActor.run {
                     processingNotification = nil
+                    // Mark email as read when approving notification (creating work pic/simian)
+                    markEmailAsReadIfNeeded(updatedNotification)
+                    
+                    // Track approval interaction by email ID
+                    if let emailId = updatedNotification.emailId {
+                        var details: [String: String] = [:]
+                        if updatedNotification.shouldCreateWorkPicture {
+                            details["createdWorkPicture"] = "true"
+                        }
+                        if updatedNotification.shouldCreateSimianJob {
+                            details["createdSimianJob"] = "true"
+                        }
+                        if let docketNumber = updatedNotification.docketNumber {
+                            details["docketNumber"] = docketNumber
+                        }
+                        EmailFeedbackTracker.shared.recordInteraction(
+                            emailId: emailId,
+                            type: .approved,
+                            details: details.isEmpty ? nil : details
+                        )
+                    }
+                    
                     // Check if docket already exists before marking as completed
                     // If it exists, just remove the notification instead
                     if let docketNumber = updatedNotification.docketNumber,
@@ -2379,14 +2620,28 @@ struct NotificationRowView: View {
         // Re-classify submenu
         Menu {
             Button(action: {
-                notificationCenter.reclassify(notification, to: .newDocket, autoArchive: false)
+                Task {
+                    await notificationCenter.reclassify(
+                        notification,
+                        to: .newDocket,
+                        autoArchive: false,
+                        emailScanningService: emailScanningService
+                    )
+                }
             }) {
                 Label("New Docket", systemImage: "doc.badge.plus")
             }
             .disabled(notification.type == .newDocket)
             
             Button(action: {
-                notificationCenter.reclassify(notification, to: .mediaFiles, autoArchive: false)
+                Task {
+                    await notificationCenter.reclassify(
+                        notification,
+                        to: .mediaFiles,
+                        autoArchive: false,
+                        emailScanningService: emailScanningService
+                    )
+                }
             }) {
                 Label("File Delivery", systemImage: "arrow.down.doc")
             }
@@ -2395,13 +2650,17 @@ struct NotificationRowView: View {
             Divider()
             
             Button(action: {
-                notificationCenter.markAsJunk(notification)
+                Task {
+                    await notificationCenter.markAsJunk(notification, emailScanningService: emailScanningService)
+                }
             }) {
                 Label("Junk (Ads/Promos)", systemImage: "trash")
             }
             
             Button(action: {
-                notificationCenter.skip(notification)
+                Task {
+                    await notificationCenter.skip(notification, emailScanningService: emailScanningService)
+                }
             }) {
                 Label("Skip (Remove)", systemImage: "forward")
             }
@@ -2413,7 +2672,14 @@ struct NotificationRowView: View {
             if !recentCustomTypes.isEmpty {
                 ForEach(recentCustomTypes, id: \.self) { customType in
                     Button(action: {
-                        notificationCenter.reclassify(notification, toCustomType: customType, autoArchive: false)
+                        Task {
+                            await notificationCenter.reclassify(
+                                notification,
+                                toCustomType: customType,
+                                autoArchive: false,
+                                emailScanningService: emailScanningService
+                            )
+                        }
                     }) {
                         Label(customType, systemImage: "tag")
                     }

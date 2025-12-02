@@ -494,6 +494,7 @@ struct AppSettings: Codable, Equatable {
     var codeMindProvider: String? // "gemini" or "grok" - determines which provider to use
     var codeMindOverlayEnabled: Bool // Show activity overlay on main window
     var codeMindOverlayDetailLevel: String // "minimal", "medium", or "detailed"
+    var codeMindReviewThreshold: Double // Confidence threshold (0.0-1.0) - notifications below this go to "For Review" (default: 0.7)
     
     // Simian Integration (via Zapier webhook)
     var simianEnabled: Bool
@@ -586,6 +587,7 @@ struct AppSettings: Codable, Equatable {
             codeMindProvider: nil, // Defaults to Claude if API key is set
             codeMindOverlayEnabled: false, // Activity overlay disabled by default
             codeMindOverlayDetailLevel: "medium", // Default detail level
+            codeMindReviewThreshold: 0.7, // Default: notifications below 70% confidence go to review
             simianEnabled: false,
             simianWebhookURL: nil,
             simianProjectTemplate: nil,

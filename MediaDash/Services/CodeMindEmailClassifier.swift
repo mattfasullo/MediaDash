@@ -273,7 +273,9 @@ class CodeMindEmailClassifier: ObservableObject {
     func classifyNewDocketEmail(
         subject: String?,
         body: String?,
-        from: String?
+        from: String?,
+        threadId: String? = nil,
+        gmailService: GmailService? = nil
     ) async throws -> (classification: DocketEmailClassification, response: CodeMindResponse) {
         // Log at the VERY START to confirm function is called - use print for immediate visibility
         print("🚀 classifyNewDocketEmail START - Function called")
@@ -288,9 +290,12 @@ class CodeMindEmailClassifier: ObservableObject {
         
         // If rules say to ignore this email, return a non-docket classification
         if rulesResult.shouldIgnore {
-            CodeMindLogger.shared.log(.info, "Email ignored by custom rule", category: .classification, metadata: [
-                "subject": subject ?? "nil"
+            CodeMindLogger.shared.log(.warning, "Email BLOCKED by custom rule (new docket check)", category: .classification, metadata: [
+                "subject": subject ?? "nil",
+                "from": from ?? "unknown",
+                "action": "Email will not be processed"
             ])
+            print("⚠️ EmailScanningService: Email BLOCKED by classification rule - Subject: \(subject ?? "nil"), From: \(from ?? "unknown")")
             let emptyResponse = CodeMindResponse(content: "{}", toolResults: [])
             let ignoredClassification = DocketEmailClassification(
                 isNewDocket: false,
@@ -322,13 +327,30 @@ class CodeMindEmailClassifier: ObservableObject {
         
         let emailContent = buildEmailContext(subject: subject, body: body, from: from)
         
-            CodeMindLogger.shared.log(.info, "Classifying new docket email", category: .classification, metadata: [
+        // Fetch thread context if available
+        var threadContext = ""
+        if let threadId = threadId, let gmailService = gmailService {
+            if let context = await fetchThreadContext(threadId: threadId, gmailService: gmailService) {
+                threadContext = context
+            }
+        }
+        
+        // Build learning context from feedback history
+        let learningContext = buildLearningContext(
+            currentSubject: subject,
+            currentFrom: from,
+            currentBody: body,
+            classificationType: "newDocket"
+        )
+        
+        CodeMindLogger.shared.log(.info, "Classifying new docket email", category: .classification, metadata: [
             "hasSubject": subject != nil,
             "hasBody": body != nil,
             "hasFrom": from != nil,
             "subjectPreview": subject?.prefix(50) ?? "nil",
             "bodyLength": body?.count ?? 0,
-            "fromEmail": from ?? "nil"
+            "fromEmail": from ?? "nil",
+            "hasThreadId": threadId != nil
         ])
         
         let prompt = """
@@ -336,11 +358,23 @@ class CodeMindEmailClassifier: ObservableObject {
         
         Analyze this email to determine if it's a "new docket" email - an email that announces or creates a new docket/job for a media production project.
         
-        Email content:
+        \(learningContext)
+        
+        \(threadContext)
+        
+        Current email to classify:
         \(emailContent)
+        
+        CRITICAL THREAD-BASED REASONING:
+        - Check thread context to understand if this is the FIRST message in a conversation (more likely new docket)
+        - If this is a REPLY in a thread, it's likely NOT a new docket announcement
+        - Company/internal emails (including @graysonmusicgroup.com) can be new docket announcements - do NOT filter them out
         
         Instructions:
         1. Determine if this email is announcing a new docket/job (not a reply, not a file delivery, not a status update)
+           - Check thread context: Is this the first message or a reply?
+           - First messages are more likely to be new docket announcements
+           - Replies are typically follow-ups, not new announcements
         2. If it IS a new docket email, extract:
            - Docket number: MUST be exactly 5 digits (e.g., "25493"), optionally with "-US" suffix (e.g., "25493-US")
              Numbers with fewer or more than 5 digits are NOT valid docket numbers - return null for those
@@ -353,7 +387,7 @@ class CodeMindEmailClassifier: ObservableObject {
           "confidence": 0.0-1.0,
           "docketNumber": "12345" or null,
           "jobName": "Client Name" or null,
-          "reasoning": "Brief explanation of why this is/isn't a new docket email",
+          "reasoning": "Brief explanation - MUST mention thread analysis if thread context available",
           "extractedMetadata": {
             "agency": "Agency name if mentioned",
             "client": "Client name if mentioned",
@@ -487,8 +521,11 @@ class CodeMindEmailClassifier: ObservableObject {
             contentToParse = response.content
         }
         
+        // Strip markdown code fences if present (e.g., ```json ... ```)
+        let cleanedContent = stripMarkdownCodeFences(from: contentToParse)
+        
         // Parse JSON response
-        guard let jsonData = contentToParse.data(using: .utf8) else {
+        guard let jsonData = cleanedContent.data(using: .utf8) else {
             CodeMindLogger.shared.log(.error, "Could not convert response to data", category: .classification, metadata: ["responsePreview": String(responsePreview)])
             throw CodeMindError.invalidResponse("Could not convert response to data")
         }
@@ -509,9 +546,11 @@ class CodeMindEmailClassifier: ObservableObject {
                 "fullResponse": logResponse
             ])
             
-            // Try to extract JSON from response if it has extra text
-            if let jsonRange = extractJSONFromResponse(response.content) {
-                let jsonString = String(response.content[jsonRange])
+            // Try to strip markdown code fences and extract JSON from response if it has extra text
+            let cleanedResponse = stripMarkdownCodeFences(from: response.content)
+            
+            if let jsonRange = extractJSONFromResponse(cleanedResponse) {
+                let jsonString = String(cleanedResponse[jsonRange])
                 CodeMindLogger.shared.log(.debug, "Attempting to parse extracted JSON", category: .classification, metadata: [
                     "extractedJSONLength": "\(jsonString.count)",
                     "extractedJSONPreview": jsonString.count > 500 ? String(jsonString.prefix(500)) + "..." : jsonString
@@ -519,12 +558,19 @@ class CodeMindEmailClassifier: ObservableObject {
                 if let extractedData = jsonString.data(using: .utf8),
                    let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: extractedData) {
                     classification = extracted
-                    CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON", category: .classification)
+                    CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
                 } else {
                     throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
                 }
             } else {
-                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                // Last resort: try parsing the cleaned response directly
+                if let cleanedData = cleanedResponse.data(using: .utf8),
+                   let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: cleanedData) {
+                    classification = extracted
+                    CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
+                } else {
+                    throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                }
             }
         }
         
@@ -624,7 +670,7 @@ class CodeMindEmailClassifier: ObservableObject {
         let emailId = "\(subject?.hashValue ?? 0)_\(from?.hashValue ?? 0)_\(Date().timeIntervalSince1970)"
         CodeMindClassificationHistory.shared.recordNewDocketClassification(
             emailId: emailId,
-            threadId: nil,
+            threadId: threadId,
             subject: subject ?? "",
             fromEmail: from ?? "",
             confidence: finalClassification.confidence,
@@ -632,6 +678,35 @@ class CodeMindEmailClassifier: ObservableObject {
             jobName: finalClassification.jobName,
             wasVerified: wasVerified,
             rawResponse: response.content
+        )
+        
+        // Feed to intelligence engines for unified tracking
+        await feedToIntelligenceEngines(
+            emailId: emailId,
+            threadId: threadId,
+            subject: subject,
+            from: from,
+            classificationType: finalClassification.isNewDocket ? "newDocket" : nil,
+            docketNumber: finalClassification.docketNumber,
+            jobName: finalClassification.jobName,
+            metadata: finalClassification.extractedMetadata
+        )
+        
+        // Log detailed classification debug information
+        CodeMindLogger.shared.logDetailedClassification(
+            emailId: emailId,
+            subject: subject,
+            from: from,
+            threadId: threadId,
+            classificationType: "newDocket",
+            isFileDelivery: nil, // Not applicable for new docket
+            confidence: finalClassification.confidence,
+            reasoning: finalClassification.reasoning,
+            threadContext: threadContext.isEmpty ? nil : threadContext,
+            prompt: prompt,
+            llmResponse: response.content,
+            recipients: nil, // Not passed for new docket classification
+            emailBody: body
         )
         
         return (finalClassification, response)
@@ -648,7 +723,9 @@ class CodeMindEmailClassifier: ObservableObject {
         subject: String?,
         body: String?,
         from: String?,
-        recipients: [String] = []
+        recipients: [String] = [],
+        threadId: String? = nil,
+        gmailService: GmailService? = nil
     ) async throws -> (classification: FileDeliveryClassification, response: CodeMindResponse) {
         // Check custom rules first for overrides
         let rulesResult = CodeMindRulesManager.shared.getClassificationOverride(
@@ -659,9 +736,12 @@ class CodeMindEmailClassifier: ObservableObject {
         
         // If rules say to ignore this email, return a non-file-delivery classification
         if rulesResult.shouldIgnore {
-            CodeMindLogger.shared.log(.info, "Email ignored by custom rule (file delivery check)", category: .classification, metadata: [
-                "subject": subject ?? "nil"
+            CodeMindLogger.shared.log(.warning, "Email BLOCKED by custom rule (file delivery check)", category: .classification, metadata: [
+                "subject": subject ?? "nil",
+                "from": from ?? "unknown",
+                "action": "Email will not be processed"
             ])
+            print("⚠️ EmailScanningService: Email BLOCKED by classification rule - Subject: \(subject ?? "nil"), From: \(from ?? "unknown")")
             let emptyResponse = CodeMindResponse(content: "{}", toolResults: [])
             let ignoredClassification = FileDeliveryClassification(
                 isFileDelivery: false,
@@ -689,6 +769,22 @@ class CodeMindEmailClassifier: ObservableObject {
         
         let emailContent = buildEmailContext(subject: subject, body: body, from: from, recipients: recipients)
         
+        // Fetch thread context if available
+        var threadContext = ""
+        if let threadId = threadId, let gmailService = gmailService {
+            if let context = await fetchThreadContext(threadId: threadId, gmailService: gmailService) {
+                threadContext = context
+            }
+        }
+        
+        // Build learning context from feedback history
+        let learningContext = buildLearningContext(
+            currentSubject: subject,
+            currentFrom: from,
+            currentBody: body,
+            classificationType: "fileDelivery"
+        )
+        
         CodeMindLogger.shared.log(.info, "Classifying file delivery email", category: .classification, metadata: [
             "hasSubject": subject != nil,
             "hasBody": body != nil,
@@ -696,33 +792,140 @@ class CodeMindEmailClassifier: ObservableObject {
             "recipientCount": "\(recipients.count)",
             "subjectPreview": subject?.prefix(50) ?? "nil",
             "bodyLength": body?.count ?? 0,
-            "fromEmail": from ?? "nil"
+            "fromEmail": from ?? "nil",
+            "hasThreadId": threadId != nil
         ])
         
-        let prompt = """
-        Analyze this email to determine if it's a file delivery email - an email that contains links to files hosted on file sharing services (Dropbox, WeTransfer, Google Drive, etc.) or contains file attachments.
+        // Build prompt with thread-first approach
+        let hasThreadContext = !threadContext.isEmpty
+        let prompt: String
         
-        Email content:
-        \(emailContent)
-        
-        Instructions:
-        1. Determine if this email is delivering files (not a new docket, not a status update, not a general communication)
-        2. If it IS a file delivery email, extract:
-           - File hosting links (Dropbox, WeTransfer, Google Drive, OneDrive, etc.)
-           - Any indication of what files are being shared
-           - Whether files are attached directly
-        3. Respond in JSON format:
-        {
-          "isFileDelivery": true/false,
-          "confidence": 0.0-1.0,
-          "fileLinks": ["https://...", "https://..."],
-          "fileHostingServices": ["Dropbox", "WeTransfer"],
-          "reasoning": "Brief explanation of why this is/isn't a file delivery email",
-          "hasAttachments": true/false
+        if hasThreadContext {
+            prompt = """
+            YOUR PRIMARY TASK: Read through the ENTIRE email thread below and determine if the CURRENT email (the last one) is a file delivery that the media team should process.
+            
+            ============================================================================
+            READ THE FULL EMAIL THREAD FIRST - This is the PRIMARY source of information
+            ============================================================================
+            
+            \(threadContext)
+            
+            ============================================================================
+            CURRENT EMAIL TO CLASSIFY (the last message in the thread above):
+            ============================================================================
+            
+            \(emailContent)
+            
+            ============================================================================
+            LEARNING FROM PAST CORRECTIONS:
+            ============================================================================
+            
+            \(learningContext)
+            
+            ============================================================================
+            YOUR ANALYSIS - READ THROUGH THE THREAD AND REASON:
+            ============================================================================
+            
+            STEP 1: UNDERSTAND THE THREAD CONTEXT
+            - Read through ALL messages in the thread chronologically
+            - Who started this conversation? (first message sender)
+            - What is the overall purpose of this thread?
+            - Who are the participants? (internal team vs external clients)
+            - Trace the conversation flow from start to finish
+            
+            STEP 2: ANALYZE THE CONVERSATION DIRECTION
+            - Is this thread primarily:
+              * An incoming conversation FROM external clients/producers TO your company?
+              * An outgoing conversation FROM your company TO external clients?
+              * An internal conversation between company employees?
+            
+            STEP 3: UNDERSTAND THE CURRENT EMAIL IN CONTEXT
+            - Where does the current email fit in the conversation?
+            - Is it part of an ongoing thread about file delivery?
+            - Does the thread context indicate files are being delivered TO your company?
+            - Or are files being sent FROM your company TO clients?
+            
+            STEP 4: KEY DISTINCTIONS TO CONSIDER
+            - External sender in thread → Likely INCOMING file delivery
+            - Company sending to external recipients in thread → OUTGOING (NOT file delivery)
+            - Company internal conversation → Could be INTERNAL REQUEST (IS file delivery)
+            - Note: Media team being CC'd doesn't change outgoing status if external clients are in the thread
+            
+            STEP 5: MAKE YOUR DECISION
+            Based on your analysis of the FULL THREAD:
+            - Is the current email part of a conversation where files are being DELIVERED TO your company?
+            - Or is it part of a conversation where your company is SENDING files OUT?
+            - Consider the entire thread context, not just the current email in isolation
+            
+            DECISION CRITERIA:
+            - Files being delivered TO your company (incoming) → isFileDelivery=true
+            - Files being sent FROM your company TO clients (outgoing) → isFileDelivery=false
+            - Internal company requests for media processing → isFileDelivery=true
+            
+            CONFIDENCE GUIDELINES:
+            - Strong thread context clearly showing direction → confidence 0.85-0.95
+            - Thread shows some ambiguity → confidence 0.6-0.8
+            - Contradictory signals in thread → confidence 0.4-0.6
+            
+            IMPORTANT: Base your decision on understanding the FULL THREAD. Don't just look at the current email - understand the entire conversation flow and context.
+            
+            INSTRUCTIONS:
+            1. Read through the ENTIRE thread above to understand the conversation
+            2. Determine if the current email is part of a file delivery TO your company
+            3. Extract file links if this is a file delivery
+            4. Respond with ONLY valid JSON:
+            {
+              "isFileDelivery": true/false,
+              "confidence": 0.0-1.0,
+              "fileLinks": ["https://...", "https://..."],
+              "fileHostingServices": ["Dropbox", "WeTransfer"],
+              "reasoning": "MUST include: 1) Your analysis of the FULL thread, 2) Conversation direction, 3) Why this is/isn't file delivery based on thread context, 4) Confidence reasoning",
+              "hasAttachments": true/false
+            }
+            
+            Only respond with valid JSON, no additional text.
+            """
+        } else {
+            // Fallback for emails without thread context
+            prompt = """
+            Analyze this email to determine if it's a file delivery email - an email that contains files that need to be processed by the media team.
+            
+            \(learningContext)
+            
+            Current email to classify:
+            \(emailContent)
+            
+            (No thread context available - analyzing single email)
+            
+            File deliveries can be:
+            - FROM external clients/producers TO your company (incoming)
+            - FROM company producers TO media team only (internal request)
+            - NOT: FROM company TO external clients (outgoing, even if media is CC'd)
+            
+            REASONING STEPS:
+            1. CHECK SENDER: External → isFileDelivery=true, Company → Continue
+            2. CHECK RECIPIENTS: If ANY external recipients → isFileDelivery=false (outgoing)
+            3. If ALL internal recipients → isFileDelivery=true (internal request)
+            
+            INSTRUCTIONS:
+            1. Determine if this email is delivering files FROM external party TO your company (not outgoing, not a new docket, not a status update)
+            2. If it IS a file delivery email, extract:
+               - File hosting links (Dropbox, WeTransfer, Google Drive, OneDrive, etc.)
+               - Any indication of what files are being shared
+               - Whether files are attached directly
+            3. Respond in JSON format:
+            {
+              "isFileDelivery": true/false,
+              "confidence": 0.0-1.0,
+              "fileLinks": ["https://...", "https://..."],
+              "fileHostingServices": ["Dropbox", "WeTransfer"],
+              "reasoning": "Brief explanation of why this is/isn't a file delivery email",
+              "hasAttachments": true/false
+            }
+            
+            Only respond with valid JSON, no additional text.
+            """
         }
-        
-        Only respond with valid JSON, no additional text.
-        """
         
         CodeMindLogger.shared.log(.debug, "Sending prompt to LLM", category: .llm, metadata: ["promptLength": "\(prompt.count)"])
         let response = try await processWithRetry(prompt: prompt, maxRetries: 1)
@@ -752,8 +955,11 @@ class CodeMindEmailClassifier: ObservableObject {
             contentToParse = response.content
         }
         
+        // Strip markdown code fences if present (e.g., ```json ... ```)
+        let cleanedContent = stripMarkdownCodeFences(from: contentToParse)
+        
         // Parse JSON response
-        guard let jsonData = contentToParse.data(using: .utf8) else {
+        guard let jsonData = cleanedContent.data(using: .utf8) else {
             CodeMindLogger.shared.log(.error, "Could not convert response to data", category: .classification, metadata: ["responsePreview": String(responsePreview)])
             throw CodeMindError.invalidResponse("Could not convert response to data")
         }
@@ -774,9 +980,11 @@ class CodeMindEmailClassifier: ObservableObject {
                 "fullResponse": logResponse
             ])
             
-            // Try to extract JSON from response if it has extra text
-            if let jsonRange = extractJSONFromResponse(response.content) {
-                let jsonString = String(response.content[jsonRange])
+            // Try to strip markdown code fences and extract JSON from response if it has extra text
+            let cleanedResponse = stripMarkdownCodeFences(from: response.content)
+            
+            if let jsonRange = extractJSONFromResponse(cleanedResponse) {
+                let jsonString = String(cleanedResponse[jsonRange])
                 CodeMindLogger.shared.log(.debug, "Attempting to parse extracted JSON", category: .classification, metadata: [
                     "extractedJSONLength": "\(jsonString.count)",
                     "extractedJSONPreview": jsonString.count > 500 ? String(jsonString.prefix(500)) + "..." : jsonString
@@ -784,12 +992,19 @@ class CodeMindEmailClassifier: ObservableObject {
                 if let extractedData = jsonString.data(using: .utf8),
                    let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: extractedData) {
                     classification = extracted
-                    CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON", category: .classification)
+                    CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
                 } else {
                     throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
                 }
             } else {
-                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                // Last resort: try parsing the cleaned response directly
+                if let cleanedData = cleanedResponse.data(using: .utf8),
+                   let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: cleanedData) {
+                    classification = extracted
+                    CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
+                } else {
+                    throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                }
             }
         }
         
@@ -852,13 +1067,42 @@ class CodeMindEmailClassifier: ObservableObject {
         let emailId = "\(subject?.hashValue ?? 0)_\(from?.hashValue ?? 0)_\(Date().timeIntervalSince1970)"
         CodeMindClassificationHistory.shared.recordFileDeliveryClassification(
             emailId: emailId,
-            threadId: nil,
+            threadId: threadId,
             subject: subject ?? "",
             fromEmail: from ?? "",
             confidence: finalClassification.confidence,
             isFileDelivery: finalClassification.isFileDelivery,
             fileLinks: finalClassification.fileLinks,
             rawResponse: response.content
+        )
+        
+        // Feed to intelligence engines for unified tracking
+        await feedToIntelligenceEngines(
+            emailId: emailId,
+            threadId: threadId,
+            subject: subject,
+            from: from,
+            classificationType: finalClassification.isFileDelivery ? "fileDelivery" : nil,
+            docketNumber: nil,
+            jobName: nil,
+            metadata: nil
+        )
+        
+        // Log detailed classification debug information
+        CodeMindLogger.shared.logDetailedClassification(
+            emailId: emailId,
+            subject: subject,
+            from: from,
+            threadId: threadId,
+            classificationType: "fileDelivery",
+            isFileDelivery: finalClassification.isFileDelivery,
+            confidence: finalClassification.confidence,
+            reasoning: finalClassification.reasoning,
+            threadContext: threadContext.isEmpty ? nil : threadContext,
+            prompt: prompt,
+            llmResponse: response.content,
+            recipients: recipients.isEmpty ? nil : recipients,
+            emailBody: body
         )
         
         return (finalClassification, response)
@@ -952,6 +1196,42 @@ class CodeMindEmailClassifier: ObservableObject {
         return context
     }
     
+    /// Strip markdown code fences from a response (e.g., ```json ... ```)
+    /// - Parameter response: The response string that may contain markdown code fences
+    /// - Returns: The response with markdown code fences removed
+    private func stripMarkdownCodeFences(from response: String) -> String {
+        var cleaned = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Remove markdown code fence at the start (```json, ```JSON, ```, etc.)
+        if cleaned.hasPrefix("```") {
+            // Find the first newline after ```
+            if let firstNewline = cleaned.firstIndex(of: "\n") {
+                cleaned = String(cleaned[cleaned.index(after: firstNewline)...])
+            } else {
+                // No newline, just remove the ```
+                cleaned = cleaned.replacingOccurrences(of: "^```[a-zA-Z]*", with: "", options: .regularExpression)
+            }
+        }
+        
+        // Remove markdown code fence at the end (```)
+        if cleaned.hasSuffix("```") {
+            // Find the last newline before ```
+            if let lastNewline = cleaned.lastIndex(of: "\n") {
+                cleaned = String(cleaned[..<lastNewline])
+            } else {
+                // No newline, just remove the ```
+                cleaned = cleaned.replacingOccurrences(of: "```$", with: "", options: .regularExpression)
+            }
+        }
+        
+        // Also handle cases where ``` might be on its own line
+        cleaned = cleaned.replacingOccurrences(of: "^```[a-zA-Z]*\n", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "\n```$", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "```$", with: "", options: .regularExpression)
+        
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
     /// Extract JSON from a response that may have extra text before/after
     /// This finds the first complete JSON object by matching braces properly
     private func extractJSONFromResponse(_ response: String) -> Range<String.Index>? {
@@ -993,6 +1273,380 @@ class CodeMindEmailClassifier: ObservableObject {
         }
         
         return nil
+    }
+    
+    // MARK: - Thread Context & Learning
+    
+    /// Fetch and format thread context for classification
+    private func fetchThreadContext(threadId: String, gmailService: GmailService) async -> String? {
+        do {
+            let thread = try await gmailService.getThread(threadId: threadId)
+            
+            guard let messages = thread.messages, messages.count > 1 else {
+                return nil // Single message, no thread
+            }
+            
+            // Sort chronologically
+            let sortedMessages = messages.sorted { msg1, msg2 in
+                let date1 = msg1.date ?? Date.distantPast
+                let date2 = msg2.date ?? Date.distantPast
+                return date1 < date2
+            }
+            
+            var context = "\n"
+            context += String(repeating: "=", count: 80) + "\n"
+            context += "EMAIL THREAD CONTEXT - READ THROUGH ALL \(sortedMessages.count) MESSAGES BELOW\n"
+            context += String(repeating: "=", count: 80) + "\n"
+            context += "This thread contains \(sortedMessages.count) messages. Read them in chronological order to understand the full conversation.\n\n"
+            
+            // Determine company domains (could come from settings)
+            let companyDomains = ["graysonmusicgroup.com", "graysonmusic.com"]
+            
+            var threadDirection = "Unknown"
+            
+            // Get media team emails from settings (will need to be passed or accessed differently)
+            // For now, use common patterns - these should ideally come from settings
+            let mediaTeamEmailPatterns = ["media@", "mediadash", "@graysonmusicgroup.com", "@graysonmusic.com"]
+            
+            // Track conversation flow
+            var allParticipants: Set<String> = []
+            var externalParticipants: Set<String> = []
+            var internalParticipants: Set<String> = []
+            
+            for (index, message) in sortedMessages.enumerated() {
+                let from = message.from ?? "Unknown"
+                let fromDomain = from.split(separator: "@").last.map(String.init) ?? ""
+                let isCompany = companyDomains.contains(where: { fromDomain.lowercased().contains($0.lowercased()) })
+                
+                // Check recipients
+                let recipients = message.allRecipients
+                let recipientDomains = recipients.map { $0.split(separator: "@").last.map(String.init) ?? "" }
+                let hasCompanyRecipients = recipientDomains.contains(where: { domain in
+                    companyDomains.contains(where: { domain.lowercased().contains($0.lowercased()) })
+                })
+                
+                // Check if there are ANY external recipients (not company domain)
+                let hasExternalRecipients = !recipients.isEmpty && !recipientDomains.allSatisfy { domain in
+                    companyDomains.contains(where: { domain.lowercased().contains($0.lowercased()) }) ||
+                    mediaTeamEmailPatterns.contains(where: { domain.lowercased().contains($0.lowercased()) })
+                }
+                
+                // Determine recipient type
+                var recipientType = ""
+                if isCompany && hasExternalRecipients {
+                    recipientType = " [OUTGOING - TO EXTERNAL CLIENTS]"
+                } else if isCompany && !hasExternalRecipients && hasCompanyRecipients {
+                    recipientType = " [INTERNAL - TO COMPANY/MEDIA TEAM ONLY]"
+                } else if !isCompany {
+                    recipientType = " [INCOMING - FROM EXTERNAL]"
+                }
+                
+                if index == 0 {
+                    if isCompany && hasExternalRecipients {
+                        threadDirection = "OUTGOING (company → external clients)"
+                    } else if isCompany && !hasExternalRecipients {
+                        threadDirection = "INTERNAL (company → company/media team)"
+                    } else {
+                        threadDirection = "INCOMING (external → company)"
+                    }
+                }
+                
+                let subject = message.subject ?? "No subject"
+                let dateStr: String
+                if let date = message.date {
+                    let formatter = DateFormatter()
+                    formatter.dateStyle = .short
+                    formatter.timeStyle = .short
+                    dateStr = formatter.string(from: date)
+                } else {
+                    dateStr = "Unknown date"
+                }
+                let snippet = message.snippet?.prefix(150) ?? ""
+                
+                // Track participants
+                allParticipants.insert(from.lowercased())
+                recipients.forEach { allParticipants.insert($0.lowercased()) }
+                if isCompany {
+                    internalParticipants.insert(from.lowercased())
+                } else {
+                    externalParticipants.insert(from.lowercased())
+                }
+                
+                context += "\n"
+                context += String(repeating: "-", count: 80) + "\n"
+                context += "MESSAGE \(index + 1) of \(sortedMessages.count) - \(dateStr)\n"
+                context += String(repeating: "-", count: 80) + "\n"
+                context += "FROM: \(from)\(isCompany ? " [YOUR COMPANY]" : " [EXTERNAL]")\n"
+                if !recipients.isEmpty {
+                    context += "TO: \(recipients.joined(separator: ", "))\(recipientType)\n"
+                }
+                context += "SUBJECT: \(subject)\n"
+                if index > 0 {
+                    let prevMessage = sortedMessages[index - 1]
+                    context += "→ This is a REPLY to message \(index) \"\(prevMessage.subject ?? "previous message")\"\n"
+                } else {
+                    context += "→ This is the FIRST message in the thread\n"
+                }
+                context += "\nCONTENT PREVIEW:\n\(snippet)\n"
+                
+                // Get body content if available for more context
+                if let body = message.plainTextBody, !body.isEmpty {
+                    let bodyPreview = body.count > 300 ? String(body.prefix(300)) + "..." : body
+                    context += "\nFULL MESSAGE CONTENT:\n\(bodyPreview)\n"
+                }
+            }
+            
+            context += "\n"
+            context += String(repeating: "=", count: 80) + "\n"
+            context += "THREAD ANALYSIS SUMMARY\n"
+            context += String(repeating: "=", count: 80) + "\n"
+            context += "Total messages: \(sortedMessages.count)\n"
+            context += "Conversation type: \(threadDirection)\n"
+            context += "\nParticipants in this thread:\n"
+            context += "- Internal (company): \(internalParticipants.count) participant(s)\n"
+            context += "- External: \(externalParticipants.count) participant(s)\n"
+            if !externalParticipants.isEmpty {
+                context += "- External participants: \(Array(externalParticipants).joined(separator: ", "))\n"
+            }
+            
+            // Analyze first message recipients for better context
+            if let firstMessage = sortedMessages.first {
+                let firstFrom = firstMessage.from ?? "Unknown"
+                let firstFromDomain = firstFrom.split(separator: "@").last.map(String.init) ?? ""
+                let firstIsCompany = companyDomains.contains(where: { firstFromDomain.lowercased().contains($0.lowercased()) })
+                let firstRecipients = firstMessage.allRecipients
+                let firstRecipientDomains = firstRecipients.map { $0.split(separator: "@").last.map(String.init) ?? "" }
+                
+                // Check if ANY recipients are external (not company domain)
+                let hasExternalRecipients = !firstRecipients.isEmpty && !firstRecipientDomains.allSatisfy { domain in
+                    companyDomains.contains(where: { domain.lowercased().contains($0.lowercased()) }) ||
+                    mediaTeamEmailPatterns.contains(where: { domain.lowercased().contains($0.lowercased()) })
+                }
+                
+                context += "\nFIRST MESSAGE ANALYSIS:\n"
+                if !firstIsCompany {
+                    context += "✓ External sender started this conversation → This thread is INCOMING\n"
+                    context += "✓ Files in this thread ARE file deliveries TO your company\n"
+                    context += "  (Media team being CC'd doesn't change that this is incoming from external)\n"
+                } else if firstIsCompany && hasExternalRecipients {
+                    context += "⚠️ Company started this conversation TO external clients → This thread is OUTGOING\n"
+                    context += "⚠️ Files in this thread are being SENT TO clients, NOT file deliveries TO process\n"
+                    context += "  (Even if media team is CC'd, this is outgoing to clients - not file delivery)\n"
+                } else if firstIsCompany && !hasExternalRecipients {
+                    context += "✓ Company started this conversation internally → This thread is INTERNAL REQUEST\n"
+                    context += "✓ Files in this thread ARE file deliveries that media team should process\n"
+                }
+            }
+            
+            context += "\n"
+            context += String(repeating: "=", count: 80) + "\n"
+            context += "END OF THREAD CONTEXT - Now analyze the conversation above\n"
+            context += String(repeating: "=", count: 80) + "\n\n"
+            
+            return context
+        } catch {
+            CodeMindLogger.shared.log(.warning, "Failed to fetch thread context", category: .classification, metadata: [
+                "threadId": threadId,
+                "error": error.localizedDescription
+            ])
+            return nil
+        }
+    }
+    
+    /// Build comprehensive learning context from feedback history and similar emails
+    private func buildLearningContext(
+        currentSubject: String?,
+        currentFrom: String?,
+        currentBody: String?,
+        classificationType: String // "newDocket" or "fileDelivery"
+    ) -> String {
+        let history = CodeMindClassificationHistory.shared
+        
+        var context = "\n\n=== LEARNING CONTEXT (Learn from these examples) ===\n"
+        
+        // 1. Find similar emails from history
+        let similarEmails = history.getSimilarClassifications(
+            subject: currentSubject,
+            fromEmail: currentFrom,
+            limit: 5
+        )
+        
+        if !similarEmails.isEmpty {
+            context += "\n📚 SIMILAR EMAILS FROM HISTORY:\n"
+            for record in similarEmails {
+                if let feedback = record.feedback, !feedback.wasCorrect, let correction = feedback.correction {
+                    context += "\n❌ MISTAKE EXAMPLE:\n"
+                    context += "  Email: \"\(record.subject)\" from \(record.fromEmail)\n"
+                    context += "  Original: Classified as \(record.classificationType.rawValue) with \(Int(record.confidence * 100))% confidence\n"
+                    context += "  User correction: \"\(correction)\"\n"
+                    context += "  Lesson: \(extractLessonFromCorrection(correction, type: classificationType))\n"
+                }
+            }
+        }
+        
+        // 2. Recent corrections specifically about company-sent emails
+        let recentCorrections = history.getRecentClassifications(limit: 20)
+            .filter { record in
+                record.feedback?.wasCorrect == false &&
+                record.feedback?.correction != nil &&
+                !record.feedback!.correction!.isEmpty
+            }
+            .prefix(10)
+        
+        let companySentCorrections = recentCorrections.filter { record in
+            let correction = record.feedback?.correction?.lowercased() ?? ""
+            return correction.contains("company") ||
+                   correction.contains("we sent") ||
+                   correction.contains("sent to clients") ||
+                   correction.contains("outgoing") ||
+                   correction.contains("client")
+        }
+        
+        if !companySentCorrections.isEmpty {
+            context += "\n\n⚠️ CRITICAL LESSONS ABOUT COMPANY-SENT EMAILS:\n"
+            context += "The user has repeatedly corrected these classifications:\n\n"
+            
+            for record in companySentCorrections.prefix(5) {
+                if let correction = record.feedback?.correction {
+                    context += "❌ MISTAKE: Email \"\(record.subject)\"\n"
+                    context += "   From: \(record.fromEmail)\n"
+                    context += "   User said: \"\(correction)\"\n"
+                    context += "   Pattern to avoid: \(extractPatternFromRecord(record))\n\n"
+                }
+            }
+            
+            context += "CRITICAL RULE - EMAIL DIRECTION DISTINCTION:\n"
+            context += "  - External sender = INCOMING (IS file delivery)\n"
+            context += "  - Company sender + ANY external recipients = OUTGOING (NOT file delivery)\n"
+            context += "  - Company sender + ONLY internal recipients = INTERNAL REQUEST (IS file delivery)\n"
+            context += "  - KEY: Check if ANY recipients are external - media team being CC'd doesn't change outgoing status!\n"
+        }
+        
+        // 3. Pattern extraction from successful classifications
+        let successfulClassifications = history.getRecentClassifications(limit: 30)
+            .filter { record in
+                (record.feedback?.wasCorrect == true || record.feedback == nil) &&
+                record.confidence > 0.8
+            }
+            .prefix(5)
+        
+        if !successfulClassifications.isEmpty {
+            context += "\n\n✅ SUCCESSFUL PATTERNS:\n"
+            for record in successfulClassifications {
+                context += "- \"\(record.subject)\" from \(record.fromEmail.split(separator: "@").last ?? "unknown")\n"
+                context += "  → Correctly classified as \(record.classificationType.rawValue) (\(Int(record.confidence * 100))%)\n"
+            }
+        }
+        
+        context += "\n=== END LEARNING CONTEXT ===\n\n"
+        
+        return context
+    }
+    
+    /// Extract a lesson from a correction
+    private func extractLessonFromCorrection(_ correction: String, type: String) -> String {
+        let lower = correction.lowercased()
+        
+        if lower.contains("company") || lower.contains("we sent") || lower.contains("sent to clients") {
+            return "This was sent FROM the company TO clients (outgoing), not incoming file delivery. Check sender domain."
+        }
+        
+        if lower.contains("client") && !lower.contains("from") {
+            return "This appears to be communication TO clients, not FROM clients. Verify email direction."
+        }
+        
+        if lower.contains("not a") || lower.contains("isn't") || lower.contains("wrong") {
+            return "User explicitly says this is NOT \(type). Look for distinguishing context."
+        }
+        
+        return correction
+    }
+    
+    /// Extract pattern from a classification record for learning
+    private func extractPatternFromRecord(_ record: ClassificationRecord) -> String {
+        var patterns: [String] = []
+        
+        // Sender domain pattern
+        if let domain = record.fromEmail.split(separator: "@").last.map(String.init) {
+            patterns.append("sender domain: \(domain)")
+        }
+        
+        // Subject keywords
+        let subjectWords = record.subject.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count > 4 }
+        
+        if let firstKeyword = subjectWords.first {
+            patterns.append("subject keyword: \(firstKeyword)")
+        }
+        
+        return patterns.joined(separator: ", ")
+    }
+    
+    /// Check if email domain matches company domain
+    private func isCompanyEmailDomain(_ domain: String) -> Bool {
+        let companyDomains = ["graysonmusicgroup.com", "graysonmusic.com"]
+        return companyDomains.contains(domain.lowercased())
+    }
+    
+    // MARK: - Intelligence Engine Integration
+    
+    /// Feed classification data to intelligence engines for unified tracking
+    private func feedToIntelligenceEngines(
+        emailId: String,
+        threadId: String?,
+        subject: String?,
+        from: String?,
+        classificationType: String?,
+        docketNumber: String?,
+        jobName: String?,
+        metadata: DocketEmailClassification.ExtractedMetadata?
+    ) async {
+        // Track email in context engine
+        CodeMindContextEngine.shared.trackEmail(
+            emailId: emailId,
+            threadId: threadId,
+            subject: subject ?? "",
+            from: from ?? "",
+            date: Date(),
+            snippet: nil,
+            classificationResult: classificationType,
+            docketNumber: docketNumber
+        )
+        
+        // If we have a docket, update lifecycle and add metadata
+        if let docket = docketNumber {
+            // Update docket lifecycle
+            let trigger = classificationType == "newDocket" ? "new_docket_email" : 
+                         (classificationType == "fileDelivery" ? "file_delivery" : "email_received")
+            CodeMindContextEngine.shared.updateDocketLifecycle(
+                docketNumber: docket,
+                jobName: jobName,
+                trigger: trigger,
+                emailId: emailId
+            )
+            
+            // Add metadata from email
+            CodeMindMetadataIntelligence.shared.addEmailMetadata(
+                docketNumber: docket,
+                jobName: jobName,
+                client: metadata?.client,
+                agency: metadata?.agency,
+                producer: metadata?.projectManager,
+                extractedFrom: subject ?? ""
+            )
+        }
+        
+        // Run data fusion in background (debounced by the provider)
+        Task {
+            await CodeMindDataFusion.shared.runFusion()
+        }
+        
+        CodeMindLogger.shared.log(.debug, "Fed classification to intelligence engines", category: .general, metadata: [
+            "emailId": emailId,
+            "type": classificationType ?? "unknown",
+            "docket": docketNumber ?? "none"
+        ])
     }
 }
 

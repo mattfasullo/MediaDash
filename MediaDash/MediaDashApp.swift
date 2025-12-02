@@ -16,7 +16,12 @@ struct MediaDashApp: App {
         // Initialize file logger on app startup
         // This creates the log file at ~/Library/Logs/MediaDash/mediadash-debug.log
         // The AI assistant can read this file directly to debug issues
-        _ = FileLogger.shared
+        // Skip initialization in preview/playground mode to avoid blocking
+        let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != nil
+        let isPlayground = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PLAYGROUNDS"] != nil
+        if !isPreview && !isPlayground {
+            _ = FileLogger.shared
+        }
     }
 
     var body: some Scene {
@@ -78,6 +83,8 @@ struct MediaDashApp: App {
         window.toolbar = nil
         // Set content view to extend into title bar area
         window.contentView?.wantsLayer = true
+        // Set window background to match content to remove grey bar
+        window.backgroundColor = NSColor.windowBackgroundColor
         // Keep window buttons but ensure they don't affect layout
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
@@ -133,6 +140,8 @@ struct WindowAccessor: NSViewRepresentable {
         window.styleMask.remove(.resizable)
         window.toolbar = nil
         window.contentView?.wantsLayer = true
+        // Set window background to match content to remove grey bar
+        window.backgroundColor = NSColor.windowBackgroundColor
         // Set fixed window size (compact mode only)
         let fixedSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
         window.minSize = fixedSize

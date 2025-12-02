@@ -63,8 +63,17 @@ struct SharedKeychainService {
     }
     
     /// Check if current user is authenticated as a Grayson Music Group employee
+    /// Now uses whitelist of verified Gmail-authenticated emails
     static func isCurrentUserGraysonEmployee() -> Bool {
         let currentUser = getCurrentUserEmail()
+        
+        // First check whitelist (most secure - only Gmail-authenticated emails)
+        if GraysonEmployeeWhitelist.shared.isWhitelisted(currentUser) {
+            return true
+        }
+        
+        // Fallback to domain check for backward compatibility
+        // (but this should eventually be removed)
         return isGraysonMusicGroupUser(currentUser)
     }
     

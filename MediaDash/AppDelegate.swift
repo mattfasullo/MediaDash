@@ -103,6 +103,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.styleMask.insert(.fullSizeContentView)
         window.toolbar = nil
         window.contentView?.wantsLayer = true
+        // Set window background to match content to remove grey bar
+        window.backgroundColor = NSColor.windowBackgroundColor
         // Set content border thickness to 0 to remove any grey bar
         window.setContentBorderThickness(0, for: .minY)
         // Keep only close button visible (no minimize or zoom)

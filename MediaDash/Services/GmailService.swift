@@ -376,11 +376,75 @@ class GmailService: ObservableObject {
         }
     }
     
+    /// Download an image from a URL and convert it to a base64 data URI
+    /// - Parameter imageURL: The URL of the image to download
+    /// - Returns: A data URI string (e.g., "data:image/jpeg;base64,...") or nil if download fails
+    private func downloadImageAsDataURI(from imageURL: URL) async throws -> String? {
+        // Create request with User-Agent header
+        var request = URLRequest(url: imageURL)
+        request.setValue("MediaDash/1.0", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15.0
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            return nil
+        }
+        
+        // Determine MIME type from Content-Type header or file extension
+        var mimeType = "image/jpeg" // default
+        
+        if let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type"),
+           contentType.hasPrefix("image/") {
+            mimeType = contentType
+        } else {
+            // Fall back to file extension
+            let pathExtension = imageURL.pathExtension.lowercased()
+            switch pathExtension {
+            case "jpg", "jpeg":
+                mimeType = "image/jpeg"
+            case "png":
+                mimeType = "image/png"
+            case "gif":
+                mimeType = "image/gif"
+            case "webp":
+                mimeType = "image/webp"
+            case "bmp":
+                mimeType = "image/bmp"
+            case "svg":
+                mimeType = "image/svg+xml"
+            default:
+                // Try to detect from data
+                if data.count >= 4 {
+                    let header = data.prefix(4)
+                    if header.starts(with: [0xFF, 0xD8, 0xFF]) {
+                        mimeType = "image/jpeg"
+                    } else if header.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+                        mimeType = "image/png"
+                    } else if header.starts(with: [0x47, 0x49, 0x46]) {
+                        mimeType = "image/gif"
+                    } else if header.starts(with: [0x52, 0x49, 0x46, 0x46]) {
+                        mimeType = "image/webp"
+                    }
+                }
+            }
+        }
+        
+        // Convert to base64
+        let base64String = data.base64EncodedString()
+        
+        // Return as data URI
+        return "data:\(mimeType);base64,\(base64String)"
+    }
+    
     /// Send a reply email
+    /// IMPORTANT: This reply ONLY goes to the specified recipients in the 'to' parameter.
+    /// All other recipients (CC, BCC) are explicitly removed - it will NOT go to clients.
     /// - Parameters:
     ///   - messageId: The ID of the original message to reply to
     ///   - body: The email body text
-    ///   - to: Array of recipient email addresses (will replace all recipients)
+    ///   - to: Array of recipient email addresses (ONLY these recipients will receive the email)
     ///   - imageURL: Optional image URL to embed in the email (creates HTML email)
     /// - Returns: The sent message ID
     func sendReply(messageId: String, body: String, to: [String], imageURL: URL? = nil) async throws -> String {
@@ -411,6 +475,9 @@ class GmailService: ObservableObject {
             emailString += "From: \(displayName) <\(email)>\r\n"
         }
         
+        // CRITICAL: Only send to specified recipients (media email only)
+        // We only set the To header - no CC/BCC headers are included to ensure
+        // this email ONLY goes to the specified recipients and removes everyone else
         emailString += "To: \(to.joined(separator: ", "))\r\n"
         
         // Get original subject and add "Re:" if not already present
@@ -428,8 +495,20 @@ class GmailService: ObservableObject {
         
         // Thread ID is automatically handled by Gmail when replying (via In-Reply-To and References headers)
         
-        // If imageURL is provided, create HTML email, otherwise plain text
+        // If imageURL is provided, download and embed as base64 data URI
+        var imageDataURI: String? = nil
         if let imageURL = imageURL {
+            // Download image and convert to data URI
+            do {
+                imageDataURI = try await downloadImageAsDataURI(from: imageURL)
+            } catch {
+                // If image download fails, log but continue without image
+                print("GmailService: Failed to download image from \(imageURL): \(error.localizedDescription)")
+            }
+        }
+        
+        // Create HTML email if we have an image, otherwise plain text
+        if let dataURI = imageDataURI {
             // Create multipart/alternative email with both HTML and plain text
             let boundary = "----=_Part_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
             
@@ -456,16 +535,12 @@ class GmailService: ObservableObject {
                 .replacingOccurrences(of: "\"", with: "&quot;")
                 .replacingOccurrences(of: "'", with: "&#39;")
             
-            // Escape image URL for HTML attribute
-            let escapedImageURL = imageURL.absoluteString
-                .replacingOccurrences(of: "&", with: "&amp;")
-                .replacingOccurrences(of: "\"", with: "&quot;")
-            
+            // Embed image as base64 data URI directly in HTML
             let htmlBody = """
             <html>
             <body>
                 <p>\(escapedBody)</p>
-                <p><img src="\(escapedImageURL)" alt="Image" style="max-width: 100%; height: auto;" /></p>
+                <p><img src="\(dataURI)" alt="Image" style="max-width: 100%; height: auto;" /></p>
                 <hr>
                 <p style="font-size: 12px; color: #666;">Grabbed via MediaDash</p>
             </body>

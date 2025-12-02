@@ -41,13 +41,18 @@ struct GatekeeperView: View {
         }
         .onAppear {
             // Ensure window is configured when view appears
-            DispatchQueue.main.async {
-                if let window = NSApplication.shared.windows.first {
-                    window.titlebarAppearsTransparent = true
-                    window.titleVisibility = .hidden
-                    window.styleMask.insert(.fullSizeContentView)
-                    window.toolbar = nil
-                    window.invalidateShadow()
+            // Skip in preview/playground mode to avoid AppKit access issues
+            let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != nil
+            let isPlayground = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PLAYGROUNDS"] != nil
+            if !isPreview && !isPlayground {
+                DispatchQueue.main.async {
+                    if let window = NSApplication.shared.windows.first {
+                        window.titlebarAppearsTransparent = true
+                        window.titleVisibility = .hidden
+                        window.styleMask.insert(.fullSizeContentView)
+                        window.toolbar = nil
+                        window.invalidateShadow()
+                    }
                 }
             }
         }
@@ -276,9 +281,7 @@ struct AuthenticatedRootView: View {
         "Stirring the data soup…",
         "Oil-ing the virtual gears…",
         "Pressurizing the pipes…",
-        "Inflating the progress balloon…",
         "Almost doing something important…",
-        "Pretending to boot faster than we are…",
         "Calculating how long this will take (forever)…",
         "Smoothing out the rough edges…",
         "Removing evidence of previous crashes…",
@@ -286,9 +289,7 @@ struct AuthenticatedRootView: View {
         "Doing app things you definitely wouldn't understand…",
         "Deciding which bugs to keep…",
         "Loading… because you asked nicely",
-        "Herding the digital cats…",
         "Untangling the spaghetti code…",
-        "Asking the server for a favour…",
         "Rewiring the imaginary neurons…",
         "Consulting the prophecy…",
         "Summoning the progress spirits…",
@@ -535,6 +536,18 @@ struct AuthenticatedRootView: View {
 
 // MARK: - Preview
 
-#Preview {
-    GatekeeperView()
+#Preview("Login View") {
+    // Preview the login view directly to avoid heavy initialization
+    // This prevents timeout issues with SessionManager and SettingsManager
+    LoginView(sessionManager: SessionManager())
+        .frame(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
+}
+
+#Preview("Onboarding View") {
+    // Preview onboarding view
+    OnboardingView(
+        hasCompletedOnboarding: .constant(false),
+        settingsManager: SettingsManager()
+    )
+    .frame(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
 }

@@ -211,18 +211,44 @@ class NotificationCenter: ObservableObject {
     ///   - notification: The notification to reclassify
     ///   - newType: The new notification type
     ///   - autoArchive: Whether to automatically archive junk/skipped notifications
-    func reclassify(_ notification: Notification, to newType: NotificationType, autoArchive: Bool = true) {
+    ///   - emailScanningService: Optional service for learning from re-classification
+    func reclassify(
+        _ notification: Notification,
+        to newType: NotificationType,
+        autoArchive: Bool = true,
+        emailScanningService: EmailScanningService? = nil
+    ) async {
         guard let index = notifications.firstIndex(where: { $0.id == notification.id }) else {
             return
         }
         
         let oldType = notifications[index].type
+        
+        // If changing from file delivery to new docket, the notification should "move" sections
+        // Reset status if it was archived so it appears in the new section
+        if oldType == .mediaFiles && newType == .newDocket {
+            if notifications[index].status == .dismissed {
+                notifications[index].status = .pending
+                notifications[index].archivedAt = nil
+            }
+        }
+        // Similarly, if changing from new docket to file delivery, reset if archived
+        else if oldType == .newDocket && newType == .mediaFiles {
+            if notifications[index].status == .dismissed {
+                notifications[index].status = .pending
+                notifications[index].archivedAt = nil
+            }
+        }
+        
         notifications[index].type = newType
         
         // Clear custom type name if not using custom type
         if newType != .custom {
             notifications[index].customTypeName = nil
         }
+        
+        // Clear old CodeMind metadata since this is a manual correction
+        notifications[index].codeMindClassification = nil
         
         // Update title to reflect new type
         switch newType {
@@ -251,6 +277,33 @@ class NotificationCenter: ObservableObject {
         
         print("📋 [NotificationCenter] Reclassified notification from \(oldType.displayName) to \(newType.displayName)")
         
+        // Mark email as read when re-classifying to anything other than "New Docket" or "File Delivery"
+        // (Re-classifying is for algorithm learning, so we mark as read to indicate user interaction)
+        if newType != .newDocket && newType != .mediaFiles,
+           let emailId = notifications[index].emailId,
+           let emailService = emailScanningService {
+            Task {
+                do {
+                    try await emailService.gmailService.markAsRead(messageId: emailId)
+                    print("📋 [NotificationCenter] Marked email \(emailId) as read after re-classification")
+                } catch {
+                    print("📋 [NotificationCenter] Failed to mark email as read: \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        // Learn from the re-classification (teach CodeMind)
+        if let emailService = emailScanningService {
+            await emailService.learnFromReclassification(
+                notification: notifications[index],
+                oldType: oldType,
+                newType: newType,
+                emailSubject: notifications[index].emailSubject,
+                emailBody: notifications[index].emailBody,
+                emailFrom: notifications[index].sourceEmail
+            )
+        }
+        
         updateUnreadCount()
         saveNotifications()
     }
@@ -260,7 +313,13 @@ class NotificationCenter: ObservableObject {
     ///   - notification: The notification to reclassify
     ///   - customTypeName: The custom classification name
     ///   - autoArchive: Whether to automatically archive the notification
-    func reclassify(_ notification: Notification, toCustomType customTypeName: String, autoArchive: Bool = false) {
+    ///   - emailScanningService: Optional service for learning from re-classification
+    func reclassify(
+        _ notification: Notification,
+        toCustomType customTypeName: String,
+        autoArchive: Bool = false,
+        emailScanningService: EmailScanningService? = nil
+    ) async {
         guard let index = notifications.firstIndex(where: { $0.id == notification.id }) else {
             return
         }
@@ -272,6 +331,9 @@ class NotificationCenter: ObservableObject {
         notifications[index].type = .custom
         notifications[index].customTypeName = trimmedName
         notifications[index].title = trimmedName
+        
+        // Clear old CodeMind metadata since this is a manual correction
+        notifications[index].codeMindClassification = nil
         
         // Add to recent custom classifications
         RecentCustomClassificationsManager.shared.add(trimmedName)
@@ -285,18 +347,44 @@ class NotificationCenter: ObservableObject {
         let oldTypeName = oldType == .custom ? (notifications[index].customTypeName ?? "Custom") : oldType.displayName
         print("📋 [NotificationCenter] Reclassified notification from \(oldTypeName) to custom type '\(trimmedName)'")
         
+        // Mark email as read when re-classifying to custom type (anything other than "New Docket" or "File Delivery")
+        // (Re-classifying is for algorithm learning, so we mark as read to indicate user interaction)
+        if let emailId = notifications[index].emailId,
+           let emailService = emailScanningService {
+            Task {
+                do {
+                    try await emailService.gmailService.markAsRead(messageId: emailId)
+                    print("📋 [NotificationCenter] Marked email \(emailId) as read after custom re-classification")
+                } catch {
+                    print("📋 [NotificationCenter] Failed to mark email as read: \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        // Learn from the re-classification (teach CodeMind)
+        if let emailService = emailScanningService {
+            await emailService.learnFromReclassification(
+                notification: notifications[index],
+                oldType: oldType,
+                newType: .custom,
+                emailSubject: notifications[index].emailSubject,
+                emailBody: notifications[index].emailBody,
+                emailFrom: notifications[index].sourceEmail
+            )
+        }
+        
         updateUnreadCount()
         saveNotifications()
     }
     
     /// Skip a notification (removes from active list without classification)
-    func skip(_ notification: Notification) {
-        reclassify(notification, to: .skipped, autoArchive: true)
+    func skip(_ notification: Notification, emailScanningService: EmailScanningService? = nil) async {
+        await reclassify(notification, to: .skipped, autoArchive: true, emailScanningService: emailScanningService)
     }
     
     /// Mark a notification as junk (ads, promos, spam)
-    func markAsJunk(_ notification: Notification) {
-        reclassify(notification, to: .junk, autoArchive: true)
+    func markAsJunk(_ notification: Notification, emailScanningService: EmailScanningService? = nil) async {
+        await reclassify(notification, to: .junk, autoArchive: true, emailScanningService: emailScanningService)
     }
     
     /// Reset notification to original values by re-fetching and re-parsing the email

@@ -168,14 +168,16 @@ struct CodeMindChatView: View {
                     return
                 }
                 
-                let projectPath = "/Users/mattfasullo/Projects/MediaDash"
-                
-                // Use a separate storage path for chat to avoid conflicts with email classifier
-                // This prevents issues if the main CodeMind instance has corrupted data
+                // Use Application Support directory for CodeMind storage (works on any machine)
                 let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                let chatStorageBase = appSupport.appendingPathComponent("CodeMindChat", isDirectory: true).path
-                let chatKnowledgePath = (chatStorageBase as NSString).appendingPathComponent("knowledge")
-                let chatLearningPath = (chatStorageBase as NSString).appendingPathComponent("learning")
+                let chatStorageBase = appSupport.appendingPathComponent("MediaDash/CodeMindChat", isDirectory: true)
+                
+                // Ensure the directories exist
+                try? FileManager.default.createDirectory(at: chatStorageBase, withIntermediateDirectories: true)
+                
+                let projectPath = chatStorageBase.path
+                let chatKnowledgePath = chatStorageBase.appendingPathComponent("knowledge").path
+                let chatLearningPath = chatStorageBase.appendingPathComponent("learning").path
                 
                 CodeMindLogger.shared.log(.info, "Initializing CodeMind for chat with isolated storage", category: .general)
                 

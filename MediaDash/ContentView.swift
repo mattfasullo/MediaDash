@@ -38,9 +38,6 @@ struct ContentView: View {
 
     @FocusState private var focusedButton: ActionButtonFocus?
 
-    // Easter egg: Windows 95 theme
-    @State private var logoClickCount = 0
-
     // Keyboard mode tracking
     @State private var isKeyboardMode = false
     @State private var isCommandKeyHeld = false
@@ -224,14 +221,12 @@ struct ContentView: View {
                             showQuickSearchSheet: $showQuickSearchSheet,
                             showSettingsSheet: $showSettingsSheet,
                             showVideoConverterSheet: $showVideoConverterSheet,
-                            logoClickCount: $logoClickCount,
                             notificationCenter: notificationCenter,
                             showNotificationCenter: $showNotificationCenter,
                             wpDate: wpDate,
                             prepDate: prepDate,
                             dateFormatter: dateFormatter,
                             attempt: attempt,
-                            cycleTheme: cycleTheme,
                             cacheManager: cacheManager
                         )
                         
