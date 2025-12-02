@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.8.0</title>
+            <description><![CDATA[
+                <p>CodeMind Brain Data Provider: Advanced data aggregation and intelligence layer. CodeMind Context Engine: Enhanced context processing and analysis. CodeMind Data Fusion: Multi-source data integration capabilities. CodeMind File Intelligence: Sophisticated file analysis and insights. CodeMind Metadata Intelligence: Enhanced metadata processing and extraction. CodeMind Session Analyzer: Deep session insights and pattern recognition. Email Feedback Tracker: Comprehensive email feedback management system. Enhanced CodeMind Email Classifier: Improved classification accuracy and performance. Enhanced Email Scanning Service: Better scanning capabilities and reliability. Improved CodeMind Brain View: Expanded functionality and user experience. Enhanced notification system: Better UI components and interaction. Improved CodeMind Logger: Enhanced logging infrastructure. Rule Editor View: New interface for managing classification rules. Grayson Employee Whitelist: Employee filtering functionality. Various bug fixes and performance improvements.</p>
+            ]]></description>
+            <pubDate>Tue, 02 Dec 2025 23:34:09 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.8.0/MediaDash.zip"
+                sparkle:version="80"
+                sparkle:shortVersionString="0.8.0"
+                sparkle:edSignature="WTTtf+Fc9P9sZN/TNcFfN1AjVMYZCEwtjrECbzw2bI8q+MK29qd3t0m7S1gpH+bxZZNjC7IqWpN5Daks77WhDA=="
+                length="15264148"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.7.1</title>
             <description><![CDATA[
                 <h2>What's New in 0.7.1</h2><ul><li>Fixed search results disappearing after pressing Enter</li><li>Excluded newlines from key handlers to prevent exact match filtering from breaking</li></ul>
