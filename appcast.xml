@@ -7,6 +7,22 @@
         <item>
             <title>Version 0.9.0</title>
             <description><![CDATA[
+                <p>Fixed window resizing: Windows are now properly locked to their default sizes in both compact and dashboard modes. Fullscreen mode: Entering fullscreen automatically switches to dashboard mode for optimal viewing. Mode switching: Added compact mode button in dashboard view to easily switch back to compact mode. Automatic window resizing: Window automatically resizes to appropriate size when switching between compact and dashboard modes. UI improvements: Fixed sidebar background to extend fully to top of window, restored all traffic light buttons. Cleanup: Removed Ready. status text from bottom right corner. Window management: Improved window delegate handling to prevent unwanted resizing.</p>
+            ]]></description>
+            <pubDate>Fri, 05 Dec 2025 06:07:43 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.0/MediaDash.zip"
+                sparkle:version="90"
+                sparkle:shortVersionString="0.9.0"
+                sparkle:edSignature="LnpsH0foXdCPlhggup3rka4R4UAspytC5UqhtCfx2OMiZeCMRLPodTOL4tIm2UbIDbkZFrKqBogdaHMMC5pmBw=="
+                length="15879558"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 0.9.0</title>
+            <description><![CDATA[
                 <h2>What's New in 0.9.0</h2>
                 <ul>
                     <li>Fixed window resizing: Windows are now properly locked to their default sizes in both compact and dashboard modes</li>
