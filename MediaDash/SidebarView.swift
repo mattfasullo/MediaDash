@@ -73,6 +73,10 @@ struct SidebarView: View {
     
     var body: some View {
         ZStack(alignment: .topTrailing) {
+            // Background that extends to top
+            currentTheme.sidebarBackground
+                .ignoresSafeArea(.all, edges: .top)
+            
             VStack(alignment: .leading, spacing: 12) {
                 // App Logo
                 logoImage
@@ -200,6 +204,7 @@ struct SidebarView: View {
             .padding(16)
             .frame(width: 300)
             .background(currentTheme.sidebarBackground)
+            .frame(maxHeight: .infinity, alignment: .top)
             .clipped() // Prevent overflow
             .animation(.easeInOut(duration: 0.2), value: layoutMode)
 
@@ -1179,7 +1184,7 @@ struct CodeMindChatButton: View {
         case .disabled:
             return .gray
         case .error:
-            return .orange
+            return .red
         case .quotaExceeded:
             return .orange
         case .unavailable:
@@ -1302,7 +1307,7 @@ struct CodeMindStatusPopover: View {
         case .disabled:
             return .gray
         case .error:
-            return .orange
+            return .red
         case .quotaExceeded:
             return .orange
         case .unavailable:

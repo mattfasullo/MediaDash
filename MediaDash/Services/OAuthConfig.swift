@@ -10,10 +10,9 @@ import Foundation
 /// Each user will still authenticate with their own account.
 struct OAuthConfig {
     // MARK: - Asana OAuth Credentials
-    // TODO: Replace with your actual Asana OAuth credentials
-    // Get them from: https://app.asana.com/0/my-apps
-    static let asanaClientID = "YOUR_ASANA_CLIENT_ID_HERE"
-    static let asanaClientSecret = "YOUR_ASANA_CLIENT_SECRET_HERE"
+    // Configured for Grayson organization
+    static let asanaClientID = "1212059930309267"
+    static let asanaClientSecret = "34e7d1f8261eaac6f95f4d38ae4b07ac"
     
     // MARK: - Gmail OAuth Credentials
     // TODO: Replace with your actual Gmail OAuth credentials

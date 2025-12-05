@@ -153,6 +153,9 @@ class CodeMindBrainDataProvider: ObservableObject {
     
     private var cancellables = Set<AnyCancellable>()
     
+    // Flag to prevent re-entrant refresh calls (avoids cascade effects)
+    private var isRefreshing = false
+    
     private init() {
         setupSubscriptions()
     }
@@ -160,48 +163,34 @@ class CodeMindBrainDataProvider: ObservableObject {
     // MARK: - Subscriptions
     
     private func setupSubscriptions() {
-        // Subscribe to data changes from all engines
-        contextEngine.objectWillChange
-            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                Task { await self?.refreshNodes() }
-            }
-            .store(in: &cancellables)
-        
-        fileIntelligence.objectWillChange
-            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                Task { await self?.refreshNodes() }
-            }
-            .store(in: &cancellables)
-        
-        sessionAnalyzer.objectWillChange
-            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                Task { await self?.refreshNodes() }
-            }
-            .store(in: &cancellables)
-        
-        dataFusion.objectWillChange
-            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                Task { await self?.refreshNodes() }
-            }
-            .store(in: &cancellables)
-        
-        rulesManager.objectWillChange
-            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                Task { await self?.refreshNodes() }
-            }
-            .store(in: &cancellables)
+        // Merge all engine publishers into a single stream with a unified debounce
+        // This prevents cascade effects when multiple engines update simultaneously
+        Publishers.MergeMany(
+            contextEngine.objectWillChange.map { _ in () },
+            fileIntelligence.objectWillChange.map { _ in () },
+            sessionAnalyzer.objectWillChange.map { _ in () },
+            dataFusion.objectWillChange.map { _ in () },
+            rulesManager.objectWillChange.map { _ in () }
+        )
+        .debounce(for: .milliseconds(750), scheduler: DispatchQueue.main) // Increased debounce for stability
+        .sink { [weak self] _ in
+            guard let self = self else { return }
+            // Prevent re-entrant calls during an active refresh
+            guard !self.isRefreshing else { return }
+            Task { await self.refreshNodes() }
+        }
+        .store(in: &cancellables)
     }
     
     // MARK: - Node Generation
     
     /// Refresh all nodes from intelligence engines
     func refreshNodes() async {
+        // Prevent re-entrant calls
+        guard !isRefreshing else { return }
+        isRefreshing = true
         isLoading = true
+        defer { isRefreshing = false }
         
         var newNodes: [BrainNode] = []
         var newConnections: [BrainConnection] = []
@@ -700,50 +689,7 @@ class CodeMindBrainDataProvider: ObservableObject {
             }
         }
         
-        // 10. Rule nodes (configuration/rules)
-        if showRules {
-            totalRulesCount = rulesManager.rules.count
-            let rules = Array(rulesManager.rules)
-            for (i, rule) in rules.enumerated() {
-                let angle = angleForIndex(i, total: rules.count, ring: 2, offset: .pi / 2)
-                let position = positionForAngle(angle, ring: 2, totalNodes: rules.count)
-                
-                let node = BrainNode(
-                    id: "rule_\(rule.id.uuidString)",
-                    title: rule.name.isEmpty ? rule.pattern : rule.name,
-                    subtitle: rule.type.rawValue,
-                    category: .rule,
-                    confidence: rule.weight,
-                    position: position,
-                    ruleId: rule.id,
-                    hasIssue: !rule.isEnabled,
-                    isHighlighted: false,
-                    detailData: [
-                        "Name": rule.name.isEmpty ? "Untitled" : rule.name,
-                        "Type": rule.type.rawValue,
-                        "Pattern": rule.pattern,
-                        "Action": rule.action.rawValue,
-                        "Weight": String(format: "%.2f", rule.weight),
-                        "Enabled": rule.isEnabled ? "Yes" : "No",
-                        "Description": rule.description.isEmpty ? "None" : rule.description
-                    ]
-                )
-                newNodes.append(node)
-                
-                // Connect to center
-                newConnections.append(BrainConnection(
-                    id: UUID(),
-                    fromId: centerNode.id,
-                    toId: node.id,
-                    strength: rule.weight,
-                    connectionType: .parentChild,
-                    color: BrainNodeCategory.rule.color,
-                    isAnimated: false
-                ))
-                
-                nodeIndex += 1
-            }
-        }
+        // NOTE: Rule nodes are already added in section 6 above - removed duplicate section 10
         
         // Update published state
         nodes = newNodes

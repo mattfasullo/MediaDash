@@ -90,7 +90,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
         return formatter.string(fromByteCount: size)
     }
 
-    private static func countFilesRecursively(in directory: URL) -> Int {
+    private static func countFilesRecursively(in directory: URL, maxFiles: Int = 10000) -> Int {
         guard let enumerator = FileManager.default.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -101,6 +101,10 @@ struct FileItem: Identifiable, Hashable, Sendable {
 
         var count = 0
         for case let fileURL as URL in enumerator {
+            // Bail early if we've counted enough files to prevent UI freeze
+            if count >= maxFiles {
+                return count
+            }
             if let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
                let isRegularFile = resourceValues.isRegularFile,
                isRegularFile {

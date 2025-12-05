@@ -60,7 +60,7 @@ struct NotificationCenterView: View {
                 if exists {
                     // Remove the notification asynchronously to avoid blocking view updates
                     Task { @MainActor in
-                        notificationCenter.remove(notification)
+                        notificationCenter.remove(notification, emailScanningService: emailScanningService)
                     }
                 }
                 return !exists
@@ -758,8 +758,10 @@ struct NotificationCenterView: View {
             }
         }
         .frame(width: 400, height: 500)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .cornerRadius(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(nsColor: .windowBackgroundColor))
+        )
         .clipShape(RoundedRectangle(cornerRadius: 12)) // Ensure content is clipped to rounded corners
         .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
         .onChange(of: activeNotifications.count) { oldCount, newCount in
@@ -1165,10 +1167,11 @@ struct NotificationRowView: View {
     @State private var pendingEmailIdForReply: String?
     @State private var isSendingReply = false
     @State private var showFeedbackDialog = false
+    @State private var isEmailPreviewButtonHovered = false
     @State private var feedbackCorrection = ""
     @State private var feedbackComment = ""
     @State private var isSubmittingFeedback = false
-    @State private var feedbackSubmitted = false
+    @State private var hasSubmittedFeedback = false // Track locally to force UI refresh
     @State private var showCustomClassificationDialog = false
     @State private var customClassificationText = ""
     
@@ -1196,674 +1199,15 @@ struct NotificationRowView: View {
     }
     
     private func notificationBody(_ notification: Notification) -> some View {
+        notificationBodyContent(notification)
+    }
+    
+    @ViewBuilder
+    private func notificationBodyContent(_ notification: Notification) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: iconForType(notification.type))
-                    .foregroundColor(colorForType(notification.type))
-                    .font(.system(size: 14))
-                
-                Text(notification.title)
-                    .font(.system(size: 13, weight: .medium))
-                
-                Spacer()
-                
-                Text(timeAgo(notification.timestamp))
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                
-                // Grabbed and Priority Assist indicators
-                if notification.type == .mediaFiles {
-                    if notification.isPriorityAssist {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.red)
-                            Text("Priority Assist")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(.red)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(4)
-                    } else if notification.isGrabbed {
-                        Button(action: {
-                            notificationCenter.archive(notification)
-                        }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.green)
-                                if let grabbedBy = notification.grabbedBy {
-                                    Text("Grabbed by \(extractProducerName(from: grabbedBy))")
-                                        .font(.system(size: 9))
-                                        .foregroundColor(.green)
-                                } else {
-                                    Text("Grabbed")
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .foregroundColor(.green)
-                                }
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(isGrabbedBadgeHovered ? Color.green.opacity(0.2) : Color.green.opacity(0.1))
-                            .cornerRadius(4)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Click to archive notification")
-                        .onHover { hovering in
-                            isGrabbedBadgeHovered = hovering
-                            if hovering {
-                                NSCursor.pointingHand.push()
-                            } else {
-                                NSCursor.pop()
-                            }
-                        }
-                    }
-                }
-                
-                if notification.status == .pending {
-                    Circle()
-                        .fill(Color.blue)
-                        .frame(width: 8, height: 8)
-                }
-            }
-            
-        // Show only docket number and job name for new docket notifications
-        if notification.type == .newDocket {
-            VStack(alignment: .leading, spacing: 4) {
-                if let docketNumber = notification.docketNumber, docketNumber != "TBD" {
-                    if let jobName = notification.jobName {
-                        Text("Docket \(docketNumber): \(jobName)")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                        
-                        // Comprehensive check for docket existence
-                        let existenceInfo = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
-                        
-                        if existenceInfo.existsAnywhere {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.orange)
-                                    Text("Docket already exists in \(existenceInfo.existenceDescription)")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.orange)
-                                }
-                                
-                                // Show existence badges
-                                HStack(spacing: 6) {
-                                    if existenceInfo.existsInWorkPicture {
-                                        HStack(spacing: 3) {
-                                            Image(systemName: "folder.fill")
-                                                .font(.system(size: 8))
-                                            Text("Work Picture")
-                                                .font(.system(size: 9, weight: .medium))
-                                        }
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.blue.opacity(0.8))
-                                        .cornerRadius(4)
-                                    }
-                                    
-                                    if existenceInfo.existsInAsana {
-                                        HStack(spacing: 3) {
-                                            Image(systemName: "list.bullet.rectangle")
-                                                .font(.system(size: 8))
-                                            Text("Asana")
-                                                .font(.system(size: 9, weight: .medium))
-                                            if let asanaInfo = existenceInfo.asanaDocketInfo {
-                                                Text("(\(asanaInfo.jobName))")
-                                                    .font(.system(size: 8))
-                                                    .opacity(0.8)
-                                            }
-                                        }
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.purple.opacity(0.8))
-                                        .cornerRadius(4)
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        Text("Docket \(docketNumber)")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                    }
-                } else if let jobName = notification.jobName {
-                    Text("\(jobName) (Docket number pending)")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                } else {
-                    Text(notification.message)
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                
-                // Show producer (sender) information
-                if let sourceEmail = notification.sourceEmail, !sourceEmail.isEmpty {
-                    let producerName = extractProducerName(from: sourceEmail)
-                    HStack(spacing: 4) {
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary.opacity(0.7))
-                        Text("Producer: \(producerName)")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary.opacity(0.8))
-                    }
-                }
-                
-                // Show CodeMind confidence indicator
-                if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
-                    let confidence = codeMindMeta.confidence
-                    let threshold = settingsManager.currentSettings.codeMindReviewThreshold
-                    let isLowConfidence = confidence < threshold
-                    
-                    HStack(spacing: 4) {
-                        Image(systemName: isLowConfidence ? "exclamationmark.triangle.fill" : "brain.head.profile")
-                            .font(.system(size: 9))
-                            .foregroundColor(isLowConfidence ? .orange : .blue.opacity(0.7))
-                        Text("Confidence: \(Int(confidence * 100))%")
-                            .font(.system(size: 10, weight: isLowConfidence ? .semibold : .regular))
-                            .foregroundColor(isLowConfidence ? .orange : .secondary.opacity(0.8))
-                        if isLowConfidence {
-                            Text("(Needs Review)")
-                                .font(.system(size: 9))
-                                .foregroundColor(.orange)
-                        }
-                    }
-                    .padding(.top, 2)
-                }
-                
-                // Email preview (expands on click)
-                if notification.emailSubject != nil || notification.emailBody != nil {
-                    // Visual indicator that notification is expandable
-                    HStack(spacing: 4) {
-                        Image(systemName: isEmailPreviewExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary.opacity(0.6))
-                        Text(isEmailPreviewExpanded ? "Hide email" : "Click to view email")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary.opacity(0.7))
-                    }
-                    .padding(.top, 2)
-                    
-                    if isEmailPreviewExpanded {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Divider()
-                                .padding(.vertical, 4)
-                            
-                            Text("Email Content")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(.secondary)
-                            
-                            // Email subject
-                            if let subject = notification.emailSubject, !subject.isEmpty {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Subject:")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundColor(.secondary)
-                                    SelectableTextView(
-                                        text: subject,
-                                        font: .systemFont(ofSize: 11),
-                                        selectedText: $selectedTextFromEmail
-                                    )
-                                    .frame(height: 40)
-                                    .padding(8)
-                                    .background(Color(nsColor: .textBackgroundColor))
-                                    .cornerRadius(6)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                                    )
-                                    .contextMenu {
-                                        notificationContextMenuContent(notification: notification)
-                                    }
-                                }
-                            }
-                            
-                            // Email body
-                            if let body = notification.emailBody, !body.isEmpty {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Body:")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundColor(.secondary)
-                                    SelectableTextView(
-                                        text: body,
-                                        font: .systemFont(ofSize: 11),
-                                        selectedText: $selectedTextFromEmail
-                                    )
-                                    .frame(height: 400)
-                                    .padding(8)
-                                    .background(Color(nsColor: .textBackgroundColor))
-                                    .cornerRadius(6)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                                    )
-                                    .contextMenu {
-                                        notificationContextMenuContent(notification: notification)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.top, 4)
-                    }
-                }
-                
-                // CodeMind feedback UI (if CodeMind was used)
-                if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
-                    Divider()
-                        .padding(.vertical, 4)
-                    
-                    // Check if feedback already exists for this email
-                    let hasExistingFeedback = notification.emailId != nil && EmailFeedbackTracker.shared.hasFeedback(for: notification.emailId!)
-                    
-                    HStack(spacing: 8) {
-                        Image(systemName: "brain.head.profile")
-                            .font(.system(size: 10))
-                            .foregroundColor(.purple)
-                        Text("AI Classification")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(.secondary)
-                        
-                        Text("(\(Int(codeMindMeta.confidence * 100))% confidence)")
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary.opacity(0.7))
-                        
-                        Spacer()
-                        
-                        if !feedbackSubmitted && !hasExistingFeedback {
-                            HStack(spacing: 4) {
-                                Button(action: {
-                                    Task {
-                                        await submitFeedback(notificationId: notification.id, wasCorrect: true, rating: 5)
-                                    }
-                                }) {
-                                    Image(systemName: "hand.thumbsup.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.green)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Classification was correct")
-                                
-                                Button(action: {
-                                    showFeedbackDialog = true
-                                }) {
-                                    Image(systemName: "hand.thumbsdown.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.red)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Classification was incorrect")
-                            }
-                        } else {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.green)
-                                Text(hasExistingFeedback ? "Feedback already submitted" : "Feedback submitted")
-                                    .font(.system(size: 8))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-            }
-        } else if notification.type == .mediaFiles {
-            // Media file notification content
-            // Extract links from email body if not already stored (for older notifications)
-            let extractedLinks: [String] = {
-                if let existingLinks = notification.fileLinks, !existingLinks.isEmpty {
-                    // DEBUG: Commented out for performance
-                    // print("NotificationCenterView: Using stored fileLinks: \(existingLinks)")
-                    return existingLinks
-                }
-                // Try to extract from email body if available
-                if let emailBody = notification.emailBody {
-                    // DEBUG: Commented out for performance
-                    // print("NotificationCenterView: Extracting links from email body (length: \(emailBody.count))")
-                    // print("NotificationCenterView: Email body preview: \(emailBody.prefix(500))")
-                    let extracted = FileHostingLinkDetector.extractFileHostingLinks(emailBody)
-                    // DEBUG: Commented out for performance
-                    // print("NotificationCenterView: Extracted \(extracted.count) links: \(extracted)")
-                    return extracted
-                }
-                // DEBUG: Commented out for performance
-                // print("NotificationCenterView: No email body available for link extraction")
-                return []
-            }()
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text(notification.message)
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                
-                // Show file hosting links if available
-                if !extractedLinks.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("File Links:")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(.secondary)
-                        
-                        ForEach(Array(extractedLinks.enumerated()), id: \.offset) { index, link in
-                            // Check if link is valid
-                            let isValidLink = URL(string: link) != nil
-                            
-                            if isValidLink {
-                                // Valid link - show as clickable
-                                Button(action: {
-                                    // DEBUG: Commented out for performance
-                                    // print("NotificationCenterView: Link button tapped: \(link)")
-                                    openLinkInBrowser(link)
-                                    // Show grabbed confirmation if email ID is available
-                                    if let emailId = notification.emailId {
-                                        pendingEmailIdForReply = emailId
-                                        showGrabbedConfirmation = true
-                                    }
-                                }) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "link.circle.fill")
-                                                .font(.system(size: 11))
-                                                .foregroundColor(.blue)
-                                            Text(link)
-                                                .font(.system(size: 10))
-                                                .foregroundColor(.blue)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
-                                            Spacer()
-                                            Image(systemName: "arrow.up.right.square")
-                                                .font(.system(size: 9))
-                                                .foregroundColor(.blue.opacity(0.7))
-                                        }
-                                        
-                                        // Show sender name if there are multiple links
-                                        if extractedLinks.count > 1, let sourceEmail = notification.sourceEmail {
-                                            HStack(spacing: 4) {
-                                                Image(systemName: "person.fill")
-                                                    .font(.system(size: 8))
-                                                    .foregroundColor(.secondary.opacity(0.6))
-                                                Text("From: \(extractProducerName(from: sourceEmail))")
-                                                    .font(.system(size: 9))
-                                                    .foregroundColor(.secondary.opacity(0.7))
-                                            }
-                                        }
-                                    }
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
-                                    .background(Color.blue.opacity(0.1))
-                                    .cornerRadius(6)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                .help("Click to open link in browser")
-                                .onHover { hovering in
-                                    if hovering {
-                                        NSCursor.pointingHand.push()
-                                    } else {
-                                        NSCursor.pop()
-                                    }
-                                }
-                            } else {
-                                // Invalid link - show error message with option to open email
-                                VStack(alignment: .leading, spacing: 6) {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "exclamationmark.triangle.fill")
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.orange)
-                                        Text("Link Invalid")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundColor(.orange)
-                                        Spacer()
-                                    }
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Unable to parse link from email. The link may be malformed or incomplete.")
-                                            .font(.system(size: 9))
-                                            .foregroundColor(.secondary)
-                                        
-                                        Text("Extracted: \(link.prefix(100))")
-                                            .font(.system(size: 8, design: .monospaced))
-                                            .foregroundColor(.secondary.opacity(0.7))
-                                            .lineLimit(2)
-                                    }
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    
-                                    if let emailId = notification.emailId {
-                                        Button(action: {
-                                            openEmailInBrowser(emailId: emailId)
-                                            // Show grabbed confirmation
-                                            pendingEmailIdForReply = emailId
-                                            showGrabbedConfirmation = true
-                                        }) {
-                                            HStack(spacing: 4) {
-                                                Image(systemName: "envelope.fill")
-                                                    .font(.system(size: 9))
-                                                Text("Open Email Thread")
-                                                    .font(.system(size: 9, weight: .medium))
-                                            }
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 4)
-                                            .background(Color.orange.opacity(0.1))
-                                            .cornerRadius(4)
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 4)
-                                                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-                                            )
-                                        }
-                                        .buttonStyle(.plain)
-                                        .help("Open the email in your browser to view the link")
-                                    }
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                .background(Color.orange.opacity(0.05))
-                                .cornerRadius(6)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-                                )
-                            }
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-                
-                // Show priority assist warning
-                if notification.isPriorityAssist {
-                    HStack(spacing: 4) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 9))
-                            .foregroundColor(.red)
-                        Text("Needs assistance - could not grab file")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.red)
-                    }
-                    .padding(.top, 2)
-                }
-                
-                // CodeMind feedback UI (if CodeMind was used)
-                if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
-                    Divider()
-                        .padding(.vertical, 4)
-                    
-                    // Check if feedback already exists for this email
-                    let hasExistingFeedback = notification.emailId != nil && EmailFeedbackTracker.shared.hasFeedback(for: notification.emailId!)
-                    
-                    HStack(spacing: 8) {
-                        Image(systemName: "brain.head.profile")
-                            .font(.system(size: 10))
-                            .foregroundColor(.purple)
-                        Text("AI Classification")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(.secondary)
-                        
-                        Text("(\(Int(codeMindMeta.confidence * 100))% confidence)")
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary.opacity(0.7))
-                        
-                        Spacer()
-                        
-                        if !feedbackSubmitted && !hasExistingFeedback {
-                            HStack(spacing: 4) {
-                                Button(action: {
-                                    Task {
-                                        await submitFeedback(notificationId: notification.id, wasCorrect: true, rating: 5)
-                                    }
-                                }) {
-                                    Image(systemName: "hand.thumbsup.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.green)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Classification was correct")
-                                
-                                Button(action: {
-                                    showFeedbackDialog = true
-                                }) {
-                                    Image(systemName: "hand.thumbsdown.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.red)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Classification was incorrect")
-                            }
-                        } else {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.green)
-                                Text(hasExistingFeedback ? "Feedback already submitted" : "Feedback submitted")
-                                    .font(.system(size: 8))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-            }
-        } else {
-            Text(notification.message)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-        }
-            
-            // Actions for new docket notifications (only show for active, non-archived notifications)
-            if notification.type == .newDocket && notification.status == .pending && notification.archivedAt == nil {
-                let docketAlreadyExists = {
-                    if let docketNumber = notification.docketNumber, docketNumber != "TBD",
-                       let jobName = notification.jobName {
-                        return docketExists(docketNumber: docketNumber, jobName: jobName)
-                    }
-                    return false
-                }()
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Create Work Picture Folder", isOn: Binding(
-                        get: { 
-                            notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateWorkPicture ?? true
-                        },
-                        set: { newValue in
-                            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                                notificationCenter.updateActionFlags(currentNotification, workPicture: newValue)
-                            }
-                        }
-                    ))
-                    .font(.system(size: 11))
-                    .disabled(docketAlreadyExists) // Disable if docket already exists
-                    .opacity(docketAlreadyExists ? 0.5 : 1.0) // Grey out if disabled
-                    
-                    Toggle("Create Simian Job", isOn: Binding(
-                        get: { 
-                            notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob ?? false
-                        },
-                        set: { newValue in
-                            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                                notificationCenter.updateActionFlags(currentNotification, simianJob: newValue)
-                            }
-                        }
-                    ))
-                    .font(.system(size: 11))
-                    .disabled(true) // Disabled until ready for release
-                    .opacity(0.5) // Greyed out
-                    
-                    // Project Manager field (only show if Simian Job is enabled)
-                    if notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob == true {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Project Manager")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                            
-                            TextField("Project Manager", text: Binding(
-                                get: {
-                                    notificationCenter.notifications.first(where: { $0.id == notificationId })?.projectManager ?? notification.sourceEmail ?? ""
-                                },
-                                set: { newValue in
-                                    if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                                        notificationCenter.updateProjectManager(currentNotification, to: newValue.isEmpty ? nil : newValue)
-                                    }
-                                }
-                            ))
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 11))
-                            
-                            Text("Defaults to email sender. Edit if needed.")
-                                .font(.system(size: 9))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    HStack(spacing: 8) {
-                        Button("Approve") {
-                            // Check if docket number is missing
-                            if notification.docketNumber == nil || notification.docketNumber == "TBD" {
-                                isDocketInputForApproval = true // This is for approval
-                                showDocketInputDialog = true
-                            } else {
-                            handleApprove()
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(processingNotification == notificationId)
-                        
-                        Button("Archive") {
-                            notificationCenter.archive(notification)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-                .padding(.top, 4)
-            } else if notification.status == .dismissed && notification.archivedAt != nil {
-                HStack(spacing: 4) {
-                    Image(systemName: "archivebox.fill")
-                        .foregroundColor(.secondary)
-                        .font(.system(size: 10))
-                    Text("Archived")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .italic()
-                }
-            } else if notification.status == .completed {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.system(size: 12))
-                    Text("Completed")
-                        .font(.system(size: 10))
-                        .foregroundColor(.green)
-                }
-            }
+            notificationHeaderView(notification: notification)
+            notificationContentView(notification: notification)
+            notificationActionsView(notification: notification)
         }
         .padding(8)
         .background(
@@ -1889,18 +1233,7 @@ struct NotificationRowView: View {
                     }
                 }
                 
-                // Tap area (only if email exists) - this captures taps on non-button areas
-                // Note: For mediaFiles notifications, links are clickable and should take priority
-                if (notification.emailSubject != nil || notification.emailBody != nil) && notification.type == .newDocket {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            debugEmailExpansion(notification, currentState: isEmailPreviewExpanded)
-                            withAnimation {
-                                isEmailPreviewExpanded.toggle()
-                            }
-                        }
-                }
+                // Removed tap area - expansion is now handled by the chevron button
             }
         )
         .cornerRadius(8)
@@ -1915,9 +1248,25 @@ struct NotificationRowView: View {
         .help("Right-click for options")
         .onAppear {
             updateSimianServiceWebhook()
+            // Always refresh hasSubmittedFeedback from persistent storage when view appears
+            // This ensures we check the source of truth even after view recreation
+            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }),
+               let emailId = currentNotification.emailId {
+                hasSubmittedFeedback = EmailFeedbackTracker.shared.hasFeedback(for: emailId)
+            } else {
+                hasSubmittedFeedback = false
+            }
         }
         .onChange(of: settingsManager.currentSettings.simianWebhookURL) { _, _ in
             updateSimianServiceWebhook()
+        }
+        .onChange(of: self.notification?.emailId) { _, newEmailId in
+            // Refresh feedback state when emailId changes
+            if let emailId = newEmailId {
+                hasSubmittedFeedback = EmailFeedbackTracker.shared.hasFeedback(for: emailId)
+            } else {
+                hasSubmittedFeedback = false
+            }
         }
         .sheet(isPresented: $showDocketInputDialog) {
             DocketNumberInputDialog(
@@ -2013,14 +1362,18 @@ struct NotificationRowView: View {
     
     /// Mark email as read if notification has an emailId
     private func markEmailAsReadIfNeeded(_ notification: Notification) {
-        guard let emailId = notification.emailId else { return }
+        guard let emailId = notification.emailId else {
+            print("📧 NotificationCenterView: ⚠️ Cannot mark email as read - notification has no emailId")
+            return
+        }
         
         Task {
             do {
                 try await emailScanningService.gmailService.markAsRead(messageId: emailId)
-                print("NotificationCenterView: Marked email \(emailId) as read")
+                print("📧 NotificationCenterView: ✅ Successfully marked email \(emailId) as read")
             } catch {
-                print("NotificationCenterView: Failed to mark email as read: \(error.localizedDescription)")
+                print("📧 NotificationCenterView: ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+                print("📧 NotificationCenterView: Error details: \(error)")
             }
         }
     }
@@ -2032,6 +1385,22 @@ struct NotificationRowView: View {
         correction: String? = nil,
         comment: String? = nil
     ) async {
+        // Prevent double-submission
+        guard !isSubmittingFeedback else { return }
+        
+        await MainActor.run {
+            isSubmittingFeedback = true
+        }
+        
+        // Get notification before processing
+        guard notificationCenter.notifications.first(where: { $0.id == notificationId }) != nil else {
+            await MainActor.run {
+                isSubmittingFeedback = false
+                showFeedbackDialog = false
+            }
+            return
+        }
+        
         await emailScanningService.provideCodeMindFeedback(
             for: notificationId,
             rating: rating,
@@ -2040,18 +1409,782 @@ struct NotificationRowView: View {
             comment: comment
         )
         
-        // Mark email as read only when submitting negative feedback (thumbs down)
-        // Thumbs up should NOT mark the email as read
-        if !wasCorrect, let notification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-            markEmailAsReadIfNeeded(notification)
-        }
-        
         await MainActor.run {
-            feedbackSubmitted = true
+            // Get the updated notification (in case it changed)
+            guard let updatedNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) else {
+                hasSubmittedFeedback = true
+                isSubmittingFeedback = false
+                showFeedbackDialog = false
+                return
+            }
+            
+            if wasCorrect {
+                // Thumbs up: Boost confidence above threshold to move it from "For Review" to regular section
+                if let codeMindMeta = updatedNotification.codeMindClassification,
+                   codeMindMeta.wasUsed {
+                    let threshold = settingsManager.currentSettings.codeMindReviewThreshold
+                    // If it's currently below threshold (in "For Review"), boost it above
+                    if codeMindMeta.confidence < threshold {
+                        // Create new metadata with boosted confidence
+                        let boostedConfidence = min(1.0, threshold + 0.01) // Boost to just above threshold
+                        let newMetadata = CodeMindClassificationMetadata(
+                            wasUsed: codeMindMeta.wasUsed,
+                            confidence: boostedConfidence,
+                            reasoning: codeMindMeta.reasoning,
+                            classificationType: codeMindMeta.classificationType,
+                            extractedData: codeMindMeta.extractedData
+                        )
+                        // Update the notification's CodeMind metadata
+                        notificationCenter.updateCodeMindMetadata(updatedNotification, metadata: newMetadata)
+                        print("📋 NotificationCenterView: ✅ Boosted confidence from \(Int(codeMindMeta.confidence * 100))% to \(Int(boostedConfidence * 100))% - moved from 'For Review' to regular section")
+                    }
+                }
+            } else {
+                // Thumbs down: Remove the notification and mark email as read
+                markEmailAsReadIfNeeded(updatedNotification)
+                notificationCenter.remove(updatedNotification, emailScanningService: emailScanningService)
+                print("📋 NotificationCenterView: Removed notification after downvote")
+            }
+            
+            hasSubmittedFeedback = true // Update local state to trigger UI refresh
+            isSubmittingFeedback = false
             showFeedbackDialog = false
             feedbackCorrection = ""
             feedbackComment = ""
         }
+    }
+    
+    /// Helper view for notification actions section
+    @ViewBuilder
+    private func notificationActionsView(notification: Notification) -> some View {
+        if notification.type == .newDocket && notification.status == .pending && notification.archivedAt == nil {
+            newDocketActionsView(notification: notification)
+        } else if notification.status == .dismissed && notification.archivedAt != nil {
+            HStack(spacing: 4) {
+                Image(systemName: "archivebox.fill")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 10))
+                Text("Archived")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .italic()
+            }
+        } else if notification.status == .completed {
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.system(size: 12))
+                Text("Completed")
+                    .font(.system(size: 10))
+                    .foregroundColor(.green)
+            }
+        }
+    }
+    
+    /// Helper view for new docket actions
+    @ViewBuilder
+    private func newDocketActionsView(notification: Notification) -> some View {
+        let docketAlreadyExists = checkIfDocketExists(notification: notification)
+        
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Create Work Picture Folder", isOn: workPictureBinding())
+                .font(.system(size: 11))
+                .disabled(docketAlreadyExists)
+                .opacity(docketAlreadyExists ? 0.5 : 1.0)
+            
+            Toggle("Create Simian Job", isOn: simianJobBinding())
+                .font(.system(size: 11))
+                .disabled(true)
+                .opacity(0.5)
+            
+            if notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob == true {
+                projectManagerFieldView(notification: notification)
+            }
+            
+            approveArchiveButtons(notification: notification)
+        }
+        .padding(.top, 4)
+    }
+    
+    private func checkIfDocketExists(notification: Notification) -> Bool {
+        if let docketNumber = notification.docketNumber, docketNumber != "TBD",
+           let jobName = notification.jobName {
+            return docketExists(docketNumber: docketNumber, jobName: jobName)
+        }
+        return false
+    }
+    
+    private func workPictureBinding() -> Binding<Bool> {
+        Binding(
+            get: { notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateWorkPicture ?? true },
+            set: { newValue in
+                if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                    notificationCenter.updateActionFlags(currentNotification, workPicture: newValue)
+                }
+            }
+        )
+    }
+    
+    private func simianJobBinding() -> Binding<Bool> {
+        Binding(
+            get: { notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob ?? false },
+            set: { newValue in
+                if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                    notificationCenter.updateActionFlags(currentNotification, simianJob: newValue)
+                }
+            }
+        )
+    }
+    
+    @ViewBuilder
+    private func projectManagerFieldView(notification: Notification) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Project Manager")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+            
+            TextField("Project Manager", text: projectManagerBinding(notification: notification))
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+            
+            Text("Defaults to email sender. Edit if needed.")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    private func projectManagerBinding(notification: Notification) -> Binding<String> {
+        Binding(
+            get: { notificationCenter.notifications.first(where: { $0.id == notificationId })?.projectManager ?? notification.sourceEmail ?? "" },
+            set: { newValue in
+                if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                    notificationCenter.updateProjectManager(currentNotification, to: newValue.isEmpty ? nil : newValue)
+                }
+            }
+        )
+    }
+    
+    @ViewBuilder
+    private func approveArchiveButtons(notification: Notification) -> some View {
+        HStack(spacing: 8) {
+            Button("Approve") {
+                if notification.docketNumber == nil || notification.docketNumber == "TBD" {
+                    isDocketInputForApproval = true
+                    showDocketInputDialog = true
+                } else {
+                    handleApprove()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(processingNotification == notificationId)
+            
+            Button("Archive") {
+                notificationCenter.archive(notification, emailScanningService: emailScanningService)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+    
+    /// Helper view for notification header row
+    @ViewBuilder
+    private func notificationHeaderView(notification: Notification) -> some View {
+        HStack {
+            Image(systemName: iconForType(notification.type))
+                .foregroundColor(colorForType(notification.type))
+                .font(.system(size: 14))
+            
+            Text(notification.title)
+                .font(.system(size: 13, weight: .medium))
+            
+            Spacer()
+            
+            Text(timeAgo(notification.timestamp))
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+            
+            mediaFilesStatusBadge(notification: notification)
+            
+            if notification.status == .pending {
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 8, height: 8)
+            }
+        }
+    }
+    
+    /// Helper view for media files status badge (grabbed/priority assist)
+    @ViewBuilder
+    private func mediaFilesStatusBadge(notification: Notification) -> some View {
+        if notification.type == .mediaFiles {
+            if notification.isPriorityAssist {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.red)
+                    Text("Priority Assist")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.red)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.red.opacity(0.1))
+                .cornerRadius(4)
+            } else if notification.isGrabbed {
+                Button(action: {
+                    notificationCenter.archive(notification, emailScanningService: emailScanningService)
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.green)
+                        if let grabbedBy = notification.grabbedBy {
+                            Text("Grabbed by \(extractProducerName(from: grabbedBy))")
+                                .font(.system(size: 9))
+                                .foregroundColor(.green)
+                        } else {
+                            Text("Grabbed")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.green)
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(isGrabbedBadgeHovered ? Color.green.opacity(0.2) : Color.green.opacity(0.1))
+                    .cornerRadius(4)
+                }
+                .buttonStyle(.plain)
+                .help("Click to archive notification")
+                .onHover { hovering in
+                    isGrabbedBadgeHovered = hovering
+                    if hovering {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Helper view for notification content based on type
+    @ViewBuilder
+    private func notificationContentView(notification: Notification) -> some View {
+        if notification.type == .newDocket {
+            newDocketContentView(notification: notification)
+        } else if notification.type == .mediaFiles {
+            mediaFilesContentView(notification: notification)
+        } else {
+            Text(notification.message)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    /// Helper view for mediaFiles notification content to reduce view complexity
+    @ViewBuilder
+    private func mediaFilesContentView(notification: Notification) -> some View {
+        let extractedLinks: [String] = {
+            if let existingLinks = notification.fileLinks, !existingLinks.isEmpty {
+                return existingLinks
+            }
+            if let emailBody = notification.emailBody {
+                return FileHostingLinkDetector.extractFileHostingLinks(emailBody)
+            }
+            return []
+        }()
+        
+        VStack(alignment: .leading, spacing: 8) {
+            Text(notification.message)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+            
+            if !extractedLinks.isEmpty {
+                fileLinksListView(notification: notification, links: extractedLinks)
+            }
+            
+            if notification.isPriorityAssist {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(.red)
+                    Text("Needs assistance - could not grab file")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.red)
+                }
+                .padding(.top, 2)
+            }
+            
+            if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
+                codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
+            }
+        }
+    }
+    
+    /// Helper view for file links list
+    @ViewBuilder
+    private func fileLinksListView(notification: Notification, links: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("File Links:")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.secondary)
+            
+            ForEach(Array(links.enumerated()), id: \.offset) { index, link in
+                if URL(string: link) != nil {
+                    validLinkButton(notification: notification, link: link, allLinks: links)
+                } else {
+                    invalidLinkView(notification: notification, link: link)
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+    
+    /// Helper view for a valid link button
+    @ViewBuilder
+    private func validLinkButton(notification: Notification, link: String, allLinks: [String]) -> some View {
+        Button(action: {
+            openLinkInBrowser(link)
+            if let emailId = notification.emailId {
+                pendingEmailIdForReply = emailId
+                showGrabbedConfirmation = true
+            }
+        }) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "link.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.blue)
+                    Text(link)
+                        .font(.system(size: 10))
+                        .foregroundColor(.blue)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 9))
+                        .foregroundColor(.blue.opacity(0.7))
+                }
+                
+                if allLinks.count > 1, let sourceEmail = notification.sourceEmail {
+                    HStack(spacing: 4) {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary.opacity(0.6))
+                        Text("From: \(extractProducerName(from: sourceEmail))")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(6)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Click to open link in browser")
+        .onHover { hovering in
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
+    
+    /// Helper view for invalid link
+    @ViewBuilder
+    private func invalidLinkView(notification: Notification, link: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+                Text("Link Invalid")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.orange)
+                Spacer()
+            }
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Unable to parse link from email. The link may be malformed or incomplete.")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+                
+                Text("Extracted: \(link.prefix(100))")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .lineLimit(2)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            
+            if let emailId = notification.emailId {
+                Button(action: {
+                    openEmailInBrowser(emailId: emailId)
+                    pendingEmailIdForReply = emailId
+                    showGrabbedConfirmation = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "envelope.fill")
+                            .font(.system(size: 9))
+                        Text("Open Email Thread")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .help("Open the email in your browser to view the link")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.05))
+        .cornerRadius(6)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+        )
+    }
+    
+    /// Helper view for newDocket notification content to reduce view complexity
+    @ViewBuilder
+    private func newDocketContentView(notification: Notification) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let docketNumber = notification.docketNumber, docketNumber != "TBD" {
+                if let jobName = notification.jobName {
+                    Text("Docket \(docketNumber): \(jobName)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    
+                    let existenceInfo = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
+                    
+                    if existenceInfo.existsAnywhere {
+                        docketExistenceWarningView(existenceInfo: existenceInfo)
+                    }
+                } else {
+                    Text("Docket \(docketNumber)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+            } else if let jobName = notification.jobName {
+                Text("\(jobName) (Docket number pending)")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            } else {
+                Text(notification.message)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            
+            producerInfoView(notification: notification)
+            codeMindConfidenceView(notification: notification)
+            emailPreviewSection(notification: notification)
+            
+            // Show feedback UI if CodeMind was used OR if CodeMind is available but was skipped
+            // This allows users to provide feedback even when CodeMind was skipped
+            if let codeMindMeta = notification.codeMindClassification {
+                if codeMindMeta.wasUsed {
+                    codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
+                } else {
+                    // CodeMind metadata exists but wasn't used (e.g., was skipped)
+                    // Still show feedback UI so users can provide feedback about the classification
+                    codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
+                }
+            } else {
+                // Debug: Log when CodeMind metadata is missing
+                #if DEBUG
+                let _ = print("NotificationCenterView: ⚠️ CodeMind metadata is nil for notification \(notification.id) - feedback UI will not show")
+                let _ = print("  - Notification type: \(notification.type)")
+                let _ = print("  - Has emailId: \(notification.emailId != nil)")
+                let _ = print("  - Has codeMindClassification: \(notification.codeMindClassification != nil)")
+                #endif
+                EmptyView()
+            }
+        }
+    }
+    
+    /// Helper view for docket existence warning
+    @ViewBuilder
+    private func docketExistenceWarningView(existenceInfo: DocketExistenceInfo) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(.orange)
+                Text("Docket already exists in \(existenceInfo.existenceDescription)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.orange)
+            }
+            
+            HStack(spacing: 6) {
+                if existenceInfo.existsInWorkPicture {
+                    HStack(spacing: 3) {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 8))
+                        Text("Work Picture")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.blue.opacity(0.8))
+                    .cornerRadius(4)
+                }
+                
+                if existenceInfo.existsInAsana {
+                    HStack(spacing: 3) {
+                        Image(systemName: "list.bullet.rectangle")
+                            .font(.system(size: 8))
+                        Text("Asana")
+                            .font(.system(size: 9, weight: .medium))
+                        if let asanaInfo = existenceInfo.asanaDocketInfo {
+                            Text("(\(asanaInfo.jobName))")
+                                .font(.system(size: 8))
+                                .opacity(0.8)
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.purple.opacity(0.8))
+                    .cornerRadius(4)
+                }
+            }
+        }
+    }
+    
+    /// Helper view for producer info
+    @ViewBuilder
+    private func producerInfoView(notification: Notification) -> some View {
+        if let sourceEmail = notification.sourceEmail, !sourceEmail.isEmpty {
+            let producerName = extractProducerName(from: sourceEmail)
+            HStack(spacing: 4) {
+                Image(systemName: "person.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary.opacity(0.7))
+                Text("Producer: \(producerName)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.8))
+            }
+        }
+    }
+    
+    /// Helper view for CodeMind confidence indicator
+    @ViewBuilder
+    private func codeMindConfidenceView(notification: Notification) -> some View {
+        if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
+            let confidence = codeMindMeta.confidence
+            let threshold = settingsManager.currentSettings.codeMindReviewThreshold
+            let isLowConfidence = confidence < threshold
+            let reasoning = codeMindMeta.reasoning
+            
+            HStack(spacing: 4) {
+                Image(systemName: isLowConfidence ? "exclamationmark.triangle.fill" : "brain.head.profile")
+                    .font(.system(size: 9))
+                    .foregroundColor(isLowConfidence ? .orange : .blue.opacity(0.7))
+                Text("Confidence: \(Int(confidence * 100))%")
+                    .font(.system(size: 10, weight: isLowConfidence ? .semibold : .regular))
+                    .foregroundColor(isLowConfidence ? .orange : .secondary.opacity(0.8))
+                if isLowConfidence {
+                    Text("(Needs Review)")
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange)
+                }
+            }
+            .padding(.top, 2)
+            .help(reasoning ?? "No reasoning provided")
+            .onTapGesture {
+                // Show reasoning in a popover or alert when clicked
+                if let reasoning = reasoning {
+                    let alert = NSAlert()
+                    alert.messageText = "CodeMind Reasoning"
+                    alert.informativeText = reasoning
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
+            }
+        }
+    }
+    
+    /// Helper view for email preview section
+    @ViewBuilder
+    private func emailPreviewSection(notification: Notification) -> some View {
+        if notification.emailSubject != nil || notification.emailBody != nil {
+            HStack(spacing: 6) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isEmailPreviewExpanded.toggle()
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: isEmailPreviewExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.primary)
+                            .frame(width: 16, height: 16)
+                        Text(isEmailPreviewExpanded ? "Hide email" : "View email")
+                            .font(.system(size: 10))
+                            .foregroundColor(.primary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(isEmailPreviewButtonHovered ? Color.primary.opacity(0.15) : Color.primary.opacity(0.1))
+                    )
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isEmailPreviewButtonHovered = hovering
+                    }
+                }
+                .help(isEmailPreviewExpanded ? "Click to hide email" : "Click to view email")
+                
+                Spacer()
+            }
+            .padding(.top, 4)
+            
+            if isEmailPreviewExpanded {
+                expandedEmailPreviewView(notification: notification)
+            }
+        }
+    }
+    
+    /// Helper view for expanded email preview
+    @ViewBuilder
+    private func expandedEmailPreviewView(notification: Notification) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
+                .padding(.vertical, 6)
+            
+            Text("Email Content")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+            
+            if let subject = notification.emailSubject, !subject.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Subject:")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                    Text(subject)
+                        .font(.system(size: 11))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contextMenu {
+                            notificationContextMenuContent(notification: notification)
+                        }
+                }
+            }
+            
+            if let body = notification.emailBody, !body.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Body:")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                    ScrollView {
+                        Text(body)
+                            .font(.system(size: 11))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 2)
+                    }
+                    .frame(maxHeight: 400)
+                    .contextMenu {
+                        notificationContextMenuContent(notification: notification)
+                    }
+                }
+            }
+        }
+        .padding(.top, 6)
+    }
+    
+    /// Helper view for CodeMind feedback UI to reduce view complexity
+    @ViewBuilder
+    private func codeMindFeedbackUI(notification: Notification, codeMindMeta: CodeMindClassificationMetadata) -> some View {
+        // Always check persistent storage - this is the source of truth
+        // Get current notification from center to ensure we have the latest emailId
+        let currentNotification = notificationCenter.notifications.first(where: { $0.id == notification.id }) ?? notification
+        let emailId = currentNotification.emailId ?? notification.emailId
+        // Only check for existing feedback if we have an emailId - if emailId is nil, show feedback options
+        let hasExistingFeedback = emailId != nil && (EmailFeedbackTracker.shared.hasFeedback(for: emailId!) || hasSubmittedFeedback)
+        
+        Divider()
+            .padding(.vertical, 4)
+        
+        HStack(spacing: 8) {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: 10))
+                .foregroundColor(.purple)
+            Text("AI Classification")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(.secondary)
+            
+            // Only show confidence if CodeMind was actually used
+            // When wasUsed is false, CodeMind was skipped and confidence is meaningless (set to 0.0)
+            if codeMindMeta.wasUsed {
+            Text("(\(Int(codeMindMeta.confidence * 100))% confidence)")
+                .font(.system(size: 8))
+                .foregroundColor(.secondary.opacity(0.7))
+            } else {
+                Text("(skipped)")
+                    .font(.system(size: 8))
+                    .foregroundColor(.secondary.opacity(0.5))
+            }
+            
+            Spacer()
+            
+            if !hasExistingFeedback {
+                HStack(spacing: 4) {
+                    Button(action: {
+                        Task {
+                            await submitFeedback(notificationId: notification.id, wasCorrect: true, rating: 5)
+                        }
+                    }) {
+                        Image(systemName: "hand.thumbsup.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(.green)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Classification was correct")
+                    .disabled(isSubmittingFeedback)
+                    
+                    Button(action: {
+                        showFeedbackDialog = true
+                    }) {
+                        Image(systemName: "hand.thumbsdown.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Classification was incorrect")
+                    .disabled(isSubmittingFeedback)
+                }
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.green)
+                    Text("Feedback submitted")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(.top, 4)
     }
     
     private func sendGrabbedReply() {
@@ -2104,7 +2237,7 @@ struct NotificationRowView: View {
                 // DEBUG: Commented out for performance
                 // print("NotificationCenterView: ✅ Successfully sent 'Grabbed' reply\(imageURL != nil ? " with image" : "")")
                 
-                // Mark notification as grabbed (archive it)
+                // Mark notification as grabbed (remove it)
                 await MainActor.run {
                     if let notification = notification {
                         // Mark email as read when grabbing file delivery
@@ -2118,7 +2251,9 @@ struct NotificationRowView: View {
                             )
                         }
                         
-                        notificationCenter.archive(notification)
+                        // Remove notification instead of archiving
+                        notificationCenter.remove(notification, emailScanningService: emailScanningService)
+                        print("📋 NotificationCenterView: Removed notification after grabbing file delivery")
                     }
                     pendingEmailIdForReply = nil
                     isSendingReply = false
@@ -2365,12 +2500,12 @@ struct NotificationRowView: View {
                         let docketName = "\(docketNumber)_\(jobName)"
                         if mediaManager.dockets.contains(docketName) {
                             // Docket already exists, remove notification instead of marking as completed
-                            notificationCenter.remove(updatedNotification)
+                            notificationCenter.remove(updatedNotification, emailScanningService: emailScanningService)
                             return
                         }
                     }
                     // Update notification status to completed
-                    notificationCenter.updateStatus(updatedNotification, to: .completed)
+                    notificationCenter.updateStatus(updatedNotification, to: .completed, emailScanningService: emailScanningService)
                 }
             } catch {
                 await MainActor.run {
@@ -2705,7 +2840,7 @@ struct NotificationRowView: View {
         // Archive option
         if notification.status == .pending && notification.archivedAt == nil {
             Button(action: {
-                notificationCenter.archive(notification)
+                notificationCenter.archive(notification, emailScanningService: emailScanningService)
             }) {
                 Label("Archive", systemImage: "archivebox")
             }

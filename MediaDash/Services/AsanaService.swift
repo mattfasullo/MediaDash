@@ -14,40 +14,129 @@ class AsanaService: ObservableObject {
     
     private let baseURL = "https://app.asana.com/api/1.0"
     private var accessToken: String?
+    private var isRefreshing = false
+    
+    /// Get refresh token from keychain (shared or personal)
+    private var refreshToken: String? {
+        get {
+            return SharedKeychainService.getAsanaRefreshToken()
+        }
+        set {
+            if let token = newValue {
+                _ = KeychainService.store(key: "asana_refresh_token", value: token)
+            } else {
+                KeychainService.delete(key: "asana_refresh_token")
+            }
+        }
+    }
     
     /// Initialize with access token
     init(accessToken: String? = nil) {
         // Check shared key first (for Grayson employees), then personal key
         self.accessToken = accessToken ?? SharedKeychainService.getAsanaAccessToken()
+        // Refresh token is loaded lazily via computed property when needed
     }
     
-    /// Set access token
+    /// Set access token and optionally refresh token
     /// Note: This stores to personal Keychain. Shared keys are set separately by admins.
-    func setAccessToken(_ token: String) {
+    func setAccessToken(_ token: String, refreshToken: String? = nil) {
         self.accessToken = token
         // Store to personal Keychain (shared keys are managed separately)
         _ = KeychainService.store(key: "asana_access_token", value: token)
+        
+        if let refreshToken = refreshToken {
+            self.refreshToken = refreshToken
+        }
     }
     
-    /// Clear access token
+    /// Clear access token and refresh token
     func clearAccessToken() {
         self.accessToken = nil
+        self.refreshToken = nil
         KeychainService.delete(key: "asana_access_token")
+        KeychainService.delete(key: "asana_refresh_token")
     }
     
     /// Check if authenticated
     var isAuthenticated: Bool {
-        return accessToken != nil
+        return accessToken != nil || refreshToken != nil
     }
     
-    /// Fetch workspaces
-    func fetchWorkspaces() async throws -> [AsanaWorkspace] {
+    /// Refresh access token using refresh token
+    private func refreshAccessToken() async throws {
+        guard !isRefreshing else {
+            // Already refreshing, wait a bit
+            try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+            return
+        }
+        
+        guard let refreshToken = refreshToken else {
+            throw AsanaError.notAuthenticated
+        }
+        
+        guard OAuthConfig.isAsanaConfigured else {
+            throw AsanaError.apiError("Asana OAuth credentials not configured")
+        }
+        
+        isRefreshing = true
+        defer { isRefreshing = false }
+        
+        let url = URL(string: "https://app.asana.com/-/oauth_token")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let body = [
+            "grant_type": "refresh_token",
+            "client_id": OAuthConfig.asanaClientID,
+            "client_secret": OAuthConfig.asanaClientSecret,
+            "refresh_token": refreshToken
+        ]
+        
+        request.httpBody = body.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AsanaError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            // If refresh fails, clear tokens - user needs to re-authenticate
+            if httpResponse.statusCode == 401 {
+                clearAccessToken()
+            }
+            throw AsanaError.apiError("Token refresh failed: HTTP \(httpResponse.statusCode): \(errorMessage)")
+        }
+        
+        struct RefreshTokenResponse: Codable {
+            let access_token: String
+            let refresh_token: String?
+            let expires_in: Int?
+            let token_type: String
+        }
+        
+        let tokenResponse = try JSONDecoder().decode(RefreshTokenResponse.self, from: data)
+        // If Asana returns a new refresh token, use it; otherwise keep the existing one
+        if let newRefreshToken = tokenResponse.refresh_token {
+            setAccessToken(tokenResponse.access_token, refreshToken: newRefreshToken)
+        } else {
+            // Keep existing refresh token
+            setAccessToken(tokenResponse.access_token, refreshToken: nil)
+        }
+        
+        print("AsanaService: Successfully refreshed access token")
+    }
+    
+    /// Make an authenticated request with automatic token refresh on 401
+    private func makeAuthenticatedRequest(_ request: inout URLRequest) async throws -> (Data, HTTPURLResponse) {
         guard let token = accessToken else {
             throw AsanaError.notAuthenticated
         }
         
-        let url = URL(string: "\(baseURL)/workspaces")!
-        var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -55,6 +144,35 @@ class AsanaService: ObservableObject {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AsanaError.invalidResponse
         }
+        
+        // If we get 401, try refreshing the token and retry once
+        if httpResponse.statusCode == 401 && refreshToken != nil {
+            print("AsanaService: Access token expired, attempting refresh...")
+            try await refreshAccessToken()
+            
+            // Retry the request with new token
+            guard let newToken = accessToken else {
+                throw AsanaError.notAuthenticated
+            }
+            request.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+            
+            let (retryData, retryResponse) = try await URLSession.shared.data(for: request)
+            guard let retryHttpResponse = retryResponse as? HTTPURLResponse else {
+                throw AsanaError.invalidResponse
+            }
+            
+            return (retryData, retryHttpResponse)
+        }
+        
+        return (data, httpResponse)
+    }
+    
+    /// Fetch workspaces
+    func fetchWorkspaces() async throws -> [AsanaWorkspace] {
+        let url = URL(string: "\(baseURL)/workspaces")!
+        var request = URLRequest(url: url)
+        
+        let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
         
         if httpResponse.statusCode == 401 {
             throw AsanaError.notAuthenticated
@@ -73,10 +191,6 @@ class AsanaService: ObservableObject {
     ///   - workspaceID: The workspace ID
     ///   - maxProjects: Maximum number of projects to fetch (stops early if reached)
     func fetchProjects(workspaceID: String, maxProjects: Int? = nil) async throws -> [AsanaProject] {
-        guard let token = accessToken else {
-            throw AsanaError.notAuthenticated
-        }
-        
         var allProjects: [AsanaProject] = []
         var offset: String? = nil
         let limit = 100 // Asana's max is 100 per page
@@ -100,13 +214,7 @@ class AsanaService: ObservableObject {
             }
             
             var request = URLRequest(url: url)
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            
-            let (data, response) = try await URLSession.shared.data(for: request)
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw AsanaError.invalidResponse
-            }
+            let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
             
             if httpResponse.statusCode == 401 {
                 throw AsanaError.notAuthenticated
@@ -159,7 +267,7 @@ class AsanaService: ObservableObject {
         print("   - Workspace ID: \(workspaceID ?? "nil")")
         print("   - Project ID: \(projectID ?? "nil")")
         
-        guard let token = accessToken else {
+        guard accessToken != nil else {
             print("🔴 [AsanaService] ERROR: No access token")
             throw AsanaError.notAuthenticated
         }
@@ -219,13 +327,7 @@ class AsanaService: ObservableObject {
             }
             
             var request = URLRequest(url: url)
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            
-            let (data, response) = try await URLSession.shared.data(for: request)
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw AsanaError.invalidResponse
-            }
+            let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
             
             if httpResponse.statusCode == 401 {
                 throw AsanaError.notAuthenticated
@@ -263,6 +365,12 @@ class AsanaService: ObservableObject {
         return finalTasks
     }
     
+    /// Progress callback type for sync operations
+    /// - Parameters:
+    ///   - progress: 0.0 to 1.0 representing overall completion
+    ///   - phase: Human-readable description of current phase
+    typealias SyncProgressCallback = (_ progress: Double, _ phase: String) -> Void
+    
     /// Fetch dockets and job names from Asana
     /// - Parameters:
     ///   - workspaceID: Optional workspace ID
@@ -270,11 +378,15 @@ class AsanaService: ObservableObject {
     ///   - docketField: Optional docket field name
     ///   - jobNameField: Optional job name field name
     ///   - modifiedSince: Optional date to only fetch tasks modified since this date (for incremental sync)
-    func fetchDockets(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?, modifiedSince: Date? = nil) async throws -> [DocketInfo] {
+    ///   - progressCallback: Optional callback to report sync progress
+    func fetchDockets(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?, modifiedSince: Date? = nil, progressCallback: SyncProgressCallback? = nil) async throws -> [DocketInfo] {
         print("🔄 [SYNC] Starting Asana sync...")
         
         isFetching = true
         lastError = nil
+        
+        // Report initial progress
+        progressCallback?(0.0, "Starting sync...")
         
         defer {
             isFetching = false
@@ -285,6 +397,9 @@ class AsanaService: ObservableObject {
         var projectMetadataMap: [String: ProjectMetadata] = [:] // project GID -> ProjectMetadata
         
         if let projectID = projectID {
+            // Single project sync - simpler progress tracking
+            progressCallback?(0.05, "Fetching project info...")
+            
             // Fetch project metadata for the specific project
             if let workspaceID = workspaceID {
                 let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: nil)
@@ -293,17 +408,25 @@ class AsanaService: ObservableObject {
                 }
             }
             
+            progressCallback?(0.1, "Fetching tasks...")
+            
             // Fetch tasks from specific project (incremental if modifiedSince provided)
             let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: projectID, maxTasks: nil, modifiedSince: modifiedSince)
             allTasks = tasks
+            
+            progressCallback?(0.8, "Fetched \(tasks.count) tasks")
+            
             if let modifiedSince = modifiedSince {
                 print("🔄 [SYNC] Fetched \(tasks.count) tasks modified since \(modifiedSince) from project")
             } else {
-            print("🔄 [SYNC] Fetched \(tasks.count) tasks from project")
+                print("🔄 [SYNC] Fetched \(tasks.count) tasks from project")
             }
         } else {
             // Fetch all projects and get tasks from each
             var finalWorkspaceID = workspaceID
+            
+            progressCallback?(0.02, "Fetching workspaces...")
+            
             if finalWorkspaceID == nil {
                 let workspaces = try await fetchWorkspaces()
                 if let firstWorkspace = workspaces.first {
@@ -314,17 +437,30 @@ class AsanaService: ObservableObject {
             }
             
             if let workspaceID = finalWorkspaceID {
+                progressCallback?(0.05, "Fetching project list...")
+                
                 // Fetch ALL projects (no limit to ensure we get all dockets)
                 let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: nil)
                 print("🔄 [SYNC] Found \(projects.count) projects, fetching ALL tasks from each...")
+                
+                progressCallback?(0.08, "Found \(projects.count) projects")
                 
                 // Build project metadata map
                 for project in projects {
                     projectMetadataMap[project.gid] = createProjectMetadata(from: project)
                 }
                 
+                // Progress range for fetching tasks: 0.1 to 0.85
+                let progressStart = 0.1
+                let progressEnd = 0.85
+                let progressRange = progressEnd - progressStart
+                
                 // Fetch ALL tasks from each project (no limit to ensure we get all dockets)
                 for (index, project) in projects.enumerated() {
+                    // Calculate progress within the task-fetching phase
+                    let projectProgress = progressStart + (Double(index) / Double(projects.count)) * progressRange
+                    progressCallback?(projectProgress, "Fetching project \(index + 1) of \(projects.count)...")
+                    
                     // Only log every 10th project to reduce noise
                     if index % 10 == 0 || index == projects.count - 1 {
                         print("🔄 [SYNC] Progress: \(index + 1)/\(projects.count) projects")
@@ -338,7 +474,7 @@ class AsanaService: ObservableObject {
                             if let modifiedSince = modifiedSince {
                                 print("   Project \(index + 1): \(tasks.count) tasks modified since \(modifiedSince)")
                             } else {
-                            print("   Project \(index + 1): \(tasks.count) tasks")
+                                print("   Project \(index + 1): \(tasks.count) tasks")
                             }
                         }
                     } catch {
@@ -346,10 +482,14 @@ class AsanaService: ObservableObject {
                         print("⚠️ [SYNC] Error fetching tasks from project \(index + 1): \(error.localizedDescription)")
                     }
                 }
+                
+                progressCallback?(0.85, "Fetched \(allTasks.count) tasks total")
             }
         }
         
         // First pass: Parse all tasks and identify which have docket numbers
+        progressCallback?(0.88, "Processing \(allTasks.count) tasks...")
+        
         var tasksWithDockets: [String: (task: AsanaTask, docketInfo: DocketInfo)] = [:] // keyed by task gid
         var tasksWithoutDockets: [AsanaTask] = []
         var parentToChildren: [String: [AsanaTask]] = [:] // parent gid -> children tasks
@@ -418,6 +558,8 @@ class AsanaService: ObservableObject {
         }
         
         // Second pass: Attach subtasks to their parent docket tasks
+        progressCallback?(0.92, "Building docket hierarchy...")
+        
         var finalDockets: [DocketInfo] = []
         
         for (taskGid, taskData) in tasksWithDockets {
@@ -455,6 +597,8 @@ class AsanaService: ObservableObject {
         if subtaskCount > 0 {
             print("   - \(subtaskCount) subtasks attached to docket tasks")
         }
+        
+        progressCallback?(1.0, "Sync complete: \(finalDockets.count) dockets")
         
         return finalDockets
     }
@@ -802,7 +946,7 @@ enum AsanaError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notAuthenticated:
-            return "Not authenticated with Asana. Please enter your Personal Access Token in Settings."
+            return "Not authenticated with Asana. Please connect via OAuth in Settings (or enter a Personal Access Token if using legacy authentication)."
         case .invalidURL:
             return "Invalid Asana API URL"
         case .invalidResponse:

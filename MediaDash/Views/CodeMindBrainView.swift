@@ -47,15 +47,21 @@ struct CodeMindBrainView: View {
                 GeometryReader { geometry in
                     ZStack {
                         // Background layer for canvas gestures (panning, zooming)
+                        // CRITICAL: Canvas background should NOT consume taps that hit nodes
+                        // Nodes are rendered on top and handle their own taps
                         Color.clear
                             .contentShape(Rectangle())
-                            .gesture(canvasDragGesture)
-                            .gesture(magnificationGesture)
+                            .simultaneousGesture(canvasDragGesture)  // Use simultaneousGesture so it doesn't block node gestures
+                            .simultaneousGesture(magnificationGesture)
                             .onTapGesture { location in
                                 // Only handle canvas tap if we're clicking on empty space (not a node)
-                                if nodeAt(location, in: geometry.size) == nil {
+                                // Convert screen location to canvas coordinates accounting for scale/offset
+                                let canvasLocation = screenToCanvas(location, canvasSize: geometry.size)
+                                if nodeAt(canvasLocation, in: geometry.size) == nil {
                                     handleCanvasClick(at: location, in: geometry.size)
                                 }
+                                // If there IS a node at this location, don't handle the tap here
+                                // The node's own tap gesture will handle it
                             }
                         
                         // Connections layer with curves (no hit testing)
@@ -63,6 +69,7 @@ struct CodeMindBrainView: View {
                             .allowsHitTesting(false)
                         
                         // Nodes layer with physics (each node handles its own gestures)
+                        // Nodes are on top, so their gestures take priority
                         nodesLayer(in: geometry.size)
                     }
                     .scaleEffect(scale)
@@ -641,7 +648,9 @@ struct CodeMindBrainView: View {
                 if draggedNodeId == nil {
                     if !isDraggingCanvas {
                         // Check if we're starting over a node - if so, don't pan
-                        if let _ = nodeAt(value.startLocation, in: canvasSize) {
+                        // Convert start location to canvas coordinates
+                        let canvasStartLocation = screenToCanvas(value.startLocation, canvasSize: canvasSize)
+                        if let _ = nodeAt(canvasStartLocation, in: canvasSize) {
                             return
                         }
                         isDraggingCanvas = true
@@ -923,13 +932,14 @@ struct FloatingNodeView: View {
             }
         }
         // CRITICAL: Define hit-testing area for gestures - must cover the entire node
+        // Use a larger hit area to make nodes easier to click
         .contentShape(Circle())
-        .frame(width: nodeSize * 1.8, height: nodeSize * 1.8)
+        .frame(width: nodeSize * 2.0, height: nodeSize * 2.0)  // Increased from 1.8 to 2.0 for easier clicking
         .position(x: position.x, y: position.y)  // Position is now handled entirely by physics with floating
         .scaleEffect(isDragging ? 1.1 : 1.0)
         .opacity(isDragging ? 0.9 : 1.0)
         .highPriorityGesture(
-            DragGesture(minimumDistance: 5)
+            DragGesture(minimumDistance: 2)  // Reduced minimum distance for more responsive dragging
                 .onChanged { value in
                     if dragStartPosition == .zero {
                         dragStartPosition = position
@@ -948,12 +958,11 @@ struct FloatingNodeView: View {
                     onDragEnd()
                 }
         )
-        .simultaneousGesture(
-            TapGesture()
-                .onEnded { _ in
-                    onTap()
-                }
-        )
+        // CRITICAL: Use onTapGesture to ensure node taps are handled
+        // This ensures the node's tap takes priority over the canvas tap gesture
+        .onTapGesture {
+            onTap()
+        }
         .onHover { isHovering in
             onHover(isHovering)
         }

@@ -365,29 +365,46 @@ class CodeMindEmailClassifier: ObservableObject {
         Current email to classify:
         \(emailContent)
         
-        CRITICAL THREAD-BASED REASONING:
+        CRITICAL EMAIL DIRECTION CHECK (MOST IMPORTANT RULE):
+        1. First, determine the EMAIL DIRECTION:
+           - INCOMING: External sender → Company (from outside to @graysonmusicgroup.com)
+           - OUTGOING: Company sender → External recipients (from @graysonmusicgroup.com to outside)
+           - INTERNAL: Company sender → Company recipients only (all @graysonmusicgroup.com)
+        
+        2. ONLY these can be "new docket" emails:
+           - INCOMING emails announcing new work/projects FROM clients/agencies TO the company
+           - INTERNAL emails where someone assigns a new job internally
+        
+        3. NEVER classify as "new docket":
+           - OUTGOING emails where company is SENDING deliverables TO external clients
+           - Emails providing "music options", "mixes", "cuts", or other work TO clients = OUTGOING = NOT new docket
+           - Follow-up emails on existing projects
+           - Status updates
+           - File delivery notifications
+        
+        CRITICAL CHECK: If the email shows someone sending work/deliverables TO an external recipient, it is NOT a new docket - the docket already exists and this is just delivery of work.
+        
+        THREAD-BASED REASONING:
         - Check thread context to understand if this is the FIRST message in a conversation (more likely new docket)
         - If this is a REPLY in a thread, it's likely NOT a new docket announcement
-        - Company/internal emails (including @graysonmusicgroup.com) can be new docket announcements - do NOT filter them out
         
         Instructions:
-        1. Determine if this email is announcing a new docket/job (not a reply, not a file delivery, not a status update)
-           - Check thread context: Is this the first message or a reply?
-           - First messages are more likely to be new docket announcements
-           - Replies are typically follow-ups, not new announcements
-        2. If it IS a new docket email, extract:
+        1. FIRST: Check email direction - Is this INCOMING (new work request) or OUTGOING (delivering work)?
+           - Outgoing = isNewDocket: false (docket already exists if you're sending work)
+        2. Determine if this email is announcing a new docket/job (not a reply, not a file delivery, not a status update, NOT an outgoing delivery)
+        3. If it IS a new docket email, extract:
            - Docket number: MUST be exactly 5 digits (e.g., "25493"), optionally with "-US" suffix (e.g., "25493-US")
              Numbers with fewer or more than 5 digits are NOT valid docket numbers - return null for those
            - If multiple docket numbers are mentioned, include ALL of them separated by comma (e.g., "25493, 25495")
            - Job name/Client name (the project or client name)
            - Any other relevant metadata
-        3. Respond with ONLY this JSON object, nothing else:
+        4. Respond with ONLY this JSON object, nothing else:
         {
           "isNewDocket": true/false,
           "confidence": 0.0-1.0,
           "docketNumber": "12345" or null,
           "jobName": "Client Name" or null,
-          "reasoning": "Brief explanation - MUST mention thread analysis if thread context available",
+          "reasoning": "Brief explanation - MUST mention: 1) Email direction (incoming/outgoing/internal), 2) Why this is/isn't a new docket based on direction",
           "extractedMetadata": {
             "agency": "Agency name if mentioned",
             "client": "Client name if mentioned",
@@ -534,8 +551,100 @@ class CodeMindEmailClassifier: ObservableObject {
         let classification: DocketEmailClassification
         do {
             classification = try JSONDecoder().decode(DocketEmailClassification.self, from: jsonData)
+            
+            // Log confidence value for debugging
+            CodeMindLogger.shared.log(.debug, "Parsed classification confidence", category: .classification, metadata: [
+                "confidence": String(format: "%.2f", classification.confidence),
+                "isNewDocket": "\(classification.isNewDocket)"
+            ])
+            
+            // Warn if confidence is 0.0 when CodeMind was used (this shouldn't happen)
+            if classification.confidence == 0.0 {
+                CodeMindLogger.shared.log(.warning, "⚠️ CodeMind returned 0.0 confidence - this may indicate a parsing issue", category: .classification, metadata: [
+                    "responsePreview": String(responsePreview.prefix(500))
+                ])
+                print("⚠️ CodeMindEmailClassifier: WARNING - CodeMind returned 0.0 confidence. Response preview: \(String(responsePreview.prefix(200)))")
+            }
         } catch let decodingError as DecodingError {
-            // Log the actual response for debugging (truncate if too large)
+            // Check if this is a missing key error (CodeMind returned wrong response type)
+            let isMissingKeyError: Bool
+            if case .keyNotFound(let key, _) = decodingError {
+                isMissingKeyError = true
+                CodeMindLogger.shared.log(.warning, "Missing expected key in response: \(key.stringValue)", category: .classification)
+            } else {
+                isMissingKeyError = false
+            }
+            
+            // If we're missing isNewDocket, try decoding as FileDeliveryClassification and convert
+            if isMissingKeyError {
+                if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: jsonData) {
+                    CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery response format for new docket check - converting", category: .classification, metadata: [
+                        "isFileDelivery": "\(fileDeliveryClassification.isFileDelivery)",
+                        "confidence": String(format: "%.2f", fileDeliveryClassification.confidence)
+                    ])
+                    // Convert file delivery response to new docket response
+                    // If it's not a file delivery, it's likely also not a new docket
+                    classification = DocketEmailClassification(
+                        isNewDocket: false,
+                        confidence: fileDeliveryClassification.confidence,
+                        docketNumber: nil,
+                        jobName: nil,
+                        reasoning: "CodeMind returned file delivery format: \(fileDeliveryClassification.reasoning)",
+                        extractedMetadata: nil
+                    )
+                } else {
+                    // Try to strip markdown and extract JSON
+                    let cleanedResponse = stripMarkdownCodeFences(from: response.content)
+                    
+                    if let jsonRange = extractJSONFromResponse(cleanedResponse) {
+                        let jsonString = String(cleanedResponse[jsonRange])
+                        if let extractedData = jsonString.data(using: .utf8) {
+                            // Try file delivery format first
+                            if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: extractedData) {
+                                CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery response format (after extraction) - converting", category: .classification)
+                                classification = DocketEmailClassification(
+                                    isNewDocket: false,
+                                    confidence: fileDeliveryClassification.confidence,
+                                    docketNumber: nil,
+                                    jobName: nil,
+                                    reasoning: "CodeMind returned file delivery format: \(fileDeliveryClassification.reasoning)",
+                                    extractedMetadata: nil
+                                )
+                            } else if let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: extractedData) {
+                                classification = extracted
+                                CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
+                            } else {
+                                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                            }
+                        } else {
+                            throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                        }
+                    } else {
+                        // Last resort: try parsing the cleaned response directly
+                        if let cleanedData = cleanedResponse.data(using: .utf8) {
+                            if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: cleanedData) {
+                                CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery response format (after cleaning) - converting", category: .classification)
+                                classification = DocketEmailClassification(
+                                    isNewDocket: false,
+                                    confidence: fileDeliveryClassification.confidence,
+                                    docketNumber: nil,
+                                    jobName: nil,
+                                    reasoning: "CodeMind returned file delivery format: \(fileDeliveryClassification.reasoning)",
+                                    extractedMetadata: nil
+                                )
+                            } else if let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: cleanedData) {
+                                classification = extracted
+                                CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
+                            } else {
+                                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                            }
+                        } else {
+                            throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                        }
+                    }
+                }
+            } else {
+                // Not a missing key error, try standard recovery
             let logResponse = response.content.count > 10_000 
                 ? String(response.content.prefix(10_000)) + "... (truncated, total length: \(response.content.count))"
                 : response.content
@@ -570,6 +679,7 @@ class CodeMindEmailClassifier: ObservableObject {
                     CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
                 } else {
                     throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                    }
                 }
             }
         }
@@ -968,8 +1078,100 @@ class CodeMindEmailClassifier: ObservableObject {
         let classification: FileDeliveryClassification
         do {
             classification = try JSONDecoder().decode(FileDeliveryClassification.self, from: jsonData)
+            
+            // Log confidence value for debugging
+            CodeMindLogger.shared.log(.debug, "Parsed file delivery classification confidence", category: .classification, metadata: [
+                "confidence": String(format: "%.2f", classification.confidence),
+                "isFileDelivery": "\(classification.isFileDelivery)"
+            ])
+            
+            // Warn if confidence is 0.0 when CodeMind was used (this shouldn't happen)
+            if classification.confidence == 0.0 {
+                CodeMindLogger.shared.log(.warning, "⚠️ CodeMind returned 0.0 confidence for file delivery - this may indicate a parsing issue", category: .classification, metadata: [
+                    "responsePreview": String(responsePreview.prefix(500))
+                ])
+                print("⚠️ CodeMindEmailClassifier: WARNING - CodeMind returned 0.0 confidence for file delivery. Response preview: \(String(responsePreview.prefix(200)))")
+            }
         } catch let decodingError as DecodingError {
-            // Log the actual response for debugging (truncate if too large)
+            // Check if this is a missing key error (CodeMind returned wrong response type)
+            let isMissingKeyError: Bool
+            if case .keyNotFound(let key, _) = decodingError {
+                isMissingKeyError = true
+                CodeMindLogger.shared.log(.warning, "Missing expected key in response: \(key.stringValue)", category: .classification)
+            } else {
+                isMissingKeyError = false
+            }
+            
+            // If we're missing isFileDelivery, try decoding as DocketEmailClassification and convert
+            if isMissingKeyError {
+                if let docketClassification = try? JSONDecoder().decode(DocketEmailClassification.self, from: jsonData) {
+                    CodeMindLogger.shared.log(.warning, "CodeMind returned new docket response format for file delivery check - converting", category: .classification, metadata: [
+                        "isNewDocket": "\(docketClassification.isNewDocket)",
+                        "confidence": String(format: "%.2f", docketClassification.confidence)
+                    ])
+                    // Convert new docket response to file delivery response
+                    // If it's not a new docket, it's likely also not a file delivery
+                    classification = FileDeliveryClassification(
+                        isFileDelivery: false,
+                        confidence: docketClassification.confidence,
+                        fileLinks: [],
+                        fileHostingServices: [],
+                        reasoning: "CodeMind returned new docket format: \(docketClassification.reasoning)",
+                        hasAttachments: false
+                    )
+                } else {
+                    // Try to strip markdown and extract JSON
+                    let cleanedResponse = stripMarkdownCodeFences(from: response.content)
+                    
+                    if let jsonRange = extractJSONFromResponse(cleanedResponse) {
+                        let jsonString = String(cleanedResponse[jsonRange])
+                        if let extractedData = jsonString.data(using: .utf8) {
+                            // Try new docket format first
+                            if let docketClassification = try? JSONDecoder().decode(DocketEmailClassification.self, from: extractedData) {
+                                CodeMindLogger.shared.log(.warning, "CodeMind returned new docket response format (after extraction) - converting", category: .classification)
+                                classification = FileDeliveryClassification(
+                                    isFileDelivery: false,
+                                    confidence: docketClassification.confidence,
+                                    fileLinks: [],
+                                    fileHostingServices: [],
+                                    reasoning: "CodeMind returned new docket format: \(docketClassification.reasoning)",
+                                    hasAttachments: false
+                                )
+                            } else if let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: extractedData) {
+                                classification = extracted
+                                CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
+                            } else {
+                                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                            }
+                        } else {
+                            throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                        }
+                    } else {
+                        // Last resort: try parsing the cleaned response directly
+                        if let cleanedData = cleanedResponse.data(using: .utf8) {
+                            if let docketClassification = try? JSONDecoder().decode(DocketEmailClassification.self, from: cleanedData) {
+                                CodeMindLogger.shared.log(.warning, "CodeMind returned new docket response format (after cleaning) - converting", category: .classification)
+                                classification = FileDeliveryClassification(
+                                    isFileDelivery: false,
+                                    confidence: docketClassification.confidence,
+                                    fileLinks: [],
+                                    fileHostingServices: [],
+                                    reasoning: "CodeMind returned new docket format: \(docketClassification.reasoning)",
+                                    hasAttachments: false
+                                )
+                            } else if let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: cleanedData) {
+                                classification = extracted
+                                CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
+                            } else {
+                                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                            }
+                        } else {
+                            throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                        }
+                    }
+                }
+            } else {
+                // Not a missing key error, try standard recovery
             let logResponse = response.content.count > 10_000 
                 ? String(response.content.prefix(10_000)) + "... (truncated, total length: \(response.content.count))"
                 : response.content
@@ -1004,6 +1206,7 @@ class CodeMindEmailClassifier: ObservableObject {
                     CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
                 } else {
                     throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                    }
                 }
             }
         }
@@ -1516,10 +1719,11 @@ class CodeMindEmailClassifier: ObservableObject {
             }
             
             context += "CRITICAL RULE - EMAIL DIRECTION DISTINCTION:\n"
-            context += "  - External sender = INCOMING (IS file delivery)\n"
-            context += "  - Company sender + ANY external recipients = OUTGOING (NOT file delivery)\n"
-            context += "  - Company sender + ONLY internal recipients = INTERNAL REQUEST (IS file delivery)\n"
-            context += "  - KEY: Check if ANY recipients are external - media team being CC'd doesn't change outgoing status!\n"
+            context += "  - External sender = INCOMING (IS file delivery / could be new docket request)\n"
+            context += "  - Company sender + ANY external recipients = OUTGOING (NOT file delivery, NOT new docket - work is being delivered)\n"
+            context += "  - Company sender + ONLY internal recipients = INTERNAL REQUEST (IS file delivery / could be new docket)\n"
+            context += "  - KEY: If company is SENDING work (music options, mixes, cuts) TO clients = OUTGOING = docket ALREADY exists!\n"
+            context += "  - KEY: 'New docket' means new work REQUEST, not delivering completed work on existing job\n"
         }
         
         // 3. Pattern extraction from successful classifications

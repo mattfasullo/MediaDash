@@ -80,6 +80,60 @@ struct ExpandableSettingsHeader: View {
     }
 }
 
+// MARK: - Window Mode Card
+
+struct WindowModeCard: View {
+    let mode: WindowMode
+    let isSelected: Bool
+    let onSelect: () -> Void
+    
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(spacing: 10) {
+                // Icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.gray.opacity(0.08))
+                        .frame(width: 80, height: 56)
+                    
+                    Image(systemName: mode.icon)
+                        .font(.system(size: 24))
+                        .foregroundColor(isSelected ? .accentColor : .secondary)
+                }
+                
+                // Text
+                VStack(spacing: 3) {
+                    Text(mode.displayName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(isSelected ? .accentColor : .primary)
+                    
+                    Text(mode.description)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(width: 140, height: 120)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? Color.accentColor : (isHovered ? Color.gray.opacity(0.3) : Color.clear), lineWidth: isSelected ? 2 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
     @EnvironmentObject var sessionManager: SessionManager
@@ -119,7 +173,7 @@ struct SettingsView: View {
                 let token = try await oauthService.authenticateAsana(useOutOfBand: false)
                 
                 // Store the access token
-                oauthService.storeToken(token.accessToken, for: "asana")
+                oauthService.storeTokens(accessToken: token.accessToken, refreshToken: token.refreshToken, for: "asana")
                 
                 await MainActor.run {
                     isConnecting = false
@@ -145,7 +199,7 @@ struct SettingsView: View {
                         Task {
                             do {
                                 let token = try await oauthService.authenticateAsana(useOutOfBand: true)
-                                oauthService.storeToken(token.accessToken, for: "asana")
+                                oauthService.storeTokens(accessToken: token.accessToken, refreshToken: token.refreshToken, for: "asana")
                                 await MainActor.run {
                                     isConnecting = false
                                     print("Asana OAuth successful! Token stored.")
@@ -186,7 +240,7 @@ struct SettingsView: View {
                     code: manualAuthCode.trimmingCharacters(in: .whitespaces)
                 )
                 
-                oauthService.storeToken(token.accessToken, for: "asana")
+                oauthService.storeTokens(accessToken: token.accessToken, refreshToken: token.refreshToken, for: "asana")
                 
                 await MainActor.run {
                     isConnecting = false
@@ -1105,6 +1159,10 @@ struct AsanaIntegrationSection: View {
     @State private var manualAuthState = ""
     @State private var showCacheDetails = false
     @State private var showAdvancedSettings = false
+    @State private var showForceSyncConfirmation = false
+    @State private var isForceSyncing = false
+    @State private var forceSyncError: String?
+    @State private var forceSyncSuccess = false
     
     private func connectToAsana() {
         guard OAuthConfig.isAsanaConfigured else {
@@ -1121,7 +1179,7 @@ struct AsanaIntegrationSection: View {
                 let token = try await oauthService.authenticateAsana(useOutOfBand: false)
                 
                 // Store the access token
-                oauthService.storeToken(token.accessToken, for: "asana")
+                oauthService.storeTokens(accessToken: token.accessToken, refreshToken: token.refreshToken, for: "asana")
                 
                 await MainActor.run {
                     isConnecting = false
@@ -1147,7 +1205,7 @@ struct AsanaIntegrationSection: View {
                         Task {
                             do {
                                 let token = try await oauthService.authenticateAsana(useOutOfBand: true)
-                                oauthService.storeToken(token.accessToken, for: "asana")
+                                oauthService.storeTokens(accessToken: token.accessToken, refreshToken: token.refreshToken, for: "asana")
                                 await MainActor.run {
                                     isConnecting = false
                                     print("Asana OAuth successful! Token stored.")
@@ -1188,7 +1246,7 @@ struct AsanaIntegrationSection: View {
                     code: manualAuthCode.trimmingCharacters(in: .whitespaces)
                 )
                 
-                oauthService.storeToken(token.accessToken, for: "asana")
+                oauthService.storeTokens(accessToken: token.accessToken, refreshToken: token.refreshToken, for: "asana")
                 
                 await MainActor.run {
                     isConnecting = false
@@ -1211,6 +1269,8 @@ struct AsanaIntegrationSection: View {
     
     private func disconnectAsana() {
         KeychainService.delete(key: "asana_access_token")
+        KeychainService.delete(key: "asana_refresh_token")
+        oauthService.clearToken(for: "asana")
         print("Asana disconnected.")
     }
     
@@ -1391,6 +1451,59 @@ struct AsanaIntegrationSection: View {
                                     .padding(.leading, 20)
                                 }
                             }
+                            
+                            Divider()
+                                .padding(.vertical, 4)
+                            
+                            // Force Full Sync
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Cache Maintenance")
+                                    .font(.system(size: 13))
+                                
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(spacing: 12) {
+                                        Button {
+                                            showForceSyncConfirmation = true
+                                        } label: {
+                                            HStack(spacing: 6) {
+                                                if isForceSyncing {
+                                                    ProgressView()
+                                                        .scaleEffect(0.7)
+                                                        .frame(width: 14, height: 14)
+                                                } else {
+                                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                                        .font(.system(size: 12))
+                                                }
+                                                Text(isForceSyncing ? "Syncing..." : "Force Full Sync")
+                                                    .font(.system(size: 12))
+                                            }
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(.orange)
+                                        .disabled(isForceSyncing || !isConnected)
+                                        
+                                        if forceSyncSuccess {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .foregroundColor(.green)
+                                                Text("Sync complete!")
+                                                    .font(.system(size: 11))
+                                                    .foregroundColor(.green)
+                                            }
+                                        }
+                                    }
+                                    
+                                    if let error = forceSyncError {
+                                        Text(error)
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.red)
+                                    }
+                                    
+                                    Text("Clears local cache and fetches all data directly from Asana. Use this if you suspect data is out of sync or corrupted.")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
                         }
                         .padding(.leading, 16)
                         .padding(.top, 8)
@@ -1433,6 +1546,46 @@ struct AsanaIntegrationSection: View {
             }
             .padding(20)
             .frame(width: 400)
+        }
+        .alert("Force Full Sync", isPresented: $showForceSyncConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Start Sync", role: .destructive) {
+                performForceSync()
+            }
+        } message: {
+            Text("This will clear your local cache and fetch all data directly from Asana. This operation may take several minutes depending on the size of your workspace.\n\nThis bypasses the shared cache and goes directly to the Asana API.")
+        }
+    }
+    
+    private func performForceSync() {
+        isForceSyncing = true
+        forceSyncError = nil
+        forceSyncSuccess = false
+        
+        Task {
+            do {
+                try await cacheManager.forceFullSync(
+                    workspaceID: settings.asanaWorkspaceID,
+                    projectID: settings.asanaProjectID,
+                    docketField: settings.asanaDocketField,
+                    jobNameField: settings.asanaJobNameField
+                )
+                
+                await MainActor.run {
+                    isForceSyncing = false
+                    forceSyncSuccess = true
+                    
+                    // Auto-hide success message after 5 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        forceSyncSuccess = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isForceSyncing = false
+                    forceSyncError = "Failed: \(error.localizedDescription)"
+                }
+            }
         }
     }
 }
@@ -2759,6 +2912,83 @@ struct CodeMindIntegrationSection: View {
                     }
                 }
                 
+                Divider()
+                
+                // Review Threshold Settings
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("Review Threshold")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    
+                    Text("Notifications with confidence below this threshold will go to 'For Review' for manual approval")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Threshold: \(Int(settings.codeMindReviewThreshold * 100))%")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.primary)
+                            
+                            Spacer()
+                            
+                            // Reset to default button
+                            Button("Reset to 97%") {
+                                settings.codeMindReviewThreshold = 0.97
+                                hasUnsavedChanges = true
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                        }
+                        
+                        Slider(
+                            value: Binding(
+                                get: { settings.codeMindReviewThreshold },
+                                set: { newValue in
+                                    settings.codeMindReviewThreshold = newValue
+                                    hasUnsavedChanges = true
+                                }
+                            ),
+                            in: 0.5...1.0,
+                            step: 0.01
+                        )
+                        
+                        HStack {
+                            Text("50%")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("97% (Recommended)")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("100%")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Confidence indicator
+                        HStack(spacing: 4) {
+                            let thresholdPercent = Int(settings.codeMindReviewThreshold * 100)
+                            let color: Color = thresholdPercent >= 95 ? .green : thresholdPercent >= 80 ? .orange : .red
+                            Circle()
+                                .fill(color)
+                                .frame(width: 8, height: 8)
+                            Text(thresholdPercent >= 95 ? "Strict - Most notifications will be reviewed" : 
+                                 thresholdPercent >= 80 ? "Moderate - Some notifications will be reviewed" : 
+                                 "Lenient - Few notifications will be reviewed")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.top, 4)
+                    }
+                    .padding(.leading, 12)
+                }
+                
                 // Shared Key Section (for Grayson Music Group employees only)
                 if SharedKeychainService.isCurrentUserGraysonEmployee() {
                     Divider()
@@ -3774,6 +4004,62 @@ struct ThemeSelectionSection: View {
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                             .padding(.top, 2)
+                    }
+                    
+                    Divider()
+                        .padding(.vertical, 4)
+                    
+                    // Window Mode
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "rectangle.split.3x1")
+                                .font(.system(size: 14))
+                                .foregroundColor(.accentColor)
+                            Text("Window Mode")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        
+                        Text("Choose between a compact phone-like interface or a full dashboard experience")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        
+                        // Window Mode Cards
+                        HStack(spacing: 12) {
+                            WindowModeCard(
+                                mode: .compact,
+                                isSelected: settings.windowMode == .compact,
+                                onSelect: {
+                                    if settings.windowMode != .compact {
+                                        settings.windowMode = .compact
+                                        hasUnsavedChanges = true
+                                    }
+                                }
+                            )
+                            
+                            WindowModeCard(
+                                mode: .dashboard,
+                                isSelected: settings.windowMode == .dashboard,
+                                onSelect: {
+                                    if settings.windowMode != .dashboard {
+                                        settings.windowMode = .dashboard
+                                        hasUnsavedChanges = true
+                                    }
+                                }
+                            )
+                        }
+                        .padding(.top, 4)
+                        
+                        // Note about restart
+                        HStack(spacing: 6) {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                            Text("Changes take effect after saving and restarting the app")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.top, 6)
                     }
                 }
             }

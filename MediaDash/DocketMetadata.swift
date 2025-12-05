@@ -146,9 +146,10 @@ class DocketMetadataManager: ObservableObject {
 
             var loadedMetadata: [String: DocketMetadata] = [:]
 
-            // Parse header to create column map
+            // Parse header to create column map (both exact and lowercase versions for case-insensitive lookup)
             let headerFields = parseCSVRow(rows[0])
             var columnMap: [String: Int] = [:]
+            var columnMapLowercase: [String: Int] = [:]  // For case-insensitive lookup
             for (index, header) in headerFields.enumerated() {
                 // Strip BOM (Byte Order Mark) and whitespace
                 var cleanedHeader = header.trimmingCharacters(in: .whitespaces)
@@ -156,41 +157,87 @@ class DocketMetadataManager: ObservableObject {
                     cleanedHeader = String(cleanedHeader.dropFirst())
                 }
                 columnMap[cleanedHeader] = index
+                columnMapLowercase[cleanedHeader.lowercased()] = index
             }
 
             print("CSV Headers: \(headerFields)")
             print("Column map: \(columnMap)")
 
+            // Helper function to find column index with fallback logic
+            func findColumnIndex(_ columnName: String, fallbackNames: [String] = []) -> Int? {
+                // Try exact match first
+                if let idx = columnMap[columnName] {
+                    return idx
+                }
+                // Try case-insensitive match
+                if let idx = columnMapLowercase[columnName.lowercased()] {
+                    return idx
+                }
+                // Try fallback names
+                for fallback in fallbackNames {
+                    if let idx = columnMap[fallback] {
+                        return idx
+                    }
+                    if let idx = columnMapLowercase[fallback.lowercased()] {
+                        return idx
+                    }
+                }
+                return nil
+            }
+
             // Get column names from settings or use defaults
             let docketCol = settings?.csvDocketColumn ?? "docket_number"
             let projectCol = settings?.csvProjectTitleColumn ?? "job_name"
+            
+            // Common variations for docket column
+            let docketFallbacks = ["docket_number", "docket number", "docket", "Docket", "Docket Number", "Docket_Number"]
+            // Common variations for project column
+            let projectFallbacks = ["job_name", "job name", "job", "Job", "Job Name", "Job_Name", "project", "project_name", "project title", "Licensor/Project Title"]
 
-            print("Looking for columns: '\(docketCol)' and '\(projectCol)'")
-            if let numIdx = columnMap[docketCol] {
-                print("Found '\(docketCol)' at index \(numIdx)")
+            print("Looking for docket column: '\(docketCol)' (with fallbacks: \(docketFallbacks.joined(separator: ", ")))")
+            let numIdx = findColumnIndex(docketCol, fallbackNames: docketFallbacks)
+            if let idx = numIdx {
+                print("✅ Found docket column at index \(idx)")
             } else {
-                print("WARNING: Column '\(docketCol)' not found in CSV!")
+                print("❌ WARNING: Docket column not found! Available columns: \(headerFields.joined(separator: ", "))")
+                print("   Tried: '\(docketCol)' and fallbacks: \(docketFallbacks.joined(separator: ", "))")
             }
-            if let nameIdx = columnMap[projectCol] {
-                print("Found '\(projectCol)' at index \(nameIdx)")
+            
+            print("Looking for project column: '\(projectCol)' (with fallbacks: \(projectFallbacks.joined(separator: ", ")))")
+            let nameIdx = findColumnIndex(projectCol, fallbackNames: projectFallbacks)
+            if let idx = nameIdx {
+                print("✅ Found project column at index \(idx)")
             } else {
-                print("WARNING: Column '\(projectCol)' not found in CSV!")
+                print("❌ WARNING: Project column not found! Available columns: \(headerFields.joined(separator: ", "))")
+                print("   Tried: '\(projectCol)' and fallbacks: \(projectFallbacks.joined(separator: ", "))")
             }
+
+            // Must have both columns to proceed
+            guard numIdx != nil, nameIdx != nil else {
+                print("❌ ERROR: Cannot load CSV - missing required columns!")
+                print("   Docket column: '\(docketCol)' (tried: \(docketFallbacks.joined(separator: ", ")))")
+                print("   Project column: '\(projectCol)' (tried: \(projectFallbacks.joined(separator: ", ")))")
+                print("   Available columns: \(headerFields.joined(separator: ", "))")
+                print("   💡 Tip: Update CSV column names or Settings > CSV Columns to match your file")
+                return
+            }
+            
+            // Unwrap the optionals (we know they're not nil from the guard above)
+            let docketIndex = numIdx!
+            let projectIndex = nameIdx!
 
             for row in rows.dropFirst() {
                 let fields = parseCSVRow(row)
 
-                // Get docket number and project title using configured column names
-                guard let numIdx = columnMap[docketCol],
-                      let nameIdx = columnMap[projectCol],
-                      fields.count > numIdx,
-                      fields.count > nameIdx else {
-                    print("Skipping row: missing required columns '\(docketCol)' or '\(projectCol)'")
+                // Get docket number and project title using found column indices
+                guard fields.count > docketIndex,
+                      fields.count > projectIndex else {
+                    print("Skipping row: not enough columns (expected at least \(max(docketIndex, projectIndex) + 1), got \(fields.count))")
                     continue
                 }
 
-                let docketNumber = fields[numIdx].trimmingCharacters(in: .whitespaces)
-                let jobName = fields[nameIdx].trimmingCharacters(in: .whitespaces)
+                let docketNumber = fields[docketIndex].trimmingCharacters(in: .whitespaces)
+                let jobName = fields[projectIndex].trimmingCharacters(in: .whitespaces)
 
                 // Skip if either is empty
                 guard !docketNumber.isEmpty && !jobName.isEmpty else {

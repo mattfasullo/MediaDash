@@ -31,6 +31,7 @@ struct SharedKeychainService {
 
         // Asana
         case asanaAccessToken
+        case asanaRefreshToken
 
         var keychainKey: String {
             switch self {
@@ -41,6 +42,7 @@ struct SharedKeychainService {
             case .gmailAccessToken: return "gmail_shared_access_token"
             case .gmailRefreshToken: return "gmail_shared_refresh_token"
             case .asanaAccessToken: return "asana_shared_access_token"
+            case .asanaRefreshToken: return "asana_shared_refresh_token"
             }
         }
     }
@@ -131,6 +133,11 @@ struct SharedKeychainService {
     /// Get Asana access token (shared or personal)
     static func getAsanaAccessToken() -> String? {
         return getKey(shared: .asanaAccessToken, personalKey: "asana_access_token")
+    }
+    
+    /// Get Asana refresh token (shared or personal)
+    static func getAsanaRefreshToken() -> String? {
+        return getKey(shared: .asanaRefreshToken, personalKey: "asana_refresh_token")
     }
     
     /// Get CodeMind API key for a provider (shared or personal)

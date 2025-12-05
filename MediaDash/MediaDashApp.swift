@@ -75,11 +75,26 @@ struct MediaDashApp: App {
     }
     
     private func configureWindow(_ window: NSWindow) {
+        // CRITICAL: Remove resizable flag FIRST
+        var styleMask = window.styleMask
+        styleMask.remove(.resizable)
+        window.styleMask = styleMask
+        window.showsResizeIndicator = false
+        
+        // Set window delegate to prevent resizing
+        if window.delegate == nil || !(window.delegate is NonResizableWindowDelegate) {
+            window.delegate = NonResizableWindowDelegate.shared
+            NonResizableWindowDelegate.shared.registerWindow(window)
+        }
+        
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
-        // Disable resizing - fixed size for compact mode only
-        window.styleMask.remove(.resizable)
+        // Re-remove resizable after inserting fullSizeContentView
+        styleMask = window.styleMask
+        styleMask.remove(.resizable)
+        window.styleMask = styleMask
+        
         window.toolbar = nil
         // Set content view to extend into title bar area
         window.contentView?.wantsLayer = true
@@ -88,7 +103,11 @@ struct MediaDashApp: App {
         // Keep window buttons but ensure they don't affect layout
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
-        window.standardWindowButton(.zoomButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = false
+        // Enable fullscreen support
+        window.collectionBehavior = [.fullScreenPrimary, .fullScreenAllowsTiling]
+        // Set up fullscreen observers to switch to dashboard mode
+        setupFullscreenObserverForDashboard(window)
         // Set fixed window size (compact mode only)
         let fixedSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
         window.minSize = fixedSize
@@ -98,6 +117,126 @@ struct MediaDashApp: App {
         window.setContentBorderThickness(0, for: .minY)
         // Force window to update
         window.invalidateShadow()
+    }
+    
+}
+
+// Top-level helper functions for fullscreen handling
+func setupFullscreenObserverForDashboard(_ window: NSWindow) {
+    // Remove any existing observers
+    Foundation.NotificationCenter.default.removeObserver(window, name: NSWindow.willEnterFullScreenNotification, object: window)
+    Foundation.NotificationCenter.default.removeObserver(window, name: NSWindow.didEnterFullScreenNotification, object: window)
+    Foundation.NotificationCenter.default.removeObserver(window, name: NSWindow.willExitFullScreenNotification, object: window)
+    Foundation.NotificationCenter.default.removeObserver(window, name: NSWindow.didExitFullScreenNotification, object: window)
+    
+    // Observer for when window is about to enter fullscreen
+    Foundation.NotificationCenter.default.addObserver(
+        forName: NSWindow.willEnterFullScreenNotification,
+        object: window,
+        queue: .main
+    ) { _ in
+        // Switch to dashboard mode before entering fullscreen
+        switchToDashboardModeForFullscreen()
+    }
+    
+    // Observer for when window enters fullscreen
+    Foundation.NotificationCenter.default.addObserver(
+        forName: NSWindow.didEnterFullScreenNotification,
+        object: window,
+        queue: .main
+    ) { _ in
+        // Ensure dashboard mode is active in fullscreen
+        switchToDashboardModeForFullscreen()
+    }
+    
+    // Observer for when window exits fullscreen - switch back to compact mode
+    Foundation.NotificationCenter.default.addObserver(
+        forName: NSWindow.willExitFullScreenNotification,
+        object: window,
+        queue: .main
+    ) { _ in
+        // Switch back to compact mode when exiting fullscreen
+        switchToCompactMode()
+    }
+    
+    // Observer for when window has exited fullscreen
+    Foundation.NotificationCenter.default.addObserver(
+        forName: NSWindow.didExitFullScreenNotification,
+        object: window,
+        queue: .main
+    ) { _ in
+        // Ensure compact mode is active after exiting fullscreen
+        switchToCompactMode()
+    }
+}
+
+// Window delegate to prevent resizing
+class NonResizableWindowDelegate: NSObject, NSWindowDelegate {
+    static let shared = NonResizableWindowDelegate()
+    private var registeredWindows: [NSWindow] = []
+    
+    func registerWindow(_ window: NSWindow) {
+        if !registeredWindows.contains(where: { $0 === window }) {
+            registeredWindows.append(window)
+            window.delegate = self
+        }
+    }
+    
+    // Prevent window from being resized - this is the key method
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        // Always return the current size to prevent any resizing
+        return sender.frame.size
+    }
+}
+
+func switchToDashboardModeForFullscreen() {
+    switchWindowMode(.dashboard)
+}
+
+func switchToCompactMode() {
+    switchWindowMode(.compact)
+}
+
+func switchWindowMode(_ mode: WindowMode) {
+    guard let profilesData = UserDefaults.standard.data(forKey: "savedProfiles"),
+          var profiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData) else {
+        return
+    }
+    let currentProfileName = UserDefaults.standard.string(forKey: "currentProfile") ?? "Default"
+    if var profile = profiles[currentProfileName] {
+        profile.windowMode = mode
+        profiles[currentProfileName] = profile
+        if let encoded = try? JSONEncoder().encode(profiles) {
+            UserDefaults.standard.set(encoded, forKey: "savedProfiles")
+            
+            // Resize window to appropriate size for the mode
+            DispatchQueue.main.async {
+                if let window = NSApplication.shared.windows.first {
+                    let targetSize: NSSize
+                    if mode == .dashboard {
+                        targetSize = NSSize(width: LayoutMode.dashboardDefaultWidth, height: LayoutMode.dashboardDefaultHeight)
+                    } else {
+                        targetSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
+                    }
+                    
+                    // Update window constraints
+                    window.minSize = targetSize
+                    window.maxSize = targetSize
+                    
+                    // Resize window
+                    var frame = window.frame
+                    frame.size = targetSize
+                    window.setFrame(frame, display: true, animate: true)
+                }
+            }
+            
+            // Post notification so ContentView can update
+            Foundation.NotificationCenter.default.post(
+                name: Foundation.Notification.Name("windowModeChanged"),
+                object: nil,
+                userInfo: ["windowMode": mode]
+            )
+        }
     }
 }
 
@@ -133,15 +272,38 @@ struct WindowAccessor: NSViewRepresentable {
     }
     
     private func configureWindow(_ window: NSWindow) {
+        // CRITICAL: Remove resizable flag FIRST
+        var styleMask = window.styleMask
+        styleMask.remove(.resizable)
+        window.styleMask = styleMask
+        window.showsResizeIndicator = false
+        
+        // Set window delegate to prevent resizing
+        if window.delegate == nil || !(window.delegate is NonResizableWindowDelegate) {
+            window.delegate = NonResizableWindowDelegate.shared
+            NonResizableWindowDelegate.shared.registerWindow(window)
+        }
+        
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
-        // Disable resizing - fixed size for compact mode only
-        window.styleMask.remove(.resizable)
+        // Re-remove resizable after inserting fullSizeContentView
+        styleMask = window.styleMask
+        styleMask.remove(.resizable)
+        window.styleMask = styleMask
+        
         window.toolbar = nil
         window.contentView?.wantsLayer = true
         // Set window background to match content to remove grey bar
         window.backgroundColor = NSColor.windowBackgroundColor
+        // Keep window buttons but ensure they don't affect layout
+        window.standardWindowButton(.closeButton)?.isHidden = false
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
+        window.standardWindowButton(.zoomButton)?.isHidden = false
+        // Enable fullscreen support
+        window.collectionBehavior = [.fullScreenPrimary, .fullScreenAllowsTiling]
+        // Set up fullscreen observers to switch to dashboard mode
+        setupFullscreenObserverForDashboard(window)
         // Set fixed window size (compact mode only)
         let fixedSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
         window.minSize = fixedSize
@@ -292,23 +454,8 @@ class DoubleClickWindowHandler: NSObject {
     func toggleFullScreen() {
         guard let window = window else { return }
         
-        if isMaximized {
-            // Restore to original frame
-            if let original = originalFrame {
-                window.setFrame(original, display: true, animate: true)
-                isMaximized = false
-            }
-        } else {
-            // Store current frame as original before maximizing
-            originalFrame = window.frame
-            
-            // Maximize to screen (non-exclusive full screen)
-            if let screen = window.screen {
-                let screenFrame = screen.visibleFrame
-                window.setFrame(screenFrame, display: true, animate: true)
-                isMaximized = true
-            }
-        }
+        // Use native macOS fullscreen API
+        window.toggleFullScreen(nil)
     }
     
     deinit {

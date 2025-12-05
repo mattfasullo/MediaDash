@@ -256,12 +256,24 @@ struct StagingAreaView: View {
                     
                     if cacheManager.isSyncing {
                         HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .frame(width: 12, height: 12)
-                            Text("Syncing with Asana")
+                            if cacheManager.syncProgress > 0 {
+                                // Show progress bar when we have progress info
+                                ProgressView(value: cacheManager.syncProgress)
+                                    .progressViewStyle(.linear)
+                                    .frame(width: 60)
+                                Text("\(Int(cacheManager.syncProgress * 100))%")
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.blue)
+                            } else {
+                                // Show spinner when starting
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .frame(width: 12, height: 12)
+                            }
+                            Text(cacheManager.syncPhase.isEmpty ? "Syncing with Asana" : cacheManager.syncPhase)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.blue)
+                                .lineLimit(1)
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
@@ -292,13 +304,6 @@ struct StagingAreaView: View {
                         Text(manager.statusMessage)
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    }
-                } else {
-                    // Don't show "Ready." when syncing or scanning
-                    if !cacheManager.isSyncing && !manager.isIndexing {
-                        Text("Ready.")
-                            .font(.caption)
-                            .foregroundColor(.gray)
                     }
                 }
             }

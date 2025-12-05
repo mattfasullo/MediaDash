@@ -34,6 +34,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ aNotification: Foundation.Notification) {
+        // Migrate existing keychain items to prevent password prompts after updates
+        // This runs once on app launch to update all existing keychain items
+        Task { @MainActor in
+            KeychainService.migrateAllExistingItems()
+        }
+        
         // Initialize Sparkle updater
         // Each app (MediaDash vs MediaDash-Dev) has its own appcast URL in Info.plist
         updaterController = SPUStandardUpdaterController(
@@ -98,19 +104,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func configureWindow(_ window: NSWindow) {
+        // CRITICAL: Remove resizable flag FIRST
+        var styleMask = window.styleMask
+        styleMask.remove(.resizable)
+        window.styleMask = styleMask
+        window.showsResizeIndicator = false
+        
+        // Set window delegate to prevent resizing
+        if window.delegate == nil || !(window.delegate is NonResizableWindowDelegate) {
+            window.delegate = NonResizableWindowDelegate.shared
+            NonResizableWindowDelegate.shared.registerWindow(window)
+        }
+        
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
+        // Re-remove resizable after inserting fullSizeContentView
+        styleMask = window.styleMask
+        styleMask.remove(.resizable)
+        window.styleMask = styleMask
+        
         window.toolbar = nil
         window.contentView?.wantsLayer = true
         // Set window background to match content to remove grey bar
         window.backgroundColor = NSColor.windowBackgroundColor
         // Set content border thickness to 0 to remove any grey bar
         window.setContentBorderThickness(0, for: .minY)
-        // Keep only close button visible (no minimize or zoom)
+        // Keep all window buttons visible
         window.standardWindowButton(.closeButton)?.isHidden = false
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.standardWindowButton(.zoomButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
+        window.standardWindowButton(.zoomButton)?.isHidden = false
         // Force window update
         window.invalidateShadow()
     }

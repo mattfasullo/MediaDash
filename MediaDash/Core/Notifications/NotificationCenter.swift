@@ -115,25 +115,64 @@ class NotificationCenter: ObservableObject {
     }
     
     /// Remove a notification
-    func remove(_ notification: Notification) {
+    func remove(_ notification: Notification, emailScanningService: EmailScanningService? = nil) {
+        // Mark email as read before removing (if notification was acted upon)
+        if let emailId = notification.emailId, let emailService = emailScanningService {
+            Task {
+                do {
+                    try await emailService.gmailService.markAsRead(messageId: emailId)
+                    print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read before removing notification")
+                } catch {
+                    print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+                    print("📋 [NotificationCenter] Error details: \(error)")
+                }
+            }
+        } else {
+            if notification.emailId == nil {
+                print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - notification has no emailId")
+            }
+            if emailScanningService == nil {
+                print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - emailScanningService is nil")
+            }
+        }
+        
         notifications.removeAll { $0.id == notification.id }
         updateUnreadCount()
         saveNotifications()
     }
     
-    /// Archive a notification (replaces dismiss)
-    func archive(_ notification: Notification) {
-        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
-            notifications[index].status = .dismissed // Keep using dismissed status for compatibility
-            notifications[index].archivedAt = Date()
-            updateUnreadCount()
-            saveNotifications()
+    /// Archive a notification - now removes it and marks email as read
+    func archive(_ notification: Notification, emailScanningService: EmailScanningService? = nil) {
+        // Mark email as read before removing
+        if let emailId = notification.emailId, let emailService = emailScanningService {
+                Task {
+                    do {
+                        try await emailService.gmailService.markAsRead(messageId: emailId)
+                    print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read before removing notification")
+                    } catch {
+                    print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+                    print("📋 [NotificationCenter] Error details: \(error)")
+                    }
+                }
+        } else {
+            if notification.emailId == nil {
+                print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - notification has no emailId")
+            }
+            if emailScanningService == nil {
+                print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - emailScanningService is nil")
+            }
         }
+        
+        // Remove notification instead of archiving
+        notifications.removeAll { $0.id == notification.id }
+        updateUnreadCount()
+        saveNotifications()
+        print("📋 [NotificationCenter] Removed notification (archived)")
     }
     
     /// Dismiss a notification (kept for backward compatibility, but now archives)
-    func dismiss(_ notification: Notification) {
-        archive(notification)
+    func dismiss(_ notification: Notification, emailScanningService: EmailScanningService? = nil) {
+        archive(notification, emailScanningService: emailScanningService)
     }
     
     /// Mark notification as read
@@ -143,11 +182,33 @@ class NotificationCenter: ObservableObject {
     }
     
     /// Update notification status
-    func updateStatus(_ notification: Notification, to status: NotificationStatus) {
+    func updateStatus(_ notification: Notification, to status: NotificationStatus, emailScanningService: EmailScanningService? = nil) {
         if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
             notifications[index].status = status
             updateUnreadCount()
             saveNotifications()
+            
+            // Mark email as read when status changes to completed or dismissed
+            if (status == .completed || status == .dismissed),
+               let emailId = notifications[index].emailId,
+               let emailService = emailScanningService {
+                Task {
+                    do {
+                        try await emailService.gmailService.markAsRead(messageId: emailId)
+                        print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read after status change to \(status)")
+                    } catch {
+                        print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+                        print("📋 [NotificationCenter] Error details: \(error)")
+                    }
+                }
+            } else if (status == .completed || status == .dismissed) {
+                if notifications[index].emailId == nil {
+                    print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - notification has no emailId")
+                }
+                if emailScanningService == nil {
+                    print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - emailScanningService is nil")
+                }
+            }
         }
     }
     
@@ -202,6 +263,14 @@ class NotificationCenter: ObservableObject {
             } else {
                 notifications[index].message = "\(jobName) (Docket number pending)"
             }
+            saveNotifications()
+        }
+    }
+    
+    /// Update CodeMind classification metadata (e.g., to boost confidence after user approval)
+    func updateCodeMindMetadata(_ notification: Notification, metadata: CodeMindClassificationMetadata) {
+        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+            notifications[index].codeMindClassification = metadata
             saveNotifications()
         }
     }
@@ -269,38 +338,66 @@ class NotificationCenter: ObservableObject {
             break
         }
         
-        // Auto-archive junk and skipped notifications
-        if autoArchive && (newType == .junk || newType == .skipped) {
-            notifications[index].status = .dismissed
-            notifications[index].archivedAt = Date()
-        }
-        
         print("📋 [NotificationCenter] Reclassified notification from \(oldType.displayName) to \(newType.displayName)")
         
-        // Mark email as read when re-classifying to anything other than "New Docket" or "File Delivery"
-        // (Re-classifying is for algorithm learning, so we mark as read to indicate user interaction)
-        if newType != .newDocket && newType != .mediaFiles,
-           let emailId = notifications[index].emailId,
-           let emailService = emailScanningService {
+        // Capture notification data before potentially removing
+        let notificationForLearning = notifications[index]
+        let emailId = notifications[index].emailId
+        let emailSubject = notifications[index].emailSubject
+        let emailBody = notifications[index].emailBody
+        let emailFrom = notifications[index].sourceEmail
+        
+        // If reclassifying to something other than "New Docket" or "File Delivery", remove notification and mark email as read
+        if newType != .newDocket && newType != .mediaFiles {
+            // Learn from the re-classification (teach CodeMind) before removing
+            if let emailService = emailScanningService {
+                await emailService.learnFromReclassification(
+                    notification: notificationForLearning,
+                    oldType: oldType,
+                    newType: newType,
+                    emailSubject: emailSubject,
+                    emailBody: emailBody,
+                    emailFrom: emailFrom
+                )
+            }
+            
+            // Mark email as read before removing
+            if let emailId = emailId, let emailService = emailScanningService {
             Task {
                 do {
                     try await emailService.gmailService.markAsRead(messageId: emailId)
-                    print("📋 [NotificationCenter] Marked email \(emailId) as read after re-classification")
+                        print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read after re-classification to \(newType.displayName)")
                 } catch {
-                    print("📋 [NotificationCenter] Failed to mark email as read: \(error.localizedDescription)")
+                        print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+                        print("📋 [NotificationCenter] Error details: \(error)")
                 }
             }
+            } else {
+                if emailId == nil {
+                    print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - notification has no emailId")
+                }
+                if emailScanningService == nil {
+                    print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - emailScanningService is nil")
+                }
+            }
+            
+            // Remove notification instead of archiving
+            notifications.removeAll { $0.id == notification.id }
+            updateUnreadCount()
+            saveNotifications()
+            print("📋 [NotificationCenter] Removed notification after re-classification to \(newType.displayName)")
+            return // Exit early since notification is removed
         }
         
-        // Learn from the re-classification (teach CodeMind)
+        // Learn from the re-classification (teach CodeMind) - for newDocket/mediaFiles reclassifications
         if let emailService = emailScanningService {
             await emailService.learnFromReclassification(
-                notification: notifications[index],
+                notification: notificationForLearning,
                 oldType: oldType,
                 newType: newType,
-                emailSubject: notifications[index].emailSubject,
-                emailBody: notifications[index].emailBody,
-                emailFrom: notifications[index].sourceEmail
+                emailSubject: emailSubject,
+                emailBody: emailBody,
+                emailFrom: emailFrom
             )
         }
         
@@ -338,43 +435,54 @@ class NotificationCenter: ObservableObject {
         // Add to recent custom classifications
         RecentCustomClassificationsManager.shared.add(trimmedName)
         
-        // Auto-archive if requested
-        if autoArchive {
-            notifications[index].status = .dismissed
-            notifications[index].archivedAt = Date()
-        }
-        
         let oldTypeName = oldType == .custom ? (notifications[index].customTypeName ?? "Custom") : oldType.displayName
         print("📋 [NotificationCenter] Reclassified notification from \(oldTypeName) to custom type '\(trimmedName)'")
         
-        // Mark email as read when re-classifying to custom type (anything other than "New Docket" or "File Delivery")
-        // (Re-classifying is for algorithm learning, so we mark as read to indicate user interaction)
-        if let emailId = notifications[index].emailId,
-           let emailService = emailScanningService {
-            Task {
-                do {
-                    try await emailService.gmailService.markAsRead(messageId: emailId)
-                    print("📋 [NotificationCenter] Marked email \(emailId) as read after custom re-classification")
-                } catch {
-                    print("📋 [NotificationCenter] Failed to mark email as read: \(error.localizedDescription)")
-                }
-            }
-        }
+        // Capture notification data before removing for learning
+        let notificationForLearning = notifications[index]
+        let emailId = notifications[index].emailId
+        let emailSubject = notifications[index].emailSubject
+        let emailBody = notifications[index].emailBody
+        let emailFrom = notifications[index].sourceEmail
         
-        // Learn from the re-classification (teach CodeMind)
+        // Learn from the re-classification (teach CodeMind) before removing
         if let emailService = emailScanningService {
             await emailService.learnFromReclassification(
-                notification: notifications[index],
+                notification: notificationForLearning,
                 oldType: oldType,
                 newType: .custom,
-                emailSubject: notifications[index].emailSubject,
-                emailBody: notifications[index].emailBody,
-                emailFrom: notifications[index].sourceEmail
+                emailSubject: emailSubject,
+                emailBody: emailBody,
+                emailFrom: emailFrom
             )
         }
         
+        // Custom types are not "New Docket" or "File Delivery", so remove notification and mark email as read
+        // Mark email as read before removing
+        if let emailId = emailId, let emailService = emailScanningService {
+            Task {
+                do {
+                    try await emailService.gmailService.markAsRead(messageId: emailId)
+                    print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read after custom re-classification")
+                } catch {
+                    print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+                    print("📋 [NotificationCenter] Error details: \(error)")
+                }
+            }
+        } else {
+            if emailId == nil {
+                print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - notification has no emailId")
+            }
+            if emailScanningService == nil {
+                print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - emailScanningService is nil")
+            }
+        }
+        
+        // Remove notification instead of archiving
+        notifications.removeAll { $0.id == notification.id }
         updateUnreadCount()
         saveNotifications()
+        print("📋 [NotificationCenter] Removed notification after custom re-classification")
     }
     
     /// Skip a notification (removes from active list without classification)

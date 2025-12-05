@@ -126,6 +126,12 @@ class EmailFeedbackTracker {
         return storage.interactions[emailId]?.contains(where: { $0.interactionType == type }) ?? false
     }
     
+    /// Check if an email has any interaction (any type)
+    /// This is useful for filtering out emails that have been interacted with
+    func hasAnyInteraction(emailId: String) -> Bool {
+        return !(storage.interactions[emailId]?.isEmpty ?? true)
+    }
+    
     /// Get the most recent interaction of a specific type for an email
     func getMostRecentInteraction(emailId: String, type: InteractionType) -> EmailInteraction? {
         return storage.interactions[emailId]?

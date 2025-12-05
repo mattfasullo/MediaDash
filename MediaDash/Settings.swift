@@ -2,6 +2,40 @@ import Foundation
 import SwiftUI
 import Combine
 
+// MARK: - Window Mode (User Preference)
+
+enum WindowMode: String, Codable, CaseIterable {
+    case compact = "Compact"
+    case dashboard = "Dashboard"
+    
+    var displayName: String {
+        switch self {
+        case .compact:
+            return "Compact"
+        case .dashboard:
+            return "Dashboard"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .compact:
+            return "Phone-like compact interface"
+        case .dashboard:
+            return "Full desktop experience with embedded notifications"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .compact:
+            return "rectangle.portrait"
+        case .dashboard:
+            return "rectangle.split.3x1"
+        }
+    }
+}
+
 // MARK: - Layout Mode
 
 enum LayoutMode: String, CaseIterable {
@@ -19,6 +53,12 @@ enum LayoutMode: String, CaseIterable {
     // Minimum window size (compact mode)
     static let minWidth: CGFloat = 650
     static let minHeight: CGFloat = 550
+    
+    // Dashboard mode dimensions
+    static let dashboardMinWidth: CGFloat = 1200
+    static let dashboardMinHeight: CGFloat = 700
+    static let dashboardDefaultWidth: CGFloat = 1400
+    static let dashboardDefaultHeight: CGFloat = 850
     
     // Determine layout mode from window size
     static func from(windowWidth: CGFloat) -> LayoutMode {
@@ -410,6 +450,9 @@ struct AppSettings: Codable, Equatable {
     // App Theme
     var appTheme: AppTheme
     
+    // Window Mode (Compact vs Dashboard)
+    var windowMode: WindowMode
+    
     // Appearance (Color Scheme)
     var appearance: AppearanceMode
 
@@ -494,7 +537,8 @@ struct AppSettings: Codable, Equatable {
     var codeMindProvider: String? // "gemini" or "grok" - determines which provider to use
     var codeMindOverlayEnabled: Bool // Show activity overlay on main window
     var codeMindOverlayDetailLevel: String // "minimal", "medium", or "detailed"
-    var codeMindReviewThreshold: Double // Confidence threshold (0.0-1.0) - notifications below this go to "For Review" (default: 0.7)
+    var codeMindReviewThreshold: Double // Confidence threshold (0.0-1.0) - notifications below this go to "For Review" (default: 0.97)
+    var codeMindSkipPatterns: [String] // Subject/body patterns that should skip CodeMind (use regular parser instead) - saves API costs
     
     // Simian Integration (via Zapier webhook)
     var simianEnabled: Bool
@@ -534,6 +578,7 @@ struct AppSettings: Codable, Equatable {
             serverConnectionURL: "192.168.200.200",
             docketSource: .csv,
             appTheme: .modern,
+            windowMode: .compact, // Default to compact mode
             appearance: .system, // Default to system appearance
             updateChannel: .production,
             workPictureFolderName: "WORK PICTURE",
@@ -587,7 +632,15 @@ struct AppSettings: Codable, Equatable {
             codeMindProvider: nil, // Defaults to Claude if API key is set
             codeMindOverlayEnabled: false, // Activity overlay disabled by default
             codeMindOverlayDetailLevel: "medium", // Default detail level
-            codeMindReviewThreshold: 0.7, // Default: notifications below 70% confidence go to review
+            codeMindReviewThreshold: 0.97, // Default: notifications below 97% confidence go to review
+            codeMindSkipPatterns: [
+                // Patterns that match these will skip CodeMind and use regular parser (saves API costs)
+                // Format: case-insensitive regex patterns
+                #"(?i)^\d{5,}\s+.+$"#,  // Subject starts with docket number (e.g., "25489 Job Name")
+                #"(?i)^new\s+docket\s+\d{5,}"#,  // "New Docket 25489" format
+                #"(?i)^docket\s*#?\s*\d{5,}"#,  // "Docket #25489" format
+                #"(?i)\[\d{5,}\]"#,  // "[25489]" format in subject
+            ],
             simianEnabled: false,
             simianWebhookURL: nil,
             simianProjectTemplate: nil,
@@ -718,6 +771,15 @@ class SettingsManager: ObservableObject {
 
     func saveCurrentProfile() {
         saveProfile(settings: currentSettings, name: currentSettings.profileName)
+    }
+    
+    func reloadCurrentProfile() {
+        let profileName = userDefaults.string(forKey: currentProfileKey) ?? "Default"
+        if let profilesData = userDefaults.data(forKey: profilesKey),
+           let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData),
+           let settings = profiles[profileName] {
+            self.currentSettings = settings
+        }
     }
 
     func saveProfile(settings: AppSettings, name: String) {

@@ -178,6 +178,103 @@ except:
     return 0
 }
 
+# Check 2.5: Validate Cache Integrity (checksum, version, count)
+check_cache_integrity() {
+    section "2.5. Cache Integrity Validation"
+    
+    if [ ! -f "$CACHE_PATH" ]; then
+        error "Cache file not found"
+        return 1
+    fi
+    
+    INTEGRITY_CHECK=$(python3 -c "
+import json
+import hashlib
+import sys
+
+EXPECTED_VERSION = 2  # Must match CacheFormat.version in SharedComponents.swift
+CACHE_FILE = '$CACHE_PATH'
+
+try:
+    with open(CACHE_FILE, 'r') as f:
+        data = json.load(f)
+    
+    dockets = data.get('dockets', [])
+    integrity = data.get('integrity')
+    
+    if not integrity:
+        print('LEGACY|No integrity metadata (legacy cache format)')
+        sys.exit(0)
+    
+    # Check version
+    version = integrity.get('version', 0)
+    if version != EXPECTED_VERSION:
+        print(f'VERSION_MISMATCH|Found v{version}, expected v{EXPECTED_VERSION}')
+        sys.exit(1)
+    
+    # Check count
+    expected_count = integrity.get('docketCount', 0)
+    actual_count = len(dockets)
+    if expected_count != actual_count:
+        print(f'COUNT_MISMATCH|Expected {expected_count}, found {actual_count}')
+        sys.exit(1)
+    
+    # Verify checksum
+    expected_checksum = integrity.get('checksum', '')
+    sorted_names = sorted([d.get('fullName', '') for d in dockets])
+    checksum_data = '|'.join(sorted_names)
+    computed_checksum = hashlib.sha256(checksum_data.encode()).hexdigest()
+    
+    if expected_checksum != computed_checksum:
+        print(f'CHECKSUM_MISMATCH|Checksum verification failed')
+        sys.exit(1)
+    
+    computed_at = integrity.get('computedAt', 'N/A')
+    print(f'VALID|Version: {version}, Count: {actual_count}, Checksum: OK, Computed: {computed_at}')
+    
+except json.JSONDecodeError as e:
+    print(f'JSON_ERROR|{e}')
+    sys.exit(1)
+except Exception as e:
+    print(f'ERROR|{e}')
+    sys.exit(1)
+")
+    
+    INTEGRITY_STATUS=$(echo "$INTEGRITY_CHECK" | cut -d'|' -f1)
+    INTEGRITY_MSG=$(echo "$INTEGRITY_CHECK" | cut -d'|' -f2-)
+    
+    case "$INTEGRITY_STATUS" in
+        "VALID")
+            success "Cache integrity verified"
+            info "$INTEGRITY_MSG"
+            ;;
+        "LEGACY")
+            warning "Cache uses legacy format (no integrity metadata)"
+            info "Consider re-syncing to add integrity verification"
+            ;;
+        "VERSION_MISMATCH")
+            warning "Cache version mismatch"
+            info "$INTEGRITY_MSG"
+            ;;
+        "COUNT_MISMATCH")
+            error "Cache corruption detected: count mismatch"
+            info "$INTEGRITY_MSG"
+            return 1
+            ;;
+        "CHECKSUM_MISMATCH")
+            error "Cache corruption detected: checksum mismatch"
+            info "$INTEGRITY_MSG"
+            return 1
+            ;;
+        *)
+            error "Integrity check failed: $INTEGRITY_MSG"
+            return 1
+            ;;
+    esac
+    
+    return 0
+}
+
 # Check 3: Cache statistics
 check_cache_stats() {
     section "3. Cache Statistics"
@@ -412,6 +509,9 @@ main() {
     CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
     
     check_json_structure && CHECKS_PASSED=$((CHECKS_PASSED + 1))
+    CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
+    
+    check_cache_integrity && CHECKS_PASSED=$((CHECKS_PASSED + 1))
     CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
     
     check_cache_stats && CHECKS_PASSED=$((CHECKS_PASSED + 1))

@@ -1,4 +1,91 @@
 import SwiftUI
+import CryptoKit
+
+// MARK: - Cache Integrity
+
+/// Cache format version constants
+enum CacheFormat {
+    /// Current cache format version - increment when making breaking changes to the cache structure
+    nonisolated static let version: Int = 2
+}
+
+/// Result of cache integrity validation
+enum CacheValidationResult: Sendable {
+    case valid
+    case corrupted(reason: String)
+    case versionMismatch(found: Int, expected: Int)
+    case checksumMismatch
+    case countMismatch(found: Int, expected: Int)
+    case missingIntegrity // Old cache without integrity data (not necessarily corrupt)
+    
+    nonisolated var isValid: Bool {
+        if case .valid = self { return true }
+        if case .missingIntegrity = self { return true } // Old caches without integrity are still usable
+        return false
+    }
+    
+    nonisolated var isCorrupted: Bool {
+        switch self {
+        case .corrupted, .checksumMismatch, .countMismatch:
+            return true
+        default:
+            return false
+        }
+    }
+    
+    nonisolated var description: String {
+        switch self {
+        case .valid:
+            return "Cache is valid"
+        case .corrupted(let reason):
+            return "Cache is corrupted: \(reason)"
+        case .versionMismatch(let found, let expected):
+            return "Cache version mismatch: found v\(found), expected v\(expected)"
+        case .checksumMismatch:
+            return "Cache checksum mismatch - data may be corrupted"
+        case .countMismatch(let found, let expected):
+            return "Cache count mismatch: found \(found), expected \(expected) - possible truncation"
+        case .missingIntegrity:
+            return "Cache missing integrity data (legacy format)"
+        }
+    }
+}
+
+/// Integrity metadata for cache validation
+struct CacheIntegrity: Codable, Sendable {
+    /// Cache format version
+    let version: Int
+    /// Expected docket count
+    let docketCount: Int
+    /// SHA256 checksum of docket data (computed from sorted docket fullNames)
+    let checksum: String
+    /// Timestamp when integrity was computed
+    let computedAt: Date
+    
+    nonisolated init(version: Int = CacheFormat.version, docketCount: Int, checksum: String, computedAt: Date = Date()) {
+        self.version = version
+        self.docketCount = docketCount
+        self.checksum = checksum
+        self.computedAt = computedAt
+    }
+    
+    /// Compute checksum for a list of dockets
+    nonisolated static func computeChecksum(for dockets: [DocketInfo]) -> String {
+        // Create a deterministic string from sorted docket fullNames
+        let sortedNames = dockets.map { $0.fullName }.sorted().joined(separator: "|")
+        let data = Data(sortedNames.utf8)
+        let hash = SHA256.hash(data: data)
+        return hash.compactMap { String(format: "%02x", $0) }.joined()
+    }
+    
+    /// Create integrity metadata for a list of dockets
+    nonisolated static func create(for dockets: [DocketInfo]) -> CacheIntegrity {
+        return CacheIntegrity(
+            docketCount: dockets.count,
+            checksum: computeChecksum(for: dockets)
+        )
+    }
+}
 
 // MARK: - Docket Info
 
@@ -57,11 +144,14 @@ struct DocketSubtask: Identifiable, Hashable, Codable {
 struct CachedDockets: Codable, Sendable {
     let dockets: [DocketInfo]
     let lastSync: Date
+    /// Integrity metadata for corruption detection (optional for backward compatibility)
+    let integrity: CacheIntegrity?
     
     // Explicit nonisolated initializer to ensure it can be created from any context
-    nonisolated init(dockets: [DocketInfo], lastSync: Date) {
+    nonisolated init(dockets: [DocketInfo], lastSync: Date, includeIntegrity: Bool = true) {
         self.dockets = dockets
         self.lastSync = lastSync
+        self.integrity = includeIntegrity ? CacheIntegrity.create(for: dockets) : nil
     }
     
     // Explicit nonisolated Codable implementation to avoid main actor isolation
@@ -69,17 +159,96 @@ struct CachedDockets: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         dockets = try container.decode([DocketInfo].self, forKey: .dockets)
         lastSync = try container.decode(Date.self, forKey: .lastSync)
+        // Optional for backward compatibility with existing caches
+        integrity = try container.decodeIfPresent(CacheIntegrity.self, forKey: .integrity)
     }
     
     nonisolated func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(dockets, forKey: .dockets)
         try container.encode(lastSync, forKey: .lastSync)
+        try container.encodeIfPresent(integrity, forKey: .integrity)
     }
     
     enum CodingKeys: String, CodingKey {
         case dockets
         case lastSync
+        case integrity
+    }
+    
+    /// Validate cache integrity
+    /// Returns validation result indicating if cache is valid or the type of corruption detected
+    nonisolated func validateIntegrity() -> CacheValidationResult {
+        // Check if integrity data exists
+        guard let integrity = integrity else {
+            return .missingIntegrity
+        }
+        
+        // Check version compatibility
+        if integrity.version != CacheFormat.version {
+            return .versionMismatch(found: integrity.version, expected: CacheFormat.version)
+        }
+        
+        // Check docket count
+        if integrity.docketCount != dockets.count {
+            return .countMismatch(found: dockets.count, expected: integrity.docketCount)
+        }
+        
+        // Verify checksum
+        let computedChecksum = CacheIntegrity.computeChecksum(for: dockets)
+        if computedChecksum != integrity.checksum {
+            return .checksumMismatch
+        }
+        
+        return .valid
+    }
+    
+    /// Check if any dockets have invalid/missing required fields
+    nonisolated func validateDocketData() -> [String] {
+        var issues: [String] = []
+        
+        for (index, docket) in dockets.enumerated() {
+            // Check for empty required fields
+            if docket.number.trimmingCharacters(in: .whitespaces).isEmpty {
+                issues.append("Docket \(index): empty number field")
+            }
+            if docket.fullName.trimmingCharacters(in: .whitespaces).isEmpty {
+                issues.append("Docket \(index): empty fullName field")
+            }
+            
+            // Check fullName consistency (should contain number)
+            if !docket.fullName.contains(docket.number) && !docket.number.isEmpty {
+                issues.append("Docket \(index) '\(docket.fullName)': fullName doesn't contain number '\(docket.number)'")
+            }
+            
+            // Check for reasonable date (not in far future)
+            if let updatedAt = docket.updatedAt {
+                let oneYearFromNow = Calendar.current.date(byAdding: .year, value: 1, to: Date()) ?? Date()
+                if updatedAt > oneYearFromNow {
+                    issues.append("Docket \(index) '\(docket.fullName)': suspicious future date \(updatedAt)")
+                }
+            }
+        }
+        
+        return issues
+    }
+    
+    /// Comprehensive validation combining integrity and data checks
+    nonisolated func validate() -> (result: CacheValidationResult, dataIssues: [String]) {
+        let integrityResult = validateIntegrity()
+        let dataIssues = validateDocketData()
+        
+        // If integrity check found corruption, return that
+        if integrityResult.isCorrupted {
+            return (integrityResult, dataIssues)
+        }
+        
+        // If data has significant issues, mark as corrupted
+        if dataIssues.count > dockets.count / 10 { // More than 10% of dockets have issues
+            return (.corrupted(reason: "Too many data issues (\(dataIssues.count) problems found)"), dataIssues)
+        }
+        
+        return (integrityResult, dataIssues)
     }
 }
 

@@ -196,6 +196,32 @@ struct ContentView: View {
                 .keyboardShortcut("`", modifiers: .command)
                 .hidden()
             )
+            .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("windowModeChanged"))) { notification in
+                // Reload settings when window mode changes (e.g., from fullscreen)
+                settingsManager.reloadCurrentProfile()
+                
+                // Resize window to appropriate size for the mode
+                DispatchQueue.main.async {
+                    if let window = NSApplication.shared.windows.first {
+                        let mode = settingsManager.currentSettings.windowMode
+                        let targetSize: NSSize
+                        if mode == .dashboard {
+                            targetSize = NSSize(width: LayoutMode.dashboardDefaultWidth, height: LayoutMode.dashboardDefaultHeight)
+                        } else {
+                            targetSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
+                        }
+                        
+                        // Update window constraints
+                        window.minSize = targetSize
+                        window.maxSize = targetSize
+                        
+                        // Resize window
+                        var frame = window.frame
+                        frame.size = targetSize
+                        window.setFrame(frame, display: true, animate: true)
+                    }
+                }
+            }
             // Popup notifications disabled to prevent UI blocking
             // .onChange(of: notificationCenter.notifications) { oldValue, newValue in
             //     // Show popup when new notification arrives
@@ -209,7 +235,36 @@ struct ContentView: View {
     }
     
     private var mainContentView: some View {
-            ZStack(alignment: .topLeading) {
+        Group {
+            if settingsManager.currentSettings.windowMode == .dashboard {
+                // Dashboard Mode - Full desktop experience
+                ZStack(alignment: .topLeading) {
+                    DashboardView(
+                        focusedButton: $focusedButton,
+                        mainViewFocused: $mainViewFocused,
+                        isKeyboardMode: $isKeyboardMode,
+                        isCommandKeyHeld: $isCommandKeyHeld,
+                        hoverInfo: $hoverInfo,
+                        showSearchSheet: $showSearchSheet,
+                        showQuickSearchSheet: $showQuickSearchSheet,
+                        showSettingsSheet: $showSettingsSheet,
+                        showVideoConverterSheet: $showVideoConverterSheet,
+                        wpDate: wpDate,
+                        prepDate: prepDate,
+                        dateFormatter: dateFormatter,
+                        attempt: attempt,
+                        cacheManager: cacheManager
+                    )
+                    .frame(minWidth: LayoutMode.dashboardMinWidth, minHeight: LayoutMode.dashboardMinHeight)
+                    .focusable()
+                    .focused($mainViewFocused)
+                    .focusEffectDisabled()
+                    
+                    CodeMindActivityOverlay()
+                }
+            } else {
+                // Compact Mode - Phone-like compact interface
+                ZStack(alignment: .topLeading) {
                     HStack(spacing: 0) {
                         SidebarView(
                             focusedButton: $focusedButton,
@@ -236,15 +291,16 @@ struct ContentView: View {
                             isStagingPressed: $isStagingPressed
                         )
                         .environmentObject(manager)
-        }
-            .frame(width: LayoutMode.minWidth, height: windowHeight)
-        .animation(.easeInOut(duration: 0.2), value: windowHeight)
-        .focusable()
-        .focused($mainViewFocused)
-        .focusEffectDisabled()
-            
-            // CodeMind Activity Overlay
-            CodeMindActivityOverlay()
+                    }
+                    .frame(width: LayoutMode.minWidth, height: windowHeight)
+                    .animation(.easeInOut(duration: 0.2), value: windowHeight)
+                    .focusable()
+                    .focused($mainViewFocused)
+                    .focusEffectDisabled()
+                    
+                    CodeMindActivityOverlay()
+                }
+            }
         }
     }
     

@@ -540,7 +540,10 @@ with open('$all_tasks_file', 'w') as f:
 import sys
 import json
 import re
+import hashlib
 from datetime import datetime
+
+CACHE_FORMAT_VERSION = 2  # Must match CacheFormat.version in SharedComponents.swift
 
 tasks = json.load(sys.stdin)
 dockets = []
@@ -571,7 +574,7 @@ for task in tasks:
         metadata_type = None
         for keyword in ["SESSION REPORT", "JOB INFO", "SESSION", "PREP", "POST"]:
             if re.match(rf'^\s*{re.escape(keyword)}(\s*-\s*|\s+|$)', name, re.IGNORECASE):
-                metadata_type = keyword.uppercase()
+                metadata_type = keyword.upper()
                 break
         
         # Parse modified_at
@@ -594,10 +597,23 @@ for task in tasks:
         
         dockets.append(docket_info)
 
-# Create cache structure
+# Compute integrity checksum (SHA256 of sorted fullNames joined by |)
+sorted_names = sorted([d['fullName'] for d in dockets])
+checksum_data = '|'.join(sorted_names)
+checksum = hashlib.sha256(checksum_data.encode()).hexdigest()
+
+now = datetime.utcnow().isoformat() + "Z"
+
+# Create cache structure with integrity metadata
 cache = {
     "dockets": dockets,
-    "lastSync": datetime.utcnow().isoformat() + "Z"
+    "lastSync": now,
+    "integrity": {
+        "version": CACHE_FORMAT_VERSION,
+        "docketCount": len(dockets),
+        "checksum": checksum,
+        "computedAt": now
+    }
 }
 
 print(json.dumps(cache, indent=2))

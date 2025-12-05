@@ -354,6 +354,8 @@ class GmailService: ObservableObject {
     
     /// Mark an email as read
     func markAsRead(messageId: String) async throws {
+        print("📧 GmailService: Attempting to mark email \(messageId) as read...")
+        
         let url = URL(string: "\(baseURL)/users/me/messages/\(messageId)/modify")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -365,15 +367,24 @@ class GmailService: ObservableObject {
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (_, httpResponse) = try await makeAuthenticatedRequest(&request)
+        let (responseData, httpResponse) = try await makeAuthenticatedRequest(&request)
+        
+        print("📧 GmailService: markAsRead response status: \(httpResponse.statusCode)")
         
         if httpResponse.statusCode == 401 {
+            print("📧 GmailService: ❌ Authentication failed (401)")
             throw GmailError.notAuthenticated
         }
         
-        guard httpResponse.statusCode == 200 else {
-            throw GmailError.apiError("HTTP \(httpResponse.statusCode)")
+        // Gmail API returns 200 for successful modify operations
+        // Some APIs return 204 (No Content), but Gmail uses 200
+        guard httpResponse.statusCode == 200 || httpResponse.statusCode == 204 else {
+            let errorMessage = String(data: responseData, encoding: .utf8) ?? "Unknown error"
+            print("📧 GmailService: ❌ Failed to mark email as read - HTTP \(httpResponse.statusCode): \(errorMessage)")
+            throw GmailError.apiError("HTTP \(httpResponse.statusCode): \(errorMessage)")
         }
+        
+        print("📧 GmailService: ✅ Successfully marked email \(messageId) as read")
     }
     
     /// Download an image from a URL and convert it to a base64 data URI
@@ -662,6 +673,51 @@ class GmailService: ObservableObject {
         }
         
         return capitalizedParts.joined(separator: " ")
+    }
+    
+    /// Download an image from a URL and convert it to a base64 data URI
+    /// - Parameter url: The URL of the image to download
+    /// - Returns: A data URI string (e.g., "data:image/jpeg;base64,...")
+    private func downloadImageAsDataURI(from url: URL) async throws -> String {
+        // Download the image
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw GmailError.apiError("Failed to download image: HTTP \(response)")
+        }
+        
+        // Determine MIME type from URL or response
+        var mimeType = "image/jpeg" // Default
+        if let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type"),
+           contentType.hasPrefix("image/") {
+            mimeType = contentType
+        } else {
+            // Try to determine from URL extension
+            let pathExtension = url.pathExtension.lowercased()
+            switch pathExtension {
+            case "jpg", "jpeg":
+                mimeType = "image/jpeg"
+            case "png":
+                mimeType = "image/png"
+            case "gif":
+                mimeType = "image/gif"
+            case "webp":
+                mimeType = "image/webp"
+            case "bmp":
+                mimeType = "image/bmp"
+            case "svg":
+                mimeType = "image/svg+xml"
+            default:
+                mimeType = "image/jpeg" // Default fallback
+            }
+        }
+        
+        // Convert to base64
+        let base64String = data.base64EncodedString()
+        
+        // Return as data URI
+        return "data:\(mimeType);base64,\(base64String)"
     }
 }
 

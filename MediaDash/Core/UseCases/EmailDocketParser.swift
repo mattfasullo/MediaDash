@@ -14,11 +14,13 @@ struct EmailDocketParser {
     private let patterns: [String]
     private let companyNameMatcher: CompanyNameMatcher?
     private let metadataManager: DocketMetadataManager?
+    private weak var asanaCacheManager: AsanaCacheManager?
     
-    init(patterns: [String] = [], companyNameMatcher: CompanyNameMatcher? = nil, metadataManager: DocketMetadataManager? = nil) {
+    init(patterns: [String] = [], companyNameMatcher: CompanyNameMatcher? = nil, metadataManager: DocketMetadataManager? = nil, asanaCacheManager: AsanaCacheManager? = nil) {
         self.patterns = patterns.isEmpty ? Self.defaultPatterns : patterns
         self.companyNameMatcher = companyNameMatcher
         self.metadataManager = metadataManager
+        self.asanaCacheManager = asanaCacheManager
     }
     
     /// Default parsing patterns
@@ -38,12 +40,30 @@ struct EmailDocketParser {
             #"(\d+)_([^_\s]+(?:_[^_\s]+)*)"#,
             // Pattern 5b: "12345 JobName" (space-separated, like "25483 HH - End of year sizzle")
             // Matches docket number followed by space and job name anywhere in text
-            #"(\d{5,})\s+(.+?)(?:\n|$|\.)"#,
+            // Made more restrictive: only match exactly 5 digits (not 5+) to prevent false positives
+            #"(\d{5})\s+(.+?)(?:\n|$|\.)"#,
             // Pattern 6: "Docket #12345 - JobName"
             #"Docket\s*#?\s*(\d+)\s*[-–]\s*(.+?)(?:\s|$|,|\.)"#,
             // Pattern 7: Just numeric docket "12345" or "25484" anywhere
-            #"(\d{5,})(?:\s|$|,|\.)"#
+            // NOTE: This is a fallback pattern - should only match if other patterns failed
+            // Made more restrictive: only match exactly 5 digits (not 5+), and only if followed by whitespace/punctuation
+            // This prevents matching long numbers like order IDs, product codes, etc.
+            #"\b(\d{5})\b(?:\s|$|,|\.)"#
         ]
+    }
+    
+    /// Check if parser can confidently parse this email (without needing CodeMind)
+    /// - Parameters:
+    ///   - subject: Email subject line
+    ///   - body: Email body text
+    ///   - from: Email sender
+    /// - Returns: ParsedDocket if parser can confidently parse (confidence >= 0.8), nil otherwise
+    func canParseWithHighConfidence(subject: String?, body: String?, from: String?) -> ParsedDocket? {
+        guard let parsed = parseEmail(subject: subject, body: body, from: from) else {
+            return nil
+        }
+        // Only return if confidence is high enough to skip CodeMind
+        return parsed.confidence >= 0.8 ? parsed : nil
     }
     
     /// Parse email to extract docket information
@@ -81,7 +101,8 @@ struct EmailDocketParser {
         
         // FIRST: Try to find docket number and job name on the first line of body (most common case)
         // Pattern: "25489 12 Days of Connection" or "25489 Job Name"
-        let firstLinePattern = #"^(\d{5,})\s+(.+?)(?:\s*$|\n|\.)"#
+        // Made more restrictive: only match exactly 5 digits (not 5+) to prevent false positives
+        let firstLinePattern = #"^(\d{5})\s+(.+?)(?:\s*$|\n|\.)"#
         if let regex = try? NSRegularExpression(pattern: firstLinePattern, options: [.anchorsMatchLines]),
            let match = regex.firstMatch(in: bodyText, range: NSRange(bodyText.startIndex..., in: bodyText)),
            match.numberOfRanges >= 3 {
@@ -169,22 +190,32 @@ struct EmailDocketParser {
         // If we have both, try to improve job name with fuzzy matching and metadata lookup
         if let docketNumber = extractedDocketNumber, let jobName = extractedJobName {
             var finalJobName = jobName
-            var confidence: Double = 0.8
+            var baseConfidence: Double = 0.8
             
             // Try metadata lookup first (most reliable)
             if let metadata = metadataManager?.getMetadata(for: docketNumber, jobName: jobName),
                !metadata.jobName.isEmpty {
                 finalJobName = metadata.jobName
-                confidence = 0.95
+                baseConfidence = 0.95
             }
             // Try fuzzy matching against company cache
             else if let matcher = companyNameMatcher {
                 let combinedText = "\(subjectText)\n\(bodyText)"
                 if let match = matcher.findBestMatch(in: combinedText) {
                     finalJobName = match.name
-                    confidence = 0.85
+                    baseConfidence = 0.85
                 }
             }
+            
+            // Apply year validation and Asana cache checking
+            let finalConfidence = calculateConfidence(
+                pattern: "first_line_body",
+                subject: subjectText,
+                docketNumber: docketNumber,
+                foundInEmail: true
+            )
+            // Use the higher of base confidence or calculated confidence
+            let confidence = max(baseConfidence, finalConfidence)
             
             return ParsedDocket(
                 docketNumber: docketNumber,
@@ -196,23 +227,52 @@ struct EmailDocketParser {
                     "subject": subjectText,
                     "body": bodyText,
                     "original_job_name": jobName,
-                    "final_job_name": finalJobName
+                    "final_job_name": finalJobName,
+                    "year_valid": isValidYearBasedDocket(docketNumber),
+                    "asana_exists": docketExistsInAsana(docketNumber)
                 ]
             )
         }
         
         // Try each pattern on combined text
-        for pattern in patterns {
+        for (index, pattern) in patterns.enumerated() {
             if let parsed = tryPattern(pattern, in: combinedText) {
+                // Check if docket number was found in email (subject or body)
+                let foundInEmail = subjectText.contains(parsed.docketNumber) || bodyText.contains(parsed.docketNumber)
+                
+                // CRITICAL: Pattern 7 is the most permissive (matches any 5-digit number)
+                // For Pattern 7, we MUST validate the year to prevent false positives
+                let isPattern7 = (index == patterns.count - 1) // Pattern 7 is the last pattern
+                if isPattern7 {
+                    // Pattern 7 is too broad - reject if year validation fails
+                    if !isValidYearBasedDocket(parsed.docketNumber) {
+                        print("EmailDocketParser: ⚠️ Rejecting Pattern 7 match - invalid year format: \(parsed.docketNumber)")
+                        continue // Skip this match, try next pattern or return nil
+                    }
+                    // Also require that the docket number appears in the email content
+                    if !foundInEmail {
+                        print("EmailDocketParser: ⚠️ Rejecting Pattern 7 match - docket number not found in email: \(parsed.docketNumber)")
+                        continue
+                    }
+                }
+                
                 return ParsedDocket(
                     docketNumber: parsed.docketNumber,
                     jobName: parsed.jobName.trimmingCharacters(in: .whitespacesAndNewlines),
                     sourceEmail: from ?? "unknown",
-                    confidence: calculateConfidence(pattern: pattern, subject: subjectText),
+                    confidence: calculateConfidence(
+                        pattern: pattern,
+                        subject: subjectText,
+                        docketNumber: parsed.docketNumber,
+                        foundInEmail: foundInEmail
+                    ),
                     rawData: [
                         "pattern": pattern,
                         "subject": subjectText,
-                        "matchedText": parsed.matchedText
+                        "matchedText": parsed.matchedText,
+                        "found_in_email": foundInEmail,
+                        "year_valid": isValidYearBasedDocket(parsed.docketNumber),
+                        "asana_exists": docketExistsInAsana(parsed.docketNumber)
                     ]
                 )
             }
@@ -220,14 +280,24 @@ struct EmailDocketParser {
         
         // If no pattern matches, try to extract from subject alone using common formats
         if let parsed = extractFromSubject(subjectText) {
+            let foundInEmail = subjectText.contains(parsed.docketNumber) || bodyText.contains(parsed.docketNumber)
+            
             return ParsedDocket(
                 docketNumber: parsed.docketNumber,
                 jobName: parsed.jobName,
                 sourceEmail: from ?? "unknown",
-                confidence: 0.5, // Lower confidence for fallback
+                confidence: calculateConfidence(
+                    pattern: "subject_fallback",
+                    subject: subjectText,
+                    docketNumber: parsed.docketNumber,
+                    foundInEmail: foundInEmail
+                ),
                 rawData: [
                     "method": "subject_fallback",
-                    "subject": subjectText
+                    "subject": subjectText,
+                    "found_in_email": foundInEmail,
+                    "year_valid": isValidYearBasedDocket(parsed.docketNumber),
+                    "asana_exists": docketExistsInAsana(parsed.docketNumber)
                 ]
             )
         }
@@ -438,25 +508,38 @@ struct EmailDocketParser {
             // If we found a docket number, use it; otherwise use "TBD"
             let finalDocketNumber = foundDocketNumber ?? "TBD"
             
+            // Check if docket number was found in email
+            let foundInEmail = foundDocketNumber != nil && (subjectText.contains(foundDocketNumber!) || bodyText.contains(foundDocketNumber!))
+            
             // Try to improve job name with fuzzy matching and metadata lookup
             var finalJobName = jobName ?? "New Docket"
-            var confidence: Double = foundDocketNumber != nil ? 0.7 : 0.3
+            var baseConfidence: Double = foundDocketNumber != nil ? 0.7 : 0.3
             
             // Try metadata lookup first (most reliable)
             if let docketNum = foundDocketNumber,
                let metadata = metadataManager?.getMetadata(for: docketNum, jobName: finalJobName),
                !metadata.jobName.isEmpty {
                 finalJobName = metadata.jobName
-                confidence = 0.9
+                baseConfidence = 0.9
             }
             // Try fuzzy matching against company cache
             else if let matcher = companyNameMatcher, finalJobName == "New Docket" || finalJobName.count < 5 {
                 let combinedText = "\(subjectText)\n\(bodyText)"
                 if let match = matcher.findBestMatch(in: combinedText) {
                     finalJobName = match.name
-                    confidence = 0.75
+                    baseConfidence = 0.75
                 }
             }
+            
+            // Apply year validation and Asana cache checking
+            let calculatedConfidence = calculateConfidence(
+                pattern: "new_docket_fallback",
+                subject: subjectText,
+                docketNumber: foundDocketNumber,
+                foundInEmail: foundInEmail
+            )
+            // Use the higher of base confidence or calculated confidence
+            let confidence = max(baseConfidence, calculatedConfidence)
             
             return ParsedDocket(
                 docketNumber: finalDocketNumber,
@@ -469,7 +552,10 @@ struct EmailDocketParser {
                     "body": bodyText,
                     "has_docket_number": foundDocketNumber != nil,
                     "original_job_name": jobName ?? "New Docket",
-                    "final_job_name": finalJobName
+                    "final_job_name": finalJobName,
+                    "found_in_email": foundInEmail,
+                    "year_valid": foundDocketNumber != nil ? isValidYearBasedDocket(foundDocketNumber!) : false,
+                    "asana_exists": foundDocketNumber != nil ? docketExistsInAsana(foundDocketNumber!) : false
                 ]
             )
         }
@@ -551,21 +637,109 @@ struct EmailDocketParser {
         return nil
     }
     
-    /// Calculate confidence score based on pattern match and context
-    private func calculateConfidence(pattern: String, subject: String) -> Double {
+    /// Validate that a docket number starts with the last two digits of a year
+    /// - Parameter docketNumber: The docket number to validate
+    /// - Returns: True if the docket number starts with valid year digits (last two digits of current or recent years)
+    private func isValidYearBasedDocket(_ docketNumber: String) -> Bool {
+        // Remove country code suffix if present (e.g., "25484-US" -> "25484")
+        let numericPart = docketNumber.components(separatedBy: "-").first ?? docketNumber
+        
+        // Must be at least 5 digits
+        guard numericPart.count >= 5, numericPart.allSatisfy({ $0.isNumber }) else {
+            return false
+        }
+        
+        // Get the first two digits (year prefix)
+        let yearPrefix = String(numericPart.prefix(2))
+        guard let yearDigits = Int(yearPrefix) else {
+            return false
+        }
+        
+        // Get current year and calculate valid year range (current year ± 2 years for safety)
+        let calendar = Calendar.current
+        let currentYear = calendar.component(.year, from: Date())
+        let currentYearLastTwo = currentYear % 100
+        
+        // Check if it matches current year or recent years (within ±2 years)
+        // This covers cases like: 23 (2023), 24 (2024), 25 (2025), 26 (2026), 27 (2027)
+        let validYears = [
+            (currentYearLastTwo - 2 + 100) % 100,  // 2 years ago
+            (currentYearLastTwo - 1 + 100) % 100,  // 1 year ago
+            currentYearLastTwo,                     // Current year
+            (currentYearLastTwo + 1) % 100,        // Next year
+            (currentYearLastTwo + 2) % 100         // 2 years ahead
+        ]
+        
+        return validYears.contains(yearDigits)
+    }
+    
+    /// Check if a docket number exists in Asana cache
+    /// - Parameter docketNumber: The docket number to check
+    /// - Returns: True if the docket exists in Asana cache
+    private func docketExistsInAsana(_ docketNumber: String) -> Bool {
+        guard let asanaCache = asanaCacheManager else {
+            return false
+        }
+        
+        // Remove country code suffix if present for comparison
+        let numericPart = docketNumber.components(separatedBy: "-").first ?? docketNumber
+        
+        // Load cached dockets and check if any match
+        // Note: AsanaCacheManager is @MainActor. Since EmailScanningService (which calls this)
+        // is also @MainActor, we can use assumeIsolated safely.
+        // If we're not on MainActor, this will crash - but that shouldn't happen given the call sites.
+        return MainActor.assumeIsolated {
+            let dockets = asanaCache.loadCachedDockets()
+            return dockets.contains { $0.number == numericPart || $0.number == docketNumber }
+        }
+    }
+    
+    /// Calculate confidence score based on pattern match, context, year validation, and Asana cache
+    /// - Parameters:
+    ///   - pattern: The pattern that matched
+    ///   - subject: Email subject
+    ///   - docketNumber: Extracted docket number
+    ///   - foundInEmail: Whether docket number was found in email content
+    /// - Returns: Confidence score (0.0 to 1.0)
+    private func calculateConfidence(pattern: String, subject: String, docketNumber: String?, foundInEmail: Bool) -> Double {
         var confidence: Double = 0.7 // Base confidence
+        
+        // CRITICAL: If docket number is NOT found in email, significantly lower confidence
+        // ALL dockets should be mentioned in the email
+        if !foundInEmail {
+            confidence -= 0.4 // Heavy penalty
+        }
+        
+        // CRITICAL: Year validation - heavily weighted
+        if let docketNum = docketNumber {
+            if isValidYearBasedDocket(docketNum) {
+                confidence += 0.25 // Heavy boost for valid year-based docket
+            } else {
+                confidence -= 0.3 // Heavy penalty for invalid year format
+            }
+            
+            // Asana cache check - boost confidence if docket exists
+            if docketExistsInAsana(docketNum) {
+                confidence += 0.15 // Boost for existing docket
+            }
+        }
         
         // Higher confidence if match is in subject (more reliable)
         if subject.lowercased().contains("docket") {
-            confidence += 0.2
+            confidence += 0.1
         }
         
         // Higher confidence for more specific patterns
         if pattern.contains("Docket") && pattern.contains("Job") {
-            confidence += 0.1
+            confidence += 0.05
         }
         
-        return min(1.0, confidence)
+        return min(1.0, max(0.0, confidence))
+    }
+    
+    /// Calculate confidence score based on pattern match and context (legacy method for backward compatibility)
+    private func calculateConfidence(pattern: String, subject: String) -> Double {
+        return calculateConfidence(pattern: pattern, subject: subject, docketNumber: nil, foundInEmail: true)
     }
 }
 

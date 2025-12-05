@@ -144,6 +144,14 @@ class OAuthService: ObservableObject {
         _ = KeychainService.store(key: "\(service)_access_token", value: token)
     }
     
+    /// Store access token and refresh token securely
+    func storeTokens(accessToken: String, refreshToken: String?, for service: String) {
+        _ = KeychainService.store(key: "\(service)_access_token", value: accessToken)
+        if let refreshToken = refreshToken {
+            _ = KeychainService.store(key: "\(service)_refresh_token", value: refreshToken)
+        }
+    }
+    
     /// Retrieve stored access token
     func retrieveToken(for service: String) -> String? {
         return KeychainService.retrieve(key: "\(service)_access_token")
@@ -152,6 +160,7 @@ class OAuthService: ObservableObject {
     /// Clear stored token
     func clearToken(for service: String) {
         KeychainService.delete(key: "\(service)_access_token")
+        KeychainService.delete(key: "\(service)_refresh_token")
     }
     
     // MARK: - Convenience Methods (using hardcoded credentials)
