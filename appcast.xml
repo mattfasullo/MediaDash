@@ -21,31 +21,6 @@
             />
         </item>
         <item>
-            <title>Version 0.9.0</title>
-            <description><![CDATA[
-                <h2>What's New in 0.9.0</h2>
-                <ul>
-                    <li>Fixed window resizing: Windows are now properly locked to their default sizes in both compact and dashboard modes</li>
-                    <li>Fullscreen mode: Entering fullscreen automatically switches to dashboard mode for optimal viewing</li>
-                    <li>Mode switching: Added compact mode button in dashboard view to easily switch back to compact mode</li>
-                    <li>Automatic window resizing: Window automatically resizes to appropriate size when switching between compact and dashboard modes</li>
-                    <li>UI improvements: Fixed sidebar background to extend fully to top of window, restored all traffic light buttons</li>
-                    <li>Cleanup: Removed "Ready." status text from bottom right corner</li>
-                    <li>Window management: Improved window delegate handling to prevent unwanted resizing</li>
-                </ul>
-            ]]></description>
-            <pubDate>Fri, 05 Dec 2025 00:27:18 +0000</pubDate>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.0/MediaDash.zip"
-                sparkle:version="90"
-                sparkle:shortVersionString="0.9.0"
-                sparkle:edSignature="PLACEHOLDER"
-                length="0"
-                type="application/octet-stream"
-            />
-        </item>
-        <item>
             <title>Version 0.8.0</title>
             <description><![CDATA[
                 <p>CodeMind Brain Data Provider: Advanced data aggregation and intelligence layer. CodeMind Context Engine: Enhanced context processing and analysis. CodeMind Data Fusion: Multi-source data integration capabilities. CodeMind File Intelligence: Sophisticated file analysis and insights. CodeMind Metadata Intelligence: Enhanced metadata processing and extraction. CodeMind Session Analyzer: Deep session insights and pattern recognition. Email Feedback Tracker: Comprehensive email feedback management system. Enhanced CodeMind Email Classifier: Improved classification accuracy and performance. Enhanced Email Scanning Service: Better scanning capabilities and reliability. Improved CodeMind Brain View: Expanded functionality and user experience. Enhanced notification system: Better UI components and interaction. Improved CodeMind Logger: Enhanced logging infrastructure. Rule Editor View: New interface for managing classification rules. Grayson Employee Whitelist: Employee filtering functionality. Various bug fixes and performance improvements.</p>
