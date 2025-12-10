@@ -2,7 +2,7 @@ import Foundation
 import CodeMind
 import Combine
 
-/// Service that uses CodeMind AI to classify and understand email content
+/// Service that uses CodeMind to classify and understand email content
 /// for identifying new docket emails and file delivery emails
 @MainActor
 class CodeMindEmailClassifier: ObservableObject {
@@ -25,15 +25,19 @@ class CodeMindEmailClassifier: ObservableObject {
     ///   - provider: Provider name ("gemini" or "grok"). If nil, will try to get from settings or default to Gemini
     ///   - codebasePath: Optional codebase path for context
     func initialize(apiKey: String? = nil, provider: String? = nil, codebasePath: String? = nil) async throws {
-        // Prevent multiple simultaneous initializations
+        // Already initialized - nothing to do
+        guard !isInitialized else { return }
+
+        // If there's an existing initialization in progress, wait for it
         if let existingTask = initializationTask {
             try await existingTask.value
             return
         }
-        
+
+        // Double-check after awaiting (another thread may have completed initialization)
         guard !isInitialized else { return }
         
-        let task = Task { [weak self] in
+        let task = _Concurrency.Task { [weak self] in
             guard let self = self else { return }
             
             // Determine provider: use provided, then try settings, then default
@@ -85,7 +89,7 @@ class CodeMindEmailClassifier: ObservableObject {
                 default:
                     envVarName = "GEMINI_API_KEY"
                 }
-                let errorMsg = "\(providerName) API key not found. Configure an API key in Settings > CodeMind AI or set the \(envVarName) environment variable."
+                let errorMsg = "\(providerName) API key not found. Configure an API key in Settings > CodeMind or set the \(envVarName) environment variable."
                 CodeMindLogger.shared.log(.error, errorMsg, category: .initialization, metadata: ["provider": selectedProvider])
                 print("❌ CodeMind: \(errorMsg)")
                 throw CodeMindError.notConfigured(errorMsg)
@@ -246,7 +250,7 @@ class CodeMindEmailClassifier: ObservableObject {
                     ])
                     
                     // Wait for the retry delay
-                    try await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                    try await _Concurrency.Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
                     
                     // Retry
                     continue
@@ -299,7 +303,7 @@ class CodeMindEmailClassifier: ObservableObject {
             let emptyResponse = CodeMindResponse(content: "{}", toolResults: [])
             let ignoredClassification = DocketEmailClassification(
                 isNewDocket: false,
-                confidence: 1.0,
+                confidence: 0.0,  // Low confidence - rule blocked, not AI classification
                 docketNumber: nil,
                 jobName: nil,
                 reasoning: "Ignored by custom classification rule",
@@ -321,7 +325,7 @@ class CodeMindEmailClassifier: ObservableObject {
         print("✅ CodeMind instance exists, proceeding with classification")
         
         // Report activity to overlay
-        Task { @MainActor in
+        _Concurrency.Task { @MainActor in
             CodeMindActivityManager.shared.startClassifying(subject: subject ?? "Unknown")
         }
         
@@ -365,6 +369,13 @@ class CodeMindEmailClassifier: ObservableObject {
         Current email to classify:
         \(emailContent)
         
+        CRITICAL: NEW MESSAGE CONTENT ONLY
+        - The email body shown above contains ONLY the new message content that the sender typed
+        - Any quoted/replied content from previous messages in the thread has been automatically removed
+        - You should ONLY evaluate the new message content shown in the "Body" section above
+        - If the new message content is empty or contains no relevant information (e.g., just "Thanks" or "Got it"), this is likely NOT a new docket
+        - Replies with no new substantive content should be classified as NOT a new docket, even if the quoted content below (which you can't see) might contain docket information
+        
         CRITICAL EMAIL DIRECTION CHECK (MOST IMPORTANT RULE):
         1. First, determine the EMAIL DIRECTION:
            - INCOMING: External sender → Company (from outside to @graysonmusicgroup.com)
@@ -392,25 +403,32 @@ class CodeMindEmailClassifier: ObservableObject {
         1. FIRST: Check email direction - Is this INCOMING (new work request) or OUTGOING (delivering work)?
            - Outgoing = isNewDocket: false (docket already exists if you're sending work)
         2. Determine if this email is announcing a new docket/job (not a reply, not a file delivery, not a status update, NOT an outgoing delivery)
-        3. If it IS a new docket email, extract:
-           - Docket number: MUST be exactly 5 digits (e.g., "25493"), optionally with "-US" suffix (e.g., "25493-US")
-             Numbers with fewer or more than 5 digits are NOT valid docket numbers - return null for those
+        3. CRITICAL REQUIREMENT: A valid docket number is MANDATORY for new docket emails
+           - If you cannot find a valid docket number (exactly 5 digits, optionally with "-US" suffix), you MUST set isNewDocket: false
+           - DO NOT classify as new docket if docket number is missing, unclear, or invalid
+           - Docket numbers MUST be exactly 5 digits (e.g., "25493", "12345")
+           - Numbers with fewer or more than 5 digits are NOT valid docket numbers
            - If multiple docket numbers are mentioned, include ALL of them separated by comma (e.g., "25493, 25495")
+        4. If it IS a new docket email (AND has a valid docket number), extract:
+           - Docket number: MUST be exactly 5 digits (e.g., "25493"), optionally with "-US" suffix (e.g., "25493-US")
+             If no valid docket number found, set isNewDocket: false
            - Job name/Client name (the project or client name)
            - Any other relevant metadata
-        4. Respond with ONLY this JSON object, nothing else:
+        5. Respond with ONLY this JSON object, nothing else:
         {
           "isNewDocket": true/false,
           "confidence": 0.0-1.0,
           "docketNumber": "12345" or null,
           "jobName": "Client Name" or null,
-          "reasoning": "Brief explanation - MUST mention: 1) Email direction (incoming/outgoing/internal), 2) Why this is/isn't a new docket based on direction",
+          "reasoning": "Brief explanation - MUST mention: 1) Email direction (incoming/outgoing/internal), 2) Why this is/isn't a new docket based on direction, 3) If docket number was found or not",
           "extractedMetadata": {
             "agency": "Agency name if mentioned",
             "client": "Client name if mentioned",
             "projectManager": "PM name if mentioned"
           }
         }
+        
+        REMEMBER: If no valid docket number is found, isNewDocket MUST be false. Docket numbers are REQUIRED.
         
         CRITICAL: Respond with ONLY the JSON object above. No markdown, no code blocks, no explanations, no additional text. Start with { and end with }.
         """
@@ -566,119 +584,233 @@ class CodeMindEmailClassifier: ObservableObject {
                 print("⚠️ CodeMindEmailClassifier: WARNING - CodeMind returned 0.0 confidence. Response preview: \(String(responsePreview.prefix(200)))")
             }
         } catch let decodingError as DecodingError {
-            // Check if this is a missing key error (CodeMind returned wrong response type)
-            let isMissingKeyError: Bool
-            if case .keyNotFound(let key, _) = decodingError {
-                isMissingKeyError = true
-                CodeMindLogger.shared.log(.warning, "Missing expected key in response: \(key.stringValue)", category: .classification)
-            } else {
-                isMissingKeyError = false
-            }
+            // Check if the response appears to be incomplete/truncated
+            let isIncomplete = isIncompleteJSON(cleanedContent)
             
-            // If we're missing isNewDocket, try decoding as FileDeliveryClassification and convert
-            if isMissingKeyError {
-                if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: jsonData) {
-                    CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery response format for new docket check - converting", category: .classification, metadata: [
+            if isIncomplete {
+                // Log that we detected incomplete JSON
+                let lastChars = cleanedContent.suffix(100)
+                CodeMindLogger.shared.log(.error, "Detected incomplete/truncated JSON response", category: .classification, metadata: [
+                    "responseLength": "\(response.content.count)",
+                    "cleanedLength": "\(cleanedContent.count)",
+                    "lastChars": String(lastChars),
+                    "preview": String(responsePreview.prefix(500))
+                ])
+                
+                // Attempt to repair the incomplete JSON
+                if let repairedJSON = attemptRepairIncompleteJSON(cleanedContent),
+                   let repairedData = repairedJSON.data(using: .utf8) {
+                    // Try parsing the repaired JSON
+                    if let repaired = try? JSONDecoder().decode(DocketEmailClassification.self, from: repairedData) {
+                        CodeMindLogger.shared.log(.warning, "Successfully repaired and parsed truncated JSON response", category: .classification, metadata: [
+                            "originalLength": "\(cleanedContent.count)",
+                            "repairedLength": "\(repairedJSON.count)"
+                        ])
+                        classification = repaired
+                    } else if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: repairedData) {
+                        // Wrong format even after repair - mark for review
+                        CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery format (after repair) - marking for review", category: .classification)
+                        classification = DocketEmailClassification(
+                            isNewDocket: false,
+                            confidence: 0.3,
+                            docketNumber: nil,
+                            jobName: nil,
+                            reasoning: "Classification uncertain: LLM returned wrong format (response was also truncated). isFileDelivery=\(fileDeliveryClassification.isFileDelivery). Manual review recommended.",
+                            extractedMetadata: nil
+                        )
+                    } else {
+                        // Repair failed - throw error with details about truncation
+                        let errorMsg = """
+                        Response is truncated/incomplete JSON. The response was cut off mid-sentence.
+                        Response length: \(response.content.count) characters
+                        Last 100 characters: \(String(lastChars))
+                        This may indicate:
+                        • CodeMind API response was truncated
+                        • Token/output limit was reached
+                        • Network connection issue
+                        
+                        Original error: \(decodingError.localizedDescription)
+                        Response preview: \(String(responsePreview.prefix(300)))
+                        """
+                        throw CodeMindError.invalidResponse(errorMsg)
+                    }
+                } else {
+                    // Could not repair - throw detailed error
+                    let errorMsg = """
+                    Response is truncated/incomplete JSON and could not be repaired.
+                    Response length: \(response.content.count) characters
+                    Last 100 characters: \(String(lastChars))
+                    This may indicate:
+                    • CodeMind API response was truncated
+                    • Token/output limit was reached
+                    • Network connection issue
+                    
+                    Original error: \(decodingError.localizedDescription)
+                    Response preview: \(String(responsePreview.prefix(300)))
+                    """
+                    throw CodeMindError.invalidResponse(errorMsg)
+                }
+                
+                // Skip the rest of the error handling since we handled the incomplete JSON case
+                // Continue to final classification processing
+            } else {
+                // JSON appears complete but still failed to parse - handle normally
+                // Check if this is a missing key error (CodeMind returned wrong response type)
+                let isMissingKeyError: Bool
+                if case .keyNotFound(let key, _) = decodingError {
+                    isMissingKeyError = true
+                    CodeMindLogger.shared.log(.warning, "Missing expected key in response: \(key.stringValue)", category: .classification)
+                } else {
+                    isMissingKeyError = false
+                }
+                
+                // If we're missing isNewDocket, try decoding as FileDeliveryClassification
+                // This indicates the LLM returned the wrong format - log it but don't assume a classification
+                if isMissingKeyError {
+                    if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: jsonData) {
+                    // LLM returned wrong format - this is a classification error, not a valid result
+                    // Log the issue and mark as low confidence requiring review
+                    CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery response format for new docket check - marking for review", category: .classification, metadata: [
                         "isFileDelivery": "\(fileDeliveryClassification.isFileDelivery)",
-                        "confidence": String(format: "%.2f", fileDeliveryClassification.confidence)
+                        "confidence": String(format: "%.2f", fileDeliveryClassification.confidence),
+                        "issue": "Wrong response format - expected DocketEmailClassification"
                     ])
-                    // Convert file delivery response to new docket response
-                    // If it's not a file delivery, it's likely also not a new docket
+                    // Return low confidence classification to force manual review
+                    // Don't assume isNewDocket value - mark as uncertain
                     classification = DocketEmailClassification(
                         isNewDocket: false,
-                        confidence: fileDeliveryClassification.confidence,
+                        confidence: 0.3,  // Low confidence to trigger review
                         docketNumber: nil,
                         jobName: nil,
-                        reasoning: "CodeMind returned file delivery format: \(fileDeliveryClassification.reasoning)",
+                        reasoning: "Classification uncertain: LLM returned wrong response format. Original response indicated isFileDelivery=\(fileDeliveryClassification.isFileDelivery). Manual review recommended.",
                         extractedMetadata: nil
                     )
-                } else {
-                    // Try to strip markdown and extract JSON
-                    let cleanedResponse = stripMarkdownCodeFences(from: response.content)
-                    
-                    if let jsonRange = extractJSONFromResponse(cleanedResponse) {
-                        let jsonString = String(cleanedResponse[jsonRange])
-                        if let extractedData = jsonString.data(using: .utf8) {
-                            // Try file delivery format first
-                            if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: extractedData) {
-                                CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery response format (after extraction) - converting", category: .classification)
-                                classification = DocketEmailClassification(
-                                    isNewDocket: false,
-                                    confidence: fileDeliveryClassification.confidence,
-                                    docketNumber: nil,
-                                    jobName: nil,
-                                    reasoning: "CodeMind returned file delivery format: \(fileDeliveryClassification.reasoning)",
-                                    extractedMetadata: nil
-                                )
-                            } else if let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: extractedData) {
-                                classification = extracted
-                                CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
+                    } else {
+                        // Try to strip markdown and extract JSON
+                        let cleanedResponse = stripMarkdownCodeFences(from: response.content)
+                        
+                        if let jsonRange = extractJSONFromResponse(cleanedResponse) {
+                            let jsonString = String(cleanedResponse[jsonRange])
+                            if let extractedData = jsonString.data(using: String.Encoding.utf8) {
+                                // Try correct format first
+                                if let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: extractedData) {
+                                    classification = extracted
+                                    CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
+                                } else if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: extractedData) {
+                                    // Wrong format - mark for review
+                                    CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery response format (after extraction) - marking for review", category: .classification)
+                                    classification = DocketEmailClassification(
+                                        isNewDocket: false,
+                                        confidence: 0.3,
+                                        docketNumber: nil,
+                                        jobName: nil,
+                                        reasoning: "Classification uncertain: LLM returned wrong format. isFileDelivery=\(fileDeliveryClassification.isFileDelivery). Manual review recommended.",
+                                        extractedMetadata: nil
+                                    )
+                                } else {
+                                    throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                                }
                             } else {
                                 throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
                             }
+                        } else {
+                            // Last resort: try parsing the cleaned response directly
+                            if let cleanedData = cleanedResponse.data(using: String.Encoding.utf8) {
+                                // Try correct format first
+                                if let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: cleanedData) {
+                                    classification = extracted
+                                    CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
+                                } else if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: cleanedData) {
+                                    // Wrong format - mark for review
+                                    CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery response format (after cleaning) - marking for review", category: .classification)
+                                    classification = DocketEmailClassification(
+                                        isNewDocket: false,
+                                        confidence: 0.3,
+                                        docketNumber: nil,
+                                        jobName: nil,
+                                        reasoning: "Classification uncertain: LLM returned wrong format. isFileDelivery=\(fileDeliveryClassification.isFileDelivery). Manual review recommended.",
+                                        extractedMetadata: nil
+                                    )
+                                } else {
+                                    // Try repair if incomplete - use cleanedResponse since we're in the cleanedData path
+                                    if isIncompleteJSON(cleanedResponse), let repaired = attemptRepairIncompleteJSON(cleanedResponse),
+                                       let repairedData = repaired.data(using: String.Encoding.utf8),
+                                       let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: repairedData) {
+                                        classification = extracted
+                                        CodeMindLogger.shared.log(.success, "Successfully parsed repaired cleaned JSON", category: .classification)
+                                    } else {
+                                        throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                                    }
+                                }
+                            } else {
+                                // Try repair if incomplete
+                                if isIncompleteJSON(cleanedResponse), let repaired = attemptRepairIncompleteJSON(cleanedResponse),
+                                   let repairedData = repaired.data(using: String.Encoding.utf8),
+                                   let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: repairedData) {
+                                    classification = extracted
+                                    CodeMindLogger.shared.log(.success, "Successfully parsed repaired cleaned JSON", category: .classification)
+                                } else {
+                                    throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Not a missing key error, try standard recovery
+                    let logResponse = response.content.count > 10_000 
+                        ? String(response.content.prefix(10_000)) + "... (truncated, total length: \(response.content.count))"
+                        : response.content
+                    CodeMindLogger.shared.log(.error, "JSON decoding failed", category: .classification, metadata: [
+                        "error": "\(decodingError)",
+                        "responsePreview": String(responsePreview),
+                        "responseLength": "\(response.content.count)",
+                        "fullResponse": logResponse
+                    ])
+                    
+                    // Try to strip markdown code fences and extract JSON from response if it has extra text
+                    let cleanedResponse = stripMarkdownCodeFences(from: response.content)
+                    
+                    if let jsonRange = extractJSONFromResponse(cleanedResponse) {
+                        var jsonString = String(cleanedResponse[jsonRange])
+                        CodeMindLogger.shared.log(.debug, "Attempting to parse extracted JSON", category: .classification, metadata: [
+                            "extractedJSONLength": "\(jsonString.count)",
+                            "extractedJSONPreview": jsonString.count > 500 ? String(jsonString.prefix(500)) + "..." : jsonString
+                        ])
+                        
+                        // Check if extracted JSON is incomplete and try to repair
+                        if isIncompleteJSON(jsonString), let repaired = attemptRepairIncompleteJSON(jsonString) {
+                            jsonString = repaired
+                            CodeMindLogger.shared.log(.debug, "Repaired incomplete extracted JSON", category: .classification, metadata: [
+                                "repairedLength": "\(repaired.count)"
+                            ])
+                        }
+                        
+                        if let extractedData = jsonString.data(using: String.Encoding.utf8),
+                           let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: extractedData) {
+                            classification = extracted
+                            CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
                         } else {
                             throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
                         }
                     } else {
                         // Last resort: try parsing the cleaned response directly
-                        if let cleanedData = cleanedResponse.data(using: .utf8) {
-                            if let fileDeliveryClassification = try? JSONDecoder().decode(FileDeliveryClassification.self, from: cleanedData) {
-                                CodeMindLogger.shared.log(.warning, "CodeMind returned file delivery response format (after cleaning) - converting", category: .classification)
-                                classification = DocketEmailClassification(
-                                    isNewDocket: false,
-                                    confidence: fileDeliveryClassification.confidence,
-                                    docketNumber: nil,
-                                    jobName: nil,
-                                    reasoning: "CodeMind returned file delivery format: \(fileDeliveryClassification.reasoning)",
-                                    extractedMetadata: nil
-                                )
-                            } else if let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: cleanedData) {
-                                classification = extracted
-                                CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
-                            } else {
-                                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
-                            }
+                        var cleanedToParse = cleanedResponse
+                        
+                        // Check if cleaned response is incomplete and try to repair
+                        if isIncompleteJSON(cleanedToParse), let repaired = attemptRepairIncompleteJSON(cleanedToParse) {
+                            cleanedToParse = repaired
+                            CodeMindLogger.shared.log(.debug, "Repaired incomplete cleaned JSON", category: .classification, metadata: [
+                                "repairedLength": "\(repaired.count)"
+                            ])
+                        }
+                        
+                        if let cleanedData = cleanedToParse.data(using: String.Encoding.utf8),
+                           let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: cleanedData) {
+                            classification = extracted
+                            CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
                         } else {
                             throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
                         }
-                    }
-                }
-            } else {
-                // Not a missing key error, try standard recovery
-            let logResponse = response.content.count > 10_000 
-                ? String(response.content.prefix(10_000)) + "... (truncated, total length: \(response.content.count))"
-                : response.content
-            CodeMindLogger.shared.log(.error, "JSON decoding failed", category: .classification, metadata: [
-                "error": "\(decodingError)",
-                "responsePreview": String(responsePreview),
-                "responseLength": "\(response.content.count)",
-                "fullResponse": logResponse
-            ])
-            
-            // Try to strip markdown code fences and extract JSON from response if it has extra text
-            let cleanedResponse = stripMarkdownCodeFences(from: response.content)
-            
-            if let jsonRange = extractJSONFromResponse(cleanedResponse) {
-                let jsonString = String(cleanedResponse[jsonRange])
-                CodeMindLogger.shared.log(.debug, "Attempting to parse extracted JSON", category: .classification, metadata: [
-                    "extractedJSONLength": "\(jsonString.count)",
-                    "extractedJSONPreview": jsonString.count > 500 ? String(jsonString.prefix(500)) + "..." : jsonString
-                ])
-                if let extractedData = jsonString.data(using: .utf8),
-                   let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: extractedData) {
-                    classification = extracted
-                    CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
-                } else {
-                    throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
-                }
-            } else {
-                // Last resort: try parsing the cleaned response directly
-                if let cleanedData = cleanedResponse.data(using: .utf8),
-                   let extracted = try? JSONDecoder().decode(DocketEmailClassification.self, from: cleanedData) {
-                    classification = extracted
-                    CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
-                } else {
-                    throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
                     }
                 }
             }
@@ -731,7 +863,7 @@ class CodeMindEmailClassifier: ObservableObject {
         var verificationSource = ""
         if let docketNumber = finalClassification.docketNumber {
             // Report verification activity
-            Task { @MainActor in
+            _Concurrency.Task { @MainActor in
                 CodeMindActivityManager.shared.startVerifying(docket: docketNumber)
             }
             
@@ -754,7 +886,7 @@ class CodeMindEmailClassifier: ObservableObject {
             // Report verification result
             let finalSource = verificationSource
             let finalVerified = wasVerified
-            Task { @MainActor in
+            _Concurrency.Task { @MainActor in
                 CodeMindActivityManager.shared.finishVerifying(
                     docket: docketNumber,
                     source: finalSource,
@@ -766,12 +898,14 @@ class CodeMindEmailClassifier: ObservableObject {
         // Report classification complete to overlay
         let classType = finalClassification.isNewDocket ? "New Docket" : "Not Docket"
         let finalWasVerified = wasVerified
-        Task { @MainActor in
+        let classificationReasoning = finalClassification.reasoning
+        _Concurrency.Task { @MainActor in
             CodeMindActivityManager.shared.finishClassifying(
                 subject: subject ?? "Unknown",
                 type: classType,
                 confidence: finalClassification.confidence,
-                verified: finalWasVerified
+                verified: finalWasVerified,
+                reasoning: classificationReasoning
             )
         }
         
@@ -855,8 +989,9 @@ class CodeMindEmailClassifier: ObservableObject {
             let emptyResponse = CodeMindResponse(content: "{}", toolResults: [])
             let ignoredClassification = FileDeliveryClassification(
                 isFileDelivery: false,
-                confidence: 1.0,
+                confidence: 0.0,  // Low confidence - rule blocked, not AI classification
                 fileLinks: [],
+                fileLinkDescriptions: nil,
                 fileHostingServices: [],
                 reasoning: "Ignored by custom classification rule",
                 hasAttachments: false
@@ -873,7 +1008,7 @@ class CodeMindEmailClassifier: ObservableObject {
         }
         
         // Report activity to overlay
-        Task { @MainActor in
+        _Concurrency.Task { @MainActor in
             CodeMindActivityManager.shared.startClassifying(subject: subject ?? "Unknown")
         }
         
@@ -925,6 +1060,13 @@ class CodeMindEmailClassifier: ObservableObject {
             ============================================================================
             
             \(emailContent)
+            
+            CRITICAL: NEW MESSAGE CONTENT ONLY
+            - The email body shown above contains ONLY the new message content that the sender typed
+            - Any quoted/replied content from previous messages has been automatically removed
+            - You should evaluate BOTH the thread context AND the new message content
+            - If the new message content is empty or contains no relevant information (e.g., just "Thanks" or "Got it"), evaluate based on thread context but with lower confidence
+            - Replies with no new substantive content should generally NOT be classified as file deliveries unless the thread context clearly indicates ongoing file delivery activity
             
             ============================================================================
             LEARNING FROM PAST CORRECTIONS:
@@ -983,16 +1125,20 @@ class CodeMindEmailClassifier: ObservableObject {
             1. Read through the ENTIRE thread above to understand the conversation
             2. Determine if the current email is part of a file delivery TO your company
             3. Extract file links if this is a file delivery
-            4. Respond with ONLY valid JSON:
+            4. For each link, determine what content is being provided (e.g., "Final masters for Toyota campaign", "Color corrected footage", "Audio stems")
+            5. Respond with ONLY valid JSON:
             {
               "isFileDelivery": true/false,
               "confidence": 0.0-1.0,
               "fileLinks": ["https://...", "https://..."],
+              "fileLinkDescriptions": ["Description of what link 1 contains", "Description of what link 2 contains"],
               "fileHostingServices": ["Dropbox", "WeTransfer"],
               "reasoning": "MUST include: 1) Your analysis of the FULL thread, 2) Conversation direction, 3) Why this is/isn't file delivery based on thread context, 4) Confidence reasoning",
               "hasAttachments": true/false
             }
-            
+
+            NOTE: fileLinkDescriptions array must have the same length as fileLinks array. If you cannot determine what a link contains, use "Unknown contents" as the description.
+
             Only respond with valid JSON, no additional text.
             """
         } else {
@@ -1004,6 +1150,12 @@ class CodeMindEmailClassifier: ObservableObject {
             
             Current email to classify:
             \(emailContent)
+            
+            CRITICAL: NEW MESSAGE CONTENT ONLY
+            - The email body shown above contains ONLY the new message content that the sender typed
+            - Any quoted/replied content from previous messages has been automatically removed
+            - You should ONLY evaluate the new message content shown in the "Body" section above
+            - If the new message content is empty or contains no relevant information, this is likely NOT a file delivery
             
             (No thread context available - analyzing single email)
             
@@ -1021,18 +1173,21 @@ class CodeMindEmailClassifier: ObservableObject {
             1. Determine if this email is delivering files FROM external party TO your company (not outgoing, not a new docket, not a status update)
             2. If it IS a file delivery email, extract:
                - File hosting links (Dropbox, WeTransfer, Google Drive, OneDrive, etc.)
-               - Any indication of what files are being shared
+               - A description of what each link contains (e.g., "Final masters for Toyota campaign", "Color corrected footage")
                - Whether files are attached directly
             3. Respond in JSON format:
             {
               "isFileDelivery": true/false,
               "confidence": 0.0-1.0,
               "fileLinks": ["https://...", "https://..."],
+              "fileLinkDescriptions": ["Description of what link 1 contains", "Description of what link 2 contains"],
               "fileHostingServices": ["Dropbox", "WeTransfer"],
               "reasoning": "Brief explanation of why this is/isn't a file delivery email",
               "hasAttachments": true/false
             }
-            
+
+            NOTE: fileLinkDescriptions array must have the same length as fileLinks array. If you cannot determine what a link contains, use "Unknown contents" as the description.
+
             Only respond with valid JSON, no additional text.
             """
         }
@@ -1093,18 +1248,90 @@ class CodeMindEmailClassifier: ObservableObject {
                 print("⚠️ CodeMindEmailClassifier: WARNING - CodeMind returned 0.0 confidence for file delivery. Response preview: \(String(responsePreview.prefix(200)))")
             }
         } catch let decodingError as DecodingError {
-            // Check if this is a missing key error (CodeMind returned wrong response type)
-            let isMissingKeyError: Bool
-            if case .keyNotFound(let key, _) = decodingError {
-                isMissingKeyError = true
-                CodeMindLogger.shared.log(.warning, "Missing expected key in response: \(key.stringValue)", category: .classification)
-            } else {
-                isMissingKeyError = false
-            }
+            // Check if the response appears to be incomplete/truncated
+            let isIncomplete = isIncompleteJSON(cleanedContent)
             
-            // If we're missing isFileDelivery, try decoding as DocketEmailClassification and convert
-            if isMissingKeyError {
-                if let docketClassification = try? JSONDecoder().decode(DocketEmailClassification.self, from: jsonData) {
+            if isIncomplete {
+                // Log that we detected incomplete JSON
+                let lastChars = cleanedContent.suffix(100)
+                CodeMindLogger.shared.log(.error, "Detected incomplete/truncated JSON response (file delivery)", category: .classification, metadata: [
+                    "responseLength": "\(response.content.count)",
+                    "cleanedLength": "\(cleanedContent.count)",
+                    "lastChars": String(lastChars),
+                    "preview": String(responsePreview.prefix(500))
+                ])
+                
+                // Attempt to repair the incomplete JSON
+                if let repairedJSON = attemptRepairIncompleteJSON(cleanedContent),
+                   let repairedData = repairedJSON.data(using: .utf8) {
+                    // Try parsing the repaired JSON
+                    if let repaired = try? JSONDecoder().decode(FileDeliveryClassification.self, from: repairedData) {
+                        CodeMindLogger.shared.log(.warning, "Successfully repaired and parsed truncated JSON response (file delivery)", category: .classification, metadata: [
+                            "originalLength": "\(cleanedContent.count)",
+                            "repairedLength": "\(repairedJSON.count)"
+                        ])
+                        classification = repaired
+                    } else if let docketClassification = try? JSONDecoder().decode(DocketEmailClassification.self, from: repairedData) {
+                        // Wrong format even after repair - convert
+                        CodeMindLogger.shared.log(.warning, "CodeMind returned new docket format (after repair) - converting", category: .classification)
+                        classification = FileDeliveryClassification(
+                            isFileDelivery: false,
+                            confidence: docketClassification.confidence,
+                            fileLinks: [],
+                            fileLinkDescriptions: nil,
+                            fileHostingServices: [],
+                            reasoning: "CodeMind returned new docket format (response was also truncated): \(docketClassification.reasoning)",
+                            hasAttachments: false
+                        )
+                    } else {
+                        // Repair failed - throw error with details about truncation
+                        let errorMsg = """
+                        Response is truncated/incomplete JSON (file delivery). The response was cut off mid-sentence.
+                        Response length: \(response.content.count) characters
+                        Last 100 characters: \(String(lastChars))
+                        This may indicate:
+                        • CodeMind API response was truncated
+                        • Token/output limit was reached
+                        • Network connection issue
+                        
+                        Original error: \(decodingError.localizedDescription)
+                        Response preview: \(String(responsePreview.prefix(300)))
+                        """
+                        throw CodeMindError.invalidResponse(errorMsg)
+                    }
+                } else {
+                    // Could not repair - throw detailed error
+                    let errorMsg = """
+                    Response is truncated/incomplete JSON and could not be repaired (file delivery).
+                    Response length: \(response.content.count) characters
+                    Last 100 characters: \(String(lastChars))
+                    This may indicate:
+                    • CodeMind API response was truncated
+                    • Token/output limit was reached
+                    • Network connection issue
+                    
+                    Original error: \(decodingError.localizedDescription)
+                    Response preview: \(String(responsePreview.prefix(300)))
+                    """
+                    throw CodeMindError.invalidResponse(errorMsg)
+                }
+                
+                // Skip the rest of the error handling since we handled the incomplete JSON case
+                // Continue to final classification processing
+            } else {
+                // JSON appears complete but still failed to parse - handle normally
+                // Check if this is a missing key error (CodeMind returned wrong response type)
+                let isMissingKeyError: Bool
+                if case .keyNotFound(let key, _) = decodingError {
+                    isMissingKeyError = true
+                    CodeMindLogger.shared.log(.warning, "Missing expected key in response: \(key.stringValue)", category: .classification)
+                } else {
+                    isMissingKeyError = false
+                }
+                
+                // If we're missing isFileDelivery, try decoding as DocketEmailClassification and convert
+                if isMissingKeyError {
+                    if let docketClassification = try? JSONDecoder().decode(DocketEmailClassification.self, from: jsonData) {
                     CodeMindLogger.shared.log(.warning, "CodeMind returned new docket response format for file delivery check - converting", category: .classification, metadata: [
                         "isNewDocket": "\(docketClassification.isNewDocket)",
                         "confidence": String(format: "%.2f", docketClassification.confidence)
@@ -1115,6 +1342,7 @@ class CodeMindEmailClassifier: ObservableObject {
                         isFileDelivery: false,
                         confidence: docketClassification.confidence,
                         fileLinks: [],
+                        fileLinkDescriptions: nil,
                         fileHostingServices: [],
                         reasoning: "CodeMind returned new docket format: \(docketClassification.reasoning)",
                         hasAttachments: false
@@ -1122,7 +1350,7 @@ class CodeMindEmailClassifier: ObservableObject {
                 } else {
                     // Try to strip markdown and extract JSON
                     let cleanedResponse = stripMarkdownCodeFences(from: response.content)
-                    
+
                     if let jsonRange = extractJSONFromResponse(cleanedResponse) {
                         let jsonString = String(cleanedResponse[jsonRange])
                         if let extractedData = jsonString.data(using: .utf8) {
@@ -1133,6 +1361,7 @@ class CodeMindEmailClassifier: ObservableObject {
                                     isFileDelivery: false,
                                     confidence: docketClassification.confidence,
                                     fileLinks: [],
+                                    fileLinkDescriptions: nil,
                                     fileHostingServices: [],
                                     reasoning: "CodeMind returned new docket format: \(docketClassification.reasoning)",
                                     hasAttachments: false
@@ -1141,20 +1370,47 @@ class CodeMindEmailClassifier: ObservableObject {
                                 classification = extracted
                                 CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
                             } else {
-                                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                                // Try repair if incomplete
+                                if isIncompleteJSON(jsonString), let repaired = attemptRepairIncompleteJSON(jsonString),
+                                   let repairedData = repaired.data(using: String.Encoding.utf8),
+                                   let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: repairedData) {
+                                    classification = extracted
+                                    CodeMindLogger.shared.log(.success, "Successfully parsed repaired extracted JSON (file delivery)", category: .classification)
+                                } else {
+                                    throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                                }
                             }
                         } else {
-                            throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                            // Try repair if incomplete
+                            if isIncompleteJSON(cleanedResponse), let repaired = attemptRepairIncompleteJSON(cleanedResponse),
+                               let repairedData = repaired.data(using: .utf8),
+                               let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: repairedData) {
+                                classification = extracted
+                                CodeMindLogger.shared.log(.success, "Successfully parsed repaired cleaned JSON (file delivery)", category: .classification)
+                            } else {
+                                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                            }
                         }
                     } else {
                         // Last resort: try parsing the cleaned response directly
-                        if let cleanedData = cleanedResponse.data(using: .utf8) {
+                        var cleanedToParse = cleanedResponse
+                        
+                        // Check if cleaned response is incomplete and try to repair
+                        if isIncompleteJSON(cleanedToParse), let repaired = attemptRepairIncompleteJSON(cleanedToParse) {
+                            cleanedToParse = repaired
+                            CodeMindLogger.shared.log(.debug, "Repaired incomplete cleaned JSON (file delivery)", category: .classification, metadata: [
+                                "repairedLength": "\(repaired.count)"
+                            ])
+                        }
+                        
+                        if let cleanedData = cleanedToParse.data(using: .utf8) {
                             if let docketClassification = try? JSONDecoder().decode(DocketEmailClassification.self, from: cleanedData) {
                                 CodeMindLogger.shared.log(.warning, "CodeMind returned new docket response format (after cleaning) - converting", category: .classification)
                                 classification = FileDeliveryClassification(
                                     isFileDelivery: false,
                                     confidence: docketClassification.confidence,
                                     fileLinks: [],
+                                    fileLinkDescriptions: nil,
                                     fileHostingServices: [],
                                     reasoning: "CodeMind returned new docket format: \(docketClassification.reasoning)",
                                     hasAttachments: false
@@ -1166,46 +1422,66 @@ class CodeMindEmailClassifier: ObservableObject {
                                 throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
                             }
                         } else {
-                            throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                                throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
                         }
                     }
-                }
-            } else {
-                // Not a missing key error, try standard recovery
-            let logResponse = response.content.count > 10_000 
-                ? String(response.content.prefix(10_000)) + "... (truncated, total length: \(response.content.count))"
-                : response.content
-            CodeMindLogger.shared.log(.error, "JSON decoding failed", category: .classification, metadata: [
-                "error": "\(decodingError)",
-                "responsePreview": String(responsePreview),
-                "responseLength": "\(response.content.count)",
-                "fullResponse": logResponse
-            ])
-            
-            // Try to strip markdown code fences and extract JSON from response if it has extra text
-            let cleanedResponse = stripMarkdownCodeFences(from: response.content)
-            
-            if let jsonRange = extractJSONFromResponse(cleanedResponse) {
-                let jsonString = String(cleanedResponse[jsonRange])
-                CodeMindLogger.shared.log(.debug, "Attempting to parse extracted JSON", category: .classification, metadata: [
-                    "extractedJSONLength": "\(jsonString.count)",
-                    "extractedJSONPreview": jsonString.count > 500 ? String(jsonString.prefix(500)) + "..." : jsonString
-                ])
-                if let extractedData = jsonString.data(using: .utf8),
-                   let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: extractedData) {
-                    classification = extracted
-                    CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
+                    }
                 } else {
-                    throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
-                }
-            } else {
-                // Last resort: try parsing the cleaned response directly
-                if let cleanedData = cleanedResponse.data(using: .utf8),
-                   let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: cleanedData) {
-                    classification = extracted
-                    CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
-                } else {
-                    throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                    // Not a missing key error, try standard recovery
+                    let logResponse = response.content.count > 10_000 
+                        ? String(response.content.prefix(10_000)) + "... (truncated, total length: \(response.content.count))"
+                        : response.content
+                    CodeMindLogger.shared.log(.error, "JSON decoding failed", category: .classification, metadata: [
+                        "error": "\(decodingError)",
+                        "responsePreview": String(responsePreview),
+                        "responseLength": "\(response.content.count)",
+                        "fullResponse": logResponse
+                    ])
+                    
+                    // Try to strip markdown code fences and extract JSON from response if it has extra text
+                    let cleanedResponse = stripMarkdownCodeFences(from: response.content)
+                    
+                    if let jsonRange = extractJSONFromResponse(cleanedResponse) {
+                        var jsonString = String(cleanedResponse[jsonRange])
+                        CodeMindLogger.shared.log(.debug, "Attempting to parse extracted JSON", category: .classification, metadata: [
+                            "extractedJSONLength": "\(jsonString.count)",
+                            "extractedJSONPreview": jsonString.count > 500 ? String(jsonString.prefix(500)) + "..." : jsonString
+                        ])
+                        
+                        // Check if extracted JSON is incomplete and try to repair
+                        if isIncompleteJSON(jsonString), let repaired = attemptRepairIncompleteJSON(jsonString) {
+                            jsonString = repaired
+                            CodeMindLogger.shared.log(.debug, "Repaired incomplete extracted JSON (file delivery)", category: .classification, metadata: [
+                                "repairedLength": "\(repaired.count)"
+                            ])
+                        }
+                        
+                        if let extractedData = jsonString.data(using: String.Encoding.utf8),
+                           let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: extractedData) {
+                            classification = extracted
+                            CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after stripping markdown", category: .classification)
+                        } else {
+                            throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                        }
+                    } else {
+                        // Last resort: try parsing the cleaned response directly
+                        var cleanedToParse = cleanedResponse
+                        
+                        // Check if cleaned response is incomplete and try to repair
+                        if isIncompleteJSON(cleanedToParse), let repaired = attemptRepairIncompleteJSON(cleanedToParse) {
+                            cleanedToParse = repaired
+                            CodeMindLogger.shared.log(.debug, "Repaired incomplete cleaned JSON (file delivery)", category: .classification, metadata: [
+                                "repairedLength": "\(repaired.count)"
+                            ])
+                        }
+                        
+                        if let cleanedData = cleanedToParse.data(using: String.Encoding.utf8),
+                           let extracted = try? JSONDecoder().decode(FileDeliveryClassification.self, from: cleanedData) {
+                            classification = extracted
+                            CodeMindLogger.shared.log(.success, "Successfully parsed JSON after stripping markdown code fences", category: .classification)
+                        } else {
+                            throw CodeMindError.invalidResponse("Response is not valid JSON. Error: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                        }
                     }
                 }
             }
@@ -1221,6 +1497,7 @@ class CodeMindEmailClassifier: ObservableObject {
                 isFileDelivery: classification.isFileDelivery,
                 confidence: newConfidence,
                 fileLinks: classification.fileLinks,
+                fileLinkDescriptions: classification.fileLinkDescriptions,
                 fileHostingServices: classification.fileHostingServices,
                 reasoning: classification.reasoning + (confidenceModifier > 0 ? " (boosted by custom rule)" : " (reduced by custom rule)"),
                 hasAttachments: classification.hasAttachments
@@ -1238,6 +1515,7 @@ class CodeMindEmailClassifier: ObservableObject {
                 isFileDelivery: true,
                 confidence: max(finalClassification.confidence, 0.85),
                 fileLinks: finalClassification.fileLinks,
+                fileLinkDescriptions: finalClassification.fileLinkDescriptions,
                 fileHostingServices: finalClassification.fileHostingServices,
                 reasoning: "Classified as file delivery by custom rule",
                 hasAttachments: finalClassification.hasAttachments
@@ -1257,12 +1535,14 @@ class CodeMindEmailClassifier: ObservableObject {
         let classType = finalClassification.isFileDelivery ? "File Delivery" : "Not File"
         let subjectForOverlay = subject ?? "Unknown"
         let confidenceForOverlay = finalClassification.confidence
-        Task { @MainActor in
+        let fileDeliveryReasoning = finalClassification.reasoning
+        _Concurrency.Task { @MainActor in
             CodeMindActivityManager.shared.finishClassifying(
                 subject: subjectForOverlay,
                 type: classType,
                 confidence: confidenceForOverlay,
-                verified: false
+                verified: false,
+                reasoning: fileDeliveryReasoning
             )
         }
         
@@ -1299,6 +1579,309 @@ class CodeMindEmailClassifier: ObservableObject {
             threadId: threadId,
             classificationType: "fileDelivery",
             isFileDelivery: finalClassification.isFileDelivery,
+            confidence: finalClassification.confidence,
+            reasoning: finalClassification.reasoning,
+            threadContext: threadContext.isEmpty ? nil : threadContext,
+            prompt: prompt,
+            llmResponse: response.content,
+            recipients: recipients.isEmpty ? nil : recipients,
+            emailBody: body
+        )
+        
+        return (finalClassification, response)
+    }
+    
+    /// Classify an email to determine if it's a request for the media team
+    /// - Parameters:
+    ///   - subject: Email subject
+    ///   - body: Email body (plain text or HTML)
+    ///   - from: Sender email address
+    ///   - recipients: Array of recipient email addresses
+    /// - Returns: Classification result with confidence and request details, plus the CodeMind response for feedback
+    func classifyRequestEmail(
+        subject: String?,
+        body: String?,
+        from: String?,
+        recipients: [String] = [],
+        threadId: String? = nil,
+        gmailService: GmailService? = nil
+    ) async throws -> (classification: RequestEmailClassification, response: CodeMindResponse) {
+        // Check custom rules first for overrides
+        let rulesResult = CodeMindRulesManager.shared.getClassificationOverride(
+            subject: subject,
+            body: body,
+            from: from
+        )
+        
+        // If rules say to ignore this email, return a non-request classification
+        if rulesResult.shouldIgnore {
+            CodeMindLogger.shared.log(.warning, "Email BLOCKED by custom rule (request check)", category: .classification, metadata: [
+                "subject": subject ?? "nil",
+                "from": from ?? "unknown",
+                "action": "Email will not be processed"
+            ])
+            print("⚠️ EmailScanningService: Email BLOCKED by classification rule - Subject: \(subject ?? "nil"), From: \(from ?? "unknown")")
+            let emptyResponse = CodeMindResponse(content: "{}", toolResults: [])
+            let ignoredClassification = RequestEmailClassification(
+                isRequest: false,
+                confidence: 0.0,  // Low confidence - rule blocked, not AI classification
+                requestType: nil,
+                reasoning: "Ignored by custom classification rule",
+                extractedMetadata: nil
+            )
+            return (ignoredClassification, emptyResponse)
+        }
+        
+        // If rules explicitly classify as request, boost that classification
+        let forceRequest = rulesResult.shouldClassifyAs == "request"
+        let confidenceModifier = rulesResult.confidenceModifier
+        
+        guard codeMind != nil else {
+            throw CodeMindError.notInitialized
+        }
+        
+        // Report activity to overlay
+        _Concurrency.Task { @MainActor in
+            CodeMindActivityManager.shared.startClassifying(subject: subject ?? "Unknown")
+        }
+        
+        let emailContent = buildEmailContext(subject: subject, body: body, from: from, recipients: recipients)
+        
+        // Fetch thread context if available
+        var threadContext = ""
+        if let threadId = threadId, let gmailService = gmailService {
+            if let context = await fetchThreadContext(threadId: threadId, gmailService: gmailService) {
+                threadContext = context
+            }
+        }
+        
+        // Build prompt for request classification
+        let prompt = """
+        Analyze this email to determine if it contains a REQUEST for the media team to perform work.
+        
+        A REQUEST is an email asking the media team to:
+        - Prepare files for a project
+        - Process or convert media files
+        - Create or update docket folders
+        - Perform any media-related task
+        
+        This is different from:
+        - New docket announcements (which create new projects)
+        - File deliveries (which are files being sent TO the media team)
+        - General inquiries or updates
+        
+        Email Content:
+        \(emailContent)
+        
+        CRITICAL: NEW MESSAGE CONTENT ONLY
+        - The email body shown above contains ONLY the new message content that the sender typed
+        - Any quoted/replied content from previous messages in the thread has been automatically removed
+        - You should ONLY evaluate the new message content shown in the "Body" section above
+        - If the new message content is empty or contains no relevant information (e.g., just "Thanks" or "Got it"), this is likely NOT a request
+        - Replies with no new substantive content should be classified as NOT a request, even if the quoted content below (which you can't see) might contain request information
+        
+        \(threadContext.isEmpty ? "" : "\nThread Context:\n\(threadContext)\n")
+        
+        Respond with JSON in this exact format:
+        {
+          "isRequest": true/false,
+          "confidence": 0.0-1.0,
+          "requestType": "file_request" | "prep_request" | "general_request" | null,
+          "reasoning": "Explanation of why this is or isn't a request",
+          "extractedMetadata": {
+            "urgency": "high" | "medium" | "low" | null,
+            "deadline": "deadline description if mentioned" | null,
+            "description": "brief description of the request" | null
+          }
+        }
+        """
+        
+        CodeMindLogger.shared.log(.debug, "Sending prompt to LLM", category: .llm, metadata: ["promptLength": "\(prompt.count)"])
+        let response = try await processWithRetry(prompt: prompt, maxRetries: 1)
+        CodeMindLogger.shared.log(.success, "Received LLM response", category: .llm, metadata: ["responseLength": "\(response.content.count)"])
+        
+        // Log actual response content for debugging
+        let responsePreview = response.content.prefix(1000)
+        CodeMindLogger.shared.log(.debug, "LLM Response received (request)", category: .llm, metadata: [
+            "preview": String(responsePreview),
+            "fullLength": "\(response.content.count)"
+        ])
+        
+        // Strip markdown code fences if present
+        let cleanedContent = stripMarkdownCodeFences(from: response.content)
+        
+        // Parse response
+        var classification: RequestEmailClassification
+        
+        // Check if JSON is incomplete first
+        let isIncomplete = isIncompleteJSON(cleanedContent)
+        
+        if isIncomplete {
+            // Log that we detected incomplete JSON
+            let lastChars = cleanedContent.suffix(100)
+            CodeMindLogger.shared.log(.error, "Detected incomplete/truncated JSON response (request)", category: .classification, metadata: [
+                "responseLength": "\(response.content.count)",
+                "cleanedLength": "\(cleanedContent.count)",
+                "lastChars": String(lastChars),
+                "preview": String(responsePreview.prefix(500))
+            ])
+            
+            // Attempt to repair the incomplete JSON
+            if let repairedJSON = attemptRepairIncompleteJSON(cleanedContent),
+               let repairedData = repairedJSON.data(using: .utf8),
+               let repaired = try? JSONDecoder().decode(RequestEmailClassification.self, from: repairedData) {
+                classification = repaired
+                CodeMindLogger.shared.log(.warning, "Successfully repaired and parsed truncated JSON response (request)", category: .classification, metadata: [
+                    "originalLength": "\(cleanedContent.count)",
+                    "repairedLength": "\(repairedJSON.count)"
+                ])
+            } else {
+                // Could not repair - throw detailed error
+                let errorMsg = """
+                Response is truncated/incomplete JSON and could not be repaired (request).
+                Response length: \(response.content.count) characters
+                Last 100 characters: \(String(lastChars))
+                This may indicate:
+                • CodeMind API response was truncated
+                • Token/output limit was reached
+                • Network connection issue
+                
+                Response preview: \(String(responsePreview.prefix(300)))
+                """
+                throw CodeMindError.invalidResponse(errorMsg)
+            }
+        } else {
+            // JSON appears complete - try parsing normally
+            guard let jsonData = cleanedContent.data(using: .utf8) else {
+                CodeMindLogger.shared.log(.error, "Could not convert response to data (request)", category: .classification, metadata: ["responsePreview": String(responsePreview)])
+                throw CodeMindError.invalidResponse("Could not convert response to data")
+            }
+            
+            do {
+                classification = try JSONDecoder().decode(RequestEmailClassification.self, from: jsonData)
+            } catch let decodingError {
+                // First, try repairing the cleaned content directly (might be incomplete despite initial check)
+                if isIncompleteJSON(cleanedContent), let repaired = attemptRepairIncompleteJSON(cleanedContent),
+                   let repairedData = repaired.data(using: .utf8),
+                   let repairedClassification = try? JSONDecoder().decode(RequestEmailClassification.self, from: repairedData) {
+                    classification = repairedClassification
+                    CodeMindLogger.shared.log(.warning, "Successfully repaired and parsed JSON after initial parse failure (request)", category: .classification, metadata: [
+                        "originalLength": "\(cleanedContent.count)",
+                        "repairedLength": "\(repaired.count)"
+                    ])
+                } else {
+                    // Try to extract JSON from response if parsing failed
+                    if let jsonRange = extractJSONFromResponse(cleanedContent) {
+                        var jsonString = String(cleanedContent[jsonRange])
+                        
+                        // Check if extracted JSON is incomplete and try to repair
+                        if isIncompleteJSON(jsonString), let repaired = attemptRepairIncompleteJSON(jsonString) {
+                            jsonString = repaired
+                            CodeMindLogger.shared.log(.debug, "Repaired incomplete extracted JSON (request)", category: .classification)
+                        }
+                        
+                        if let extractedData = jsonString.data(using: .utf8),
+                           let extracted = try? JSONDecoder().decode(RequestEmailClassification.self, from: extractedData) {
+                            classification = extracted
+                            CodeMindLogger.shared.log(.success, "Successfully parsed extracted JSON after repair/extraction", category: .classification)
+                        } else {
+                            // Last attempt: try repairing the extracted JSON even if isIncompleteJSON didn't detect it
+                            if let repaired = attemptRepairIncompleteJSON(jsonString),
+                               let repairedData = repaired.data(using: .utf8),
+                               let repaired = try? JSONDecoder().decode(RequestEmailClassification.self, from: repairedData) {
+                                classification = repaired
+                                CodeMindLogger.shared.log(.warning, "Successfully parsed after forced repair attempt (request)", category: .classification)
+                            } else {
+                                throw CodeMindError.invalidResponse("Response is not valid JSON: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                            }
+                        }
+                    } else {
+                        // No JSON range found - try one more repair attempt on the full cleaned content
+                        if let repaired = attemptRepairIncompleteJSON(cleanedContent),
+                           let repairedData = repaired.data(using: .utf8),
+                           let repaired = try? JSONDecoder().decode(RequestEmailClassification.self, from: repairedData) {
+                            classification = repaired
+                            CodeMindLogger.shared.log(.warning, "Successfully parsed after forced repair attempt on full content (request)", category: .classification)
+                        } else {
+                            throw CodeMindError.invalidResponse("Response is not valid JSON: \(decodingError.localizedDescription). Response preview: \(String(responsePreview.prefix(200)))")
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Apply custom rule modifiers to classification
+        var finalClassification = classification
+        
+        // Apply confidence modifier from custom rules
+        if confidenceModifier != 0 {
+            let newConfidence = max(0, min(1.0, classification.confidence + confidenceModifier))
+            finalClassification = RequestEmailClassification(
+                isRequest: classification.isRequest,
+                confidence: newConfidence,
+                requestType: classification.requestType,
+                reasoning: classification.reasoning + (confidenceModifier > 0 ? " (boosted by custom rule)" : " (reduced by custom rule)"),
+                extractedMetadata: classification.extractedMetadata
+            )
+        }
+        
+        // If custom rules force request classification
+        if forceRequest && !finalClassification.isRequest {
+            finalClassification = RequestEmailClassification(
+                isRequest: true,
+                confidence: max(finalClassification.confidence, 0.85),
+                requestType: finalClassification.requestType ?? "general_request",
+                reasoning: "Classified as request by custom rule",
+                extractedMetadata: finalClassification.extractedMetadata
+            )
+        }
+        
+        CodeMindLogger.shared.log(.success, "Request classification complete", category: .classification, metadata: [
+            "isRequest": "\(finalClassification.isRequest)",
+            "confidence": String(format: "%.2f", finalClassification.confidence),
+            "requestType": finalClassification.requestType ?? "none",
+            "rulesApplied": confidenceModifier != 0 || forceRequest
+        ])
+        
+        // Report classification complete to overlay
+        let classType = finalClassification.isRequest ? "Request" : "Not Request"
+        let subjectForOverlay = subject ?? "Unknown"
+        let confidenceForOverlay = finalClassification.confidence
+        let requestReasoning = finalClassification.reasoning
+        _Concurrency.Task { @MainActor in
+            CodeMindActivityManager.shared.finishClassifying(
+                subject: subjectForOverlay,
+                type: classType,
+                confidence: confidenceForOverlay,
+                verified: false,
+                reasoning: requestReasoning
+            )
+        }
+
+        // Record request classification to history
+        let emailId = "\(subject?.hashValue ?? 0)_\(from?.hashValue ?? 0)_\(Date().timeIntervalSince1970)"
+        // Note: We'll need to add a recordRequestClassification method to CodeMindClassificationHistory
+        
+        // Feed to intelligence engines for unified tracking
+        await feedToIntelligenceEngines(
+            emailId: emailId,
+            threadId: threadId,
+            subject: subject,
+            from: from,
+            classificationType: finalClassification.isRequest ? "request" : nil,
+            docketNumber: nil,
+            jobName: nil,
+            metadata: nil
+        )
+        
+        // Log detailed classification debug information
+        CodeMindLogger.shared.logDetailedClassification(
+            emailId: emailId,
+            subject: subject,
+            from: from,
+            threadId: threadId,
+            classificationType: "request",
+            isFileDelivery: nil,
             confidence: finalClassification.confidence,
             reasoning: finalClassification.reasoning,
             threadContext: threadContext.isEmpty ? nil : threadContext,
@@ -1353,6 +1936,76 @@ class CodeMindEmailClassifier: ObservableObject {
         CodeMindLogger.shared.log(.success, "Feedback saved to shared cache", category: .cache)
     }
     
+    /// Extract only the new message content from an email body, stripping quoted/replied content
+    /// This identifies the actual message the sender typed, not the quoted thread content
+    private func extractNewMessageContent(from body: String) -> String {
+        // Clean up HTML first
+        let cleanedBody = body
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Common patterns that indicate the start of quoted/replied content
+        let quotePatterns = [
+            // Common email client patterns
+            "On .* wrote:",
+            "From:.*",
+            "Sent:.*",
+            "To:.*",
+            "Subject:.*",
+            "Date:.*",
+            "-----Original Message-----",
+            "________________________________",
+            "From:",
+            "Sent from",
+            "Le .* a écrit :",
+            "Am .* schrieb",
+            // Gmail-style
+            "On .* at .* wrote:",
+            // Outlook-style
+            "From:.*Sent:.*To:.*Subject:",
+            // Apple Mail
+            "On .*, .* wrote:",
+            // Generic reply indicators
+            ">",
+            ">>",
+            // Divider patterns
+            "---",
+            "___",
+            // Forward indicators
+            "Begin forwarded message:",
+            "Original Message",
+            // Thread separators
+            "________________________________________",
+        ]
+        
+        // Find the earliest occurrence of any quote pattern
+        var earliestQuoteIndex: String.Index? = nil
+        for pattern in quotePatterns {
+            if let range = cleanedBody.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
+                if earliestQuoteIndex == nil || range.lowerBound < earliestQuoteIndex! {
+                    earliestQuoteIndex = range.lowerBound
+                }
+            }
+        }
+        
+        // If we found a quote pattern, extract only content before it
+        if let quoteIndex = earliestQuoteIndex {
+            let newMessage = String(cleanedBody[..<quoteIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Only return if we have meaningful content (more than just whitespace)
+            if !newMessage.isEmpty && newMessage.count > 3 {
+                return newMessage
+            }
+        }
+        
+        // If no quote pattern found, return the whole cleaned body
+        return cleanedBody
+    }
+    
     /// Build a formatted email context string for CodeMind
     private func buildEmailContext(
         subject: String?,
@@ -1377,21 +2030,15 @@ class CodeMindEmailClassifier: ObservableObject {
         context += "\n"
         
         if let body = body, !body.isEmpty {
-            // Clean up HTML if present (basic cleanup)
-            let cleanedBody = body
-                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-                .replacingOccurrences(of: "&nbsp;", with: " ")
-                .replacingOccurrences(of: "&amp;", with: "&")
-                .replacingOccurrences(of: "&lt;", with: "<")
-                .replacingOccurrences(of: "&gt;", with: ">")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Extract only the new message content (strip quoted/replied content)
+            let newMessageContent = extractNewMessageContent(from: body)
             
             // Limit body length to avoid token limits (keep first 2000 chars)
-            let bodyPreview = cleanedBody.count > 2000 
-                ? String(cleanedBody.prefix(2000)) + "\n... (truncated)"
-                : cleanedBody
+            let bodyPreview = newMessageContent.count > 2000 
+                ? String(newMessageContent.prefix(2000)) + "\n... (truncated)"
+                : newMessageContent
             
-            context += "Body:\n\(bodyPreview)\n"
+            context += "Body (NEW MESSAGE CONTENT ONLY - quoted/replied content has been removed):\n\(bodyPreview)\n"
         } else {
             context += "Body: (empty)\n"
         }
@@ -1435,6 +2082,163 @@ class CodeMindEmailClassifier: ObservableObject {
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
+    /// Detect if JSON appears to be incomplete/truncated
+    /// - Parameter json: The JSON string to check
+    /// - Returns: true if JSON appears incomplete (ends mid-string, missing closing brace, etc.)
+    private func isIncompleteJSON(_ json: String) -> Bool {
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Must start with { to be valid JSON object
+        guard trimmed.first == "{" else {
+            return true
+        }
+        
+        // If it doesn't end with }, it's likely incomplete (but check brace balance too)
+        if !trimmed.hasSuffix("}") {
+            // Check if we're mid-string - if so, it's definitely incomplete
+            var inString = false
+            var escapeNext = false
+            
+            for char in trimmed {
+                if escapeNext {
+                    escapeNext = false
+                    continue
+                }
+                
+                if char == "\\" {
+                    escapeNext = true
+                    continue
+                }
+                
+                if char == "\"" {
+                    inString.toggle()
+                }
+            }
+            
+            // If we're still in a string, definitely incomplete
+            if inString {
+                return true
+            }
+            
+            // Otherwise, check brace balance to see if it's just missing closing brace(s)
+        }
+        
+        // Check brace balance - count braces only when NOT inside strings
+        var inString = false
+        var escapeNext = false
+        var openBraces = 0
+        var closeBraces = 0
+        
+        for char in trimmed {
+            if escapeNext {
+                escapeNext = false
+                continue
+            }
+            
+            if char == "\\" {
+                escapeNext = true
+                continue
+            }
+            
+            if char == "\"" {
+                inString.toggle()
+                continue
+            }
+            
+            // Only count braces when not inside a string
+            if !inString {
+                if char == "{" {
+                    openBraces += 1
+                } else if char == "}" {
+                    closeBraces += 1
+                }
+            }
+        }
+        
+        // If we're still in a string at the end, it's incomplete
+        if inString {
+            return true
+        }
+        
+        // If braces don't match, it's incomplete
+        if openBraces != closeBraces {
+            return true
+        }
+        
+        return false
+    }
+    
+    /// Attempt to repair incomplete JSON by closing open strings and objects
+    /// - Parameter incompleteJSON: The incomplete JSON string
+    /// - Returns: Repaired JSON string, or nil if repair is not possible
+    private func attemptRepairIncompleteJSON(_ incompleteJSON: String) -> String? {
+        var repaired = incompleteJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Track if we're inside a string (accounting for escaped quotes)
+        var inString = false
+        var escapeNext = false
+        
+        for char in repaired {
+            if escapeNext {
+                escapeNext = false
+                continue
+            }
+            
+            if char == "\\" {
+                escapeNext = true
+                continue
+            }
+            
+            if char == "\"" {
+                inString.toggle()
+            }
+        }
+        
+        // If we're still in a string when we hit the end, close it
+        if inString {
+            repaired.append("\"")
+        }
+        
+        // Count braces (but only when not inside strings)
+        inString = false
+        escapeNext = false
+        var openBraces = 0
+        var closeBraces = 0
+        
+        for char in repaired {
+            if escapeNext {
+                escapeNext = false
+                continue
+            }
+            
+            if char == "\\" {
+                escapeNext = true
+                continue
+            }
+            
+            if char == "\"" {
+                inString.toggle()
+                continue
+            }
+            
+            if !inString {
+                if char == "{" {
+                    openBraces += 1
+                } else if char == "}" {
+                    closeBraces += 1
+                }
+            }
+        }
+        
+        // Add missing closing braces
+        if openBraces > closeBraces {
+            let missingBraces = openBraces - closeBraces
+            repaired.append(String(repeating: "}", count: missingBraces))
+        }
+        
+        return repaired
+    }
+    
     /// Extract JSON from a response that may have extra text before/after
     /// This finds the first complete JSON object by matching braces properly
     private func extractJSONFromResponse(_ response: String) -> Range<String.Index>? {
@@ -1467,6 +2271,14 @@ class CodeMindEmailClassifier: ObservableObject {
             }
             
             currentIndex = response.index(after: currentIndex)
+        }
+        
+        // If we didn't find a complete JSON object, the response might be truncated
+        // Return the range up to the end of what we found (even if incomplete)
+        // The caller can attempt to repair it
+        if braceCount > 0 {
+            // Incomplete JSON - return what we have so caller can attempt repair
+            return firstBrace..<searchEndIndex
         }
         
         // If we didn't find a complete JSON object, fall back to finding last brace in search range
@@ -1877,9 +2689,25 @@ struct FileDeliveryClassification: Codable {
     let isFileDelivery: Bool
     let confidence: Double
     let fileLinks: [String]
+    let fileLinkDescriptions: [String]? // Description of what each link contains (parallel array to fileLinks)
     let fileHostingServices: [String]
     let reasoning: String
     let hasAttachments: Bool
+}
+
+/// Result of classifying an email as a request for the media team
+struct RequestEmailClassification: Codable {
+    let isRequest: Bool
+    let confidence: Double
+    let requestType: String? // e.g., "file_request", "prep_request", "general_request"
+    let reasoning: String
+    let extractedMetadata: RequestExtractedMetadata?
+    
+    struct RequestExtractedMetadata: Codable {
+        let urgency: String? // "high", "medium", "low"
+        let deadline: String?
+        let description: String?
+    }
 }
 
 // MARK: - Errors

@@ -77,9 +77,11 @@ class EmailScanningService: ObservableObject {
     private var scanningTask: Task<Void, Never>?
     private var patternSyncTask: Task<Void, Never>?
     private var processedEmailIds: Set<String> = []
+    private var processedThreadIds: Set<String> = []  // Track processed threads to prevent duplicates
     private let processedEmailsKey = "gmail_processed_email_ids"
+    private let processedThreadsKey = "gmail_processed_thread_ids"
     
-    // CodeMind AI classifier for enhanced email understanding
+    // CodeMind classifier for enhanced email understanding
     private var codeMindClassifier: CodeMindEmailClassifier?
     private var useCodeMind: Bool = false
     // Store CodeMind responses for feedback (keyed by notification ID)
@@ -99,15 +101,21 @@ class EmailScanningService: ObservableObject {
         self.gmailService = gmailService
         self.parser = parser
         loadProcessedEmailIds()
-        
+
         // Check if Gmail is already authenticated and add to whitelist
-        Task { @MainActor in
-            await checkAndAddGmailToWhitelist()
+        // Use detached task to avoid blocking app launch when network is slow
+        Task.detached { [weak self] in
+            guard let self = self else { return }
+            await self.checkAndAddGmailToWhitelist()
         }
-        
+
         // Initialize CodeMind classifier if API key is available
-        Task { @MainActor in
-            await initializeCodeMindIfAvailable()
+        // Use detached task with slight delay to not compete with app launch
+        Task.detached { [weak self] in
+            // Small delay to let the app finish launching first
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            guard let self = self else { return }
+            await self.initializeCodeMindIfAvailable()
         }
     }
     
@@ -148,7 +156,7 @@ class EmailScanningService: ObservableObject {
         
         guard let key = apiKey else {
             let providerName = provider.capitalized
-            print("CodeMindEmailClassifier: No \(providerName) API key found. Add your API key in Settings > CodeMind AI to enable AI classification.")
+            print("CodeMindEmailClassifier: No \(providerName) API key found. Add your API key in Settings > CodeMind to enable classification.")
             codeMindStatus = .unavailable
             useCodeMind = false
             return
@@ -171,13 +179,30 @@ class EmailScanningService: ObservableObject {
             
             print("CodeMindEmailClassifier: ✅ Initialized and enabled for email classification")
         } catch {
+            // Get both localized description and full error string for better debugging
             let errorMessage = error.localizedDescription
-            print("CodeMindEmailClassifier: Failed to initialize: \(errorMessage)")
+            let fullError = "\(error)"
+            print("CodeMindEmailClassifier: ❌ Failed to initialize")
+            print("  - Error type: \(type(of: error))")
+            print("  - Localized: \(errorMessage)")
+            print("  - Full error: \(fullError)")
+
+            // Log to CodeMindLogger for visibility in debug panel
+            CodeMindLogger.shared.log(.error, "CodeMind initialization failed", category: .initialization, metadata: [
+                "errorType": "\(type(of: error))",
+                "localizedDescription": errorMessage,
+                "fullError": fullError
+            ])
+
             // Parse error to check if it's a quota/rate limit error
-            if let quotaInfo = parseQuotaError(errorMessage) {
+            // Check both the localized description and full error string
+            let combinedError = "\(errorMessage) \(fullError)"
+            if let quotaInfo = parseQuotaError(combinedError) {
                 codeMindStatus = .quotaExceeded(retryAfter: quotaInfo.retryAfter, userMessage: quotaInfo.message)
             } else {
-                codeMindStatus = .error(errorMessage)
+                // Use fullError if it has more detail than localizedDescription
+                let displayError = fullError.count > errorMessage.count ? fullError : errorMessage
+                codeMindStatus = .error(displayError)
             }
             useCodeMind = false
             codeMindClassifier = nil
@@ -218,7 +243,10 @@ class EmailScanningService: ObservableObject {
                !sharedCacheURL.isEmpty {
                 companyNameCache.configure(sharedCacheURL: sharedCacheURL)
                 // Configure CodeMind shared cache (uses same directory, different filename)
-                CodeMindSharedCacheManager.shared.configure(sharedCacheURL: sharedCacheURL)
+                CodeMindSharedCacheManager.shared.configure(
+                    sharedCacheURL: sharedCacheURL,
+                    serverBasePath: settings.serverBasePath
+                )
             }
             
             // Get job names from file system (MediaManager.dockets)
@@ -290,26 +318,6 @@ class EmailScanningService: ObservableObject {
         patternSyncTask = nil
     }
     
-    /// Build Gmail query from search terms (case-insensitive, supports labels and subject)
-    private func buildGmailQuery(from searchTerms: [String]) -> String {
-        guard !searchTerms.isEmpty else {
-            // No search terms - search for "new docket" variations in all emails
-            return "\"new docket\" OR \"new docket -\" OR \"docket -\""
-        }
-        
-        // Build OR query for each term, trying label, subject, AND body
-        // Gmail queries are case-insensitive by default, but we'll be explicit
-        let queryParts = searchTerms.flatMap { term in
-            [
-                "label:\"\(term)\"",
-                "subject:\"\(term)\"",
-                "\"\(term)\""  // This searches in body too
-            ]
-        }
-        
-        return "(\(queryParts.joined(separator: " OR ")))"
-    }
-    
     /// Check if an email is a reply or forward
     private func isReplyOrForward(_ message: GmailMessage) -> Bool {
         guard let subject = message.subject else { return false }
@@ -363,25 +371,14 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Build query from search terms (or fallback to searching for "new docket" in all emails)
-            let baseQuery: String
-            if !settings.gmailSearchTerms.isEmpty {
-                baseQuery = buildGmailQuery(from: settings.gmailSearchTerms)
-            } else if !settings.gmailQuery.isEmpty {
-                baseQuery = settings.gmailQuery
-            } else {
-                // No specific terms - search for "new docket" variations in all emails
-                baseQuery = "\"new docket\" OR \"new docket -\" OR \"docket -\""
-            }
+            // Always scan ALL unread emails
+            // The classifier will determine relevance - no pre-filtering needed
+            let query = "is:unread"
             
-            // Only fetch unread emails
-            // Search for docket-related content in all unread emails (not just labeled ones)
-            let query = "(\(baseQuery) OR \"new docket\" OR \"new docket -\" OR \"docket -\" OR \"New docket\") is:unread"
             print("EmailScanningService: 🔍 Starting scan...")
             print("  📧 Gmail enabled: \(settings.gmailEnabled)")
             print("  🔑 Gmail authenticated: \(gmailService.isAuthenticated)")
-            print("  🔎 Query: \(query)")
-            print("  📋 Search terms: \(settings.gmailSearchTerms.isEmpty ? "none (using default)" : settings.gmailSearchTerms.joined(separator: ", "))")
+            print("  🔎 Query: \(query) (scanning all unread emails)")
             
             CodeMindLogger.shared.log(.info, "Starting email scan", category: .classification, metadata: [
                 "query": query,
@@ -406,6 +403,16 @@ class EmailScanningService: ObservableObject {
             
             print("  📦 Retrieved \(messages.count) full email messages")
             
+            // DEBUG: Log ALL messages retrieved (before filtering)
+            print("  🔍 DEBUG: All messages retrieved from Gmail:")
+            for (index, message) in messages.enumerated() {
+                let subject = message.subject ?? "(no subject)"
+                let from = message.from ?? "(no sender)"
+                let labelIds = message.labelIds ?? []
+                let isUnread = labelIds.contains("UNREAD")
+                print("    \(index + 1). \"\(subject)\" | From: \(from) | Unread: \(isUnread)")
+            }
+            
             // Filter to only unread emails (double-check labelIds)
             let unreadMessages = messages.filter { message in
                 guard let labelIds = message.labelIds else { return false }
@@ -414,33 +421,99 @@ class EmailScanningService: ObservableObject {
             
             print("  ✅ \(unreadMessages.count) are unread (filtered out \(messages.count - unreadMessages.count) already-read emails)")
             
-            // Log sample of unread emails for debugging
+            // DEBUG: Check if Kids Help Phone email is in the unread list
+            let kidsHelpPhoneEmails = unreadMessages.filter { message in
+                let subject = message.subject ?? ""
+                let from = message.from ?? ""
+                return subject.localizedCaseInsensitiveContains("kids help phone") ||
+                       from.localizedCaseInsensitiveContains("kids help phone")
+            }
+            if !kidsHelpPhoneEmails.isEmpty {
+                print("  ✅ FOUND Kids Help Phone email(s) in unread list: \(kidsHelpPhoneEmails.count)")
+                for email in kidsHelpPhoneEmails {
+                    print("    - Subject: \(email.subject ?? "none") | From: \(email.from ?? "none") | ID: \(email.id)")
+                }
+            } else {
+                print("  ⚠️  WARNING: Kids Help Phone email NOT found in unread list")
+                print("     This could mean:")
+                print("     1. Email is marked as read in Gmail")
+                print("     2. Email is not in the first 50 unread emails (Gmail query limit)")
+                print("     3. Email was already processed and is in processedEmailIds/processedThreadIds")
+            }
+            
+            // Log ALL unread emails found
             if !unreadMessages.isEmpty {
-                print("  📝 Sample unread emails:")
-                for (index, message) in unreadMessages.prefix(5).enumerated() {
+                print("  📝 Found \(unreadMessages.count) unread email(s):")
+                for (index, message) in unreadMessages.enumerated() {
                     let subject = message.subject ?? "(no subject)"
                     let from = message.from ?? "(no sender)"
-                    print("    \(index + 1). Subject: \"\(subject)\" | From: \(from)")
+                    let isReply = isReplyOrForward(message)
+                    let isProcessed = processedEmailIds.contains(message.id)
+                    let isThreadProcessed = processedThreadIds.contains(message.threadId)
+                    var status = ""
+                    if isProcessed { status += " [already processed]" }
+                    if isThreadProcessed { status += " [thread already processed]" }
+                    if isReply { status += " [reply/forward - will still be processed]" }
+                    print("    \(index + 1). \"\(subject)\" | From: \(from)\(status)")
+                    
+                    // Log if this might be a request (for debugging)
+                    if subject.localizedCaseInsensitiveContains("request") || 
+                       subject.localizedCaseInsensitiveContains("help") ||
+                       from.localizedCaseInsensitiveContains("kids help phone") {
+                        print("      🔍 NOTE: This email might be a request - will check during classification")
+                    }
                 }
             }
             
-            // Filter out replies and forwards (only process initial emails)
-            let initialEmails = unreadMessages.filter { message in
-                !isReplyOrForward(message)
+            // Process ALL unread emails, including replies/forwards
+            // CodeMind will determine if they contain new docket information
+            // This ensures we don't miss important emails that happen to be in reply/forward format
+            let initialEmails = unreadMessages
+            
+            let replyForwardCount = unreadMessages.filter { isReplyOrForward($0) }.count
+            print("  📬 Processing all \(initialEmails.count) emails (including \(replyForwardCount) replies/forwards - CodeMind will determine relevance)")
+            
+            // Filter out already processed emails AND threads (unless force rescan)
+            // This prevents duplicate notifications from the same email thread
+            let newMessages = initialEmails.filter { message in
+                if forceRescan { return true }
+                let subject = message.subject ?? "(no subject)"
+                let from = message.from ?? "(no sender)"
+                let emailId = message.id
+                let threadId = message.threadId
+                
+                // Skip if this exact email was already processed
+                if processedEmailIds.contains(emailId) {
+                    print("  ⏭️  SKIPPED (already processed): \"\(subject)\" from \(from) [emailId: \(emailId)]")
+                    return false
+                }
+                // Skip if this thread was already processed (prevents duplicates from replies)
+                if processedThreadIds.contains(threadId) {
+                    print("  ⏭️  SKIPPED (thread processed): \"\(subject)\" from \(from) [threadId: \(threadId)]")
+                    return false
+                }
+                return true
             }
-            
-            let replyForwardCount = unreadMessages.count - initialEmails.count
-            print("  📬 \(initialEmails.count) are initial emails (filtered out \(replyForwardCount) replies/forwards)")
-            
-            // Filter out already processed emails (unless force rescan)
-            let newMessages = initialEmails.filter { 
-                forceRescan || !processedEmailIds.contains($0.id) 
-            }
-            
+
             let alreadyProcessedCount = initialEmails.count - newMessages.count
             print("  🆕 \(newMessages.count) are new (not yet processed)")
             if alreadyProcessedCount > 0 {
-                print("  ⏭️  Skipped \(alreadyProcessedCount) already-processed emails")
+                print("  ⏭️  Skipped \(alreadyProcessedCount) already-processed emails/threads")
+                print("  🔍 DEBUG: If 'Kids Help Phone' email is missing, check if it was in the skipped list above")
+            }
+            
+            // DEBUG: Log all emails that will be processed
+            print("  📋 Emails that will be processed:")
+            for (index, message) in newMessages.enumerated() {
+                let subject = message.subject ?? "(no subject)"
+                let from = message.from ?? "(no sender)"
+                print("    \(index + 1). \"\(subject)\" | From: \(from)")
+                
+                // Specifically highlight Kids Help Phone emails
+                if subject.localizedCaseInsensitiveContains("kids help phone") ||
+                   from.localizedCaseInsensitiveContains("kids help phone") {
+                    print("      ✅ Kids Help Phone email WILL BE PROCESSED")
+                }
             }
             
             // Parse and create notifications (don't auto-create dockets)
@@ -457,9 +530,10 @@ class EmailScanningService: ObservableObject {
                 if await processEmailAndCreateNotification(message) {
                     notificationCount += 1
                     print("    ✅ Created notification")
-                    // Mark email as processed (so we don't create duplicate notifications)
+                    // Mark email AND thread as processed (prevents duplicate notifications from same thread)
                     _ = await MainActor.run {
                         processedEmailIds.insert(message.id)
+                        processedThreadIds.insert(message.threadId)
                     }
                 } else {
                     rejectedCount += 1
@@ -469,6 +543,9 @@ class EmailScanningService: ObservableObject {
             
             // Save processed email IDs
             saveProcessedEmailIds()
+            
+            // Periodically clean up old processed IDs to prevent unbounded growth
+            cleanupOldProcessedIds()
             
             // Print diagnostic summary
             print("EmailScanningService: 📊 Scan Summary:")
@@ -536,6 +613,10 @@ class EmailScanningService: ObservableObject {
         let htmlBody = message.htmlBody ?? ""
         let body = !plainBody.isEmpty ? plainBody : htmlBody
         
+        // For file hosting link detection, we want to check BOTH plain text and HTML
+        // because links might be in HTML format even if plain text exists
+        let bodyForDetection = !plainBody.isEmpty ? (plainBody + " " + htmlBody) : htmlBody
+        
         print("EmailScanningService: Parsing email:")
         print("  Subject: \(subject)")
         print("  Plain body length: \(plainBody.count)")
@@ -546,6 +627,176 @@ class EmailScanningService: ObservableObject {
         } else {
             print("  Body: (empty)")
             print("  Snippet: \(message.snippet ?? "(none)")")
+        }
+        
+        // PRIORITY CHECK: Check for file delivery FIRST using CodeMind classification
+        // Even if this is a reply in a "new docket" thread, if it has file links that are incoming (not outgoing to client),
+        // it should be a file delivery. CodeMind can understand context to determine if links are going out vs coming in.
+        
+        // First, check if there are any file hosting links at all (quick check before CodeMind)
+        let hasFileDeliveryLinks = FileHostingLinkDetector.containsFileHostingLink(bodyForDetection)
+        
+        if hasFileDeliveryLinks {
+            print("EmailScanningService: 🔗 File hosting links detected - checking with CodeMind to determine if file delivery (not outgoing to client)")
+            
+            // Check if we should skip CodeMind based on patterns
+            var shouldSkipFileDeliveryCodeMind = false
+            let skipPatterns = currentSettings.codeMindSkipPatterns
+            if !skipPatterns.isEmpty {
+                let combinedText = "\(subject)\n\(bodyForDetection)".lowercased()
+                for pattern in skipPatterns {
+                    if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                       regex.firstMatch(in: combinedText, range: NSRange(combinedText.startIndex..., in: combinedText)) != nil {
+                        shouldSkipFileDeliveryCodeMind = true
+                        print("EmailScanningService: ⏭️  SKIPPING CodeMind for file delivery: Matched skip pattern: \(pattern)")
+                        break
+                    }
+                }
+            }
+            
+            // Check if quota is exceeded
+            var quotaExceededForFileDelivery = false
+            if case .quotaExceeded(let retryAfter, _) = codeMindStatus, retryAfter > Date() {
+                quotaExceededForFileDelivery = true
+            }
+            
+            // Use CodeMind to classify if available and not skipped
+            if useCodeMind && !shouldSkipFileDeliveryCodeMind && !quotaExceededForFileDelivery, let classifier = codeMindClassifier {
+                do {
+                    print("EmailScanningService: 🤖 Using CodeMind to classify file delivery (checking if links are incoming vs outgoing)...")
+                    let recipients = message.allRecipients
+                    let result = try await classifier.classifyFileDeliveryEmail(
+                        subject: message.subject,
+                        body: bodyForDetection,
+                        from: message.from,
+                        recipients: recipients,
+                        threadId: message.threadId,
+                        gmailService: gmailService
+                    )
+                    let classification = result.classification
+                    
+                    print("CodeMind File Delivery Classification Result (reply in thread):")
+                    print("  Is File Delivery: \(classification.isFileDelivery)")
+                    print("  Confidence: \(classification.confidence)")
+                    print("  File Links: \(classification.fileLinks.count)")
+                    print("  Reasoning: \(classification.reasoning)")
+                    
+                    // Only create file delivery notification if CodeMind confirms it's actually a file delivery
+                    // (not outgoing to a client)
+                    if classification.isFileDelivery && classification.confidence >= 0.7 {
+                        let fileLinks = classification.fileLinks
+                        print("EmailScanningService: ✅ CodeMind confirmed file delivery (not outgoing to client)")
+                        
+                        // Extract docket info if available for context
+                        var extractedDocketNumber: String? = nil
+                        var extractedJobName: String? = nil
+                        if let parsed = parser.canParseWithHighConfidence(subject: subject, body: body, from: message.from),
+                           isValidDocketNumber(parsed.docketNumber) {
+                            extractedDocketNumber = parsed.docketNumber
+                            extractedJobName = parsed.jobName
+                        }
+                        
+                        // Store classification metadata
+                        var extractedData: [String: String] = [:]
+                        if !classification.fileLinks.isEmpty {
+                            extractedData["fileLinks"] = classification.fileLinks.joined(separator: ", ")
+                        }
+                        if !classification.fileHostingServices.isEmpty {
+                            extractedData["services"] = classification.fileHostingServices.joined(separator: ", ")
+                        }
+                        let fileDeliveryMetadata = CodeMindClassificationMetadata(
+                            wasUsed: true,
+                            confidence: classification.confidence,
+                            reasoning: classification.reasoning,
+                            classificationType: "fileDelivery",
+                            extractedData: extractedData.isEmpty ? nil : extractedData
+                        )
+                        
+                        await MainActor.run {
+                            guard let notificationCenter = notificationCenter else {
+                                print("EmailScanningService: ERROR - notificationCenter is nil when trying to add file delivery notification")
+                                return
+                            }
+                            
+                            // Create a cleaner message
+                            let cleanMessage: String
+                            if let docketNum = extractedDocketNumber, let jobName = extractedJobName {
+                                cleanMessage = "Docket \(docketNum): \(jobName)"
+                            } else if let docketNum = extractedDocketNumber {
+                                cleanMessage = "Docket \(docketNum)"
+                            } else if !subject.isEmpty {
+                                let maxLength = 100
+                                cleanMessage = subject.count > maxLength ? String(subject.prefix(maxLength)) + "..." : subject
+                            } else {
+                                cleanMessage = "File Delivery"
+                            }
+                            
+                            var notification = Notification(
+                                type: .mediaFiles,
+                                title: "File Delivery Detected",
+                                message: cleanMessage,
+                                docketNumber: extractedDocketNumber,
+                                jobName: extractedJobName,
+                                emailId: message.id,
+                                sourceEmail: message.from ?? "",
+                                emailSubject: subject.isEmpty ? nil : subject,
+                                emailBody: body.isEmpty ? nil : body,
+                                fileLinks: fileLinks,
+                                threadId: message.threadId
+                            )
+                            
+                            notification.codeMindClassification = fileDeliveryMetadata
+                            codeMindResponses[notification.id] = result.response
+                            
+                            print("EmailScanningService: ✅ Created file delivery notification (reply in new docket thread with incoming links)")
+                            notificationCenter.add(notification)
+                            
+                            // Show system notification
+                            NotificationService.shared.showNewDocketNotification(
+                                docketNumber: extractedDocketNumber,
+                                jobName: extractedJobName ?? "File Delivery"
+                            )
+                        }
+                        
+                        return true // File delivery notification created - don't check for new docket
+                    } else if !classification.isFileDelivery && classification.confidence >= 0.7 {
+                        print("EmailScanningService: ❌ CodeMind determined links are OUTGOING to client (not a file delivery)")
+                        print("  Reasoning: \(classification.reasoning)")
+                        print("  Continuing to check for new docket...")
+                        // Don't create file delivery notification - continue to new docket check
+                    } else {
+                        print("EmailScanningService: ⚠️ CodeMind has low confidence for file delivery classification (\(Int(classification.confidence * 100))%)")
+                        print("  Reasoning: \(classification.reasoning)")
+                        print("  Continuing to check for new docket...")
+                        // Low confidence - don't create notification, continue to new docket check
+                    }
+                } catch {
+                    let errorMessage = error.localizedDescription
+                    let fullError = "\(error)"
+                    print("EmailScanningService: ❌ CodeMind file delivery classification failed: \(errorMessage)")
+                    print("  Falling back to new docket check...")
+                    
+                    // Parse error to check if it's a quota/rate limit error
+                    let combinedError = "\(errorMessage) \(fullError)"
+                    if let quotaInfo = parseQuotaError(combinedError) {
+                        codeMindStatus = .quotaExceeded(retryAfter: quotaInfo.retryAfter, userMessage: quotaInfo.message)
+                        useCodeMind = false
+                        print("EmailScanningService: ⚠️ Quota exceeded during file delivery classification - disabling CodeMind for remainder of this scan")
+                    }
+                    // Continue to new docket check on error
+                }
+            } else {
+                // CodeMind not available/skipped - if we have links, we can't be sure if they're incoming or outgoing
+                // For now, skip file delivery check and continue to new docket check
+                if shouldSkipFileDeliveryCodeMind {
+                    print("EmailScanningService: ⚠️ CodeMind skipped for file delivery check - continuing to new docket check")
+                } else if quotaExceededForFileDelivery {
+                    print("EmailScanningService: ⚠️ CodeMind quota exceeded - skipping file delivery check, continuing to new docket check")
+                } else {
+                    print("EmailScanningService: ⚠️ CodeMind not available for file delivery check - continuing to new docket check")
+                }
+                // Continue to new docket check
+            }
         }
         
         // Try CodeMind classification first if enabled
@@ -601,17 +852,35 @@ class EmailScanningService: ObservableObject {
             )
         }
         
+        // Check if quota is exceeded - if so, skip CodeMind API calls to prevent further rate limit errors
+        var quotaExceeded = false
+        var retryAfterDate: Date? = nil
+        if case .quotaExceeded(let retryAfter, _) = codeMindStatus {
+            retryAfterDate = retryAfter
+            // Check if retry time has passed
+            if retryAfter > Date() {
+                quotaExceeded = true
+                print("EmailScanningService: ⚠️ CodeMind quota exceeded - skipping API calls until \(retryAfter)")
+            } else {
+                // Retry time has passed - reset status and allow CodeMind to be used again
+                print("EmailScanningService: ✅ CodeMind quota retry time expired - CodeMind available again")
+                codeMindStatus = .working
+            }
+        }
+        
         // Debug: Log why CodeMind might not be used
         if !useCodeMind {
             print("EmailScanningService: ⚠️ CodeMind not used: useCodeMind=false (status: \(codeMindStatus))")
         } else if shouldSkipCodeMind {
             print("EmailScanningService: ⚠️ CodeMind not used: skipped (\(skipReason ?? "unknown reason"))")
+        } else if quotaExceeded, let retryAfter = retryAfterDate {
+            print("EmailScanningService: ⚠️ CodeMind not used: quota exceeded (retry after \(retryAfter))")
         } else if codeMindClassifier == nil {
             print("EmailScanningService: ⚠️ CodeMind not used: classifier is nil (status: \(codeMindStatus))")
         }
         
-        // Only use CodeMind if we haven't skipped it
-        if useCodeMind && !shouldSkipCodeMind, let classifier = codeMindClassifier {
+        // Only use CodeMind if we haven't skipped it and quota is not exceeded
+        if useCodeMind && !shouldSkipCodeMind && !quotaExceeded, let classifier = codeMindClassifier {
             do {
                 print("EmailScanningService: 🤖 Using CodeMind to classify email...")
                 print("EmailScanningService: CodeMind status: useCodeMind=\(useCodeMind), shouldSkipCodeMind=\(shouldSkipCodeMind), classifier=exists")
@@ -700,108 +969,190 @@ class EmailScanningService: ObservableObject {
                             }
                         } else {
                             // CodeMind identified new docket with job name but no docket number
-                            // Create notification with "TBD" as docket number
-                            print("EmailScanningService: ✅ CodeMind identified new docket with job name but no docket number - using 'TBD'")
-                            parsedDocket = ParsedDocket(
-                                docketNumber: "TBD",
-                                jobName: jobName,
-                                sourceEmail: message.from ?? "",
-                                confidence: classification.confidence,
-                                rawData: [
-                                    "codeMindReasoning": classification.reasoning,
-                                    "extractedMetadata": classification.extractedMetadata as Any,
-                                    "docketNumberMissing": true
-                                ]
-                            )
-                            if classification.confidence < 0.7 {
-                                print("EmailScanningService: ⚠️ CodeMind identified docket but has low confidence (\(Int(classification.confidence * 100))%) - will go to 'For Review'")
-                            } else {
-                            print("EmailScanningService: ✅ CodeMind successfully extracted job name, docket number will be 'TBD'")
-                        }
+                            // STRICT REQUIREMENT: Reject emails without docket numbers - they are NOT valid new docket notifications
+                            // BUT: Continue checking for File Delivery and Requests
+                            print("EmailScanningService: ❌ REJECTED as new docket: CodeMind identified as new docket but NO DOCKET NUMBER found")
+                            print("  Job name: \(jobName)")
+                            print("  Reasoning: \(classification.reasoning)")
+                            print("  ⚠️ DOCKET NUMBERS ARE REQUIRED for new docket notifications")
+                            print("  ✅ Will continue checking for File Delivery and Requests...")
+                            
+                            // Log this as a rejection for CodeMind learning
+                            CodeMindLogger.shared.log(.warning, "Rejected new docket email - missing docket number", category: .classification, metadata: [
+                                "jobName": jobName,
+                                "reasoning": classification.reasoning,
+                                "confidence": String(format: "%.2f", classification.confidence),
+                                "rejectionReason": "missing_docket_number",
+                                "willCheckFileDelivery": "true",
+                                "willCheckRequests": "true"
+                            ])
+                            
+                            // Do NOT create new docket notification, but continue to check for file delivery/requests
+                            // Set parsedDocket to nil so we fall through to file delivery/request checks
+                            parsedDocket = nil
                     }
+                    } else {
+                        // No job name either - reject as new docket but continue checking
+                        print("EmailScanningService: ❌ REJECTED as new docket: CodeMind identified as new docket but NO JOB NAME and NO DOCKET NUMBER")
+                        print("  Reasoning: \(classification.reasoning)")
+                        print("  ⚠️ BOTH docket number AND job name are required for new docket notifications")
+                        print("  ✅ Will continue checking for File Delivery and Requests...")
+                        
+                        // Continue to check for file delivery/requests
+                        parsedDocket = nil
                     }
                 } else if !classification.isNewDocket {
                     // CodeMind says it's NOT a new docket email
+                    // IMPORTANT: Don't return false here - continue to check for file delivery and requests
                     if classification.confidence >= 0.7 {
-                        // High confidence rejection - don't create notification
+                        // High confidence rejection as new docket - but still check for requests/file delivery
                         print("    ❌ CodeMind determined this is NOT a new docket email (high confidence: \(Int(classification.confidence * 100))%)")
-                    print("      Reasoning: \(classification.reasoning)")
+                        print("      Reasoning: \(classification.reasoning)")
+                        print("      ✅ Will continue checking for File Delivery and Requests...")
                     } else {
                         // Low confidence rejection - still create notification for review
                         // Use parser result if available, otherwise create with CodeMind's reasoning
                         print("    ⚠️ CodeMind says NOT a new docket but has low confidence (\(Int(classification.confidence * 100))%)")
                         print("      Reasoning: \(classification.reasoning)")
-                        print("      Will create notification for review - user can vote")
+                        print("      Will continue checking for File Delivery and Requests...")
                         // Fall through to use parser result or create notification for review
                     }
                     
-                    // Check if this is an internal request from company domain
-                    // Internal requests should fall through to regular parser instead of being rejected
-                    let recipients = message.allRecipients
-                    let mediaEmail = settingsManager.currentSettings.companyMediaEmail
-                    
-                    if isInternalRequest(from: message.from, recipients: recipients, mediaEmail: mediaEmail) {
-                        let warningMessage = """
-                        ⚠️ WARNING: Internal Grayson email rejected by CodeMind as 'not new docket'
-                        However, this appears to be an internal request (company → media team).
-                        Falling through to regular parser instead of rejecting.
-                        
-                        - Subject: \(subject)
-                        - From: \(message.from ?? "unknown")
-                        - Recipients: \(recipients.joined(separator: ", "))
-                        - CodeMind Confidence: \(classification.confidence)
-                        - CodeMind Reasoning: \(classification.reasoning)
-                        """
-                        print(warningMessage)
-                        CodeMindLogger.shared.log(.warning, "Internal Grayson email rejected by CodeMind as 'not new docket' - falling through to parser", category: .classification, metadata: [
-                            "subject": subject,
-                            "from": message.from ?? "unknown",
-                            "recipients": recipients.joined(separator: ", "),
-                            "confidence": String(format: "%.2f", classification.confidence),
-                            "reasoning": classification.reasoning,
-                            "action": "Falling through to regular parser"
-                        ])
-                        // Don't return false - fall through to regular parser
-                    } else {
-                        // External or outgoing email - safe to reject
-                        if let from = message.from {
-                            let domain = from.split(separator: "@").last.map(String.init) ?? ""
-                            if domain.lowercased().contains("grayson") {
-                                let warningMessage = """
-                                ⚠️ WARNING: Grayson email rejected as 'not new docket'
-                                This appears to be outgoing (company → external clients), so rejection is likely correct.
-                                
-                                - Subject: \(subject)
-                                - From: \(from)
-                                - Recipients: \(recipients.joined(separator: ", "))
-                                - Confidence: \(classification.confidence)
-                                - Reasoning: \(classification.reasoning)
-                                """
-                                print(warningMessage)
-                                CodeMindLogger.shared.log(.warning, "Grayson email rejected as 'not new docket' - appears to be outgoing", category: .classification, metadata: [
-                                    "subject": subject,
-                                    "from": from,
-                                    "recipients": recipients.joined(separator: ", "),
-                                    "confidence": String(format: "%.2f", classification.confidence),
-                                    "reasoning": classification.reasoning
-                                ])
-                            }
-                        }
-                        return false
-                    }
+                    // Don't return false - continue to check for file delivery and requests
+                    // The email might still be a request or file delivery even if it's not a new docket
+                    parsedDocket = nil
                 }
                 // If confidence is low, fall through to regular parser
             } catch {
+                // Get both localized description and full error string for better debugging
                 let errorMessage = error.localizedDescription
-                print("EmailScanningService: CodeMind classification failed: \(errorMessage). Falling back to regular parser.")
+                let fullError = "\(error)"
+                print("EmailScanningService: ❌ CodeMind classification failed")
+                print("  - Error type: \(type(of: error))")
+                print("  - Localized: \(errorMessage)")
+                print("  - Full error: \(fullError)")
+                print("  - Falling back to regular parser.")
+
+                // Log to CodeMindLogger for visibility in debug panel
+                CodeMindLogger.shared.log(.error, "CodeMind classification failed", category: .classification, metadata: [
+                    "errorType": "\(type(of: error))",
+                    "localizedDescription": errorMessage,
+                    "fullError": fullError
+                ])
+
                 // Parse error to check if it's a quota/rate limit error
-                if let quotaInfo = parseQuotaError(errorMessage) {
+                let combinedError = "\(errorMessage) \(fullError)"
+                if let quotaInfo = parseQuotaError(combinedError) {
                     codeMindStatus = .quotaExceeded(retryAfter: quotaInfo.retryAfter, userMessage: quotaInfo.message)
+                    // Disable CodeMind for the rest of this scan to prevent further API calls
+                    useCodeMind = false
+                    print("EmailScanningService: ⚠️ Quota exceeded - disabling CodeMind for remainder of this scan")
                 } else {
-                    codeMindStatus = .error(errorMessage)
+                    // Use fullError if it has more detail than localizedDescription
+                    let displayError = fullError.count > errorMessage.count ? fullError : errorMessage
+                    codeMindStatus = .error(displayError)
                 }
                 // Don't disable CodeMind permanently - it might be a transient error
                 // Just log it and use fallback for this email
+            }
+        }
+        
+        // Check for request classification if not a new docket
+        // Only check if CodeMind is enabled and we haven't already created a notification
+        // Note: quotaExceeded check was done above for new docket classification
+        // Re-check here in case it was set during the previous classification
+        var quotaExceededForRequest = false
+        if case .quotaExceeded(let retryAfter, _) = codeMindStatus, retryAfter > Date() {
+            quotaExceededForRequest = true
+        }
+        
+        if parsedDocket == nil && useCodeMind && !shouldSkipCodeMind && !quotaExceededForRequest, let classifier = codeMindClassifier {
+            do {
+                print("EmailScanningService: 🤖 Checking if email is a request for media team...")
+                let recipients = message.allRecipients
+                let result = try await classifier.classifyRequestEmail(
+                    subject: message.subject,
+                    body: body,
+                    from: message.from,
+                    recipients: recipients,
+                    threadId: message.threadId,
+                    gmailService: gmailService
+                )
+                let classification = result.classification
+                
+                print("CodeMind Request Classification Result:")
+                print("  Is Request: \(classification.isRequest)")
+                print("  Confidence: \(classification.confidence)")
+                print("  Request Type: \(classification.requestType ?? "none")")
+                print("  Reasoning: \(classification.reasoning)")
+                
+                if classification.isRequest && classification.confidence >= 0.7 {
+                    // Create request notification
+                    await MainActor.run {
+                        guard let notificationCenter = notificationCenter else {
+                            print("EmailScanningService: ERROR - notificationCenter is nil when trying to add request notification")
+                            return
+                        }
+                        
+                        let requestTitle = classification.requestType?.replacingOccurrences(of: "_", with: " ").capitalized ?? "Request"
+                        let messageText = classification.extractedMetadata?.description ?? subject
+                        
+                        var extractedData: [String: String] = [:]
+                        if let requestType = classification.requestType {
+                            extractedData["requestType"] = requestType
+                        }
+                        if let urgency = classification.extractedMetadata?.urgency {
+                            extractedData["urgency"] = urgency
+                        }
+                        if let deadline = classification.extractedMetadata?.deadline {
+                            extractedData["deadline"] = deadline
+                        }
+                        
+                        let requestMetadata = CodeMindClassificationMetadata(
+                            wasUsed: true,
+                            confidence: classification.confidence,
+                            reasoning: classification.reasoning,
+                            classificationType: "request",
+                            extractedData: extractedData.isEmpty ? nil : extractedData
+                        )
+                        
+                        var notification = Notification(
+                            type: .request,
+                            title: "Media Team Request",
+                            message: messageText,
+                            emailId: message.id,
+                            sourceEmail: message.from ?? "",
+                            emailSubject: subject.isEmpty ? nil : subject,
+                            emailBody: body.isEmpty ? nil : body
+                        )
+                        
+                        notification.codeMindClassification = requestMetadata
+                        codeMindResponses[notification.id] = result.response
+                        
+                        print("EmailScanningService: ✅ Created request notification")
+                        notificationCenter.add(notification)
+                        
+                        // Show system notification
+                        NotificationService.shared.showNewDocketNotification(
+                            docketNumber: nil,
+                            jobName: requestTitle
+                        )
+                    }
+                    return true
+                }
+            } catch {
+                let errorMessage = error.localizedDescription
+                let fullError = "\(error)"
+                print("EmailScanningService: Request classification failed: \(errorMessage). Continuing...")
+                // Parse error to check if it's a quota/rate limit error
+                let combinedError = "\(errorMessage) \(fullError)"
+                if let quotaInfo = parseQuotaError(combinedError) {
+                    codeMindStatus = .quotaExceeded(retryAfter: quotaInfo.retryAfter, userMessage: quotaInfo.message)
+                    // Disable CodeMind for the rest of this scan to prevent further API calls
+                    useCodeMind = false
+                    print("EmailScanningService: ⚠️ Quota exceeded during request classification - disabling CodeMind for remainder of this scan")
+                }
+                // Don't fail the whole process if request classification fails
             }
         }
         
@@ -822,18 +1173,16 @@ class EmailScanningService: ObservableObject {
         
         print("    ✅ Parsed docket: \(parsedDocket.docketNumber) - \(parsedDocket.jobName)")
         
-        // VALIDATE docket number before creating notification (unless it's "TBD")
-        if parsedDocket.docketNumber != "TBD" {
-            // Validate that it's a proper 5-digit docket number
-            if !isValidDocketNumber(parsedDocket.docketNumber) {
-                print("    ❌ REJECTED: Invalid docket number format: '\(parsedDocket.docketNumber)' (must be exactly 5 digits, optionally with -US suffix)")
-                return false
-            }
+        // STRICT VALIDATION: Docket number is REQUIRED - no exceptions, no "TBD" allowed
+        // If we don't have a valid docket number, reject the notification
+        if !isValidDocketNumber(parsedDocket.docketNumber) {
+            print("    ❌ REJECTED: Invalid or missing docket number: '\(parsedDocket.docketNumber)' (must be exactly 5 digits, optionally with -US suffix)")
+            print("    ⚠️ DOCKET NUMBERS ARE MANDATORY - This email will NOT create a notification")
+            return false
         }
         
-        // Check if docket already exists (only if we have a valid docket number, not "TBD")
-        if parsedDocket.docketNumber != "TBD",
-           let manager = mediaManager,
+        // Check if docket already exists
+        if let manager = mediaManager,
            manager.dockets.contains("\(parsedDocket.docketNumber)_\(parsedDocket.jobName)") {
             // Docket already exists - mark as processed but don't create notification
             print("    ❌ REJECTED: Docket already exists: \(parsedDocket.docketNumber)_\(parsedDocket.jobName)")
@@ -873,7 +1222,8 @@ class EmailScanningService: ObservableObject {
                 emailId: message.id,
                 sourceEmail: parsedDocket.sourceEmail,
                 emailSubject: emailSubjectToStore,
-                emailBody: emailBodyToStore
+                emailBody: emailBodyToStore,
+                threadId: message.threadId  // Track thread to prevent duplicates
             )
             
             // Store CodeMind classification metadata if available
@@ -994,9 +1344,11 @@ class EmailScanningService: ObservableObject {
         // Try CodeMind classification first if enabled
         var linkResult: QualificationResult? = nil
         var fileLinks: [String] = []
+        var fileLinkDescriptions: [String] = []
         var codeMindMetadata: CodeMindClassificationMetadata? = nil
         var codeMindResponse: CodeMindResponse? = nil
-        
+        let codeMindAvailable = useCodeMind && codeMindClassifier != nil
+
         // Check if we should skip CodeMind based on patterns
         var shouldSkipCodeMind = false
         var skipReason: String? = nil
@@ -1015,9 +1367,28 @@ class EmailScanningService: ObservableObject {
                 }
             }
         }
+
+        // If CodeMind was skipped due to skip patterns, create metadata for feedback
+        // This allows users to still provide feedback even when CodeMind is skipped
+        if shouldSkipCodeMind && codeMindMetadata == nil && codeMindAvailable {
+            codeMindMetadata = CodeMindClassificationMetadata(
+                wasUsed: false,
+                confidence: 0.0,
+                reasoning: skipReason,
+                classificationType: "fileDelivery",
+                extractedData: nil
+            )
+        }
+
+        // Check if quota is exceeded - if so, skip CodeMind API calls to prevent further rate limit errors
+        var quotaExceededForFileDelivery = false
+        if case .quotaExceeded(let retryAfter, _) = codeMindStatus, retryAfter > Date() {
+            quotaExceededForFileDelivery = true
+            print("EmailScanningService: ⚠️ CodeMind quota exceeded - skipping file delivery API calls until \(retryAfter)")
+        }
         
-        // Only use CodeMind if we haven't skipped it
-        if useCodeMind && !shouldSkipCodeMind, let classifier = codeMindClassifier {
+        // Only use CodeMind if we haven't skipped it and quota is not exceeded
+        if useCodeMind && !shouldSkipCodeMind && !quotaExceededForFileDelivery, let classifier = codeMindClassifier {
             do {
                 print("EmailScanningService: 🤖 Using CodeMind to classify file delivery email...")
                 let recipients = message.allRecipients
@@ -1057,10 +1428,11 @@ class EmailScanningService: ObservableObject {
                 
                 if classification.isFileDelivery && classification.confidence >= 0.7 {
                     fileLinks = classification.fileLinks
+                    fileLinkDescriptions = classification.fileLinkDescriptions ?? []
                     linkResult = QualificationResult(
                         qualifies: true,
                         reasons: ["CodeMind classification: \(classification.reasoning)"] + classification.fileHostingServices.map { "Found \($0) link" },
-                        matchedCriteria: ["CodeMind AI classification"] + classification.fileHostingServices,
+                        matchedCriteria: ["CodeMind classification"] + classification.fileHostingServices,
                         exclusionReasons: []
                     )
                     print("EmailScanningService: ✅ CodeMind confirmed file delivery email")
@@ -1101,7 +1473,7 @@ class EmailScanningService: ObservableObject {
                             qualifies: false,
                             reasons: ["CodeMind determined this is NOT a file delivery email: \(classification.reasoning)"],
                             matchedCriteria: [],
-                            exclusionReasons: ["CodeMind AI classification: not a file delivery"]
+                            exclusionReasons: ["CodeMind classification: not a file delivery"]
                         )
                         
                         if let from = message.from {
@@ -1131,10 +1503,15 @@ class EmailScanningService: ObservableObject {
                 }
             } catch {
                 let errorMessage = error.localizedDescription
+                let fullError = "\(error)"
                 print("EmailScanningService: CodeMind classification failed: \(errorMessage). Falling back to regular detection.")
                 // Parse error to check if it's a quota/rate limit error
-                if let quotaInfo = parseQuotaError(errorMessage) {
+                let combinedError = "\(errorMessage) \(fullError)"
+                if let quotaInfo = parseQuotaError(combinedError) {
                     codeMindStatus = .quotaExceeded(retryAfter: quotaInfo.retryAfter, userMessage: quotaInfo.message)
+                    // Disable CodeMind for the rest of this scan to prevent further API calls
+                    useCodeMind = false
+                    print("EmailScanningService: ⚠️ Quota exceeded during file delivery classification - disabling CodeMind for remainder of this scan")
                 } else {
                     codeMindStatus = .error(errorMessage)
                 }
@@ -1215,22 +1592,57 @@ class EmailScanningService: ObservableObject {
                 return
             }
             
+            // Try to extract docket number from email (subject or body)
+            var extractedDocketNumber: String? = nil
+            var extractedJobName: String? = nil
+            
+            // Try parsing the email to extract docket info
+            if let parsed = parser.canParseWithHighConfidence(subject: subject, body: body, from: message.from) {
+                // Only use parsed docket if it's valid (not "TBD")
+                if isValidDocketNumber(parsed.docketNumber) {
+                    extractedDocketNumber = parsed.docketNumber
+                    extractedJobName = parsed.jobName
+                    print("EmailScanningService: ✅ Extracted docket from file delivery email: \(parsed.docketNumber) - \(parsed.jobName)")
+                }
+            }
+            
+            // Create a cleaner message - use subject but truncate if too long, or create a summary
+            let cleanMessage: String
+            if let docketNum = extractedDocketNumber, let jobName = extractedJobName {
+                // If we have docket info, create a clean message
+                cleanMessage = "Docket \(docketNum): \(jobName)"
+            } else if let docketNum = extractedDocketNumber {
+                // Just docket number
+                cleanMessage = "Docket \(docketNum)"
+            } else if !subject.isEmpty {
+                // Use subject but truncate if it's very long (likely contains body text)
+                let maxLength = 100
+                if subject.count > maxLength {
+                    cleanMessage = String(subject.prefix(maxLength)) + "..."
+                } else {
+                    cleanMessage = subject
+                }
+            } else {
+                cleanMessage = "Files shared via \(settings.companyMediaEmail)"
+            }
+            
             // Create notification for media files
             var notification = Notification(
                 type: .mediaFiles,
                 title: "File Delivery Available",
-                message: subject.isEmpty ? "Files shared via \(settings.companyMediaEmail)" : subject,
+                message: cleanMessage,
                 timestamp: Date(),
                 status: .pending, // Ensure it's marked as pending
                 archivedAt: nil,
-                docketNumber: nil,
-                jobName: nil,
+                docketNumber: extractedDocketNumber,
+                jobName: extractedJobName,
                 emailId: message.id,
                 sourceEmail: message.from,
                 projectManager: nil,
                 emailSubject: subject.isEmpty ? nil : subject,
                 emailBody: body.isEmpty ? nil : body,
                 fileLinks: fileLinks.isEmpty ? nil : fileLinks,
+                fileLinkDescriptions: fileLinkDescriptions.isEmpty ? nil : fileLinkDescriptions,
                 threadId: message.threadId // Store thread ID for tracking replies
             )
             
@@ -1322,7 +1734,7 @@ class EmailScanningService: ObservableObject {
             )
             
             // Also record as interaction
-            let interactionType: EmailFeedbackTracker.InteractionType = wasCorrect ? .feedbackThumbsUp : .feedbackThumbsDown
+            let interactionType: InteractionType = wasCorrect ? .feedbackThumbsUp : .feedbackThumbsDown
             EmailFeedbackTracker.shared.recordInteraction(
                 emailId: emailId,
                 type: interactionType
@@ -1683,25 +2095,84 @@ class EmailScanningService: ObservableObject {
            let ids = try? JSONDecoder().decode(Set<String>.self, from: data) {
             processedEmailIds = ids
         }
+        // Also load processed thread IDs
+        if let data = UserDefaults.standard.data(forKey: processedThreadsKey),
+           let ids = try? JSONDecoder().decode(Set<String>.self, from: data) {
+            processedThreadIds = ids
+        }
     }
-    
+
     /// Save processed email IDs to UserDefaults
     private func saveProcessedEmailIds() {
         if let data = try? JSONEncoder().encode(processedEmailIds) {
             UserDefaults.standard.set(data, forKey: processedEmailsKey)
         }
+        // Also save processed thread IDs
+        if let data = try? JSONEncoder().encode(processedThreadIds) {
+            UserDefaults.standard.set(data, forKey: processedThreadsKey)
+        }
     }
-    
+
     /// Mark email as processed (used for tracking)
     func markEmailAsProcessed(messageId: String) {
         processedEmailIds.insert(messageId)
         saveProcessedEmailIds()
     }
-    
+
+    /// Mark thread as processed (prevents duplicate processing of same email thread)
+    func markThreadAsProcessed(threadId: String) {
+        processedThreadIds.insert(threadId)
+        saveProcessedEmailIds()
+    }
+
+    /// Check if a thread has already been processed
+    func isThreadProcessed(threadId: String) -> Bool {
+        return processedThreadIds.contains(threadId)
+    }
+
     /// Clear processed email IDs (useful for re-processing)
     func clearProcessedEmails() {
         processedEmailIds.removeAll()
+        processedThreadIds.removeAll()
         saveProcessedEmailIds()
+    }
+    
+    /// Clean up old processed email/thread IDs to prevent unbounded growth
+    /// Keeps only IDs from emails processed within the last N days
+    /// This prevents memory issues from tracking thousands of old emails
+    /// Note: We can't track exact timestamps per ID, so we use a size-based cleanup
+    /// that keeps the most recent entries (assuming newer emails are added later)
+    func cleanupOldProcessedIds(maxEntries: Int = 5000) {
+        // If sets are within reasonable size, no cleanup needed
+        let totalEntries = processedEmailIds.count + processedThreadIds.count
+        guard totalEntries > maxEntries else {
+            return
+        }
+        
+        // Calculate how many to keep (keep 80% of max to avoid frequent cleanups)
+        let keepCount = Int(Double(maxEntries) * 0.8)
+        
+        // For processedEmailIds, keep the most recent entries
+        // Since Set doesn't preserve order, we'll keep a subset
+        // In practice, this is a simple size limit - we keep the first N entries
+        // A more sophisticated approach would track timestamps, but that requires
+        // changing the data structure
+        if processedEmailIds.count > keepCount / 2 {
+            // Keep only a subset - convert to array, take first N, rebuild set
+            let idsArray = Array(processedEmailIds.prefix(keepCount / 2))
+            processedEmailIds = Set(idsArray)
+        }
+        
+        // Same for processedThreadIds
+        if processedThreadIds.count > keepCount / 2 {
+            let idsArray = Array(processedThreadIds.prefix(keepCount / 2))
+            processedThreadIds = Set(idsArray)
+        }
+        
+        // Save the cleaned-up sets
+        saveProcessedEmailIds()
+        
+        print("EmailScanningService: Cleaned up processed IDs (kept \(processedEmailIds.count) emails, \(processedThreadIds.count) threads)")
     }
     
     /// Scan for unread docket emails and create notifications (used when opening notification window)
@@ -1730,52 +2201,18 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Build query from search terms (or fallback to searching for "new docket" in all emails)
-            let baseQuery: String
-            if !settings.gmailSearchTerms.isEmpty {
-                baseQuery = buildGmailQuery(from: settings.gmailSearchTerms)
-            } else if !settings.gmailQuery.isEmpty {
-                baseQuery = settings.gmailQuery
-            } else {
-                // No specific terms - search for "new docket" variations in all emails
-                baseQuery = "\"new docket\" OR \"new docket -\" OR \"docket -\""
-            }
+            // Always scan ALL unread emails
+            // The classifier will determine relevance - no pre-filtering needed
+            let query = "is:unread"
+            print("EmailScanningService: Scanning all unread emails for classification")
             
-            // Only fetch unread emails
-            // Search for docket-related content in all unread emails (not just labeled ones)
-            let docketQuery = "(\(baseQuery) OR \"new docket\" OR \"new docket -\" OR \"docket -\" OR \"New docket\") is:unread"
-            print("EmailScanningService: Scanning unread emails with query: \(docketQuery)")
-            
-            // Also scan for media emails (sent to company media email)
-            // Check both "to:" and "cc:" fields, and also check if media email is in the recipient list
-            let mediaEmail = settings.companyMediaEmail.lowercased()
-            // Gmail query: check to, cc, and bcc fields
-            let mediaQuery = "(to:\(mediaEmail) OR cc:\(mediaEmail) OR bcc:\(mediaEmail)) is:unread"
-            print("EmailScanningService: Also scanning for media emails with query: \(mediaQuery)")
-            
-            // Fetch unread emails matching docket query
-            let docketMessageRefs = try await gmailService.fetchEmails(
-                query: docketQuery,
+            // Fetch all unread emails
+            let messageRefs = try await gmailService.fetchEmails(
+                query: query,
                 maxResults: 50
             )
             
-            // Fetch unread emails matching media email query
-            let mediaMessageRefs = try await gmailService.fetchEmails(
-                query: mediaQuery,
-                maxResults: 50
-            )
-            
-            // Combine and deduplicate message references
-            var allMessageRefs = docketMessageRefs
-            let docketIds = Set(docketMessageRefs.map { $0.id })
-            for ref in mediaMessageRefs {
-                if !docketIds.contains(ref.id) {
-                    allMessageRefs.append(ref)
-                }
-            }
-            
-            let messageRefs = allMessageRefs
-            print("EmailScanningService: Found \(docketMessageRefs.count) docket emails and \(mediaMessageRefs.count) media emails (total unique: \(messageRefs.count))")
+            print("EmailScanningService: Found \(messageRefs.count) unread emails")
             
             guard !messageRefs.isEmpty else {
                 print("EmailScanningService: No unread emails found")
@@ -1967,20 +2404,26 @@ class EmailScanningService: ObservableObject {
             return
         }
         
-        // Check if notification already exists for this docket + email combo
+        // Check if notification already exists for this docket + email/thread combo
+        // Also check threadId to prevent duplicates from replies in the same thread
         let existingNotification = notificationCenter.notifications.first { notification in
-            notification.emailId == message.id && notification.docketNumber == docketNumber
+            // Check by emailId OR threadId (either match means duplicate)
+            let sameEmail = notification.emailId == message.id
+            let sameThread = notification.threadId != nil && notification.threadId == message.threadId
+            let sameDocket = notification.docketNumber == docketNumber
+            return sameDocket && (sameEmail || sameThread)
         }
-        
+
         if existingNotification != nil {
-            print("EmailScanningService: Notification already exists for docket \(docketNumber) from email \(message.id)")
+            let threadIdDisplay = message.threadId.isEmpty ? "nil" : message.threadId
+            print("EmailScanningService: Notification already exists for docket \(docketNumber) from email/thread \(message.id)/\(threadIdDisplay)")
             return
         }
-        
+
         let messageText = "Docket \(docketNumber): \(jobName)"
         let emailSubjectToStore = subject.isEmpty ? nil : subject
         let emailBodyToStore = body.isEmpty ? nil : body
-        
+
         var notification = Notification(
             type: .newDocket,
             title: "New Docket Detected",
@@ -1990,7 +2433,8 @@ class EmailScanningService: ObservableObject {
             emailId: message.id,
             sourceEmail: message.from ?? "",
             emailSubject: emailSubjectToStore,
-            emailBody: emailBodyToStore
+            emailBody: emailBodyToStore,
+            threadId: message.threadId  // Track thread to prevent duplicates
         )
         
         // Add CodeMind classification metadata if available
