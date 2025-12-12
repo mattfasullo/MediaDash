@@ -5,6 +5,26 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.9.2</title>
+            <description><![CDATA[
+                <p>Email filtering improvements:
+
+- New docket emails now only from Grayson Producers: Added signature validation to ensure only emails from Grayson employees (@graysonmusicgroup.com) with 'Producer' title in their signature are processed as new docket emails
+- Improved signature extraction: Better handling of HTML emails and email signature detection
+- Fixed notification center UI: Rounded corners background now properly displays without sharp corners showing through</p>
+            ]]></description>
+            <pubDate>Fri, 12 Dec 2025 22:07:16 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.2/MediaDash.zip"
+                sparkle:version="92"
+                sparkle:shortVersionString="0.9.2"
+                sparkle:edSignature="Ts24/4Wb0GVFFE4jjODLI84KSzuBJtMiK32Po+0tKKesyxh53zAS8ew7rWB7Vj7H+ljmUUzF+j5XUuc0tChwAw=="
+                length="16238913"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.9.1</title>
             <description><![CDATA[
                 <h2>What's New in 0.9.1</h2><ul><li>Fixed CodeMind quota exceeded handling: Prevents excessive API calls when rate limits are hit</li><li>Improved file delivery detection: Replies in new docket threads with file links are now properly detected as file deliveries</li><li>Enhanced CodeMind classification: File delivery links are checked through CodeMind to distinguish incoming vs outgoing (prevents false positives for outgoing client links)</li><li>Improved JSON repair: Better handling of truncated API responses with multiple repair attempts</li><li>Bug fixes: Fixed quota exceeded status preventing further API calls during the same scan cycle</li></ul>
