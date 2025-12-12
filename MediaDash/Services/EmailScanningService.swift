@@ -247,6 +247,11 @@ class EmailScanningService: ObservableObject {
                     sharedCacheURL: sharedCacheURL,
                     serverBasePath: settings.serverBasePath
                 )
+                // Configure Notification sync manager (uses same directory, different filename)
+                NotificationSyncManager.shared.configure(
+                    sharedCacheURL: sharedCacheURL,
+                    serverBasePath: settings.serverBasePath
+                )
             }
             
             // Get job names from file system (MediaManager.dockets)

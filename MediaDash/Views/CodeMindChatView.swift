@@ -143,7 +143,7 @@ struct CodeMindChatView: View {
                     await MainActor.run {
                         messages.append(ChatMessage(
                             role: .system,
-                            content: "❌ CodeMind is not configured. Please add a \(providerDisplayName) API key in Settings > CodeMind AI.",
+                            content: "❌ CodeMind is not configured. Please add a \(providerDisplayName) API key in Settings > CodeMind.",
                             timestamp: Date()
                         ))
                     }
@@ -188,7 +188,7 @@ struct CodeMindChatView: View {
                     knowledgeStoragePath: chatKnowledgePath,
                     learningStoragePath: chatLearningPath,
                     customSystemPrompt: """
-                    You are CodeMind, an AI assistant for email classification in MediaDash.
+                    You are CodeMind, an assistant for email classification in MediaDash.
                     Your role is to help users by:
                     1. Understanding how emails are classified (new docket emails, file delivery emails)
                     2. Answering questions about the email classification system and how it works
@@ -325,7 +325,7 @@ struct CodeMindChatView: View {
                 
                 Your Gemini API key has exceeded its usage quota. Here are your options:
                 
-                1. **Check your Google AI billing**: Visit \(apiKeyURL)
+                1. **Check your Google billing**: Visit \(apiKeyURL)
                 2. **Add payment method**: Ensure you have a valid payment method linked
                 3. **Wait for quota reset**: If you're on a free tier, wait for the monthly reset
                 """
@@ -346,7 +346,7 @@ struct CodeMindChatView: View {
             
             There's an issue with your \(providerDisplayName) API key:
             
-            1. **Check your API key**: Go to Settings > CodeMind AI and verify your \(providerDisplayName) key
+            1. **Check your API key**: Go to Settings > CodeMind and verify your \(providerDisplayName) key
             2. **Test connection**: Use the "Test Connection" button in settings
             3. **Get a new key**: Visit \(apiKeyURL) to create a new \(providerDisplayName) API key
             """

@@ -127,6 +127,7 @@ struct SidebarView: View {
                     dateFormatter: dateFormatter,
                     attempt: attempt
                 )
+                .draggableLayout(id: "actionButtons")
 
                 Spacer()
 
@@ -200,6 +201,7 @@ struct SidebarView: View {
                     }
                 }
                 .padding(.bottom, 12)
+                .draggableLayout(id: "sidebarBottomActions")
             }
             .padding(16)
             .frame(width: 300)
@@ -738,7 +740,7 @@ struct ServerConnectionDialogView: View {
             }
         }
         .padding()
-        .frame(width: 400)
+        .frame(width: 400, height: 180)
         .onAppear {
             // Focus the text field when sheet appears - use longer delay to ensure sheet is fully presented
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -1195,15 +1197,15 @@ struct CodeMindChatButton: View {
     private var tooltipText: String {
         switch emailScanningService.codeMindStatus {
         case .working:
-            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nActive - AI classification enabled"
+            return "CodeMind Chat (Right-click) / Status (Left-click)\nActive - CodeMind classification enabled"
         case .disabled:
-            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nDisabled - Using rule-based classification"
+            return "CodeMind Chat (Right-click) / Status (Left-click)\nDisabled - Using rule-based classification"
         case .error(let message):
-            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nError - Using rule-based classification\n\(message)"
+            return "CodeMind Chat (Right-click) / Status (Left-click)\nError - Using rule-based classification\n\(message)"
         case .quotaExceeded(_, let userMessage):
-            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nRate Limit Exceeded - \(userMessage)"
+            return "CodeMind Chat (Right-click) / Status (Left-click)\nRate Limit Exceeded - \(userMessage)"
         case .unavailable:
-            return "CodeMind AI Chat (Right-click) / Status (Left-click)\nUnavailable - Configure in Settings > CodeMind AI"
+            return "CodeMind Chat (Right-click) / Status (Left-click)\nUnavailable - Configure in Settings > CodeMind"
         }
     }
     
@@ -1263,7 +1265,7 @@ struct CodeMindStatusPopover: View {
     private var statusDescription: String {
         switch emailScanningService.codeMindStatus {
         case .working:
-            return "CodeMind is active and enhancing email classification with AI"
+            return "CodeMind is active and enhancing email classification"
         case .disabled:
             return "CodeMind is disabled. Using rule-based classification patterns"
         case .error(let message):
@@ -1273,7 +1275,7 @@ struct CodeMindStatusPopover: View {
         case .quotaExceeded(_, let userMessage):
             return userMessage
         case .unavailable:
-            return "CodeMind is not configured. Configure an API key in Settings > CodeMind AI to enable AI-powered email classification"
+            return "CodeMind is not configured. Configure an API key in Settings > CodeMind to enable email classification"
         }
     }
     
@@ -1338,7 +1340,7 @@ struct CodeMindStatusPopover: View {
                     .font(.system(size: 16))
                     .foregroundColor(statusColor)
                 
-                Text("CodeMind AI Status")
+                Text("CodeMind Status")
                     .font(.system(size: 14, weight: .semibold))
                 
                 Spacer()
@@ -1380,7 +1382,7 @@ struct CodeMindStatusPopover: View {
                         Image(systemName: "sparkles")
                             .font(.system(size: 12))
                             .foregroundColor(.green)
-                        Text("AI-Powered Classification")
+                        Text("CodeMind Classification")
                             .font(.system(size: 12))
                             .foregroundColor(.primary)
                     }

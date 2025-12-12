@@ -288,10 +288,10 @@ struct StagingAreaView: View {
                 if manager.isProcessing {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            ProgressView(value: manager.progress)
+                            ProgressView(value: max(0, min(1, manager.progress)))
                                 .progressViewStyle(.linear)
                                 .frame(maxWidth: 200)
-                            Text("\(Int(manager.progress * 100))%")
+                            Text("\(Int(max(0, min(1, manager.progress)) * 100))%")
                                 .font(.caption)
                                 .monospacedDigit()
                                 .frame(width: 40, alignment: .trailing)

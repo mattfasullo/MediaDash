@@ -23,7 +23,9 @@
       "Bash(defaults read:*)",
       "Bash(gh release view:*)",
       "Bash(killall:*)",
-      "Bash(defaults delete:*)"
+      "Bash(defaults delete:*)",
+      "Bash(find:*)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

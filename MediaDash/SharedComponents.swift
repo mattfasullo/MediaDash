@@ -95,6 +95,7 @@ struct DocketInfo: Identifiable, Hashable, Codable {
     let jobName: String
     let fullName: String
     let updatedAt: Date?
+    let createdAt: Date?
     
     // Metadata keywords extracted from the original name (SESSION, PREP, POST, etc.)
     let metadataType: String?
@@ -105,12 +106,13 @@ struct DocketInfo: Identifiable, Hashable, Codable {
     // Project metadata (from Asana project)
     let projectMetadata: ProjectMetadata?
     
-    nonisolated init(id: UUID = UUID(), number: String, jobName: String, fullName: String, updatedAt: Date? = nil, metadataType: String? = nil, subtasks: [DocketSubtask]? = nil, projectMetadata: ProjectMetadata? = nil) {
+    nonisolated init(id: UUID = UUID(), number: String, jobName: String, fullName: String, updatedAt: Date? = nil, createdAt: Date? = nil, metadataType: String? = nil, subtasks: [DocketSubtask]? = nil, projectMetadata: ProjectMetadata? = nil) {
         self.id = id
         self.number = number
         self.jobName = jobName
         self.fullName = fullName
         self.updatedAt = updatedAt
+        self.createdAt = createdAt
         self.metadataType = metadataType
         self.subtasks = subtasks
         self.projectMetadata = projectMetadata

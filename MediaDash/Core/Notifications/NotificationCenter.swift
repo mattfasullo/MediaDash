@@ -8,17 +8,96 @@ class NotificationCenter: ObservableObject {
     @Published var notifications: [Notification] = []
     @Published var unreadCount: Int = 0
     @Published var isExpanded: Bool = false
-    
+
     weak var grabbedIndicatorService: GrabbedIndicatorService?
-    
+
     private let notificationsKey = "mediadash_notifications"
-    
+
+    // MARK: - Index Caches for O(1) Lookups
+    // These dictionaries provide fast lookups instead of linear array searches
+    private var notificationById: [UUID: Int] = [:]        // id -> array index
+    private var notificationByEmailId: [String: Int] = [:] // emailId -> array index
+    private var notificationByThreadId: [String: Set<Int>] = [:] // threadId -> set of array indices
+
     init() {
         loadNotifications()
+        rebuildIndices() // Build lookup indices
         migrateOldNotifications() // Migrate old notifications to have original values
         removeDuplicates() // Clean up any existing duplicates
         cleanupOldArchivedNotifications()
+        cleanupOldCompletedRequests()
         updateUnreadCount()
+        
+        // Sync completion status from shared cache
+        Task {
+            await syncCompletionStatus()
+        }
+    }
+
+    /// Rebuild all index caches - call after any bulk modification
+    private func rebuildIndices() {
+        notificationById.removeAll(keepingCapacity: true)
+        notificationByEmailId.removeAll(keepingCapacity: true)
+        notificationByThreadId.removeAll(keepingCapacity: true)
+
+        for (index, notification) in notifications.enumerated() {
+            notificationById[notification.id] = index
+            if let emailId = notification.emailId {
+                notificationByEmailId[emailId] = index
+            }
+            if let threadId = notification.threadId {
+                notificationByThreadId[threadId, default: []].insert(index)
+            }
+        }
+    }
+
+    /// Find notification index by ID (O(1) lookup)
+    private func indexById(_ id: UUID) -> Int? {
+        guard let cachedIndex = notificationById[id],
+              cachedIndex < notifications.count,
+              notifications[cachedIndex].id == id else {
+            // Cache miss or stale - fall back to linear search and update cache
+            if let index = notifications.firstIndex(where: { $0.id == id }) {
+                notificationById[id] = index
+                return index
+            }
+            return nil
+        }
+        return cachedIndex
+    }
+
+    /// Find notification index by emailId (O(1) lookup)
+    private func indexByEmailId(_ emailId: String) -> Int? {
+        guard let cachedIndex = notificationByEmailId[emailId],
+              cachedIndex < notifications.count,
+              notifications[cachedIndex].emailId == emailId else {
+            // Cache miss or stale - fall back to linear search and update cache
+            if let index = notifications.firstIndex(where: { $0.emailId == emailId }) {
+                notificationByEmailId[emailId] = index
+                return index
+            }
+            return nil
+        }
+        return cachedIndex
+    }
+
+    /// Find notifications by threadId (O(1) lookup, returns indices)
+    private func indicesByThreadId(_ threadId: String) -> [Int] {
+        guard let cachedIndices = notificationByThreadId[threadId] else {
+            // Build cache for this threadId
+            var indices: Set<Int> = []
+            for (index, notification) in notifications.enumerated() {
+                if notification.threadId == threadId {
+                    indices.insert(index)
+                }
+            }
+            if !indices.isEmpty {
+                notificationByThreadId[threadId] = indices
+            }
+            return Array(indices)
+        }
+        // Validate cached indices
+        return cachedIndices.filter { $0 < notifications.count && notifications[$0].threadId == threadId }
     }
     
     /// Migrate old notifications to populate missing original values
@@ -101,14 +180,118 @@ class NotificationCenter: ObservableObject {
         }
     }
     
-    /// Add a new notification (prevents duplicates by emailId)
+    /// Remove completed request notifications older than 24 hours
+    func cleanupOldCompletedRequests() {
+        let cutoffDate = Date().addingTimeInterval(-24 * 60 * 60) // 24 hours ago
+        let beforeCount = notifications.count
+        notifications.removeAll { notification in
+            if notification.type == .request,
+               notification.status == .completed,
+               let completedAt = notification.completedAt,
+               completedAt < cutoffDate {
+                return true
+            }
+            return false
+        }
+        if notifications.count < beforeCount {
+            updateUnreadCount()
+            saveNotifications()
+        }
+    }
+    
+    /// Add a new notification (prevents duplicates by emailId, threadId, or docket+jobName)
+    /// If a notification already exists for the same thread, silently skips unless there's new actionable content
     func add(_ notification: Notification) {
         // Check for duplicate by emailId if emailId is present
         if let emailId = notification.emailId {
             // Remove any existing notification with the same emailId
             notifications.removeAll { $0.emailId == emailId }
         }
-        
+
+        // Check for duplicate by threadId - skip if we already have a notification for this thread
+        // Replies to existing threads don't need new notifications (just conversation noise)
+        if let threadId = notification.threadId {
+            // For docket notifications, skip if we already have one for this thread
+            if notification.type == .newDocket {
+                let existingThreadNotification = notifications.first { existing in
+                    existing.threadId == threadId &&
+                    existing.type == .newDocket
+                }
+                if existingThreadNotification != nil {
+                    print("📋 [NotificationCenter] Skipping thread reply - already have docket notification for thread \(threadId)")
+                    return
+                }
+            }
+            // For file delivery, only update if there are NEW file links
+            if notification.type == .mediaFiles {
+                if let existingIndex = notifications.firstIndex(where: { existing in
+                    existing.threadId == threadId && existing.type == .mediaFiles
+                }) {
+                    // Check if there are genuinely new file links worth notifying about
+                    if let newLinks = notification.fileLinks, !newLinks.isEmpty {
+                        let existingLinks = notifications[existingIndex].fileLinks ?? []
+                        let existingLinksSet = Set(existingLinks)
+                        let newDescriptions = notification.fileLinkDescriptions ?? []
+
+                        // Find indices of truly new links
+                        var trulyNewLinks: [String] = []
+                        var trulyNewDescriptions: [String] = []
+                        for (index, link) in newLinks.enumerated() {
+                            if !existingLinksSet.contains(link) {
+                                trulyNewLinks.append(link)
+                                let desc = index < newDescriptions.count ? newDescriptions[index] : "Unknown contents"
+                                trulyNewDescriptions.append(desc)
+                            }
+                        }
+
+                        if !trulyNewLinks.isEmpty {
+                            // Add the new links and descriptions to the existing notification
+                            var updatedLinks = existingLinks
+                            updatedLinks.append(contentsOf: trulyNewLinks)
+                            notifications[existingIndex].fileLinks = updatedLinks
+
+                            var updatedDescriptions = notifications[existingIndex].fileLinkDescriptions ?? []
+                            updatedDescriptions.append(contentsOf: trulyNewDescriptions)
+                            notifications[existingIndex].fileLinkDescriptions = updatedDescriptions
+
+                            saveNotifications()
+                            print("📋 [NotificationCenter] Added \(trulyNewLinks.count) new file links to existing notification for thread \(threadId)")
+                        } else {
+                            print("📋 [NotificationCenter] Skipping thread reply - no new file links for thread \(threadId)")
+                        }
+                    } else {
+                        print("📋 [NotificationCenter] Skipping thread reply - already have file delivery notification for thread \(threadId)")
+                    }
+                    return
+                }
+            }
+            // For requests, skip if we already have one for this thread
+            if notification.type == .request {
+                let existingThreadNotification = notifications.first { existing in
+                    existing.threadId == threadId && existing.type == .request
+                }
+                if existingThreadNotification != nil {
+                    print("📋 [NotificationCenter] Skipping thread reply - already have request notification for thread \(threadId)")
+                    return
+                }
+            }
+        }
+
+        // Additional check: for newDocket, prevent duplicates with same docketNumber + jobName
+        if notification.type == .newDocket,
+           let docketNum = notification.docketNumber,
+           let jobName = notification.jobName {
+            let existingDocketNotification = notifications.first { existing in
+                existing.type == .newDocket &&
+                existing.docketNumber == docketNum &&
+                existing.jobName == jobName
+            }
+            if existingDocketNotification != nil {
+                print("📋 [NotificationCenter] Skipping duplicate - same docket+job already exists: \(docketNum) \(jobName)")
+                return
+            }
+        }
+
         notifications.insert(notification, at: 0) // Add to top
         updateUnreadCount()
         saveNotifications()
@@ -210,6 +393,87 @@ class NotificationCenter: ObservableObject {
                 }
             }
         }
+    }
+    
+    /// Mark a request notification as complete (syncs with other users)
+    func markRequestComplete(_ notification: Notification) async {
+        guard notification.type == .request else {
+            print("📋 [NotificationCenter] ⚠️ Cannot mark non-request notification as complete")
+            return
+        }
+        
+        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+            let completedAt = Date()
+            notifications[index].status = .completed
+            notifications[index].completedAt = completedAt
+            updateUnreadCount()
+            saveNotifications()
+            
+            // Sync completion status to shared cache
+            await NotificationSyncManager.shared.saveCompletionStatus(
+                notificationId: notification.id,
+                isCompleted: true,
+                completedAt: completedAt
+            )
+            
+            print("📋 [NotificationCenter] ✅ Marked request notification as complete")
+        }
+    }
+    
+    /// Mark a request notification as incomplete (undoes completion, syncs with other users)
+    func markRequestIncomplete(_ notification: Notification) async {
+        guard notification.type == .request else {
+            print("📋 [NotificationCenter] ⚠️ Cannot mark non-request notification as incomplete")
+            return
+        }
+        
+        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+            notifications[index].status = .pending
+            notifications[index].completedAt = nil
+            updateUnreadCount()
+            saveNotifications()
+            
+            // Sync completion status to shared cache
+            await NotificationSyncManager.shared.saveCompletionStatus(
+                notificationId: notification.id,
+                isCompleted: false,
+                completedAt: nil
+            )
+            
+            print("📋 [NotificationCenter] ✅ Marked request notification as incomplete")
+        }
+    }
+    
+    /// Sync completion status from shared cache
+    func syncCompletionStatus() async {
+        await NotificationSyncManager.shared.syncWithSharedCache()
+        
+        // Apply synced completion status to local notifications
+        for index in notifications.indices {
+            let notification = notifications[index]
+            if notification.type == .request {
+                if let completionStatus = await NotificationSyncManager.shared.getCompletionStatus(notificationId: notification.id) {
+                    // Update local notification to match synced status
+                    if completionStatus.isCompleted {
+                        if notifications[index].status != .completed {
+                            notifications[index].status = .completed
+                            notifications[index].completedAt = completionStatus.completedAt
+                        }
+                    } else {
+                        // If synced status says incomplete, but we have it as completed, update it
+                        if notifications[index].status == .completed {
+                            notifications[index].status = .pending
+                            notifications[index].completedAt = nil
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Clean up old completed requests after syncing
+        cleanupOldCompletedRequests()
+        saveNotifications()
+        updateUnreadCount()
     }
     
     /// Update notification action flags
@@ -325,6 +589,8 @@ class NotificationCenter: ObservableObject {
             notifications[index].title = "New Docket"
         case .mediaFiles:
             notifications[index].title = "File Delivery"
+        case .request:
+            notifications[index].title = "Media Team Request"
         case .junk:
             notifications[index].title = "Junk"
         case .skipped:
@@ -347,8 +613,8 @@ class NotificationCenter: ObservableObject {
         let emailBody = notifications[index].emailBody
         let emailFrom = notifications[index].sourceEmail
         
-        // If reclassifying to something other than "New Docket" or "File Delivery", remove notification and mark email as read
-        if newType != .newDocket && newType != .mediaFiles {
+        // If reclassifying to something other than "New Docket", "File Delivery", or "Request", remove notification and mark email as read
+        if newType != .newDocket && newType != .mediaFiles && newType != .request {
             // Learn from the re-classification (teach CodeMind) before removing
             if let emailService = emailScanningService {
                 await emailService.learnFromReclassification(
@@ -592,25 +858,54 @@ class NotificationCenter: ObservableObject {
     /// Remove duplicate notifications (keeps the most recent one for each emailId)
     func removeDuplicates() {
         var seenEmailIds: Set<String> = []
+        var seenThreadDockets: Set<String> = []  // "threadId:docketNumber" combinations
+        var seenDocketJobs: Set<String> = []     // "docketNumber:jobName" combinations for newDocket
         var uniqueNotifications: [Notification] = []
-        
+
         // Process notifications in reverse order (oldest first) so we keep the newest
         for notification in notifications.reversed() {
+            var isDuplicate = false
+
+            // Check by emailId
             if let emailId = notification.emailId {
-                if !seenEmailIds.contains(emailId) {
+                if seenEmailIds.contains(emailId) {
+                    isDuplicate = true
+                } else {
                     seenEmailIds.insert(emailId)
-                    uniqueNotifications.append(notification)
                 }
-                // Skip duplicate
-            } else {
-                // No emailId, keep it (can't be a duplicate)
+            }
+
+            // Check by threadId + docketNumber (for same thread with same docket)
+            if !isDuplicate, let threadId = notification.threadId, let docketNum = notification.docketNumber {
+                let key = "\(threadId):\(docketNum)"
+                if seenThreadDockets.contains(key) {
+                    isDuplicate = true
+                    print("📋 [NotificationCenter] Removing duplicate: same thread+docket - \(docketNum)")
+                } else {
+                    seenThreadDockets.insert(key)
+                }
+            }
+
+            // Check by docketNumber + jobName (for newDocket type only)
+            if !isDuplicate, notification.type == .newDocket,
+               let docketNum = notification.docketNumber, let jobName = notification.jobName {
+                let key = "\(docketNum):\(jobName)"
+                if seenDocketJobs.contains(key) {
+                    isDuplicate = true
+                    print("📋 [NotificationCenter] Removing duplicate: same docket+job - \(docketNum) \(jobName)")
+                } else {
+                    seenDocketJobs.insert(key)
+                }
+            }
+
+            if !isDuplicate {
                 uniqueNotifications.append(notification)
             }
         }
-        
+
         // Reverse back to original order (newest first)
         uniqueNotifications.reverse()
-        
+
         let removedCount = notifications.count - uniqueNotifications.count
         if removedCount > 0 {
             notifications = uniqueNotifications

@@ -49,7 +49,7 @@ struct JobNameEditDialog: View {
             }
         }
         .padding(24)
-        .frame(width: 400)
+        .frame(width: 400, height: 200)
         .onAppear {
             // Focus the text field when dialog appears
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {

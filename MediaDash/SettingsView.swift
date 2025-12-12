@@ -322,7 +322,7 @@ struct SettingsView: View {
                         oauthService: oauthService
                     )
 
-                    // CodeMind AI Integration Section
+                    // CodeMind Integration Section
                     CodeMindIntegrationSection(
                         settings: $settings,
                         hasUnsavedChanges: $hasUnsavedChanges
@@ -705,11 +705,10 @@ struct PathSettingsSection: View {
                     .padding(.vertical, 4)
 
                 // Job Info Source
-                // TEMPORARILY DISABLED FOR ASANA DEBUGGING - Only Asana is available
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Job Info Source")
                         .font(.system(size: 14, weight: .medium))
-                    Text("Currently using Asana only (CSV and Server disabled for debugging)")
+                    Text("Docket information is synced from Asana")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                     // Force Asana selection
@@ -1151,7 +1150,7 @@ struct AsanaIntegrationSection: View {
     @StateObject var oauthService: OAuthService
     @Binding var isConnecting: Bool
     @Binding var connectionError: String?
-    
+
     @StateObject private var cacheManager = AsanaCacheManager()
     @State private var showManualCodeEntry = false
     @State private var manualAuthCode = ""
@@ -1163,27 +1162,40 @@ struct AsanaIntegrationSection: View {
     @State private var isForceSyncing = false
     @State private var forceSyncError: String?
     @State private var forceSyncSuccess = false
+
+    // Connection health tracking
+    enum ConnectionHealth {
+        case unknown       // Not yet checked
+        case checking      // Currently validating
+        case healthy       // Token works
+        case expired       // Token exists but doesn't work
+        case noToken       // No token stored
+    }
+    @State private var connectionHealth: ConnectionHealth = .unknown
+    @State private var lastHealthCheck: Date?
     
     private func connectToAsana() {
         guard OAuthConfig.isAsanaConfigured else {
             connectionError = "Asana OAuth credentials not configured. Please update OAuthConfig.swift with your credentials."
             return
         }
-        
+
         isConnecting = true
         connectionError = nil
-        
+
         Task {
             do {
                 // Try localhost first
                 let token = try await oauthService.authenticateAsana(useOutOfBand: false)
-                
+
                 // Store the access token
                 oauthService.storeTokens(accessToken: token.accessToken, refreshToken: token.refreshToken, for: "asana")
-                
+
                 await MainActor.run {
                     isConnecting = false
-                    print("Asana OAuth successful! Token stored.")
+                    connectionHealth = .healthy
+                    connectionError = nil
+                    print("✅ Asana OAuth successful! Token stored.")
                 }
             } catch OAuthError.manualCodeRequired(let state, let authURL) {
                 // Fall back to manual code entry
@@ -1208,7 +1220,9 @@ struct AsanaIntegrationSection: View {
                                 oauthService.storeTokens(accessToken: token.accessToken, refreshToken: token.refreshToken, for: "asana")
                                 await MainActor.run {
                                     isConnecting = false
-                                    print("Asana OAuth successful! Token stored.")
+                                    connectionHealth = .healthy
+                                    connectionError = nil
+                                    print("✅ Asana OAuth successful! Token stored (OOB flow).")
                                 }
                             } catch OAuthError.manualCodeRequired(let state, let authURL) {
                                 await MainActor.run {
@@ -1226,7 +1240,7 @@ struct AsanaIntegrationSection: View {
                     } else {
                         connectionError = error.localizedDescription
                     }
-                    print("Asana OAuth failed: \(error.localizedDescription)")
+                    print("❌ Asana OAuth failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -1236,23 +1250,25 @@ struct AsanaIntegrationSection: View {
         guard !manualAuthCode.isEmpty else {
             return
         }
-        
+
         isConnecting = true
         connectionError = nil
-        
+
         Task {
             do {
                 let token = try await oauthService.exchangeCodeForTokenManually(
                     code: manualAuthCode.trimmingCharacters(in: .whitespaces)
                 )
-                
+
                 oauthService.storeTokens(accessToken: token.accessToken, refreshToken: token.refreshToken, for: "asana")
-                
+
                 await MainActor.run {
                     isConnecting = false
+                    connectionHealth = .healthy
+                    connectionError = nil
                     showManualCodeEntry = false
                     manualAuthCode = ""
-                    print("Asana OAuth successful! Token stored.")
+                    print("✅ Asana OAuth successful! Token stored (manual code).")
                 }
             } catch {
                 await MainActor.run {
@@ -1262,7 +1278,8 @@ struct AsanaIntegrationSection: View {
             }
         }
     }
-    
+
+    // Note: isConnected is kept for backward compatibility but connectionHealth is the source of truth
     private var isConnected: Bool {
         SharedKeychainService.getAsanaAccessToken() != nil
     }
@@ -1273,7 +1290,53 @@ struct AsanaIntegrationSection: View {
         oauthService.clearToken(for: "asana")
         print("Asana disconnected.")
     }
-    
+
+    private func reconnectAsana() {
+        // Clear existing tokens first
+        KeychainService.delete(key: "asana_access_token")
+        KeychainService.delete(key: "asana_refresh_token")
+        oauthService.clearToken(for: "asana")
+        connectionHealth = .noToken
+        print("Asana tokens cleared for reconnection.")
+
+        // Now connect fresh
+        connectToAsana()
+    }
+
+    /// Check if the Asana connection actually works by making a lightweight API call
+    private func checkConnectionHealth() {
+        // If no token, mark as no token
+        guard let token = SharedKeychainService.getAsanaAccessToken() else {
+            connectionHealth = .noToken
+            return
+        }
+
+        connectionHealth = .checking
+
+        Task {
+            let asanaService = AsanaService()
+            asanaService.setAccessToken(token)
+
+            do {
+                // Try to fetch workspaces - this is a lightweight call that validates the token
+                let _ = try await asanaService.fetchWorkspaces()
+                await MainActor.run {
+                    connectionHealth = .healthy
+                    lastHealthCheck = Date()
+                    connectionError = nil
+                    print("✅ [Asana Health] Connection verified - token is valid")
+                }
+            } catch {
+                await MainActor.run {
+                    connectionHealth = .expired
+                    lastHealthCheck = Date()
+                    connectionError = "Token expired or invalid. Please click 'Reconnect' to re-authenticate."
+                    print("❌ [Asana Health] Connection failed - token expired or invalid: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     var body: some View {
         SettingsCard {
             VStack(alignment: .leading, spacing: 16) {
@@ -1299,43 +1362,118 @@ struct AsanaIntegrationSection: View {
                             Text("Connecting...")
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)
-                        } else if isConnected {
-                            HStack(spacing: 6) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                    .font(.system(size: 14))
-                                Text("Connected")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.green)
-                            }
                         } else {
-                            Button("Connect to Asana") {
-                                connectToAsana()
+                            // Show connection health status
+                            switch connectionHealth {
+                            case .unknown:
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                    Text("Checking connection...")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                }
+                            case .checking:
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                    Text("Verifying token...")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                }
+                            case .healthy:
+                                HStack(spacing: 6) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                        .font(.system(size: 14))
+                                    Text("Connected")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.green)
+                                }
+                            case .expired:
+                                HStack(spacing: 6) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.red)
+                                        .font(.system(size: 14))
+                                    Text("Token Expired")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(.red)
+                                }
+                            case .noToken:
+                                Button("Connect to Asana") {
+                                    connectToAsana()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!OAuthConfig.isAsanaConfigured)
+                            }
+                        }
+
+                        Spacer()
+
+                        // Show buttons based on connection health
+                        if connectionHealth == .expired {
+                            // When expired, Reconnect is prominent (primary action)
+                            Button("Reconnect") {
+                                reconnectAsana()
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(!OAuthConfig.isAsanaConfigured)
-                        }
-                        
-                        if isConnected {
-                            Spacer()
+                            .controlSize(.small)
+                            .help("Re-authenticate with Asana")
+
                             Button("Disconnect") {
                                 disconnectAsana()
+                                connectionHealth = .noToken
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        } else if connectionHealth == .healthy {
+                            // When healthy, both buttons are secondary
+                            Button("Reconnect") {
+                                reconnectAsana()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("Re-authenticate with Asana")
+
+                            Button("Disconnect") {
+                                disconnectAsana()
+                                connectionHealth = .noToken
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         }
                     }
-                    
-                    // Error Messages
-                    if let error = connectionError {
+
+                    // Expired token warning - prominent alert
+                    if connectionHealth == .expired {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.white)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Asana Connection Lost")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.white)
+                                Text("Your authentication token has expired. Click 'Reconnect' to restore the connection.")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                            Spacer()
+                        }
+                        .padding(10)
+                        .background(Color.red)
+                        .cornerRadius(8)
+                    }
+
+                    // Other error messages
+                    if let error = connectionError, connectionHealth != .expired {
                         Text(error)
                             .font(.system(size: 11))
                             .foregroundColor(.red)
                             .textSelection(.enabled)
                     }
-                    
+
                     // Config Warning
-                    if !OAuthConfig.isAsanaConfigured && !isConnected {
+                    if !OAuthConfig.isAsanaConfigured && connectionHealth == .noToken {
                         Text("OAuth credentials not configured")
                             .font(.system(size: 11))
                             .foregroundColor(.orange)
@@ -1511,11 +1649,15 @@ struct AsanaIntegrationSection: View {
                 }
             }
         }
+        .onAppear {
+            // Check connection health when settings view appears
+            checkConnectionHealth()
+        }
         .sheet(isPresented: $showManualCodeEntry) {
             VStack(spacing: 20) {
                 Text("Manual Authorization")
                     .font(.system(size: 16, weight: .semibold))
-                
+
                 if let url = manualAuthURL {
                     Text("Copy the authorization code from your browser:")
                         .font(.system(size: 12))
@@ -1545,7 +1687,7 @@ struct AsanaIntegrationSection: View {
                 }
             }
             .padding(20)
-            .frame(width: 400)
+            .frame(width: 400, height: 220)
         }
         .alert("Force Full Sync", isPresented: $showForceSyncConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -1776,24 +1918,8 @@ struct GmailIntegrationSection: View {
         
         Task {
             do {
-                // Build query from search terms
-                let baseQuery: String
-                if !settings.gmailSearchTerms.isEmpty {
-                    // Build OR query for each term, trying both label and subject
-                    let queryParts = settings.gmailSearchTerms.filter { !$0.isEmpty }.flatMap { term in
-                        [
-                            "label:\"\(term)\"",
-                            "subject:\"\(term)\""
-                        ]
-                    }
-                    baseQuery = queryParts.isEmpty ? "label:\"New Docket\"" : "(\(queryParts.joined(separator: " OR ")))"
-                } else if !settings.gmailQuery.isEmpty {
-                    baseQuery = settings.gmailQuery
-                } else {
-                    baseQuery = "label:\"New Docket\""
-                }
-                
-                let query = "\(baseQuery) is:unread"
+                // Always scan all unread emails for testing
+                let query = "is:unread"
                 
                 // Fetch a few emails to test the connection
                 let messageRefs = try await gmailService.fetchEmails(query: query, maxResults: 5)
@@ -1956,52 +2082,6 @@ struct GmailIntegrationSection: View {
                         
                         if showAdvancedSettings {
                             VStack(alignment: .leading, spacing: 12) {
-                                // Search Terms
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Search Terms / Labels")
-                                        .font(.system(size: 13))
-                                    
-                                    Text("Add terms or labels to search for in email subjects, labels, and body text (case-insensitive)")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                    
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        ForEach(settings.gmailSearchTerms.indices, id: \.self) { index in
-                                            HStack(spacing: 8) {
-                                                TextField("Search term", text: Binding(
-                                                    get: { settings.gmailSearchTerms[index] },
-                                                    set: {
-                                                        settings.gmailSearchTerms[index] = $0
-                                                        hasUnsavedChanges = true
-                                                    }
-                                                ))
-                                                .textFieldStyle(.roundedBorder)
-                                                
-                                                Button(action: {
-                                                    settings.gmailSearchTerms.remove(at: index)
-                                                    hasUnsavedChanges = true
-                                                }) {
-                                                    Image(systemName: "minus.circle.fill")
-                                                        .foregroundColor(.red)
-                                                }
-                                                .buttonStyle(.plain)
-                                            }
-                                        }
-                                        
-                                        Button(action: {
-                                            settings.gmailSearchTerms.append("")
-                                            hasUnsavedChanges = true
-                                        }) {
-                                            HStack(spacing: 4) {
-                                                Image(systemName: "plus.circle.fill")
-                                                Text("Add Search Term")
-                                            }
-                                            .font(.system(size: 12))
-                                        }
-                                        .buttonStyle(.bordered)
-                                    }
-                                }
-                                
                                 // Polling Interval
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Scan Interval (seconds)")
@@ -2434,7 +2514,7 @@ struct GmailIntegrationSection: View {
                 }
             }
             .padding(20)
-            .frame(width: 400)
+            .frame(width: 400, height: 220)
         }
         .onAppear {
             // Restore connection state from Keychain when settings view appears
@@ -2469,7 +2549,7 @@ struct GmailIntegrationSection: View {
 }
 
 
-// MARK: - CodeMind AI Integration Section
+// MARK: - CodeMind Integration Section
 
 struct CodeMindIntegrationSection: View {
     @Binding var settings: AppSettings
@@ -2643,12 +2723,12 @@ struct CodeMindIntegrationSection: View {
                     Image(systemName: "brain.head.profile")
                         .foregroundColor(.blue)
                         .font(.system(size: 16))
-                    Text("CodeMind AI")
+                    Text("CodeMind")
                         .font(.system(size: 16, weight: .semibold))
                     Spacer()
                 }
                 
-                Text("AI-powered email classification for better docket and file delivery detection")
+                Text("Email classification for better docket and file delivery detection")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                 
@@ -2681,7 +2761,7 @@ struct CodeMindIntegrationSection: View {
                     }
                     
                     // Provider dropdown
-                    Picker("AI Provider", selection: $provider) {
+                    Picker("Provider", selection: $provider) {
                         Text("Gemini").tag("gemini")
                         Text("Grok (xAI)").tag("grok")
                     }
@@ -3071,7 +3151,7 @@ struct SharedKeySetupView: View {
         VStack(alignment: .leading, spacing: 16) {
             // CodeMind Section
             VStack(alignment: .leading, spacing: 8) {
-                Text("CodeMind AI")
+                Text("CodeMind")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
                 

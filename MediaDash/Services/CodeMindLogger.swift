@@ -11,19 +11,66 @@ class CodeMindLogger: ObservableObject {
     
     private let maxLogs = 1000 // Keep last 1000 logs
     private var logQueue = DispatchQueue(label: "com.mediadash.codemind.logger", qos: .utility)
-    
+
+    // Patterns to redact from log messages (API keys, tokens, etc.)
+    private let sensitivePatterns: [(pattern: String, replacement: String)] = [
+        // Google API keys (key=...)
+        (#"key=[A-Za-z0-9_-]{20,}"#, "key=[REDACTED]"),
+        // Bearer tokens
+        (#"Bearer [A-Za-z0-9._-]+"#, "Bearer [REDACTED]"),
+        // Generic API key patterns
+        (#"api[_-]?key[=:]\s*[A-Za-z0-9_-]{16,}"#, "api_key=[REDACTED]"),
+        // OAuth tokens
+        (#"access[_-]?token[=:]\s*[A-Za-z0-9._-]+"#, "access_token=[REDACTED]"),
+        (#"refresh[_-]?token[=:]\s*[A-Za-z0-9._-]+"#, "refresh_token=[REDACTED]"),
+    ]
+
     private init() {}
+
+    /// Sanitize a message by redacting sensitive information like API keys
+    private func sanitize(_ message: String) -> String {
+        var sanitized = message
+        for (pattern, replacement) in sensitivePatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+                sanitized = regex.stringByReplacingMatches(
+                    in: sanitized,
+                    options: [],
+                    range: NSRange(sanitized.startIndex..., in: sanitized),
+                    withTemplate: replacement
+                )
+            }
+        }
+        return sanitized
+    }
+
+    /// Sanitize metadata dictionary values
+    private func sanitizeMetadata(_ metadata: [String: Any]?) -> [String: Any]? {
+        guard let metadata = metadata else { return nil }
+        var sanitized: [String: Any] = [:]
+        for (key, value) in metadata {
+            if let stringValue = value as? String {
+                sanitized[key] = sanitize(stringValue)
+            } else {
+                sanitized[key] = value
+            }
+        }
+        return sanitized
+    }
     
     /// Log a CodeMind operation
     func log(_ level: CodeMindLogLevel, _ message: String, category: CodeMindLogCategory = .general, metadata: [String: Any]? = nil) {
         guard isEnabled else { return }
-        
+
+        // Sanitize message and metadata to remove API keys and other sensitive data
+        let sanitizedMessage = sanitize(message)
+        let sanitizedMetadata = sanitizeMetadata(metadata)
+
         let entry = CodeMindLogEntry(
             timestamp: Date(),
             level: level,
             category: category,
-            message: message,
-            metadata: metadata
+            message: sanitizedMessage,
+            metadata: sanitizedMetadata
         )
         
         logQueue.async { [weak self] in
@@ -48,8 +95,8 @@ class CodeMindLogger: ObservableObject {
         case .error: logLevel = .error
         }
         
-        var logMessage = message
-        if let metadata = metadata, !metadata.isEmpty {
+        var logMessage = sanitizedMessage
+        if let metadata = sanitizedMetadata, !metadata.isEmpty {
             let metadataString = metadata.map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
             logMessage += " [\(metadataString)]"
         }
@@ -64,8 +111,8 @@ class CodeMindLogger: ObservableObject {
         // Note: These print() statements appear in Xcode console but are NOT captured by FileLogger
         // Only the FileLogger.shared.log() call above writes to the file
         let emoji = level.emoji
-        print("\(emoji) [CodeMind \(category.rawValue)] \(message)")
-        if let metadata = metadata, !metadata.isEmpty {
+        print("\(emoji) [CodeMind \(category.rawValue)] \(sanitizedMessage)")
+        if let metadata = sanitizedMetadata, !metadata.isEmpty {
             print("   Metadata: \(metadata)")
         }
     }
@@ -125,56 +172,21 @@ class CodeMindLogger: ObservableObject {
         recipients: [String]?,
         emailBody: String?
     ) {
-        var debugMessage = "📊 DETAILED CLASSIFICATION DEBUG\n"
-        debugMessage += String(repeating: "=", count: 80) + "\n\n"
+        var debugMessage = "📊 Classification: \"\(subject ?? "no subject")\" from \(from ?? "unknown")\n"
         
-        debugMessage += "EMAIL INFORMATION:\n"
-        debugMessage += "- Email ID: \(emailId)\n"
-        debugMessage += "- Subject: \(subject ?? "nil")\n"
-        debugMessage += "- From: \(from ?? "unknown")\n"
-        debugMessage += "- Thread ID: \(threadId ?? "none (single email)")\n"
-        if let recipients = recipients, !recipients.isEmpty {
-            debugMessage += "- Recipients: \(recipients.joined(separator: ", "))\n"
-        }
-        debugMessage += "- Classification Type: \(classificationType)\n\n"
-        
-        // Check if from company domain
+        // Brief summary only
         if let from = from {
             let domain = from.split(separator: "@").last.map(String.init) ?? ""
             let isCompany = domain.lowercased().contains("grayson")
-            debugMessage += "SENDER ANALYSIS:\n"
-            debugMessage += "- Domain: \(domain)\n"
-            debugMessage += "- Is Company Domain: \(isCompany ? "YES ⚠️" : "NO") (graysonmusicgroup.com or graysonmusic.com)\n"
-            if let recipients = recipients, !recipients.isEmpty {
-                let hasExternal = recipients.contains { email in
-                    let recDomain = email.split(separator: "@").last.map(String.init) ?? ""
-                    return !recDomain.lowercased().contains("grayson")
-                }
-                debugMessage += "- Has External Recipients: \(hasExternal ? "YES (likely outgoing)" : "NO (likely internal)")\n"
+            if isCompany {
+                debugMessage += "  ⚠️ Company domain detected\n"
             }
-            debugMessage += "\n"
         }
         
-        if let threadContext = threadContext, !threadContext.isEmpty {
-            debugMessage += "THREAD CONTEXT:\n"
-            debugMessage += threadContext
-            debugMessage += "\n"
-        }
-        
+        // Brief email body preview (first 200 chars only)
         if let emailBody = emailBody, !emailBody.isEmpty {
-            debugMessage += "EMAIL BODY (FULL):\n"
-            debugMessage += String(repeating: "-", count: 80) + "\n"
-            debugMessage += emailBody
-            debugMessage += "\n"
-            debugMessage += String(repeating: "-", count: 80) + "\n\n"
-        }
-        
-        if let prompt = prompt, !prompt.isEmpty {
-            debugMessage += "LLM PROMPT (FULL):\n"
-            debugMessage += String(repeating: "-", count: 80) + "\n"
-            debugMessage += prompt
-            debugMessage += "\n"
-            debugMessage += String(repeating: "-", count: 80) + "\n\n"
+            let preview = String(emailBody.prefix(200)).replacingOccurrences(of: "\n", with: " ")
+            debugMessage += "EMAIL PREVIEW: \(preview)\(emailBody.count > 200 ? "..." : "")\n\n"
         }
         
         debugMessage += "CLASSIFICATION RESULT:\n"
@@ -182,29 +194,20 @@ class CodeMindLogger: ObservableObject {
             debugMessage += "- Is File Delivery: \(isFileDelivery)\n"
         }
         if let confidence = confidence {
-            debugMessage += "- Confidence: \(String(format: "%.2f", confidence)) (\(Int(confidence * 100))%)\n"
-            if confidence < 0.7 {
-                debugMessage += "  ⚠️ Low confidence - would go to 'For Review'\n"
-            } else {
-                debugMessage += "  ✓ High confidence - would be shown normally\n"
-            }
+            debugMessage += "- Confidence: \(String(format: "%.0f", confidence * 100))%\n"
         }
         if let reasoning = reasoning {
             debugMessage += "- Reasoning: \(reasoning)\n"
         }
-        debugMessage += "\n"
         
+        // Brief LLM response preview (just the JSON result, not full prompt)
         if let llmResponse = llmResponse, !llmResponse.isEmpty {
-            debugMessage += "LLM RESPONSE (FULL):\n"
-            debugMessage += String(repeating: "-", count: 80) + "\n"
-            debugMessage += llmResponse
-            debugMessage += "\n"
-            debugMessage += String(repeating: "-", count: 80) + "\n\n"
+            // Try to extract just the JSON part if it's wrapped in other text
+            let jsonPreview = llmResponse.count > 300 ? String(llmResponse.prefix(300)) + "..." : llmResponse
+            debugMessage += "\nRESPONSE: \(jsonPreview)\n"
         }
         
-        debugMessage += String(repeating: "=", count: 80) + "\n"
-        
-        // Log as a single entry with the full debug info
+        // Log as a single entry with concise debug info
         self.log(.debug, debugMessage, category: .classification, metadata: [
             "emailId": emailId,
             "subject": subject ?? "nil",

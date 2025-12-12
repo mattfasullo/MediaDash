@@ -5,7 +5,7 @@ import SwiftUI
 /// Types of CodeMind activities that can be tracked
 enum CodeMindActivity: Identifiable {
     case classifying(emailSubject: String)
-    case classified(emailSubject: String, type: String, confidence: Double, verified: Bool)
+    case classified(emailSubject: String, type: String, confidence: Double, verified: Bool, reasoning: String?)
     case verifying(docketNumber: String)
     case verified(docketNumber: String, source: String, found: Bool)
     case scanning(query: String)
@@ -14,7 +14,7 @@ enum CodeMindActivity: Identifiable {
     case anomalyDetected(description: String, severity: String)
     case error(message: String)
     case idle
-    
+
     var id: UUID { UUID() }
     
     var icon: String {
@@ -35,7 +35,7 @@ enum CodeMindActivity: Identifiable {
     var color: Color {
         switch self {
         case .classifying: return .blue
-        case .classified(_, _, let conf, _): return conf >= 0.8 ? .green : (conf >= 0.6 ? .yellow : .orange)
+        case .classified(_, _, let conf, _, _): return conf >= 0.8 ? .green : (conf >= 0.6 ? .yellow : .orange)
         case .verifying: return .purple
         case .verified(_, _, let found): return found ? .green : .orange
         case .scanning: return .blue
@@ -67,7 +67,7 @@ enum CodeMindActivity: Identifiable {
         switch self {
         case .classifying(let subject):
             return "'\(subject.prefix(40))...'"
-        case .classified(let subject, let type, let conf, let verified):
+        case .classified(let subject, let type, let conf, let verified, _):
             let confStr = String(format: "%.0f%%", conf * 100)
             let verifiedStr = verified ? " ✓" : ""
             return "\(type) • \(confStr)\(verifiedStr) • '\(subject.prefix(30))...'"
@@ -84,6 +84,12 @@ enum CodeMindActivity: Identifiable {
         case .anomalyDetected(let desc, _):
             return desc.prefix(50).description
         case .error(let message):
+            // Show full error message for server connection issues (up to 100 chars)
+            if message.localizedCaseInsensitiveContains("server") || 
+               message.localizedCaseInsensitiveContains("cannot access") ||
+               message.localizedCaseInsensitiveContains("not connected") {
+                return message.prefix(100).description
+            }
             return message.prefix(50).description
         case .idle:
             return "Waiting for activity"
@@ -94,6 +100,16 @@ enum CodeMindActivity: Identifiable {
         switch self {
         case .classifying, .verifying, .scanning: return true
         default: return false
+        }
+    }
+
+    /// Returns the reasoning/explanation for classifications
+    var reasoning: String? {
+        switch self {
+        case .classified(_, _, _, _, let reason):
+            return reason
+        default:
+            return nil
         }
     }
 }
@@ -183,7 +199,7 @@ class CodeMindActivityManager: ObservableObject {
         recentActivities.insert(record, at: 0)
         
         // Track classification stats
-        if case .classified(_, _, let conf, _) = activity {
+        if case .classified(_, _, let conf, _, _) = activity {
             totalClassifications += 1
             classificationCount += 1
             confidenceSum += conf
@@ -218,8 +234,8 @@ class CodeMindActivityManager: ObservableObject {
         recordActivity(.classifying(emailSubject: subject))
     }
     
-    func finishClassifying(subject: String, type: String, confidence: Double, verified: Bool) {
-        recordActivity(.classified(emailSubject: subject, type: type, confidence: confidence, verified: verified))
+    func finishClassifying(subject: String, type: String, confidence: Double, verified: Bool, reasoning: String? = nil) {
+        recordActivity(.classified(emailSubject: subject, type: type, confidence: confidence, verified: verified, reasoning: reasoning))
     }
     
     func startVerifying(docket: String) {

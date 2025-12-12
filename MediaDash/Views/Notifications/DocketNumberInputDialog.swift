@@ -42,7 +42,7 @@ struct DocketNumberInputDialog: View {
             }
         }
         .padding(24)
-        .frame(width: 400)
+        .frame(width: 400, height: 180)
         .onAppear {
             isTextFieldFocused = true
         }

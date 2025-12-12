@@ -48,6 +48,8 @@ struct NotificationPopupView: View {
             return "folder.badge.plus"
         case .mediaFiles:
             return "link.circle.fill"
+        case .request:
+            return "hand.raised.fill"
         case .error:
             return "exclamationmark.triangle.fill"
         case .info:

@@ -113,6 +113,28 @@ struct FileItem: Identifiable, Hashable, Sendable {
         }
         return count
     }
+
+    /// Calculate total size of all files in a directory recursively
+    static func calculateDirectorySize(at url: URL) -> Int64 {
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var totalSize: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            if let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+               let isRegularFile = resourceValues.isRegularFile,
+               isRegularFile,
+               let fileSize = resourceValues.fileSize {
+                totalSize += Int64(fileSize)
+            }
+        }
+        return totalSize
+    }
 }
 
 struct SearchResults: Sendable {
@@ -439,10 +461,21 @@ enum MediaLogic {
 
             if !videoFiles.isEmpty {
                 var durationGroups: [String: Int] = [:]
-                for video in videoFiles {
-                    if let duration = await getVideoDuration(video) {
-                        let formatted = formatDuration(duration)
-                        durationGroups[formatted, default: 0] += 1
+                // Process videos with limited concurrency (max 3 at a time) to avoid overwhelming the system
+                await withTaskGroup(of: (String, Int)?.self) { group in
+                    for video in videoFiles {
+                        group.addTask {
+                            guard let duration = await getVideoDuration(video) else { return nil }
+                            let formatted = formatDuration(duration)
+                            return (formatted, 1)
+                        }
+                    }
+                    
+                    // Collect results as they complete
+                    for await result in group {
+                        if let (formatted, count) = result {
+                            durationGroups[formatted, default: 0] += count
+                        }
                     }
                 }
 
@@ -563,6 +596,9 @@ class MediaManager: ObservableObject {
     var omfAafValidator: OMFAAFValidatorManager?
     @Published var showOMFAAFValidator: Bool = false
     @Published var omfAafFileToValidate: URL?
+    private var conversionMonitoringTask: Task<Void, Never>? // Track conversion monitoring task for cleanup
+    private var prepSummaryRegenerationTask: Task<Void, Never>? // Track prep summary regeneration to cancel previous ones
+    private var prepSummaryRegenerationWorkItem: DispatchWorkItem? // For debouncing watcher events
 
     init(settingsManager: SettingsManager, metadataManager: DocketMetadataManager) {
         self.config = AppConfig(settings: settingsManager.currentSettings)
@@ -838,7 +874,13 @@ class MediaManager: ObservableObject {
         }
     }
     
-    func clearFiles() { selectedFiles.removeAll() }
+    func clearFiles() {
+        selectedFiles.removeAll()
+        // Clean up progress tracking when files are cleared
+        fileProgress.removeAll()
+        fileCompletionState.removeAll()
+        conversionProgress.removeAll()
+    }
 
     func removeFile(withId id: UUID) {
         selectedFiles.removeAll { $0.id == id }
@@ -851,6 +893,16 @@ class MediaManager: ObservableObject {
     func cancelProcessing() {
         cancelRequested = true
         statusMessage = "Cancelling..."
+        
+        // Cancel any ongoing conversion monitoring
+        conversionMonitoringTask?.cancel()
+        conversionMonitoringTask = nil
+        isConverting = false
+        
+        // Clear progress dictionaries to prevent memory buildup
+        fileProgress.removeAll()
+        fileCompletionState.removeAll()
+        conversionProgress.removeAll()
     }
     
     func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date) {
@@ -867,16 +919,44 @@ class MediaManager: ObservableObject {
         fileCompletionState.removeAll() // Clear completion states
         let files = selectedFiles
         let currentConfig = self.config
+
+        // Calculate total bytes for all files
+        let totalBytes: Int64 = files.reduce(0) { sum, file in
+            if file.isDirectory {
+                // For directories, sum up all files recursively
+                return sum + FileItem.calculateDirectorySize(at: file.url)
+            } else {
+                return sum + (file.fileSize ?? 0)
+            }
+        }
+        // For "both" mode, files are copied twice
+        let adjustedTotalBytes = type == .both ? totalBytes * 2 : totalBytes
+
+        // Start floating progress indicator
+        let progressOperation: ProgressOperation = {
+            switch type {
+            case .workPicture: return .filing(docket: docket)
+            case .prep: return .prepping(docket: docket)
+            case .both: return .filingAndPrepping(docket: docket)
+            }
+        }()
+        FloatingProgressManager.shared.startOperation(progressOperation, totalFiles: files.count * (type == .both ? 2 : 1), totalBytes: adjustedTotalBytes)
+
+        print("🚀 [DEBUG] Starting file operation: \(type), files: \(files.count), totalBytes: \(adjustedTotalBytes)")
         Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
             let paths = currentConfig.getPaths()
             let total = Double(files.count * (type == .both ? 2 : 1))
             var currentStep = 0.0
-            
+            var cumulativeBytesCopied: Int64 = 0
+
             var failedFiles: [String] = []
 
             if type == .workPicture || type == .both {
-                await MainActor.run { self.statusMessage = "Filing..." }
+                await MainActor.run {
+                    self.statusMessage = "Filing..."
+                    FloatingProgressManager.shared.updateProgress(0, message: "Filing...")
+                }
                 
                 // Verify work picture parent directory exists before creating folders
                 guard fm.fileExists(atPath: paths.workPic.path) else {
@@ -884,6 +964,7 @@ class MediaManager: ObservableObject {
                         self.errorMessage = "Work Picture folder path does not exist:\n\(paths.workPic.path)\n\nPlease check your settings:\n• Server Base Path: \(currentConfig.settings.serverBasePath)\n• Year Prefix: \(currentConfig.settings.yearPrefix)\n• Work Picture Folder Name: \(currentConfig.settings.workPictureFolderName)\n\nMake sure the server is connected and the paths are correct in Settings."
                         self.showError = true
                         self.isProcessing = false
+                        FloatingProgressManager.shared.hide()
                     }
                     return
                 }
@@ -895,6 +976,7 @@ class MediaManager: ObservableObject {
                         self.errorMessage = "Docket folder does not exist:\n\(base.path)\n\nPlease create the docket folder first or check that the docket name is correct."
                         self.showError = true
                         self.isProcessing = false
+                        FloatingProgressManager.shared.hide()
                     }
                     return
                 }
@@ -926,26 +1008,39 @@ class MediaManager: ObservableObject {
                     await MainActor.run { self.fileProgress[f.id] = 0.0 }
 
                     let dest = destFolder.appendingPathComponent(f.name)
-                    
+                    let fileSize = f.fileSize ?? 0
+                    let bytesBeforeThisFile = cumulativeBytesCopied
+
                     // Skip if file already exists, otherwise copy it
                     if fm.fileExists(atPath: dest.path) {
                         // File already exists, skip it but don't count as failed
                         print("Skipping existing file: \(f.name)")
-                        // Still mark as complete for progress tracking
-                        currentStep += 1
-                        let p = currentStep / total
-                        await MainActor.run {
-                            self.fileProgress[f.id] = 1.0
-                            self.progress = p
-                            if type == .both {
-                                self.fileCompletionState[f.id] = .workPicDone
-                            } else {
-                                self.fileCompletionState[f.id] = .complete
+                        // Still count bytes for skipped files to keep progress accurate
+                        cumulativeBytesCopied += fileSize
+                    } else {
+                        // Use progress-aware copy for large files
+                        let baseProgress = currentStep / total
+                        let progressPerFile = 1.0 / total
+
+                        let copySuccess = self.copyItemWithProgress(from: f.url, to: dest) { bytesWritten, fileTotalBytes in
+                            let filePortionComplete = Double(bytesWritten) / Double(fileTotalBytes)
+                            let adjustedProgress = baseProgress + (progressPerFile * filePortionComplete)
+                            let currentTotalBytes = bytesBeforeThisFile + bytesWritten
+
+                            // Use DispatchQueue.main.async instead of Task to avoid task accumulation
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self = self else { return }
+                                self.fileProgress[f.id] = filePortionComplete
+                                self.progress = min(adjustedProgress, 1.0)
+                                FloatingProgressManager.shared.updateProgress(adjustedProgress, currentFile: f.name)
+                                FloatingProgressManager.shared.updateBytes(copied: currentTotalBytes)
                             }
                         }
-                    } else {
-                    if !self.copyItem(from: f.url, to: dest) {
-                        failedFiles.append(f.name)
+
+                        if copySuccess {
+                            cumulativeBytesCopied += fileSize
+                        } else {
+                            failedFiles.append(f.name)
                         }
                     }
 
@@ -969,7 +1064,10 @@ class MediaManager: ObservableObject {
             var prepDestinationFolder: URL? = nil
 
             if type == .prep || type == .both {
-                await MainActor.run { self.statusMessage = "Prepping..." }
+                await MainActor.run {
+                    self.statusMessage = "Prepping..."
+                    FloatingProgressManager.shared.updateProgress(self.progress, message: "Prepping...")
+                }
                 
                 // Verify prep parent directory exists before creating folders
                 guard fm.fileExists(atPath: paths.prep.path) else {
@@ -977,6 +1075,7 @@ class MediaManager: ObservableObject {
                         self.errorMessage = "Prep folder path does not exist:\n\(paths.prep.path)\n\nPlease check your settings:\n• Server Base Path: \(currentConfig.settings.serverBasePath)\n• Year Prefix: \(currentConfig.settings.yearPrefix)\n• Prep Folder Name: \(currentConfig.settings.prepFolderName)\n\nMake sure the server is connected and the paths are correct in Settings."
                         self.showError = true
                         self.isProcessing = false
+                        FloatingProgressManager.shared.hide()
                     }
                     return
                 }
@@ -1082,14 +1181,50 @@ class MediaManager: ObservableObject {
                     }
                     
                     let destFile = dir.appendingPathComponent(flatFile.lastPathComponent)
-                    
+
+                    // Get file size for byte tracking
+                    let flatFileSize: Int64 = {
+                        if let attrs = try? fm.attributesOfItem(atPath: flatFile.path),
+                           let size = attrs[.size] as? Int64 {
+                            return size
+                        }
+                        return 0
+                    }()
+                    let bytesBeforeThisFile = cumulativeBytesCopied
+
                     // Skip if file already exists, otherwise copy it
                     if fm.fileExists(atPath: destFile.path) {
                         // File already exists, skip it but don't count as failed
                         print("Skipping existing file: \(flatFile.lastPathComponent)")
+                        // Still count bytes for skipped files to keep progress accurate
+                        cumulativeBytesCopied += flatFileSize
                     } else {
-                        if !self.copyItem(from: flatFile, to: destFile) {
-                        failedFiles.append(flatFile.lastPathComponent)
+                        // Use progress-aware copy for large files
+                        // This provides smooth progress updates during long file copies
+                        let baseProgress = currentStep / total
+                        let progressPerFile = 1.0 / total
+                        // Note: fileToFlatCount[sourceId] is available for future use if needed for per-source progress tracking
+
+                        let currentFileName = flatFile.lastPathComponent
+                        let copySuccess = self.copyItemWithProgress(from: flatFile, to: destFile) { bytesWritten, fileTotalBytes in
+                            // Calculate sub-file progress (0.0 to 1.0 within this file's portion)
+                            let filePortionComplete = Double(bytesWritten) / Double(fileTotalBytes)
+                            let adjustedProgress = baseProgress + (progressPerFile * filePortionComplete)
+                            let currentTotalBytes = bytesBeforeThisFile + bytesWritten
+
+                            // Update UI on main thread - use DispatchQueue.main.async instead of Task to avoid task accumulation
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self = self else { return }
+                                self.progress = min(adjustedProgress, 1.0)
+                                FloatingProgressManager.shared.updateProgress(adjustedProgress, currentFile: currentFileName)
+                                FloatingProgressManager.shared.updateBytes(copied: currentTotalBytes)
+                            }
+                        }
+
+                        if copySuccess {
+                            cumulativeBytesCopied += flatFileSize
+                        } else {
+                            failedFiles.append(flatFile.lastPathComponent)
                         }
                     }
 
@@ -1121,12 +1256,19 @@ class MediaManager: ObservableObject {
 
                 // Organize stems and generate summary
                 if type == .prep || type == .both {
+                    print("📁 [DEBUG] Starting stem organization and summary generation")
                     await MainActor.run { self.statusMessage = "Organizing stems..." }
-                    self.organizeStems(in: root, config: currentConfig)
+                    // Run organizeStems in background to avoid blocking
+                    await Task.detached(priority: .utility) {
+                        print("📁 [DEBUG] Organizing stems in background task")
+                        self.organizeStems(in: root, config: currentConfig)
+                        print("✅ [DEBUG] Stem organization completed")
+                    }.value
 
                     // Get job name for summary
                     let jobName = await MainActor.run { self.getJobName(for: docket) }
 
+                    print("📊 [DEBUG] Generating prep summary...")
                     await MainActor.run { self.statusMessage = "Generating prep summary..." }
                     let summary = await MediaLogic.generatePrepSummary(
                         docket: docket,
@@ -1134,17 +1276,24 @@ class MediaManager: ObservableObject {
                         prepFolderPath: root.path,
                         config: currentConfig
                     )
+                    print("✅ [DEBUG] Prep summary generated")
 
                     // Save summary to file
                     let summaryFile = root.appendingPathComponent("\(docket)_Prep_Summary.txt")
                     try? summary.write(to: summaryFile, atomically: true, encoding: .utf8)
 
-                    // Update UI and setup file watching
+                    // Update UI and setup file watching (but delay watcher setup to avoid firing during final operations)
                     await MainActor.run {
                         self.prepSummary = summary
                         self.showPrepSummary = true
                         self.currentPrepFolder = root.path
-                        self.setupPrepFolderWatcher(path: root.path, docket: docket)
+                        
+                        print("⏰ [DEBUG] Scheduling prep folder watcher setup in 2 seconds (to avoid firing during final operations)")
+                        // Delay watcher setup to avoid immediate firing from final file operations
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                            print("⏰ [DEBUG] Setting up prep folder watcher now (2 second delay elapsed)")
+                            self?.setupPrepFolderWatcher(path: root.path, docket: docket)
+                        }
                     }
                 }
             }
@@ -1157,13 +1306,22 @@ class MediaManager: ObservableObject {
 
             await MainActor.run {
                 if wasCancelled {
+                    print("🛑 [DEBUG] File operation cancelled")
                     self.isProcessing = false
                     self.statusMessage = "Cancelled"
+                    FloatingProgressManager.shared.cancel()
+                    // Ensure cleanup on cancel
+                    self.fileProgress.removeAll()
+                    self.fileCompletionState.removeAll()
                     return
                 }
+                
+                print("✅ [DEBUG] File operation completed. isProcessing: \(self.isProcessing) -> false")
                 self.isProcessing = false
+                
                 if finalFailedFiles.isEmpty {
                     self.statusMessage = "Done!"
+                    FloatingProgressManager.shared.complete(message: "Done!")
                     NSSound(named: "Glass")?.play()
 
                     // Open prep folder if setting is enabled
@@ -1174,6 +1332,16 @@ class MediaManager: ObservableObject {
                     self.statusMessage = "Completed with \(finalFailedFiles.count) error(s)"
                     self.errorMessage = "Failed to copy these files:\n\(finalFailedFiles.joined(separator: "\n"))"
                     self.showError = true
+                    FloatingProgressManager.shared.complete(message: "Completed with errors")
+                }
+                
+                // Clean up progress dictionaries after operation completes
+                // Keep fileProgress for a short time in case UI needs to show final state
+                // But clear old entries that are no longer relevant
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    print("🧹 [DEBUG] Cleaning up progress dictionaries")
+                    self?.fileProgress.removeAll()
+                    self?.fileCompletionState.removeAll()
                 }
             }
         }
@@ -1186,37 +1354,32 @@ class MediaManager: ObservableObject {
     nonisolated private func getNextFolder(base: URL, date: String) -> URL {
         let fm = FileManager.default
         var p = 1
-        
+
         // Get all items in the base directory
         guard let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: [.isDirectoryKey]) else {
             return base.appendingPathComponent(String(format: "%02d_%@", p, date))
         }
-        
-        // Filter for directories that match the date pattern: NN_date
-        let matchingFolders = items.filter { item in
+
+        // Filter for directories that match the numbered date pattern: NN_anydate
+        // We look at ALL numbered folders to find the highest number, regardless of date
+        let numberedFolders = items.filter { item in
             // Only check directories
             guard let isDirectory = try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory,
                   isDirectory == true else {
                 return false
             }
             let name = item.lastPathComponent
-            // Must end with the date (format: "01_date" or "1_date")
-            // Also handle old date formats that might not have zero-padded days
-            if name.hasSuffix("_\(date)") {
-                return true
+            // Match pattern: digits followed by underscore (e.g., "01_", "02_", "15_")
+            guard let underscoreIndex = name.firstIndex(of: "_") else {
+                return false
             }
-            // Check if it matches when normalized (handles "Dec2.25" vs "Dec02.25")
-            if let underscoreIndex = name.firstIndex(of: "_") {
-                let datePart = String(name[name.index(after: underscoreIndex)...])
-                if normalizeDateString(datePart) == normalizeDateString(date) {
-                    return true
-                }
-            }
-            return false
+            let prefix = String(name[..<underscoreIndex])
+            // Verify the prefix is a number
+            return Int(prefix) != nil
         }
-        
+
         // Extract numbers from folder names (format: "01_date" -> 1)
-        let nums = matchingFolders.compactMap { item -> Int? in
+        let nums = numberedFolders.compactMap { item -> Int? in
             let name = item.lastPathComponent
             // Extract the number prefix before the underscore
             if let underscoreIndex = name.firstIndex(of: "_") {
@@ -1225,12 +1388,12 @@ class MediaManager: ObservableObject {
             }
             return nil
         }
-        
+
         // Find the highest number and increment
         if let max = nums.max(), max >= 1 {
             p = max + 1
         }
-        
+
         return base.appendingPathComponent(String(format: "%02d_%@", p, date))
     }
     
@@ -1273,6 +1436,128 @@ class MediaManager: ObservableObject {
         } catch {
             print("Error copying file from \(from.path) to \(to.path): \(error.localizedDescription)")
             return false
+        }
+    }
+
+    /// Copy a file with progress reporting for large files
+    /// Returns (success, bytesWritten) - bytesWritten is used to update progress during copy
+    /// Includes timeout protection to prevent hanging on slow/stuck file operations
+    nonisolated private func copyItemWithProgress(
+        from: URL,
+        to: URL,
+        progressHandler: @escaping (Int64, Int64) -> Void,  // (bytesWritten, totalBytes)
+        timeoutSeconds: TimeInterval = 300.0  // 5 minutes default timeout
+    ) -> Bool {
+        let fm = FileManager.default
+
+        // Get file size for progress calculation
+        guard let attributes = try? fm.attributesOfItem(atPath: from.path),
+              let fileSize = attributes[.size] as? Int64 else {
+            // Fall back to regular copy if we can't get file size
+            return copyItem(from: from, to: to)
+        }
+
+        // For small files (< 50MB), use regular copy - faster and simpler
+        let smallFileThreshold: Int64 = 50 * 1024 * 1024
+        if fileSize < smallFileThreshold {
+            return copyItem(from: from, to: to)
+        }
+
+        // For large files, use streaming copy with progress updates
+        do {
+            if fm.fileExists(atPath: to.path) {
+                try fm.removeItem(at: to)
+            }
+
+            // Create destination file
+            fm.createFile(atPath: to.path, contents: nil, attributes: nil)
+
+            guard let inputStream = InputStream(url: from),
+                  let outputStream = OutputStream(url: to, append: false) else {
+                return copyItem(from: from, to: to)
+            }
+
+            inputStream.open()
+            outputStream.open()
+
+            defer {
+                inputStream.close()
+                outputStream.close()
+            }
+
+            // Use 1MB buffer for efficient copying
+            let bufferSize = 1024 * 1024
+            var buffer = [UInt8](repeating: 0, count: bufferSize)
+            var totalBytesWritten: Int64 = 0
+            var lastProgressUpdate = Date()
+            let startTime = Date()
+            var lastByteCount: Int64 = 0
+            var lastByteCountTime = Date()
+
+            while inputStream.hasBytesAvailable {
+                // Check for overall timeout
+                let elapsed = Date().timeIntervalSince(startTime)
+                if elapsed > timeoutSeconds {
+                    print("Error: File copy timed out after \(timeoutSeconds) seconds")
+                    try? fm.removeItem(at: to)
+                    return false
+                }
+                
+                // Check for stall (no progress for 30 seconds indicates a stuck operation)
+                let timeSinceLastProgress = Date().timeIntervalSince(lastByteCountTime)
+                if timeSinceLastProgress > 30.0 && totalBytesWritten == lastByteCount && totalBytesWritten > 0 {
+                    print("Error: File copy stalled (no progress for 30 seconds)")
+                    try? fm.removeItem(at: to)
+                    return false
+                }
+
+                let bytesRead = inputStream.read(&buffer, maxLength: bufferSize)
+                if bytesRead < 0 {
+                    // Read error
+                    try? fm.removeItem(at: to)
+                    return false
+                }
+                if bytesRead == 0 {
+                    break
+                }
+
+                var bytesWritten = 0
+                while bytesWritten < bytesRead {
+                    // Use withUnsafeBufferPointer for safe pointer arithmetic
+                    let writeResult = buffer.withUnsafeBufferPointer { bufferPtr in
+                        guard let baseAddress = bufferPtr.baseAddress else { return -1 }
+                        return outputStream.write(baseAddress + bytesWritten, maxLength: bytesRead - bytesWritten)
+                    }
+                    if writeResult < 0 {
+                        // Write error
+                        try? fm.removeItem(at: to)
+                        return false
+                    }
+                    bytesWritten += writeResult
+                }
+
+                totalBytesWritten += Int64(bytesWritten)
+                
+                // Track progress for stall detection
+                if totalBytesWritten > lastByteCount {
+                    lastByteCount = totalBytesWritten
+                    lastByteCountTime = Date()
+                }
+
+                // Update progress every 100ms to avoid too many UI updates
+                let now = Date()
+                if now.timeIntervalSince(lastProgressUpdate) >= 0.1 {
+                    progressHandler(totalBytesWritten, fileSize)
+                    lastProgressUpdate = now
+                }
+            }
+
+            // Final progress update
+            progressHandler(fileSize, fileSize)
+            return true
+        } catch {
+            print("Error copying file with progress from \(from.path) to \(to.path): \(error.localizedDescription)")
+            return copyItem(from: from, to: to)
         }
     }
 
@@ -1328,24 +1613,51 @@ class MediaManager: ObservableObject {
 
     /// Setup file system monitoring for prep folder
     func setupPrepFolderWatcher(path: String, docket: String) {
+        print("🔍 [DEBUG] Setting up prep folder watcher for: \(path)")
+        
         // Stop existing watcher
         prepFolderWatcher?.cancel()
         prepFolderWatcher = nil
+        
+        // Cancel any pending regeneration
+        prepSummaryRegenerationWorkItem?.cancel()
+        prepSummaryRegenerationWorkItem = nil
 
         let fd = open(path, O_EVTONLY)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else {
+            print("⚠️ [DEBUG] Failed to open file descriptor for watcher: \(path)")
+            return
+        }
 
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
             eventMask: [.write, .extend, .delete, .rename],
-            queue: DispatchQueue.global(qos: .background)
+            queue: DispatchQueue.global(qos: .utility) // Lower priority to avoid interfering with file operations
         )
 
         source.setEventHandler { [weak self] in
-            // Regenerate summary when folder changes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                self?.regeneratePrepSummary(path: path, docket: docket)
+            guard let self = self else { return }
+            print("🔍 [DEBUG] Prep folder watcher fired for: \(path), isProcessing: \(self.isProcessing)")
+            
+            // Cancel previous debounce work item
+            self.prepSummaryRegenerationWorkItem?.cancel()
+            
+            // Create new debounced work item with longer delay to avoid firing during active file operations
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                // Only regenerate if we're not currently processing files
+                if self.isProcessing {
+                    print("⏸️ [DEBUG] Skipping summary regeneration - still processing files")
+                    return
+                }
+                print("🔄 [DEBUG] Executing debounced summary regeneration for: \(path)")
+                self.regeneratePrepSummary(path: path, docket: docket)
             }
+            
+            self.prepSummaryRegenerationWorkItem = workItem
+            
+            // Debounce with 3 second delay to avoid firing during active file operations
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
         }
 
         source.setCancelHandler {
@@ -1354,27 +1666,66 @@ class MediaManager: ObservableObject {
 
         source.resume()
         prepFolderWatcher = source
+        print("✅ [DEBUG] Prep folder watcher started successfully")
     }
 
     /// Regenerate prep summary
     func regeneratePrepSummary(path: String, docket: String) {
-        Task {
-            let jobName = getJobName(for: docket)
+        // Cancel any existing regeneration task to prevent accumulation
+        if prepSummaryRegenerationTask != nil {
+            print("🛑 [DEBUG] Cancelling previous prep summary regeneration task")
+            prepSummaryRegenerationTask?.cancel()
+        }
+        
+        print("🚀 [DEBUG] Starting prep summary regeneration for: \(path)")
+        prepSummaryRegenerationTask = Task { [weak self] in
+            guard let self = self else {
+                print("⚠️ [DEBUG] Summary regeneration task: self is nil")
+                return
+            }
+            
+            // Check if task was cancelled
+            guard !Task.isCancelled else {
+                print("🛑 [DEBUG] Summary regeneration task cancelled immediately")
+                return
+            }
+            
+            let jobName = await MainActor.run { self.getJobName(for: docket) }
+            
+            // Check again after getting job name
+            guard !Task.isCancelled else {
+                print("🛑 [DEBUG] Summary regeneration task cancelled after getting job name")
+                return
+            }
+            
+            print("📊 [DEBUG] Generating prep summary...")
             let summary = await MediaLogic.generatePrepSummary(
                 docket: docket,
                 jobName: jobName,
                 prepFolderPath: path,
-                config: config
+                config: self.config
             )
+
+            // Final cancellation check
+            guard !Task.isCancelled else {
+                print("🛑 [DEBUG] Summary regeneration task cancelled after generating summary")
+                return
+            }
 
             // Save updated summary
             let summaryFile = URL(fileURLWithPath: path).appendingPathComponent("\(docket)_Prep_Summary.txt")
             try? summary.write(to: summaryFile, atomically: true, encoding: .utf8)
 
-            // Update UI
+            // Update UI only if not cancelled
+            guard !Task.isCancelled else {
+                print("🛑 [DEBUG] Summary regeneration task cancelled before UI update")
+                return
+            }
+            
             await MainActor.run {
                 self.prepSummary = summary
             }
+            print("✅ [DEBUG] Prep summary regeneration completed successfully")
         }
     }
 
@@ -1383,6 +1734,10 @@ class MediaManager: ObservableObject {
     /// Start background video conversion
     func startVideoConversion(aspectRatio: AspectRatio, outputDirectory: URL) async {
         guard let converter = videoConverter else { return }
+
+        // Cancel any existing monitoring task
+        conversionMonitoringTask?.cancel()
+        conversionMonitoringTask = nil
 
         // Get video files from staging area
         let videoExtensions = ["mp4", "mov", "avi", "mxf", "m4v", "prores"]
@@ -1403,14 +1758,15 @@ class MediaManager: ObservableObject {
         // Start conversion and monitor progress
         isConverting = true
 
-        // Monitor conversion progress in parallel
-        Task {
-            while isConverting {
+        // Monitor conversion progress in parallel with proper cleanup
+        conversionMonitoringTask = Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            while !Task.isCancelled && self.isConverting {
                 // Update progress for each job
                 for job in converter.jobs {
                     // Find matching file item by URL
-                    if let fileItem = selectedFiles.first(where: { $0.url == job.sourceURL }) {
-                        conversionProgress[fileItem.id] = job.progress
+                    if let fileItem = self.selectedFiles.first(where: { $0.url == job.sourceURL }) {
+                        self.conversionProgress[fileItem.id] = job.progress
                     }
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
@@ -1420,8 +1776,10 @@ class MediaManager: ObservableObject {
         // Start the actual conversion
         await converter.startConversion()
 
-        // Mark conversion as complete
+        // Mark conversion as complete and cleanup
         isConverting = false
+        conversionMonitoringTask?.cancel()
+        conversionMonitoringTask = nil
 
         // Clear progress
         conversionProgress.removeAll()
@@ -1494,5 +1852,17 @@ class MediaManager: ObservableObject {
     func skipPrepVideoConversion() {
         showConvertVideosPrompt = false
         pendingPrepConversion = nil
+    }
+    
+    deinit {
+        // Clean up resources when MediaManager is deallocated
+        prepFolderWatcher?.cancel()
+        prepFolderWatcher = nil
+        conversionMonitoringTask?.cancel()
+        conversionMonitoringTask = nil
+        prepSummaryRegenerationTask?.cancel()
+        prepSummaryRegenerationTask = nil
+        prepSummaryRegenerationWorkItem?.cancel()
+        prepSummaryRegenerationWorkItem = nil
     }
 }

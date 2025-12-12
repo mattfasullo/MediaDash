@@ -527,13 +527,12 @@ struct AppSettings: Codable, Equatable {
 
     // Gmail Integration
     var gmailEnabled: Bool
-    var gmailQuery: String // Gmail search query (e.g., "subject:New Docket") - deprecated, use gmailSearchTerms instead
-    var gmailSearchTerms: [String] // Search terms/labels to look for (case-insensitive, e.g., ["New Docket", "DOCKET"])
+    var gmailQuery: String // Gmail search query (deprecated - now always scans all unread emails)
     var gmailPollInterval: TimeInterval // Polling interval in seconds (default: 300 = 5 minutes)
     var docketParsingPatterns: [String] // Regex patterns for extracting docket info
     
-    // CodeMind AI Integration
-    var codeMindAPIKey: String? // Stored in Keychain, not in settings - API key for CodeMind AI email classification
+    // CodeMind Integration
+    var codeMindAPIKey: String? // Stored in Keychain, not in settings - API key for CodeMind email classification
     var codeMindProvider: String? // "gemini" or "grok" - determines which provider to use
     var codeMindOverlayEnabled: Bool // Show activity overlay on main window
     var codeMindOverlayDetailLevel: String // "minimal", "medium", or "detailed"
@@ -624,8 +623,7 @@ struct AppSettings: Codable, Equatable {
             sharedCacheURL: "/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache",
             useSharedCache: true,
             gmailEnabled: false,
-            gmailQuery: "label:\"New Docket\"",
-            gmailSearchTerms: ["New Docket", "DOCKET"], // Default search terms
+            gmailQuery: "",
             gmailPollInterval: 300, // 5 minutes
             docketParsingPatterns: [],
             codeMindAPIKey: nil, // Stored in Keychain

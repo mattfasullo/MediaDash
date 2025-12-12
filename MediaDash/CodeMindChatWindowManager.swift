@@ -55,7 +55,7 @@ class CodeMindChatWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         guard let chatWindow = chatWindow else { return }
         
         chatWindow.contentViewController = chatWindowController
-        chatWindow.title = "CodeMind AI"
+        chatWindow.title = "CodeMind"
         chatWindow.delegate = self
         chatWindow.isReleasedWhenClosed = false
         chatWindow.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]

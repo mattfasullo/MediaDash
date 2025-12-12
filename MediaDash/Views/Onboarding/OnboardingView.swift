@@ -315,9 +315,9 @@ struct OnboardingView: View {
             .background(Color.gray.opacity(0.1))
             .cornerRadius(12)
         }
-        .frame(width: 400)
+        .frame(width: 400, height: 200)
     }
-    
+
     // MARK: - Navigation Buttons
     
     private var navigationButtons: some View {

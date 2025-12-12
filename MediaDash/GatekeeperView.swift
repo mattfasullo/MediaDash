@@ -205,6 +205,30 @@ struct AuthenticatedRootView: View {
                 
                 // Start email scanning if enabled and authenticated
                 if settingsManager.currentSettings.gmailEnabled {
+                    // #region agent log
+                    let logData: [String: Any] = [
+                        "sessionId": "debug-session",
+                        "runId": "run1",
+                        "hypothesisId": "C",
+                        "location": "GatekeeperView.swift:onAppear",
+                        "message": "GatekeeperView accessing Gmail keychain",
+                        "data": [
+                            "timestamp": Date().timeIntervalSince1970,
+                            "operation": "getGmailAccessToken"
+                        ],
+                        "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
+                    ]
+                    if let json = try? JSONSerialization.data(withJSONObject: logData),
+                       let jsonString = String(data: json, encoding: .utf8) {
+                        if let fileHandle = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                            fileHandle.seekToEndOfFile()
+                            fileHandle.write((jsonString + "\n").data(using: .utf8)!)
+                            fileHandle.closeFile()
+                        } else {
+                            try? (jsonString + "\n").write(toFile: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log", atomically: true, encoding: .utf8)
+                        }
+                    }
+                    // #endregion
                     // Restore tokens from Keychain
                     if let accessToken = SharedKeychainService.getGmailAccessToken(), !accessToken.isEmpty {
                         // Restore refresh token if available

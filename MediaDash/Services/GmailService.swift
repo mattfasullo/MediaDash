@@ -10,7 +10,7 @@ class GmailService: ObservableObject {
     
     private let baseURL = "https://www.googleapis.com/gmail/v1"
     private var accessToken: String?
-    private var isRefreshing = false
+    private var refreshTask: Task<String, Error>? // Shared task to prevent race conditions
     
     /// Initialize with access token
     init(accessToken: String? = nil) {
@@ -59,11 +59,20 @@ class GmailService: ObservableObject {
     }
     
     /// Refresh access token using refresh token
+    /// Uses a shared Task to prevent race conditions when multiple requests need token refresh simultaneously
     private func refreshAccessToken() async throws {
-        guard !isRefreshing else {
-            // Already refreshing, wait a bit
-            try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-            return
+        // If a refresh is already in progress, wait for it to complete
+        if let existingTask = refreshTask {
+            do {
+                let newToken = try await existingTask.value
+                // Update access token from the shared task result
+                self.accessToken = newToken
+                return
+            } catch {
+                // If the existing task failed, clear it and try again
+                refreshTask = nil
+                throw error
+            }
         }
         
         guard let refreshToken = refreshToken else {
@@ -74,57 +83,78 @@ class GmailService: ObservableObject {
             throw GmailError.apiError("Gmail OAuth credentials not configured")
         }
         
-        isRefreshing = true
-        defer { isRefreshing = false }
-        
-        let url = URL(string: "https://oauth2.googleapis.com/token")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        
-        let body = [
-            "grant_type": "refresh_token",
-            "client_id": OAuthConfig.gmailClientID,
-            "client_secret": OAuthConfig.gmailClientSecret,
-            "refresh_token": refreshToken
-        ]
-        
-        request.httpBody = body.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
-            .joined(separator: "&")
-            .data(using: .utf8)
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw GmailError.invalidResponse
-        }
-        
-        guard httpResponse.statusCode == 200 else {
-            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
-            // If refresh fails, clear tokens - user needs to re-authenticate
-            if httpResponse.statusCode == 401 {
-                clearAccessToken()
+        // Create a new refresh task that multiple callers can await
+        let task = Task<String, Error> {
+            let url = URL(string: "https://oauth2.googleapis.com/token")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            
+            let body = [
+                "grant_type": "refresh_token",
+                "client_id": OAuthConfig.gmailClientID,
+                "client_secret": OAuthConfig.gmailClientSecret,
+                "refresh_token": refreshToken
+            ]
+            
+            request.httpBody = body.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+                .joined(separator: "&")
+                .data(using: .utf8)
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw GmailError.invalidResponse
             }
-            throw GmailError.apiError("Token refresh failed: HTTP \(httpResponse.statusCode): \(errorMessage)")
+            
+            guard httpResponse.statusCode == 200 else {
+                let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+                // If refresh fails, clear tokens - user needs to re-authenticate
+                if httpResponse.statusCode == 401 {
+                    clearAccessToken()
+                }
+                throw GmailError.apiError("Token refresh failed: HTTP \(httpResponse.statusCode): \(errorMessage)")
+            }
+            
+            struct RefreshTokenResponse: Codable {
+                let access_token: String
+                let expires_in: Int?
+                let token_type: String
+                let refresh_token: String? // Google may return a new refresh token
+            }
+            
+            let tokenResponse = try JSONDecoder().decode(RefreshTokenResponse.self, from: data)
+            let newAccessToken = tokenResponse.access_token
+            
+            // Update tokens on main actor
+            await MainActor.run {
+                // If Google returns a new refresh token, use it; otherwise keep the existing one
+                if let newRefreshToken = tokenResponse.refresh_token {
+                    self.setAccessToken(newAccessToken, refreshToken: newRefreshToken)
+                } else {
+                    // Keep existing refresh token
+                    self.setAccessToken(newAccessToken, refreshToken: nil)
+                }
+            }
+            
+            print("GmailService: Successfully refreshed access token")
+            return newAccessToken
         }
         
-        struct RefreshTokenResponse: Codable {
-            let access_token: String
-            let expires_in: Int?
-            let token_type: String
-            let refresh_token: String? // Google may return a new refresh token
-        }
+        // Store the task so other callers can await it
+        refreshTask = task
         
-        let tokenResponse = try JSONDecoder().decode(RefreshTokenResponse.self, from: data)
-        // If Google returns a new refresh token, use it; otherwise keep the existing one
-        if let newRefreshToken = tokenResponse.refresh_token {
-            setAccessToken(tokenResponse.access_token, refreshToken: newRefreshToken)
-        } else {
-            // Keep existing refresh token
-            setAccessToken(tokenResponse.access_token, refreshToken: nil)
-        }
+        // Await the task and clean up when done
+        defer { refreshTask = nil }
         
-        print("GmailService: Successfully refreshed access token")
+        do {
+            let newToken = try await task.value
+            self.accessToken = newToken
+        } catch {
+            // Clear the task on error so a new refresh can be attempted
+            refreshTask = nil
+            throw error
+        }
     }
     
     /// Make an authenticated request with automatic token refresh on 401

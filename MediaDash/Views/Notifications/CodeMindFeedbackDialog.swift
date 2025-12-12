@@ -49,7 +49,7 @@ struct CodeMindFeedbackDialog: View {
             }
         }
         .padding(20)
-        .frame(width: 400)
+        .frame(width: 400, height: 220)
     }
 }
 

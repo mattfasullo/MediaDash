@@ -312,10 +312,13 @@ struct EmailDocketParser {
                                bodyText.lowercased().contains("new docket") ||
                                bodyText.lowercased().contains("new docket -")
         
-        // Be more aggressive: if we find a 5+ digit number that looks like a docket (starts with 25xxx or 26xxx),
+        // Be more aggressive: if we find a 5+ digit number that looks like a docket (starts with valid year prefixes),
         // treat it as a potential docket even without "new docket" text
-        let hasPotentialDocketNumber = bodyText.range(of: #"\b(25|26)\d{3,}\b"#, options: .regularExpression) != nil ||
-                                      subjectText.range(of: #"\b(25|26)\d{3,}\b"#, options: .regularExpression) != nil
+        let validYearPrefixes = getValidYearPrefixes()
+        let yearPrefixPattern = validYearPrefixes.map { String(format: "%02d", $0) }.joined(separator: "|")
+        let docketYearPattern = "\\b(\(yearPrefixPattern))\\d{3,}\\b"
+        let hasPotentialDocketNumber = bodyText.range(of: docketYearPattern, options: .regularExpression) != nil ||
+                                      subjectText.range(of: docketYearPattern, options: .regularExpression) != nil
         
         if hasNewDocketText || hasPotentialDocketNumber {
             // Search for docket numbers (5+ digits, optionally with country code) anywhere in subject or body
@@ -637,9 +640,53 @@ struct EmailDocketParser {
         return nil
     }
     
+    /// Get valid year prefixes for docket numbers based on current date
+    /// - Returns: Array of valid two-digit year prefixes (e.g., [21, 22, 23, 24, 25, 26, 27])
+    private func getValidYearPrefixes() -> [Int] {
+        let calendar = Calendar.current
+        let currentYear = calendar.component(.year, from: Date())
+        let currentYearLastTwo = currentYear % 100
+        
+        var validYears: [Int] = []
+        
+        // Current year: always valid
+        validYears.append(currentYearLastTwo)
+        
+        // Next year: valid for planning ahead
+        validYears.append((currentYearLastTwo + 1) % 100)
+        
+        // Future years: allow 1-2 years ahead for planning (but not too far)
+        for i in 2...3 {
+            let futureYear = (currentYearLastTwo + i) % 100
+            // Only include if it's reasonable (not wrapping around too far)
+            // If we're in 2025 (25), 26 and 27 are valid, but 28 might wrap to 28 (2028) which is fine
+            // We want to avoid wrapping to very low numbers (like 0, 1, 2) which would be 2100, 2101, 2102
+            if futureYear > currentYearLastTwo || (futureYear < currentYearLastTwo && futureYear < 10) {
+                validYears.append(futureYear)
+            }
+        }
+        
+        // Previous years: allow last 10-15 years for revivals
+        // This handles cases like "we're reviving a docket from 2021"
+        // If we're in 2025 (25), we want: 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10
+        // We want to avoid wrapping to 99, 98, etc. (which would be 1999, 1998 - too old)
+        for i in 1...15 {
+            let pastYear = (currentYearLastTwo - i + 100) % 100
+            // Only include if it's within reasonable range
+            // If pastYear <= currentYearLastTwo, it's definitely a valid past year (e.g., 24 <= 25)
+            // If pastYear > currentYearLastTwo, it wrapped around to 1900s (e.g., 99 > 25 means 1999), so skip it
+            if pastYear <= currentYearLastTwo {
+                validYears.append(pastYear)
+            }
+        }
+        
+        // Remove duplicates and sort
+        return Array(Set(validYears)).sorted()
+    }
+    
     /// Validate that a docket number starts with the last two digits of a year
     /// - Parameter docketNumber: The docket number to validate
-    /// - Returns: True if the docket number starts with valid year digits (last two digits of current or recent years)
+    /// - Returns: True if the docket number starts with valid year digits (dynamically calculated based on current date)
     private func isValidYearBasedDocket(_ docketNumber: String) -> Bool {
         // Remove country code suffix if present (e.g., "25484-US" -> "25484")
         let numericPart = docketNumber.components(separatedBy: "-").first ?? docketNumber
@@ -655,20 +702,9 @@ struct EmailDocketParser {
             return false
         }
         
-        // Get current year and calculate valid year range (current year ± 2 years for safety)
-        let calendar = Calendar.current
-        let currentYear = calendar.component(.year, from: Date())
-        let currentYearLastTwo = currentYear % 100
-        
-        // Check if it matches current year or recent years (within ±2 years)
-        // This covers cases like: 23 (2023), 24 (2024), 25 (2025), 26 (2026), 27 (2027)
-        let validYears = [
-            (currentYearLastTwo - 2 + 100) % 100,  // 2 years ago
-            (currentYearLastTwo - 1 + 100) % 100,  // 1 year ago
-            currentYearLastTwo,                     // Current year
-            (currentYearLastTwo + 1) % 100,        // Next year
-            (currentYearLastTwo + 2) % 100         // 2 years ahead
-        ]
+        // Get valid year prefixes dynamically based on current date
+        // This allows: current year, next year, previous years (for revivals), and future years (for planning)
+        let validYears = getValidYearPrefixes()
         
         return validYears.contains(yearDigits)
     }

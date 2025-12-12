@@ -129,37 +129,32 @@ struct FileJobUseCase {
     private func getNextFolder(base: URL, date: String, fileSystem: FileSystem) -> URL {
         var p = 1
         var isDir: ObjCBool = false
-        
+
         guard fileSystem.fileExists(atPath: base.path, isDirectory: &isDir),
               let items = try? fileSystem.contentsOfDirectory(at: base, includingPropertiesForKeys: [.isDirectoryKey], options: []) else {
             return base.appendingPathComponent(String(format: "%02d_%@", p, date))
         }
-        
-        // Filter for directories matching date pattern
-        let matchingFolders = items.filter { item in
+
+        // Filter for directories that match the numbered date pattern: NN_anydate
+        // We look at ALL numbered folders to find the highest number, regardless of date
+        let numberedFolders = items.filter { item in
             var itemIsDir: ObjCBool = false
             guard fileSystem.fileExists(atPath: item.path, isDirectory: &itemIsDir),
                   itemIsDir.boolValue else {
                 return false
             }
             let name = item.lastPathComponent
-            // Must end with the date (format: "01_date" or "1_date")
-            // Also handle old date formats that might not have zero-padded days
-            if name.hasSuffix("_\(date)") {
-                return true
+            // Match pattern: digits followed by underscore (e.g., "01_", "02_", "15_")
+            guard let underscoreIndex = name.firstIndex(of: "_") else {
+                return false
             }
-            // Check if it matches when normalized (handles "Dec2.25" vs "Dec02.25")
-            if let underscoreIndex = name.firstIndex(of: "_") {
-                let datePart = String(name[name.index(after: underscoreIndex)...])
-                if normalizeDateString(datePart) == normalizeDateString(date) {
-                    return true
-                }
-            }
-            return false
+            let prefix = String(name[..<underscoreIndex])
+            // Verify the prefix is a number
+            return Int(prefix) != nil
         }
-        
+
         // Extract numbers and find max
-        let nums = matchingFolders.compactMap { item -> Int? in
+        let nums = numberedFolders.compactMap { item -> Int? in
             let name = item.lastPathComponent
             if let underscoreIndex = name.firstIndex(of: "_") {
                 let prefix = String(name[..<underscoreIndex])
@@ -167,11 +162,11 @@ struct FileJobUseCase {
             }
             return nil
         }
-        
+
         if let max = nums.max(), max >= 1 {
             p = max + 1
         }
-        
+
         return base.appendingPathComponent(String(format: "%02d_%@", p, date))
     }
     

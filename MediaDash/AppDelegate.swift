@@ -32,13 +32,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return .production // Default for production builds
     }
+    
+    func applicationWillFinishLaunching(_ notification: Foundation.Notification) {
+        // Migrate keychain items BEFORE views initialize
+        // This is critical after Sparkle updates where code signature changes
+        // cause macOS to treat the new version as a different app
+        // Running here ensures migration completes before any @StateObject
+        // properties in SwiftUI views can access keychain
+        KeychainService.migrateAllExistingItems()
+    }
 
     func applicationDidFinishLaunching(_ aNotification: Foundation.Notification) {
-        // Migrate existing keychain items to prevent password prompts after updates
-        // This runs once on app launch to update all existing keychain items
-        Task { @MainActor in
-            KeychainService.migrateAllExistingItems()
+        // #region agent log
+        let logData: [String: Any] = [
+            "sessionId": "debug-session",
+            "runId": "post-fix",
+            "hypothesisId": "A",
+            "location": "AppDelegate.swift:applicationDidFinishLaunching",
+            "message": "App launch - migration starting",
+            "data": [
+                "timestamp": Date().timeIntervalSince1970,
+                "thread": Thread.current.name ?? "main"
+            ],
+            "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
+        ]
+        if let json = try? JSONSerialization.data(withJSONObject: logData),
+           let jsonString = String(data: json, encoding: .utf8) {
+            if let fileHandle = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                fileHandle.seekToEndOfFile()
+                fileHandle.write((jsonString + "\n").data(using: .utf8)!)
+                fileHandle.closeFile()
+            } else {
+                try? (jsonString + "\n").write(toFile: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log", atomically: true, encoding: .utf8)
+            }
         }
+        // #endregion
+        // Keychain migration now happens in applicationWillFinishLaunching
+        // which runs before SwiftUI views initialize, ensuring migration completes
+        // before any @StateObject properties can access keychain
         
         // Initialize Sparkle updater
         // Each app (MediaDash vs MediaDash-Dev) has its own appcast URL in Info.plist
@@ -54,10 +85,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Configure all existing windows immediately
         DispatchQueue.main.async {
             for window in NSApplication.shared.windows {
-                self.configureWindow(window)
+                WindowConfiguration.configureWindow(window)
             }
         }
-        
+
         // Configure windows when they become key
         Foundation.NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
@@ -65,10 +96,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { notification in
             if let window = notification.object as? NSWindow {
-                self.configureWindow(window)
+                WindowConfiguration.configureWindow(window)
             }
         }
-        
+
         // Configure windows when they become main
         Foundation.NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeMainNotification,
@@ -76,9 +107,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { notification in
             if let window = notification.object as? NSWindow {
-                self.configureWindow(window)
+                WindowConfiguration.configureWindow(window)
             }
         }
+
+        // Initialize floating progress window manager (it auto-shows/hides based on FloatingProgressManager.shared.isVisible)
+        _ = FloatingProgressWindowManager.shared
     }
     
     private func setupGlobalQuitHandler() {
@@ -103,41 +137,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
-    private func configureWindow(_ window: NSWindow) {
-        // CRITICAL: Remove resizable flag FIRST
-        var styleMask = window.styleMask
-        styleMask.remove(.resizable)
-        window.styleMask = styleMask
-        window.showsResizeIndicator = false
-        
-        // Set window delegate to prevent resizing
-        if window.delegate == nil || !(window.delegate is NonResizableWindowDelegate) {
-            window.delegate = NonResizableWindowDelegate.shared
-            NonResizableWindowDelegate.shared.registerWindow(window)
-        }
-        
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.styleMask.insert(.fullSizeContentView)
-        // Re-remove resizable after inserting fullSizeContentView
-        styleMask = window.styleMask
-        styleMask.remove(.resizable)
-        window.styleMask = styleMask
-        
-        window.toolbar = nil
-        window.contentView?.wantsLayer = true
-        // Set window background to match content to remove grey bar
-        window.backgroundColor = NSColor.windowBackgroundColor
-        // Set content border thickness to 0 to remove any grey bar
-        window.setContentBorderThickness(0, for: .minY)
-        // Keep all window buttons visible
-        window.standardWindowButton(.closeButton)?.isHidden = false
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
-        window.standardWindowButton(.zoomButton)?.isHidden = false
-        // Force window update
-        window.invalidateShadow()
-    }
-
     @IBAction func checkForUpdates(_ sender: Any?) {
         updaterController.checkForUpdates(sender)
     }

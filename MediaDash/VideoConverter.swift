@@ -341,13 +341,31 @@ class VideoConverterManager: ObservableObject {
         var currentTime: Double = 0
         var encodingSpeed: Double = 0
         var startTime = Date()
+        var lastDataTime = Date()
+        let timeout: TimeInterval = 300.0 // 5 minute timeout
 
-        // Read progress updates continuously
-        while true {
+        // Read progress updates continuously with cancellation and timeout support
+        while !Task.isCancelled {
+            // Check for timeout (no data for too long)
+            let timeSinceLastData = Date().timeIntervalSince(lastDataTime)
+            if timeSinceLastData > timeout {
+                print("FFmpeg progress monitoring timed out after \(timeout) seconds")
+                break
+            }
+            
             let line = fileHandle.availableData
-            if line.isEmpty { break }
+            if line.isEmpty {
+                // Wait a bit before checking again to avoid tight loop
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                continue
+            }
+            
+            lastDataTime = Date()
 
-            guard let output = String(data: line, encoding: .utf8) else { continue }
+            guard let output = String(data: line, encoding: .utf8) else {
+                try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+                continue
+            }
 
             // Parse FFmpeg progress output format (key=value pairs)
             let lines = output.components(separatedBy: .newlines)
@@ -670,7 +688,7 @@ struct VideoConverterView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(width: 500, height: hasStartedConversion ? 400 : 350)
+        .frame(width: 500, height: 400)
         .alert("Error", isPresented: $showAlert) {
             Button("OK") { }
         } message: {

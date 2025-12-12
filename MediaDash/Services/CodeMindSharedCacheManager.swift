@@ -11,6 +11,7 @@ class CodeMindSharedCacheManager: ObservableObject {
     private let sharedCacheFileName = "mediadash_codemind_cache.json"
     private let legacyCacheFileName = "codemind_learning_cache.json" // Old filename for migration
     private var sharedCacheURL: URL?
+    private var serverBasePath: String? // For checking server connection
     
     @Published private(set) var lastSyncDate: Date?
     @Published private(set) var isSyncing = false
@@ -24,7 +25,8 @@ class CodeMindSharedCacheManager: ObservableObject {
     
     // MARK: - Configuration
     
-    func configure(sharedCacheURL: String?) {
+    func configure(sharedCacheURL: String?, serverBasePath: String? = nil) {
+        self.serverBasePath = serverBasePath
         if let urlString = sharedCacheURL, !urlString.isEmpty {
             let baseURL = URL(fileURLWithPath: urlString)
             let fileManager = FileManager.default
@@ -102,10 +104,31 @@ class CodeMindSharedCacheManager: ObservableObject {
     
     // MARK: - Sync
     
+    /// Check if server is connected (if shared cache requires server access)
+    private func isServerConnected() -> Bool {
+        guard let serverPath = serverBasePath, !serverPath.isEmpty else {
+            // No server path configured - assume it's not needed
+            return true
+        }
+        return FileManager.default.fileExists(atPath: serverPath)
+    }
+    
     /// Sync with shared cache - merges learning data intelligently
     func syncWithSharedCache() async {
         guard let sharedURL = sharedCacheURL else {
             CodeMindLogger.shared.log(.warning, "No shared cache URL configured", category: .cache)
+            CodeMindActivityManager.shared.recordError(message: "CodeMind: No shared cache URL configured. Check Settings > CodeMind AI.")
+            return
+        }
+        
+        // Check if server is connected (if cache is on server)
+        if !isServerConnected() {
+            let errorMessage = "CodeMind: Cannot access shared cache - server not connected. Please connect to the Grayson server to enable shared learning cache."
+            CodeMindLogger.shared.log(.error, errorMessage, category: .cache, metadata: [
+                "serverPath": serverBasePath ?? "not configured",
+                "sharedCachePath": sharedURL.path
+            ])
+            CodeMindActivityManager.shared.recordError(message: errorMessage)
             return
         }
         
@@ -160,14 +183,32 @@ class CodeMindSharedCacheManager: ObservableObject {
             
             // Try to save to shared location - if it fails, log but don't fail the entire sync
             do {
+                // Check server connection again before saving
+                guard isServerConnected() else {
+                    let errorMessage = "CodeMind: Cannot save to shared cache - server not connected. Please connect to the Grayson server."
+                    CodeMindLogger.shared.log(.error, errorMessage, category: .cache, metadata: [
+                        "serverPath": serverBasePath ?? "not configured",
+                        "note": "Local cache sync succeeded. Shared cache save failed - server not connected."
+                    ])
+                    CodeMindActivityManager.shared.recordError(message: errorMessage)
+                    return
+                }
+                
                 try await saveSharedLearningData(mergedData, to: sharedURL)
             } catch {
                 // Shared cache write failed (permissions, network issues, etc.)
-                // Log the error but continue - local sync still succeeded
-                CodeMindLogger.shared.log(.warning, "Could not save to shared cache (continuing with local-only)", category: .cache, metadata: [
+                // Check if it's a server connection issue
+                let isServerIssue = !isServerConnected()
+                let errorMessage = isServerIssue 
+                    ? "CodeMind: Cannot save to shared cache - server not connected. Please connect to the Grayson server."
+                    : "CodeMind: Could not save to shared cache: \(error.localizedDescription). Local cache sync succeeded."
+                
+                CodeMindLogger.shared.log(isServerIssue ? .error : .warning, errorMessage, category: .cache, metadata: [
                     "error": error.localizedDescription,
-                    "note": "Local cache sync succeeded. Shared cache write failed due to permissions or network issues."
+                    "serverConnected": "\(isServerConnected())",
+                    "note": "Local cache sync succeeded. Shared cache write failed."
                 ])
+                CodeMindActivityManager.shared.recordError(message: errorMessage)
             }
             
             CodeMindLogger.shared.log(.success, "Cache sync completed", category: .cache, metadata: [
@@ -176,14 +217,37 @@ class CodeMindSharedCacheManager: ObservableObject {
             ])
             
         } catch {
-            CodeMindLogger.shared.log(.error, "Cache sync failed", category: .cache, metadata: ["error": error.localizedDescription])
+            // Check if error is due to server connection
+            let isServerIssue = !isServerConnected()
+            let errorMessage = isServerIssue
+                ? "CodeMind: Cache sync failed - server not connected. Please connect to the Grayson server to enable shared learning cache."
+                : "CodeMind: Cache sync failed: \(error.localizedDescription)"
+            
+            CodeMindLogger.shared.log(.error, errorMessage, category: .cache, metadata: [
+                "error": error.localizedDescription,
+                "serverConnected": "\(isServerConnected())",
+                "serverPath": serverBasePath ?? "not configured"
+            ])
+            CodeMindActivityManager.shared.recordError(message: errorMessage)
         }
     }
     
     /// Save local learning data to shared cache (called after feedback is provided)
     func saveToSharedCache() async {
         guard let sharedURL = sharedCacheURL else {
-            CodeMindLogger.shared.log(.warning, "Cannot save to shared cache - no URL configured", category: .cache)
+            let errorMessage = "CodeMind: Cannot save to shared cache - no URL configured. Check Settings > CodeMind AI."
+            CodeMindLogger.shared.log(.warning, errorMessage, category: .cache)
+            CodeMindActivityManager.shared.recordError(message: errorMessage)
+            return
+        }
+        
+        // Check server connection
+        guard isServerConnected() else {
+            let errorMessage = "CodeMind: Cannot save to shared cache - server not connected. Please connect to the Grayson server."
+            CodeMindLogger.shared.log(.error, errorMessage, category: .cache, metadata: [
+                "serverPath": serverBasePath ?? "not configured"
+            ])
+            CodeMindActivityManager.shared.recordError(message: errorMessage)
             return
         }
         
@@ -203,7 +267,18 @@ class CodeMindSharedCacheManager: ObservableObject {
                 "feedbackRecords": "\(localData.feedbackRecords.count)"
             ])
         } catch {
-            CodeMindLogger.shared.log(.error, "Failed to save to shared cache", category: .cache, metadata: ["error": error.localizedDescription])
+            // Check if error is due to server connection
+            let isServerIssue = !isServerConnected()
+            let errorMessage = isServerIssue
+                ? "CodeMind: Failed to save to shared cache - server not connected. Please connect to the Grayson server."
+                : "CodeMind: Failed to save to shared cache: \(error.localizedDescription)"
+            
+            CodeMindLogger.shared.log(.error, errorMessage, category: .cache, metadata: [
+                "error": error.localizedDescription,
+                "serverConnected": "\(isServerConnected())",
+                "serverPath": serverBasePath ?? "not configured"
+            ])
+            CodeMindActivityManager.shared.recordError(message: errorMessage)
         }
     }
     
@@ -324,8 +399,9 @@ class CodeMindSharedCacheManager: ObservableObject {
                 mergedPatterns.append(similarPatterns[0])
             } else {
                 // Multiple similar patterns - merge them
-                let merged = mergeSimilarPatterns(similarPatterns)
-                mergedPatterns.append(merged)
+                if let merged = mergeSimilarPatterns(similarPatterns) {
+                    mergedPatterns.append(merged)
+                }
             }
         }
         
@@ -351,11 +427,14 @@ class CodeMindSharedCacheManager: ObservableObject {
     }
     
     /// Merge similar patterns by combining their knowledge
-    private func mergeSimilarPatterns(_ patterns: [LearnedPattern]) -> LearnedPattern {
+    /// - Parameter patterns: Array of patterns to merge (must not be empty)
+    /// - Returns: A merged pattern combining knowledge from all input patterns, or nil if input is empty
+    private func mergeSimilarPatterns(_ patterns: [LearnedPattern]) -> LearnedPattern? {
         guard !patterns.isEmpty else {
-            fatalError("Cannot merge empty patterns array")
+            CodeMindLogger.shared.log(.error, "Cannot merge empty patterns array - returning nil", category: .cache)
+            return nil
         }
-        
+
         if patterns.count == 1 {
             return patterns[0]
         }

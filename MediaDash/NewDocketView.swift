@@ -6,6 +6,8 @@ struct NewDocketView: View {
     @ObservedObject var manager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
     var onDocketCreated: (() -> Void)? = nil
+    var initialDocketNumber: String? = nil
+    var initialJobName: String? = nil
 
     @State private var number = ""
     @State private var jobName = ""
@@ -19,39 +21,86 @@ struct NewDocketView: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("New Docket")
+        VStack(spacing: 16) {
+            Text("Create New Folder")
                 .font(.headline)
+                .padding(.top, 8)
             
-            Form {
-                TextField("Number", text: $number)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedField, equals: .number)
-                    .onSubmit {
-                        focusedField = .jobName
-                    }
-                TextField("Job Name", text: $jobName)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedField, equals: .jobName)
-                    .onSubmit {
-                        if !number.isEmpty && !jobName.isEmpty {
-                            createDocket()
+            VStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Docket Number")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextField("", text: $number)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focusedField, equals: .number)
+                        .onSubmit {
+                            focusedField = .jobName
                         }
-                    }
+                }
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Job Name")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextField("", text: $jobName)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focusedField, equals: .jobName)
+                        .onSubmit {
+                            if !number.isEmpty && !jobName.isEmpty {
+                                createDocket()
+                            }
+                        }
+                }
             }
-            .frame(width: 300)
+            .frame(width: 280)
             .onAppear {
-                // Focus the first field when the view appears
-                focusedField = .number
+                // Set initial values when view appears - do this first
+                print("NewDocketView onAppear - initialDocketNumber: \(initialDocketNumber ?? "nil"), initialJobName: \(initialJobName ?? "nil")")
+                if let initialNumber = initialDocketNumber {
+                    number = initialNumber
+                    print("Set number to: \(number)")
+                }
+                if let initialName = initialJobName {
+                    jobName = initialName
+                    print("Set jobName to: \(jobName)")
+                }
+                // Focus the first empty field when the view appears
+                if number.isEmpty {
+                    focusedField = .number
+                } else if jobName.isEmpty {
+                    focusedField = .jobName
+                } else {
+                    focusedField = .number
+                }
+            }
+            .onChange(of: initialDocketNumber) { oldValue, newValue in
+                // Update when initial value changes (e.g., when pre-filled from Asana)
+                print("onChange initialDocketNumber: oldValue=\(oldValue ?? "nil"), newValue=\(newValue ?? "nil")")
+                if let newValue = newValue, newValue != number {
+                    number = newValue
+                    print("Updated number to: \(number)")
+                }
+            }
+            .onChange(of: initialJobName) { oldValue, newValue in
+                // Update when initial value changes (e.g., when pre-filled from Asana)
+                print("onChange initialJobName: oldValue=\(oldValue ?? "nil"), newValue=\(newValue ?? "nil")")
+                if let newValue = newValue, newValue != jobName {
+                    jobName = newValue
+                    print("Updated jobName to: \(jobName)")
+                }
             }
             
             if showValidationError {
                 Text(validationMessage)
                     .foregroundColor(.red)
                     .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+                    .padding(.horizontal, 4)
             }
             
-            HStack {
+            HStack(spacing: 12) {
                 Button("Cancel") {
                     isPresented = false
                 }
@@ -63,10 +112,13 @@ struct NewDocketView: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(number.isEmpty || jobName.isEmpty)
             }
+            .padding(.top, 4)
         }
-        .padding()
+        .padding(20)
+        .frame(idealWidth: 320, idealHeight: 200)
+        .fixedSize(horizontal: true, vertical: true)
     }
-    
+
     private func createDocket() {
         // Validate inputs
         guard !number.trimmingCharacters(in: .whitespaces).isEmpty else {

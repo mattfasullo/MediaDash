@@ -33,7 +33,10 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     private var displayLink: CVDisplayLink?
     private var lastAnimationStartTime: CFTimeInterval = 0
     private var pendingTargetOrigin: NSPoint?
-    
+
+    // Flag to track if we're being deallocated (for displayLink callback safety)
+    private var isShuttingDown = false
+
     private override init() {
         super.init()
         // Find main window
@@ -180,59 +183,35 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     private func findMainWindow() {
         // Find the main content window (not the notification window)
         let allWindows = NSApplication.shared.windows
-        // DEBUG: Commented out for performance
-        // print("🔍 NotificationWindowManager: Finding main window from \(allWindows.count) windows")
-        // for window in allWindows {
-        //     print("   Window: '\(window.title)' - visible: \(window.isVisible), width: \(window.frame.width), isNotification: \(window == notificationWindow)")
-        // }
-        
+
         let newMainWindow = allWindows.first { window in
-            window != notificationWindow && 
-            window.isVisible && 
+            window != notificationWindow &&
+            window.isVisible &&
             window.title != "Notifications" &&
-            window.frame.width >= 300 // Main window is at least 300px wide
+            window.frame.width >= 300
         } ?? allWindows.first { window in
             window != notificationWindow && window.isVisible
         }
-        
+
         // If main window changed, update delegate
         if newMainWindow != mainWindow {
-            // DEBUG: Commented out for performance
-            // print("🔄 NotificationWindowManager: Main window changed")
-            // Remove delegate from old main window
             if let oldMainWindow = mainWindow, isMainWindowDelegate {
-                // DEBUG: Commented out for performance
-                // print("   Removing delegate from old main window: \(oldMainWindow.title)")
                 oldMainWindow.delegate = nil
                 isMainWindowDelegate = false
             }
-            
-            // Set new main window and add as delegate
+
             mainWindow = newMainWindow
             if let mainWindow = mainWindow, isLocked {
-                // DEBUG: Commented out for performance
-                // print("   Setting delegate for new main window: \(mainWindow.title)")
                 mainWindow.delegate = self
                 isMainWindowDelegate = true
                 lastMainWindowFrame = mainWindow.frame
-            } else {
-                // DEBUG: Commented out for performance
-                // print("   ⚠️ New main window found but not setting delegate - isLocked: \(isLocked)")
             }
-        } else if newMainWindow != nil {
-            // DEBUG: Commented out for performance
-            // print("   ✅ Main window unchanged: \(newMainWindow!.title)")
-        } else {
-            // DEBUG: Commented out for performance
-            // print("   ❌ No main window found!")
         }
     }
     
     private func setupWindowMonitoring() {
         // Only monitor if window is locked
         guard isLocked else {
-            // DEBUG: Commented out for performance
-            // print("🔒 NotificationWindowManager: Monitoring not set up - window is unlocked")
             // Remove child window relationship when unlocked
             if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
                 mainWindow.removeChildWindow(notificationWindow)
@@ -240,25 +219,12 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             return
         }
 
-        // DEBUG: Commented out for performance
-        // print("🔒 NotificationWindowManager: Setting up window monitoring...")
-
         // Set up main window as delegate for direct frame tracking
         findMainWindow()
         if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
-            // DEBUG: Commented out for performance
-            // print("✅ NotificationWindowManager: Found main window: \(mainWindow.title) at \(mainWindow.frame)")
-
-            // CRITICAL: Make notification window a CHILD of main window
-            // This makes macOS automatically move it with the parent - ZERO overhead!
-            // BUT we'll add a spring animation for elastic feel
+            // Make notification window a child of main window for automatic movement
             mainWindow.addChildWindow(notificationWindow, ordered: .below)
-
-            // Enable spring animation for elastic following
             notificationWindow.animationBehavior = .utilityWindow
-
-            // DEBUG: Commented out for performance
-            // print("✅ NotificationWindowManager: Added notification window as child with elastic animation")
 
             mainWindow.delegate = self
             isMainWindowDelegate = true
@@ -266,9 +232,6 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             lastUpdateTime = CACurrentMediaTime()
             velocityX = 0
             velocityY = 0
-        } else {
-            // DEBUG: Commented out for performance
-            // print("❌ NotificationWindowManager: Could not find main window or notification window!")
         }
 
         // Still set up monitoring for resize events
@@ -313,42 +276,44 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     
     private func setupDisplayLink() {
         // Create display link callback
+        // Note: The callback uses a weak reference pattern via DispatchQueue.main.async
+        // to ensure we don't access the manager if it's being deallocated
         let displayLinkCallback: CVDisplayLinkOutputCallback = { (displayLink, inNow, inOutputTime, flagsIn, flagsOut, context) -> CVReturn in
             guard let context = context else { return kCVReturnError }
             let manager = Unmanaged<NotificationWindowManager>.fromOpaque(context).takeUnretainedValue()
-            
-            DispatchQueue.main.async {
+
+            // Check if we're shutting down before dispatching
+            if manager.isShuttingDown {
+                return kCVReturnSuccess
+            }
+
+            DispatchQueue.main.async { [weak manager] in
+                guard let manager = manager, !manager.isShuttingDown else { return }
                 manager.updatePositionFromDisplayLink()
             }
-            
+
             return kCVReturnSuccess
         }
-        
+
         // Create display link
         var displayLink: CVDisplayLink?
         let result = CVDisplayLinkCreateWithActiveCGDisplays(&displayLink)
-        
+
         guard result == kCVReturnSuccess, let link = displayLink else {
-            // DEBUG: Commented out for performance
-            // debugLog("Display link creation failed, falling back to timer")
             // Fallback to timer if display link fails
             fallbackToTimer()
             return
         }
-        
+
         // Set callback
         let context = Unmanaged.passUnretained(self).toOpaque()
         CVDisplayLinkSetOutputCallback(link, displayLinkCallback, context)
-        
+
         // Start display link
         let startResult = CVDisplayLinkStart(link)
         if startResult == kCVReturnSuccess {
             self.displayLink = link
-            // DEBUG: Commented out for performance
-            // debugLog("Display link started successfully")
         } else {
-            // DEBUG: Commented out for performance
-            // debugLog("Display link start failed, falling back to timer")
             fallbackToTimer()
         }
     }
@@ -372,31 +337,17 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     }
     
     private func updatePositionFromDisplayLink() {
-        guard isLocked else {
-            // DEBUG: Commented out for performance (runs ~120 times/sec)
-            // if Int.random(in: 0..<120) == 0 {
-            //     debugLog("updatePositionFromDisplayLink: not locked")
-            // }
-            return
-        }
-        guard let mainWindow = mainWindow, let notificationWindow = notificationWindow else {
-            // DEBUG: Commented out for performance (runs ~120 times/sec)
-            // if Int.random(in: 0..<120) == 0 {
-            //     debugLog("updatePositionFromDisplayLink: missing windows - main: \(mainWindow != nil), notification: \(notificationWindow != nil)")
-            // }
-                    return
-                }
-                
-                // Get current main window frame directly (most reliable)
-                let currentMainFrame = mainWindow.frame
-                let currentTime = CACurrentMediaTime()
+        guard isLocked else { return }
+        guard let mainWindow = mainWindow, let notificationWindow = notificationWindow else { return }
+
+        // Get current main window frame directly (most reliable)
+        let currentMainFrame = mainWindow.frame
+        let currentTime = CACurrentMediaTime()
                 
         // Initialize last frame if needed
         if lastMainWindowFrame == nil {
             lastMainWindowFrame = currentMainFrame
             lastUpdateTime = currentTime
-            // DEBUG: Commented out for performance
-            // debugLog("updatePositionFromDisplayLink: Initialized lastMainWindowFrame")
         }
         
         // Always calculate target position and update if needed (don't require frame change)
@@ -429,16 +380,9 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
                 
                 // Adaptive threshold: smaller threshold during fast movements for responsiveness
         let velocityMagnitude = hypot(velocityX, velocityY)
-        let threshold: CGFloat = velocityMagnitude > 50 ? 0.2 : 0.3  // Lower threshold for smoother updates
-        
-        // DEBUG: Commented out for performance (runs ~120 times/sec with expensive string formatting)
-        // debugLog("updatePositionFromDisplayLink: deltaX=\(String(format: "%.1f", deltaX)), deltaY=\(String(format: "%.1f", deltaY)), threshold=\(String(format: "%.1f", threshold)), velocity=\(String(format: "%.1f", velocityMagnitude))")
-        // debugValue("currentOrigin", currentOrigin)
-        // debugValue("targetOrigin", targetOrigin)
-                
-                if deltaX > threshold || deltaY > threshold {
-            // DEBUG: Commented out for performance
-            // debugLog("updatePositionFromDisplayLink: Position update needed, deltaX=\(String(format: "%.1f", deltaX)), deltaY=\(String(format: "%.1f", deltaY))")
+        let threshold: CGFloat = velocityMagnitude > 50 ? 0.2 : 0.3
+
+        if deltaX > threshold || deltaY > threshold {
             // For very fast movements, update directly without animation for immediate response
             // For slower movements, use smooth interpolation
             if velocityMagnitude > 150 {
@@ -476,17 +420,10 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
                     isProgrammaticallyMoving = false
                 } else {
                     // Large movement - use animation to smooth it out
-                    // DEBUG: Commented out for performance
-                    // debugLog("updatePositionFromDisplayLink: Large movement, using animation, distance=\(String(format: "%.1f", distance))")
                     pendingTargetOrigin = nil
                     updateNotificationWindowPositionSmoothly(targetOrigin: targetOrigin)
                 }
             }
-        } else {
-            // DEBUG: Commented out for performance (runs ~120 times/sec)
-            // if Int.random(in: 0..<120) == 0 {
-            //     debugLog("updatePositionFromDisplayLink: No update needed - deltaX=\(String(format: "%.1f", deltaX)), deltaY=\(String(format: "%.1f", deltaY)), threshold=\(String(format: "%.1f", threshold))")
-            // }
         }
     }
     
@@ -725,9 +662,6 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         notificationWindow.styleMask = [.borderless, .fullSizeContentView]
         
         // Setup window monitoring based on lock state
-        // This will also set up the main window delegate relationship
-        // DEBUG: Commented out for performance
-        // print("🔧 NotificationWindowManager: Setting up window monitoring, isLocked: \(String(describing: isLocked))")
         setupWindowMonitoring()
         
         // Calculate target position (normal size)
@@ -1211,6 +1145,39 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     func refreshMainWindow() {
         findMainWindow()
         updateNotificationWindowPosition()
+    }
+
+    // MARK: - Cleanup
+
+    /// Clean up all resources. Call this before the manager is deallocated.
+    func cleanup() {
+        isShuttingDown = true
+
+        // Stop display link first (prevents callback from accessing freed memory)
+        stopDisplayLink()
+
+        // Invalidate timer
+        positionUpdateTimer?.invalidate()
+        positionUpdateTimer = nil
+
+        // Clear all cancellables
+        cancellables.removeAll()
+
+        // Remove child window relationship
+        if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
+            mainWindow.removeChildWindow(notificationWindow)
+        }
+
+        // Remove delegate from main window
+        if let mainWindow = mainWindow, isMainWindowDelegate {
+            mainWindow.delegate = nil
+            isMainWindowDelegate = false
+        }
+
+        // Close notification window
+        notificationWindow?.close()
+        notificationWindow = nil
+        isVisible = false
     }
 }
 

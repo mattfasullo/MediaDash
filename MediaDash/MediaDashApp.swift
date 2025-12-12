@@ -62,6 +62,66 @@ struct MediaDashApp: App {
                     }
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+                
+                Divider()
+                
+                Button("Toggle Layout Edit Mode") {
+                    LayoutEditManager.shared.toggleEditMode()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                
+                Button("Export Layout to Desktop") {
+                    if let url = LayoutEditManager.shared.exportLayoutToDesktop() {
+                        // Show success notification
+                        let alert = NSAlert()
+                        alert.messageText = "Layout Exported"
+                        alert.informativeText = "Layout exported to:\n\(url.path)"
+                        alert.alertStyle = .informational
+                        alert.addButton(withTitle: "OK")
+                        alert.runModal()
+                    } else {
+                        let alert = NSAlert()
+                        alert.messageText = "Export Failed"
+                        alert.informativeText = "Failed to export layout. Check console for details."
+                        alert.alertStyle = .warning
+                        alert.addButton(withTitle: "OK")
+                        alert.runModal()
+                    }
+                }
+                .keyboardShortcut("e", modifiers: [.command, .option])
+                
+                Divider()
+                
+                Button("Undo Layout Change") {
+                    LayoutEditManager.shared.undo()
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                
+                Button("Redo Layout Change") {
+                    LayoutEditManager.shared.redo()
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                
+                Divider()
+                
+                Button("Reset Layout to Default") {
+                    let alert = NSAlert()
+                    alert.messageText = "Reset Layout?"
+                    alert.informativeText = "This will clear all layout changes and restore the original positions. This cannot be undone."
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "Reset")
+                    alert.addButton(withTitle: "Cancel")
+                    
+                    if alert.runModal() == .alertFirstButtonReturn {
+                        LayoutEditManager.shared.resetAllOffsets()
+                        let confirmAlert = NSAlert()
+                        confirmAlert.messageText = "Layout Reset"
+                        confirmAlert.informativeText = "All layout changes have been cleared. Restart the app to see the original layout."
+                        confirmAlert.alertStyle = .informational
+                        confirmAlert.addButton(withTitle: "OK")
+                        confirmAlert.runModal()
+                    }
+                }
             }
         }
     }
@@ -69,105 +129,130 @@ struct MediaDashApp: App {
     private func configureAllWindows() {
         DispatchQueue.main.async {
             for window in NSApplication.shared.windows {
-                configureWindow(window)
+                WindowConfiguration.configureWindow(window)
             }
         }
     }
-    
-    private func configureWindow(_ window: NSWindow) {
+}
+
+// MARK: - Centralized Window Configuration
+
+/// Centralized window configuration to avoid code duplication
+/// All window configuration should go through this struct
+enum WindowConfiguration {
+    /// Configures a window with the standard MediaDash appearance and behavior
+    static func configureWindow(_ window: NSWindow) {
         // CRITICAL: Remove resizable flag FIRST
         var styleMask = window.styleMask
         styleMask.remove(.resizable)
         window.styleMask = styleMask
         window.showsResizeIndicator = false
-        
+
         // Set window delegate to prevent resizing
         if window.delegate == nil || !(window.delegate is NonResizableWindowDelegate) {
             window.delegate = NonResizableWindowDelegate.shared
             NonResizableWindowDelegate.shared.registerWindow(window)
         }
-        
+
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
+
         // Re-remove resizable after inserting fullSizeContentView
         styleMask = window.styleMask
         styleMask.remove(.resizable)
         window.styleMask = styleMask
-        
+
         window.toolbar = nil
-        // Set content view to extend into title bar area
         window.contentView?.wantsLayer = true
-        // Set window background to match content to remove grey bar
         window.backgroundColor = NSColor.windowBackgroundColor
-        // Keep window buttons but ensure they don't affect layout
+
+        // Keep window buttons visible
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
         window.standardWindowButton(.zoomButton)?.isHidden = false
+
         // Enable fullscreen support
         window.collectionBehavior = [.fullScreenPrimary, .fullScreenAllowsTiling]
-        // Set up fullscreen observers to switch to dashboard mode
+
+        // Set up fullscreen observers
         setupFullscreenObserverForDashboard(window)
-        // Set fixed window size (compact mode only)
+
+        // Set fixed window size (compact mode by default)
         let fixedSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
         window.minSize = fixedSize
         window.maxSize = fixedSize
         window.setContentSize(fixedSize)
+
         // Remove content border to ensure content extends fully to top
         window.setContentBorderThickness(0, for: .minY)
+
         // Force window to update
         window.invalidateShadow()
     }
-    
 }
 
-// Top-level helper functions for fullscreen handling
+// MARK: - Fullscreen Observer Management
+
+/// Manages fullscreen observers to prevent memory leaks
+/// Uses a static dictionary to track observers per window
+private var fullscreenObservers: [ObjectIdentifier: [NSObjectProtocol]] = [:]
+
+/// Sets up fullscreen observers for a window, properly cleaning up any existing ones
 func setupFullscreenObserverForDashboard(_ window: NSWindow) {
-    // Remove any existing observers
-    Foundation.NotificationCenter.default.removeObserver(window, name: NSWindow.willEnterFullScreenNotification, object: window)
-    Foundation.NotificationCenter.default.removeObserver(window, name: NSWindow.didEnterFullScreenNotification, object: window)
-    Foundation.NotificationCenter.default.removeObserver(window, name: NSWindow.willExitFullScreenNotification, object: window)
-    Foundation.NotificationCenter.default.removeObserver(window, name: NSWindow.didExitFullScreenNotification, object: window)
-    
+    let windowId = ObjectIdentifier(window)
+
+    // Remove any existing observers for this window
+    if let existingObservers = fullscreenObservers[windowId] {
+        for observer in existingObservers {
+            Foundation.NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    var observers: [NSObjectProtocol] = []
+
     // Observer for when window is about to enter fullscreen
-    Foundation.NotificationCenter.default.addObserver(
+    let willEnter = Foundation.NotificationCenter.default.addObserver(
         forName: NSWindow.willEnterFullScreenNotification,
         object: window,
         queue: .main
     ) { _ in
-        // Switch to dashboard mode before entering fullscreen
         switchToDashboardModeForFullscreen()
     }
-    
+    observers.append(willEnter)
+
     // Observer for when window enters fullscreen
-    Foundation.NotificationCenter.default.addObserver(
+    let didEnter = Foundation.NotificationCenter.default.addObserver(
         forName: NSWindow.didEnterFullScreenNotification,
         object: window,
         queue: .main
     ) { _ in
-        // Ensure dashboard mode is active in fullscreen
         switchToDashboardModeForFullscreen()
     }
-    
-    // Observer for when window exits fullscreen - switch back to compact mode
-    Foundation.NotificationCenter.default.addObserver(
+    observers.append(didEnter)
+
+    // Observer for when window exits fullscreen
+    let willExit = Foundation.NotificationCenter.default.addObserver(
         forName: NSWindow.willExitFullScreenNotification,
         object: window,
         queue: .main
     ) { _ in
-        // Switch back to compact mode when exiting fullscreen
         switchToCompactMode()
     }
-    
+    observers.append(willExit)
+
     // Observer for when window has exited fullscreen
-    Foundation.NotificationCenter.default.addObserver(
+    let didExit = Foundation.NotificationCenter.default.addObserver(
         forName: NSWindow.didExitFullScreenNotification,
         object: window,
         queue: .main
     ) { _ in
-        // Ensure compact mode is active after exiting fullscreen
         switchToCompactMode()
     }
+    observers.append(didExit)
+
+    // Store observers for cleanup
+    fullscreenObservers[windowId] = observers
 }
 
 // Window delegate to prevent resizing
@@ -256,61 +341,19 @@ struct WindowAccessor: NSViewRepresentable {
         let view = TitleBarDoubleClickView()
         DispatchQueue.main.async {
             if let window = view.window {
-                configureWindow(window)
+                WindowConfiguration.configureWindow(window)
             }
         }
         return view
     }
-    
+
     func updateNSView(_ nsView: NSView, context: Context) {
         // Re-configure on update
         DispatchQueue.main.async {
             if let window = nsView.window {
-                configureWindow(window)
+                WindowConfiguration.configureWindow(window)
             }
         }
-    }
-    
-    private func configureWindow(_ window: NSWindow) {
-        // CRITICAL: Remove resizable flag FIRST
-        var styleMask = window.styleMask
-        styleMask.remove(.resizable)
-        window.styleMask = styleMask
-        window.showsResizeIndicator = false
-        
-        // Set window delegate to prevent resizing
-        if window.delegate == nil || !(window.delegate is NonResizableWindowDelegate) {
-            window.delegate = NonResizableWindowDelegate.shared
-            NonResizableWindowDelegate.shared.registerWindow(window)
-        }
-        
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.styleMask.insert(.fullSizeContentView)
-        // Re-remove resizable after inserting fullSizeContentView
-        styleMask = window.styleMask
-        styleMask.remove(.resizable)
-        window.styleMask = styleMask
-        
-        window.toolbar = nil
-        window.contentView?.wantsLayer = true
-        // Set window background to match content to remove grey bar
-        window.backgroundColor = NSColor.windowBackgroundColor
-        // Keep window buttons but ensure they don't affect layout
-        window.standardWindowButton(.closeButton)?.isHidden = false
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
-        window.standardWindowButton(.zoomButton)?.isHidden = false
-        // Enable fullscreen support
-        window.collectionBehavior = [.fullScreenPrimary, .fullScreenAllowsTiling]
-        // Set up fullscreen observers to switch to dashboard mode
-        setupFullscreenObserverForDashboard(window)
-        // Set fixed window size (compact mode only)
-        let fixedSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
-        window.minSize = fixedSize
-        window.maxSize = fixedSize
-        window.setContentSize(fixedSize)
-        window.setContentBorderThickness(0, for: .minY)
-        window.invalidateShadow()
     }
 }
 
@@ -327,6 +370,14 @@ class TitleBarDoubleClickView: NSView {
             originalFrame = window.frame
             
             // Set up double-click handler on the window
+            setupDoubleClickHandler(window)
+        }
+    }
+    
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        // Update overlay position when view resizes
+        if let window = window {
             setupDoubleClickHandler(window)
         }
     }
@@ -376,14 +427,6 @@ class TitleBarDoubleClickView: NSView {
                     }
                 }
             }
-        }
-    }
-    
-    override func layout() {
-        super.layout()
-        // Update tracking area when layout changes
-        if let window = window {
-            setupDoubleClickHandler(window)
         }
     }
 }

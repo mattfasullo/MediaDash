@@ -32,6 +32,30 @@ class AsanaService: ObservableObject {
     
     /// Initialize with access token
     init(accessToken: String? = nil) {
+        // #region agent log
+        let logData: [String: Any] = [
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "C",
+            "location": "AsanaService.swift:init",
+            "message": "AsanaService init - accessing keychain",
+            "data": [
+                "timestamp": Date().timeIntervalSince1970,
+                "hasProvidedToken": accessToken != nil
+            ],
+            "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
+        ]
+        if let json = try? JSONSerialization.data(withJSONObject: logData),
+           let jsonString = String(data: json, encoding: .utf8) {
+            if let fileHandle = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                fileHandle.seekToEndOfFile()
+                fileHandle.write((jsonString + "\n").data(using: .utf8)!)
+                fileHandle.closeFile()
+            } else {
+                try? (jsonString + "\n").write(toFile: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log", atomically: true, encoding: .utf8)
+            }
+        }
+        // #endregion
         // Check shared key first (for Grayson employees), then personal key
         self.accessToken = accessToken ?? SharedKeychainService.getAsanaAccessToken()
         // Refresh token is loaded lazily via computed property when needed
@@ -131,7 +155,8 @@ class AsanaService: ObservableObject {
         print("AsanaService: Successfully refreshed access token")
     }
     
-    /// Make an authenticated request with automatic token refresh on 401
+    /// Make an authenticated request with automatic token refresh on 401 and retry logic for transient failures
+    /// Retries up to 3 times for transient network errors (timeouts, connection errors, 5xx server errors)
     private func makeAuthenticatedRequest(_ request: inout URLRequest) async throws -> (Data, HTTPURLResponse) {
         guard let token = accessToken else {
             throw AsanaError.notAuthenticated
@@ -139,32 +164,77 @@ class AsanaService: ObservableObject {
         
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        // Retry logic for transient failures
+        let maxRetries = 3
+        var lastError: Error?
         
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AsanaError.invalidResponse
+        for attempt in 0..<maxRetries {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw AsanaError.invalidResponse
+                }
+                
+                // If we get 401, try refreshing the token and retry once
+                if httpResponse.statusCode == 401 && refreshToken != nil {
+                    print("AsanaService: Access token expired, attempting refresh...")
+                    try await refreshAccessToken()
+                    
+                    // Retry the request with new token
+                    guard let newToken = accessToken else {
+                        throw AsanaError.notAuthenticated
+                    }
+                    request.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+                    
+                    let (retryData, retryResponse) = try await URLSession.shared.data(for: request)
+                    guard let retryHttpResponse = retryResponse as? HTTPURLResponse else {
+                        throw AsanaError.invalidResponse
+                    }
+                    
+                    return (retryData, retryHttpResponse)
+                }
+                
+                // Check for transient server errors (5xx) - retry these
+                if httpResponse.statusCode >= 500 && httpResponse.statusCode < 600 && attempt < maxRetries - 1 {
+                    let delay = Double(attempt + 1) * 0.5 // Exponential backoff: 0.5s, 1s, 1.5s
+                    print("AsanaService: Server error \(httpResponse.statusCode), retrying in \(delay)s (attempt \(attempt + 1)/\(maxRetries))...")
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    continue
+                }
+                
+                // For non-retryable errors or successful responses, return immediately
+                return (data, httpResponse)
+                
+            } catch {
+                lastError = error
+                
+                // Check if this is a transient network error that we should retry
+                let isTransientError: Bool
+                if let urlError = error as? URLError {
+                    isTransientError = urlError.code == .timedOut ||
+                                     urlError.code == .networkConnectionLost ||
+                                     urlError.code == .cannotConnectToHost ||
+                                     urlError.code == .notConnectedToInternet
+                } else {
+                    isTransientError = false
+                }
+                
+                // Retry if it's a transient error and we have attempts left
+                if isTransientError && attempt < maxRetries - 1 {
+                    let delay = Double(attempt + 1) * 0.5 // Exponential backoff
+                    print("AsanaService: Transient network error, retrying in \(delay)s (attempt \(attempt + 1)/\(maxRetries)): \(error.localizedDescription)")
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    continue
+                }
+                
+                // Not a transient error or out of retries - throw the error
+                throw error
+            }
         }
         
-        // If we get 401, try refreshing the token and retry once
-        if httpResponse.statusCode == 401 && refreshToken != nil {
-            print("AsanaService: Access token expired, attempting refresh...")
-            try await refreshAccessToken()
-            
-            // Retry the request with new token
-            guard let newToken = accessToken else {
-                throw AsanaError.notAuthenticated
-            }
-            request.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
-            
-            let (retryData, retryResponse) = try await URLSession.shared.data(for: request)
-            guard let retryHttpResponse = retryResponse as? HTTPURLResponse else {
-                throw AsanaError.invalidResponse
-            }
-            
-            return (retryData, retryHttpResponse)
-        }
-        
-        return (data, httpResponse)
+        // If we exhausted all retries, throw the last error
+        throw lastError ?? AsanaError.apiError("Request failed after \(maxRetries) attempts")
     }
     
     /// Fetch workspaces
@@ -290,7 +360,7 @@ class AsanaService: ObservableObject {
         repeat {
             var components = URLComponents(string: "\(baseURL)/tasks")!
             var queryItems: [URLQueryItem] = [
-                URLQueryItem(name: "opt_fields", value: "gid,name,custom_fields,modified_at,parent,memberships"),
+                URLQueryItem(name: "opt_fields", value: "gid,name,custom_fields,modified_at,created_at,parent,memberships"),
                 URLQueryItem(name: "limit", value: "\(limit)")
             ]
             
@@ -313,7 +383,10 @@ class AsanaService: ObservableObject {
                 // Use project if specified - this gets ALL tasks in the project (not just assigned)
                 queryItems.append(URLQueryItem(name: "project", value: projectID))
             } else if let workspaceID = finalWorkspaceID {
-                // Use assignee + workspace (required: both must be specified together)
+                // When no project is specified, fetchDockets() should fetch all projects and call this with each projectID
+                // This branch should rarely be hit in normal flow. If it is hit, we can't fetch company-wide
+                // without a project filter, so we'll use workspace + assignee as a fallback (though this limits to user's tasks)
+                // For true company-wide access, the caller should fetch all projects first
                 queryItems.append(URLQueryItem(name: "assignee", value: "me"))
                 queryItems.append(URLQueryItem(name: "workspace", value: workspaceID))
             } else {
@@ -392,99 +465,75 @@ class AsanaService: ObservableObject {
             isFetching = false
         }
         
-        // If no project specified, fetch all projects from workspace and get tasks from all of them
+        // Always fetch from all projects to ensure company-wide calendar items are available
+        // This ensures the calendar shows all tasks across the workspace, not just from a single project
+        // Note: Even if projectID is specified in settings, we ignore it and fetch from all projects
+        // to provide company-wide calendar access
         var allTasks: [AsanaTask] = []
         var projectMetadataMap: [String: ProjectMetadata] = [:] // project GID -> ProjectMetadata
         
-        if let projectID = projectID {
-            // Single project sync - simpler progress tracking
-            progressCallback?(0.05, "Fetching project info...")
-            
-            // Fetch project metadata for the specific project
-            if let workspaceID = workspaceID {
-                let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: nil)
-                if let project = projects.first(where: { $0.gid == projectID }) {
-                    projectMetadataMap[projectID] = createProjectMetadata(from: project)
-                }
-            }
-            
-            progressCallback?(0.1, "Fetching tasks...")
-            
-            // Fetch tasks from specific project (incremental if modifiedSince provided)
-            let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: projectID, maxTasks: nil, modifiedSince: modifiedSince)
-            allTasks = tasks
-            
-            progressCallback?(0.8, "Fetched \(tasks.count) tasks")
-            
-            if let modifiedSince = modifiedSince {
-                print("🔄 [SYNC] Fetched \(tasks.count) tasks modified since \(modifiedSince) from project")
+        // Fetch all projects and get tasks from each
+        var finalWorkspaceID = workspaceID
+        
+        progressCallback?(0.02, "Fetching workspaces...")
+        
+        if finalWorkspaceID == nil {
+            let workspaces = try await fetchWorkspaces()
+            if let firstWorkspace = workspaces.first {
+                finalWorkspaceID = firstWorkspace.gid
             } else {
-                print("🔄 [SYNC] Fetched \(tasks.count) tasks from project")
+                throw AsanaError.apiError("No workspaces found")
             }
-        } else {
-            // Fetch all projects and get tasks from each
-            var finalWorkspaceID = workspaceID
+        }
+        
+        if let workspaceID = finalWorkspaceID {
+            progressCallback?(0.05, "Fetching project list...")
             
-            progressCallback?(0.02, "Fetching workspaces...")
+            // Fetch ALL projects (no limit to ensure we get all dockets)
+            let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: nil)
+            print("🔄 [SYNC] Found \(projects.count) projects, fetching ALL tasks from each...")
             
-            if finalWorkspaceID == nil {
-                let workspaces = try await fetchWorkspaces()
-                if let firstWorkspace = workspaces.first {
-                    finalWorkspaceID = firstWorkspace.gid
-                } else {
-                    throw AsanaError.apiError("No workspaces found")
-                }
+            progressCallback?(0.08, "Found \(projects.count) projects")
+            
+            // Build project metadata map
+            for project in projects {
+                projectMetadataMap[project.gid] = createProjectMetadata(from: project)
             }
             
-            if let workspaceID = finalWorkspaceID {
-                progressCallback?(0.05, "Fetching project list...")
+            // Progress range for fetching tasks: 0.1 to 0.85
+            let progressStart = 0.1
+            let progressEnd = 0.85
+            let progressRange = progressEnd - progressStart
+            
+            // Fetch ALL tasks from each project (no limit to ensure we get all dockets)
+            for (index, project) in projects.enumerated() {
+                // Calculate progress within the task-fetching phase
+                let projectProgress = progressStart + (Double(index) / Double(projects.count)) * progressRange
+                progressCallback?(projectProgress, "Fetching project \(index + 1) of \(projects.count)...")
                 
-                // Fetch ALL projects (no limit to ensure we get all dockets)
-                let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: nil)
-                print("🔄 [SYNC] Found \(projects.count) projects, fetching ALL tasks from each...")
-                
-                progressCallback?(0.08, "Found \(projects.count) projects")
-                
-                // Build project metadata map
-                for project in projects {
-                    projectMetadataMap[project.gid] = createProjectMetadata(from: project)
+                // Only log every 10th project to reduce noise
+                if index % 10 == 0 || index == projects.count - 1 {
+                    print("🔄 [SYNC] Progress: \(index + 1)/\(projects.count) projects")
                 }
                 
-                // Progress range for fetching tasks: 0.1 to 0.85
-                let progressStart = 0.1
-                let progressEnd = 0.85
-                let progressRange = progressEnd - progressStart
-                
-                // Fetch ALL tasks from each project (no limit to ensure we get all dockets)
-                for (index, project) in projects.enumerated() {
-                    // Calculate progress within the task-fetching phase
-                    let projectProgress = progressStart + (Double(index) / Double(projects.count)) * progressRange
-                    progressCallback?(projectProgress, "Fetching project \(index + 1) of \(projects.count)...")
-                    
-                    // Only log every 10th project to reduce noise
+                do {
+                    // Fetch tasks (incremental if modifiedSince provided)
+                    let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: project.gid, maxTasks: nil, modifiedSince: modifiedSince)
+                    allTasks.append(contentsOf: tasks)
                     if index % 10 == 0 || index == projects.count - 1 {
-                        print("🔄 [SYNC] Progress: \(index + 1)/\(projects.count) projects")
-                    }
-                    
-                    do {
-                        // Fetch tasks (incremental if modifiedSince provided)
-                        let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: project.gid, maxTasks: nil, modifiedSince: modifiedSince)
-                        allTasks.append(contentsOf: tasks)
-                        if index % 10 == 0 || index == projects.count - 1 {
-                            if let modifiedSince = modifiedSince {
-                                print("   Project \(index + 1): \(tasks.count) tasks modified since \(modifiedSince)")
-                            } else {
-                                print("   Project \(index + 1): \(tasks.count) tasks")
-                            }
+                        if let modifiedSince = modifiedSince {
+                            print("   Project \(index + 1): \(tasks.count) tasks modified since \(modifiedSince)")
+                        } else {
+                            print("   Project \(index + 1): \(tasks.count) tasks")
                         }
-                    } catch {
-                        // Log error but continue with other projects
-                        print("⚠️ [SYNC] Error fetching tasks from project \(index + 1): \(error.localizedDescription)")
                     }
+                } catch {
+                    // Log error but continue with other projects
+                    print("⚠️ [SYNC] Error fetching tasks from project \(index + 1): \(error.localizedDescription)")
                 }
-                
-                progressCallback?(0.85, "Fetched \(allTasks.count) tasks total")
             }
+            
+            progressCallback?(0.85, "Fetched \(allTasks.count) tasks total")
         }
         
         // First pass: Parse all tasks and identify which have docket numbers
@@ -538,6 +587,7 @@ class AsanaService: ObservableObject {
                     jobName: parseResult.jobName.isEmpty ? task.name : parseResult.jobName,
                     fullName: "\(docket)_\(parseResult.jobName.isEmpty ? task.name : parseResult.jobName)",
                     updatedAt: task.modified_at,
+                    createdAt: task.created_at,
                     metadataType: parseResult.metadataType,
                     subtasks: nil, // Will be populated in second pass
                     projectMetadata: projectMetadata
@@ -584,6 +634,7 @@ class AsanaService: ObservableObject {
                 jobName: taskData.docketInfo.jobName,
                 fullName: taskData.docketInfo.fullName,
                 updatedAt: taskData.docketInfo.updatedAt,
+                createdAt: taskData.docketInfo.createdAt,
                 metadataType: taskData.docketInfo.metadataType,
                 subtasks: subtasks.isEmpty ? nil : subtasks,
                 projectMetadata: taskData.docketInfo.projectMetadata
@@ -821,6 +872,7 @@ struct AsanaTask: Codable, Identifiable {
     let name: String
     let custom_fields: [AsanaCustomField]?
     let modified_at: Date?
+    let created_at: Date?
     let parent: AsanaParent?
     let memberships: [AsanaMembership]?
     
@@ -831,6 +883,7 @@ struct AsanaTask: Codable, Identifiable {
         case name
         case custom_fields
         case modified_at
+        case created_at
         case parent
         case memberships
     }
@@ -856,6 +909,20 @@ struct AsanaTask: Codable, Identifiable {
         } else {
             modified_at = nil
         }
+        
+        // Parse created_at as ISO8601 date string
+        if let createdAtString = try? container.decodeIfPresent(String.self, forKey: .created_at) {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            // Try with fractional seconds first, then without
+            created_at = formatter.date(from: createdAtString) ?? {
+                let formatterNoFractional = ISO8601DateFormatter()
+                formatterNoFractional.formatOptions = [.withInternetDateTime]
+                return formatterNoFractional.date(from: createdAtString)
+            }()
+        } else {
+            created_at = nil
+        }
     }
     
     func encode(to encoder: Encoder) throws {
@@ -869,6 +936,11 @@ struct AsanaTask: Codable, Identifiable {
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             try container.encode(formatter.string(from: modifiedAt), forKey: .modified_at)
+        }
+        if let createdAt = created_at {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            try container.encode(formatter.string(from: createdAt), forKey: .created_at)
         }
     }
     

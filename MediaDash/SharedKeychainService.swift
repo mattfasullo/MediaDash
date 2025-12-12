@@ -52,7 +52,8 @@ struct SharedKeychainService {
     /// Check if the given email/username is from Grayson Music Group
     static func isGraysonMusicGroupUser(_ emailOrUsername: String?) -> Bool {
         guard let email = emailOrUsername?.lowercased() else { return false }
-        return email.hasSuffix("@\(allowedEmailDomain)") || email.contains("@\(allowedEmailDomain)")
+        // hasSuffix already covers all cases where the email contains the domain at the end
+        return email.hasSuffix("@\(allowedEmailDomain)")
     }
     
     /// Get the current authenticated user's email/username
@@ -84,6 +85,32 @@ struct SharedKeychainService {
     /// Get a shared key from Keychain (only for Grayson employees)
     /// Falls back to personal key if shared key doesn't exist
     static func getKey(shared: SharedKey, personalKey: String) -> String? {
+        // #region agent log
+        let logData: [String: Any] = [
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "D",
+            "location": "SharedKeychainService.swift:getKey",
+            "message": "SharedKeychainService.getKey called",
+            "data": [
+                "sharedKey": shared.keychainKey,
+                "personalKey": personalKey,
+                "isGraysonEmployee": isCurrentUserGraysonEmployee(),
+                "timestamp": Date().timeIntervalSince1970
+            ],
+            "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
+        ]
+        if let json = try? JSONSerialization.data(withJSONObject: logData),
+           let jsonString = String(data: json, encoding: .utf8) {
+            if let fileHandle = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                fileHandle.seekToEndOfFile()
+                fileHandle.write((jsonString + "\n").data(using: .utf8)!)
+                fileHandle.closeFile()
+            } else {
+                try? (jsonString + "\n").write(toFile: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log", atomically: true, encoding: .utf8)
+            }
+        }
+        // #endregion
         // First try shared key (only if Grayson employee)
         if isCurrentUserGraysonEmployee() {
             if let sharedKey = KeychainService.retrieve(key: shared.keychainKey) {

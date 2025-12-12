@@ -85,6 +85,7 @@ struct DashboardView: View {
                 attempt: attempt,
                 cacheManager: cacheManager
             )
+            .draggableLayout(id: "dashboardTopBar")
             
             // Main Content with Panels
             GeometryReader { geometry in
@@ -97,6 +98,7 @@ struct DashboardView: View {
                         )
                         .frame(width: leftPanelWidth)
                         .transition(.move(edge: .leading).combined(with: .opacity))
+                        .draggableLayout(id: "dashboardLeftPanel")
                         
                         // Left Divider
                         ResizableDivider(
@@ -114,6 +116,7 @@ struct DashboardView: View {
                         selectedFileIndex: $selectedFileIndex
                     )
                     .frame(minWidth: 400)
+                    .draggableLayout(id: "dashboardStagingArea")
                     
                     // Right Panel - Notifications
                     if !rightPanelCollapsed {
@@ -132,6 +135,7 @@ struct DashboardView: View {
                         )
                         .frame(width: rightPanelWidth)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .draggableLayout(id: "dashboardRightPanel")
                     }
                 }
             }
@@ -527,16 +531,14 @@ struct DashboardLeftPanel: View {
     let cacheManager: AsanaCacheManager?
     @Binding var showSettings: Bool
     
-    @State private var selectedTab: LeftPanelTab = .calendar
-    
+    @State private var selectedTab: LeftPanelTab = .recent
+
     enum LeftPanelTab: String, CaseIterable {
-        case calendar = "Calendar"
         case recent = "Recent"
         case status = "Status"
-        
+
         var icon: String {
             switch self {
-            case .calendar: return "calendar"
             case .recent: return "clock.arrow.circlepath"
             case .status: return "chart.bar.fill"
             }
@@ -576,8 +578,6 @@ struct DashboardLeftPanel: View {
             
             // Tab Content
             switch selectedTab {
-            case .calendar:
-                DocketCalendarView(cacheManager: cacheManager)
             case .recent:
                 RecentDocketsView(cacheManager: cacheManager)
             case .status:
@@ -588,473 +588,6 @@ struct DashboardLeftPanel: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
-    }
-}
-
-// MARK: - Docket Calendar View (Asana-Style)
-
-struct DocketCalendarView: View {
-    let cacheManager: AsanaCacheManager?
-    
-    @State private var selectedDate: Date = Date()
-    @State private var currentMonth: Date = Date()
-    @State private var docketsByDueDate: [Date: [DocketInfo]] = [:]
-    @State private var docketsByUpdatedDate: [Date: [DocketInfo]] = [:]
-    @State private var isLoading = true
-    @State private var expandedDayView: Date? = nil
-    @State private var viewMode: CalendarViewMode = .updated  // Default to Activity since most dockets have updatedAt
-    @State private var totalDueDateCount: Int = 0
-    @State private var totalUpdatedCount: Int = 0
-    
-    enum CalendarViewMode: String, CaseIterable {
-        case dueDate = "Due"
-        case updated = "Activity"
-        
-        var icon: String {
-            switch self {
-            case .dueDate: return "calendar.badge.clock"
-            case .updated: return "clock.arrow.circlepath"
-            }
-        }
-    }
-    
-    private var calendar: Calendar { Calendar.current }
-    
-    private var docketsByDate: [Date: [DocketInfo]] {
-        viewMode == .dueDate ? docketsByDueDate : docketsByUpdatedDate
-    }
-    
-    private var docketsForSelectedDate: [DocketInfo] {
-        let dateKey = calendar.startOfDay(for: selectedDate)
-        return docketsByDate[dateKey] ?? []
-    }
-    
-    private var monthDays: [Date] {
-        guard let range = calendar.range(of: .day, in: .month, for: currentMonth) else { return [] }
-        guard let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: currentMonth)) else { return [] }
-        return range.compactMap { calendar.date(byAdding: .day, value: $0 - 1, to: startOfMonth) }
-    }
-    
-    private var firstWeekday: Int {
-        guard let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: currentMonth)) else { return 0 }
-        return calendar.component(.weekday, from: startOfMonth) - 1
-    }
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header with view mode toggle
-            calendarHeader
-            
-            // Calendar Grid
-            calendarGrid
-            
-            Divider()
-                .padding(.top, 8)
-            
-            // Selected Date Detail View (Asana-style task list)
-            selectedDateDetailView
-        }
-        .task {
-            await loadDockets()
-        }
-        .onChange(of: currentMonth) { _, _ in
-            // Reload when month changes
-            Task { await loadDockets() }
-        }
-    }
-    
-    private var calendarHeader: some View {
-        VStack(spacing: 8) {
-            // Month Navigation
-            HStack {
-                Button(action: { goToToday() }) {
-                    Text("Today")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.accentColor)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.accentColor.opacity(0.1))
-                        .cornerRadius(4)
-                }
-                .buttonStyle(.plain)
-                
-                Spacer()
-                
-                HStack(spacing: 12) {
-                    Button(action: { previousMonth() }) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    
-                    Text(currentMonth, formatter: monthYearFormatter)
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 120)
-                    
-                    Button(action: { nextMonth() }) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                
-                Spacer()
-                
-                // View mode toggle with counts
-                HStack(spacing: 2) {
-                    ForEach(CalendarViewMode.allCases, id: \.self) { mode in
-                        let count = mode == .dueDate ? totalDueDateCount : totalUpdatedCount
-                        Button(action: { viewMode = mode }) {
-                            HStack(spacing: 3) {
-                                Image(systemName: mode.icon)
-                                    .font(.system(size: 9))
-                                Text(mode.rawValue)
-                                    .font(.system(size: 9, weight: .medium))
-                                if count > 0 {
-                                    Text("\(count)")
-                                        .font(.system(size: 8, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 4)
-                                        .padding(.vertical, 1)
-                                        .background(Capsule().fill(viewMode == mode ? Color.accentColor : Color.secondary))
-                                }
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 4)
-                            .background(viewMode == mode ? Color.accentColor.opacity(0.15) : Color.clear)
-                            .foregroundColor(viewMode == mode ? .accentColor : .secondary)
-                            .cornerRadius(4)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            
-            // Weekday Headers
-            HStack(spacing: 0) {
-                ForEach(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], id: \.self) { day in
-                    Text(day)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity)
-                }
-            }
-            .padding(.horizontal, 6)
-        }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
-    }
-    
-    private var calendarGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 7), spacing: 1) {
-            // Empty cells for days before start of month
-            ForEach(0..<firstWeekday, id: \.self) { _ in
-                Color.clear.frame(height: 60)
-            }
-            
-            // Days of month
-            ForEach(monthDays, id: \.self) { date in
-                let dateKey = calendar.startOfDay(for: date)
-                let docketsForDay = docketsByDate[dateKey] ?? []
-                
-                AsanaCalendarDayCell(
-                    date: date,
-                    isSelected: calendar.isDate(date, inSameDayAs: selectedDate),
-                    isToday: calendar.isDateInToday(date),
-                    dockets: docketsForDay,
-                    isCurrentMonth: calendar.isDate(date, equalTo: currentMonth, toGranularity: .month)
-                ) {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        selectedDate = date
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 4)
-        .background(Color(nsColor: .separatorColor).opacity(0.3))
-    }
-    
-    private var selectedDateDetailView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(selectedDate, formatter: selectedDateFormatter)
-                        .font(.system(size: 13, weight: .semibold))
-                    
-                    if !docketsForSelectedDate.isEmpty {
-                        Text("\(docketsForSelectedDate.count) task\(docketsForSelectedDate.count == 1 ? "" : "s")")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                Spacer()
-                
-                if isLoading {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            
-            Divider()
-            
-            // Task List
-            if isLoading {
-                VStack(spacing: 10) {
-                    ProgressView()
-                    Text("Loading tasks...")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if docketsForSelectedDate.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: calendar.isDateInToday(selectedDate) ? "calendar.badge.checkmark" : "calendar")
-                        .font(.system(size: 28))
-                        .foregroundColor(.secondary.opacity(0.4))
-                    Text(calendar.isDateInToday(selectedDate) ? "No tasks due today" : "No tasks on this date")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(docketsForSelectedDate) { docket in
-                            AsanaTaskRow(docket: docket)
-                        }
-                    }
-                    .padding(8)
-                }
-            }
-        }
-    }
-    
-    private func loadDockets() async {
-        guard let cacheManager = cacheManager else {
-            print("📅 [Calendar] No cache manager available")
-            isLoading = false
-            return
-        }
-        
-        // Small delay to let UI render first
-        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-        
-        // Load on main actor (required by AsanaCacheManager)
-        let dockets = await MainActor.run {
-            cacheManager.loadCachedDockets()
-        }
-        
-        print("📅 [Calendar] Loaded \(dockets.count) dockets from cache")
-        
-        // Process in background
-        let processedResult = await Task.detached(priority: .userInitiated) { [calendar] () -> (byDue: [Date: [DocketInfo]], byUpdated: [Date: [DocketInfo]], dueCount: Int, updatedCount: Int) in
-            var byDue: [Date: [DocketInfo]] = [:]
-            var byUpdated: [Date: [DocketInfo]] = [:]
-            var dueCount = 0
-            var updatedCount = 0
-            
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd"
-            
-            for docket in dockets {
-                // Group by due date (from projectMetadata)
-                if let dueDateString = docket.projectMetadata?.dueDate,
-                   !dueDateString.isEmpty,
-                   let dueDate = dateFormatter.date(from: dueDateString) {
-                    let dateKey = calendar.startOfDay(for: dueDate)
-                    byDue[dateKey, default: []].append(docket)
-                    dueCount += 1
-                }
-                
-                // Group by updated date
-                if let updatedAt = docket.updatedAt {
-                    let dateKey = calendar.startOfDay(for: updatedAt)
-                    byUpdated[dateKey, default: []].append(docket)
-                    updatedCount += 1
-                }
-            }
-            
-            // Sort dockets within each day by job name
-            for (key, value) in byDue {
-                byDue[key] = value.sorted { $0.jobName < $1.jobName }
-            }
-            for (key, value) in byUpdated {
-                byUpdated[key] = value.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
-            }
-            
-            return (byDue, byUpdated, dueCount, updatedCount)
-        }.value
-        
-        print("📅 [Calendar] Processed: \(processedResult.dueCount) with due dates, \(processedResult.updatedCount) with updated dates")
-        print("📅 [Calendar] Due date days: \(processedResult.byDue.count), Updated days: \(processedResult.byUpdated.count)")
-        
-        await MainActor.run {
-            docketsByDueDate = processedResult.byDue
-            docketsByUpdatedDate = processedResult.byUpdated
-            totalDueDateCount = processedResult.dueCount
-            totalUpdatedCount = processedResult.updatedCount
-            isLoading = false
-        }
-    }
-    
-    private func goToToday() {
-        withAnimation {
-            currentMonth = Date()
-            selectedDate = Date()
-        }
-    }
-    
-    private func previousMonth() {
-        withAnimation {
-            currentMonth = calendar.date(byAdding: .month, value: -1, to: currentMonth) ?? currentMonth
-        }
-    }
-    
-    private func nextMonth() {
-        withAnimation {
-            currentMonth = calendar.date(byAdding: .month, value: 1, to: currentMonth) ?? currentMonth
-        }
-    }
-    
-    private var monthYearFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter
-    }
-    
-    private var selectedDateFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d"
-        return formatter
-    }
-}
-
-// MARK: - Asana-Style Calendar Day Cell
-
-struct AsanaCalendarDayCell: View {
-    let date: Date
-    let isSelected: Bool
-    let isToday: Bool
-    let dockets: [DocketInfo]
-    let isCurrentMonth: Bool
-    let action: () -> Void
-    
-    private var calendar: Calendar { Calendar.current }
-    
-    // Get color based on project metadata or fallback
-    private func colorForDocket(_ docket: DocketInfo) -> Color {
-        if let colorName = docket.projectMetadata?.color {
-            return asanaColorToSwiftUI(colorName)
-        }
-        return .blue
-    }
-    
-    private func asanaColorToSwiftUI(_ colorName: String) -> Color {
-        switch colorName.lowercased() {
-        case "dark-pink", "hot-pink": return .pink
-        case "dark-red", "red": return .red
-        case "dark-orange", "orange": return .orange
-        case "dark-warm-gray", "warm-gray": return Color(red: 0.6, green: 0.5, blue: 0.4)
-        case "yellow", "light-yellow": return .yellow
-        case "dark-green", "green": return .green
-        case "light-green", "lime": return Color(red: 0.5, green: 0.8, blue: 0.3)
-        case "dark-teal", "teal": return .teal
-        case "aqua", "light-teal": return .cyan
-        case "dark-blue", "blue": return .blue
-        case "light-blue": return Color(red: 0.4, green: 0.7, blue: 1.0)
-        case "dark-purple", "purple": return .purple
-        case "light-purple": return Color(red: 0.7, green: 0.5, blue: 0.9)
-        case "cool-gray", "light-gray": return .gray
-        default: return .blue
-        }
-    }
-    
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 2) {
-                // Day number header
-                HStack {
-                    Text("\(calendar.component(.day, from: date))")
-                        .font(.system(size: 10, weight: isToday ? .bold : .medium))
-                        .foregroundColor(dayNumberColor)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(
-                            isToday ? Circle().fill(Color.accentColor) : nil
-                        )
-                    
-                    Spacer()
-                }
-                .padding(.top, 2)
-                .padding(.horizontal, 2)
-                
-                // Task previews (show up to 3 tasks)
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(dockets.prefix(3)) { docket in
-                        HStack(spacing: 3) {
-                            Circle()
-                                .fill(colorForDocket(docket))
-                                .frame(width: 4, height: 4)
-                            
-                            Text(docket.jobName)
-                                .font(.system(size: 8))
-                                .lineLimit(1)
-                                .foregroundColor(.primary)
-                        }
-                    }
-                    
-                    // Show "+X more" if there are more tasks
-                    if dockets.count > 3 {
-                        Text("+\(dockets.count - 3) more")
-                            .font(.system(size: 7, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding(.horizontal, 3)
-                
-                Spacer(minLength: 0)
-            }
-            .frame(height: 60)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(cellBackground)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-    
-    private var dayNumberColor: Color {
-        if isToday {
-            return .white
-        } else if isSelected {
-            return .accentColor
-        } else if !isCurrentMonth {
-            return .secondary.opacity(0.5)
-        } else {
-            return .primary
-        }
-    }
-    
-    private var cellBackground: Color {
-        if isSelected {
-            return Color.accentColor.opacity(0.08)
-        } else if !isCurrentMonth {
-            return Color(nsColor: .windowBackgroundColor).opacity(0.5)
-        } else {
-            return Color(nsColor: .controlBackgroundColor).opacity(0.3)
-        }
     }
 }
 
@@ -1644,7 +1177,7 @@ struct StatusPanelView: View {
                 }
                 
                 // CodeMind Status
-                StatusCard(title: "CodeMind AI") {
+                StatusCard(title: "CodeMind") {
                     CodeMindChatButton(
                         emailScanningService: emailScanningService,
                         showSettings: $showSettings
@@ -2082,6 +1615,7 @@ struct DashboardNotificationsPanel: View {
     enum NotificationFilter: String, CaseIterable {
         case all = "All"
         case newDockets = "Dockets"
+        case requests = "Requests"
         case fileDeliveries = "Files"
         case forReview = "Review"
         
@@ -2090,6 +1624,7 @@ struct DashboardNotificationsPanel: View {
             case .all: return "tray.full"
             case .newDockets: return "doc.badge.plus"
             case .fileDeliveries: return "arrow.down.doc"
+            case .requests: return "hand.raised"
             case .forReview: return "eye"
             }
         }
@@ -2104,6 +1639,8 @@ struct DashboardNotificationsPanel: View {
             return active.filter { $0.type == .newDocket }
         case .fileDeliveries:
             return active.filter { $0.type == .mediaFiles }
+        case .requests:
+            return active.filter { $0.type == .request }
         case .forReview:
             let threshold = settingsManager.currentSettings.codeMindReviewThreshold
             return active.filter { notification in
@@ -2245,6 +1782,7 @@ struct DashboardNotificationCard: View {
         switch notification.type {
         case .newDocket: return "doc.badge.plus"
         case .mediaFiles: return "arrow.down.doc.fill"
+        case .request: return "hand.raised.fill"
         case .error: return "exclamationmark.triangle.fill"
         case .info: return "info.circle.fill"
         case .junk, .skipped: return "xmark.circle.fill"
@@ -2256,6 +1794,7 @@ struct DashboardNotificationCard: View {
         switch notification.type {
         case .newDocket: return .blue
         case .mediaFiles: return .green
+        case .request: return .orange
         case .error: return .red
         case .info: return .cyan
         case .junk, .skipped: return .gray

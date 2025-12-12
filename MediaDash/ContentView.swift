@@ -106,8 +106,38 @@ struct ContentView: View {
         return formatter
     }()
     
+    @StateObject private var layoutEditManager = LayoutEditManager.shared
+    
     var body: some View {
         mainContentView
+            .environmentObject(layoutEditManager)
+            .focusable()
+            .focused($mainViewFocused)
+            .onKeyPress { keyPress in
+                // Handle arrow keys for layout editing
+                if layoutEditManager.isEditMode, let selectedId = layoutEditManager.selectedViewId {
+                    let step: CGFloat = 1.0 // 1 pixel per key press
+                    var delta = CGSize.zero
+                    
+                    switch keyPress.key {
+                    case .leftArrow:
+                        delta = CGSize(width: -step, height: 0)
+                    case .rightArrow:
+                        delta = CGSize(width: step, height: 0)
+                    case .upArrow:
+                        delta = CGSize(width: 0, height: -step)
+                    case .downArrow:
+                        delta = CGSize(width: 0, height: step)
+                    default:
+                        return .ignored
+                    }
+                    
+                    // moveOffset already defers internally, so we can call it directly
+                    layoutEditManager.moveOffset(delta, for: selectedId)
+                    return .handled
+                }
+                return .ignored
+            }
             .modifier(KeyboardHandlersModifier(
                 isKeyboardMode: $isKeyboardMode,
                 focusedButton: $focusedButton,
@@ -162,6 +192,12 @@ struct ContentView: View {
             // Notification popup is now handled by NotificationPopupWindowManager
             .onChange(of: showNotificationCenter) { oldValue, newValue in
                 if newValue {
+                    // Don't open notification centre in dashboard mode
+                    if settingsManager.currentSettings.windowMode == .dashboard {
+                        showNotificationCenter = false
+                        return
+                    }
+                    
                     // Always show as separate window (locked or unlocked)
                     // Load lock state from settings
                     let isLocked = settingsManager.currentSettings.notificationWindowLocked
@@ -189,7 +225,10 @@ struct ContentView: View {
             }
             .background(
                 Button(action: {
-                    showNotificationCenter.toggle()
+                    // Don't allow opening notification centre in dashboard mode
+                    if settingsManager.currentSettings.windowMode != .dashboard {
+                        showNotificationCenter.toggle()
+                    }
                 }) {
                     EmptyView()
                 }
@@ -199,6 +238,11 @@ struct ContentView: View {
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("windowModeChanged"))) { notification in
                 // Reload settings when window mode changes (e.g., from fullscreen)
                 settingsManager.reloadCurrentProfile()
+                
+                // Close notification centre if switching to dashboard mode
+                if settingsManager.currentSettings.windowMode == .dashboard && showNotificationCenter {
+                    showNotificationCenter = false
+                }
                 
                 // Resize window to appropriate size for the mode
                 DispatchQueue.main.async {
@@ -256,11 +300,73 @@ struct ContentView: View {
                         cacheManager: cacheManager
                     )
                     .frame(minWidth: LayoutMode.dashboardMinWidth, minHeight: LayoutMode.dashboardMinHeight)
+                    .draggableLayout(id: "dashboardView")
                     .focusable()
                     .focused($mainViewFocused)
                     .focusEffectDisabled()
                     
                     CodeMindActivityOverlay()
+                }
+                .overlay(alignment: .topLeading) {
+                    // Layout Edit Mode Indicator
+                    if layoutEditManager.isEditMode {
+                        HStack(spacing: 12) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "hand.draw")
+                                    .foregroundColor(.blue)
+                                Text("Layout Edit Mode")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.blue)
+                                Text("(Cmd+Shift+E to exit)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Divider()
+                                .frame(height: 20)
+                            
+                            // Undo/Redo buttons
+                            Button(action: {
+                                layoutEditManager.undo()
+                            }) {
+                                Image(systemName: "arrow.uturn.backward")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!layoutEditManager.canUndo)
+                            .foregroundColor(layoutEditManager.canUndo ? .blue : .gray)
+                            .help("Undo (Cmd+Z)")
+                            
+                            Button(action: {
+                                layoutEditManager.redo()
+                            }) {
+                                Image(systemName: "arrow.uturn.forward")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!layoutEditManager.canRedo)
+                            .foregroundColor(layoutEditManager.canRedo ? .blue : .gray)
+                            .help("Redo (Cmd+Shift+Z)")
+                            
+                            Divider()
+                                .frame(height: 20)
+                            
+                            Button(action: {
+                                layoutEditManager.resetAllOffsets()
+                            }) {
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(.blue)
+                            .help("Reset Layout")
+                        }
+                        .padding(8)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(6)
+                        .padding(.top, 8)
+                        .padding(.leading, 8)
+                    }
                 }
             } else {
                 // Compact Mode - Phone-like compact interface
@@ -284,6 +390,8 @@ struct ContentView: View {
                             attempt: attempt,
                             cacheManager: cacheManager
                         )
+                        .offset(x: 0, y: -4) // Layout edit: sidebar offset
+                        .draggableLayout(id: "sidebar")
                         
                         StagingAreaView(
                             cacheManager: cacheManager,
@@ -291,6 +399,7 @@ struct ContentView: View {
                             isStagingPressed: $isStagingPressed
                         )
                         .environmentObject(manager)
+                        .draggableLayout(id: "stagingArea")
                     }
                     .frame(width: LayoutMode.minWidth, height: windowHeight)
                     .animation(.easeInOut(duration: 0.2), value: windowHeight)
@@ -299,6 +408,76 @@ struct ContentView: View {
                     .focusEffectDisabled()
                     
                     CodeMindActivityOverlay()
+                }
+                .overlay(alignment: .topTrailing) {
+                    // Dashboard button in very top right - only in compact mode
+                    DashboardButton(settingsManager: settingsManager)
+                        .padding(.top, 8)
+                        .padding(.trailing, 8)
+                        .offset(x: 2.7109375, y: -29.5390625) // Layout edit: dashboardButton offset
+                        .draggableLayout(id: "dashboardButton")
+                        .zIndex(1000) // Ensure it stays on top
+                }
+                .overlay(alignment: .topLeading) {
+                    // Layout Edit Mode Indicator
+                    if layoutEditManager.isEditMode {
+                        HStack(spacing: 12) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "hand.draw")
+                                    .foregroundColor(.blue)
+                                Text("Layout Edit Mode")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.blue)
+                                Text("(Cmd+Shift+E to exit)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Divider()
+                                .frame(height: 20)
+                            
+                            // Undo/Redo buttons
+                            Button(action: {
+                                layoutEditManager.undo()
+                            }) {
+                                Image(systemName: "arrow.uturn.backward")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!layoutEditManager.canUndo)
+                            .foregroundColor(layoutEditManager.canUndo ? .blue : .gray)
+                            .help("Undo (Cmd+Z)")
+                            
+                            Button(action: {
+                                layoutEditManager.redo()
+                            }) {
+                                Image(systemName: "arrow.uturn.forward")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!layoutEditManager.canRedo)
+                            .foregroundColor(layoutEditManager.canRedo ? .blue : .gray)
+                            .help("Redo (Cmd+Shift+Z)")
+                            
+                            Divider()
+                                .frame(height: 20)
+                            
+                            Button(action: {
+                                layoutEditManager.resetAllOffsets()
+                            }) {
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(.blue)
+                            .help("Reset Layout")
+                        }
+                        .padding(8)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(6)
+                        .padding(.top, 8)
+                        .padding(.leading, 8)
+                    }
                 }
             }
         }
@@ -868,6 +1047,7 @@ struct DocketSearchView: View {
     @Binding var selectedDocket: String
     var jobType: JobType = .workPicture
     var onConfirm: () -> Void
+    var cacheManager: AsanaCacheManager?
 
     @State private var searchText = ""
     @FocusState private var isSearchFieldFocused: Bool
@@ -875,9 +1055,12 @@ struct DocketSearchView: View {
     @State private var filteredDockets: [String] = []
     @State private var selectedPath: String?
     @State private var showNewDocketSheet = false
+    @State private var showAsanaSearchSheet = false
     @State private var allDockets: [String] = []
     @State private var showExistingPrepAlert = false
     @State private var existingPrepFolders: [String] = []
+    @State private var prefillDocketNumber: String? = nil
+    @State private var prefillJobName: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -952,14 +1135,14 @@ struct DocketSearchView: View {
                 } else {
                     ScrollViewReader { proxy in
                         List(selection: $selectedPath) {
-                        // "Create New Docket" option at the top
+                        // "Create New Folder" option at the top
                         HoverableButton(action: {
                             showNewDocketSheet = true
                         }) { isHovered in
                             HStack {
                                 Image(systemName: "plus.circle.fill")
                                     .foregroundColor(.green)
-                                Text("Create New Docket")
+                                Text("Create New Folder")
                                     .font(.system(size: 14, weight: .semibold))
                                 Spacer()
                                 Image(systemName: "chevron.right")
@@ -971,6 +1154,28 @@ struct DocketSearchView: View {
                             .background(isHovered ? Color.green.opacity(0.15) : Color.clear)
                         }
                         .listRowBackground(Color.green.opacity(0.1))
+                        
+                        // "Search Asana" option below "Create New Folder"
+                        if cacheManager != nil {
+                            HoverableButton(action: {
+                                showAsanaSearchSheet = true
+                            }) { isHovered in
+                                HStack {
+                                    Image(systemName: "magnifyingglass.circle.fill")
+                                        .foregroundColor(.blue)
+                                    Text("Search Asana")
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.vertical, 6)
+                                .contentShape(Rectangle())
+                                .background(isHovered ? Color.blue.opacity(0.15) : Color.clear)
+                            }
+                            .listRowBackground(Color.blue.opacity(0.1))
+                        }
 
                         if !filteredDockets.isEmpty {
                             Section {
@@ -1021,7 +1226,7 @@ struct DocketSearchView: View {
                                     .foregroundColor(.gray.opacity(0.5))
                                 Text("No dockets found")
                                     .foregroundColor(.gray)
-                                Text("Try adjusting your search or create a new docket")
+                                Text("Try adjusting your search or create a new folder")
                                     .font(.caption)
                                     .foregroundColor(.gray.opacity(0.7))
                             }
@@ -1064,7 +1269,7 @@ struct DocketSearchView: View {
             .padding()
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 600, height: 500)
+        .frame(minWidth: 400, idealWidth: 600, maxWidth: 600, minHeight: 300)
         .onAppear {
             // Scan dockets based on job type
             Task {
@@ -1092,11 +1297,45 @@ struct DocketSearchView: View {
                 onDocketCreated: {
                     // When a new docket is created, close both sheets and run the job
                     isPresented = false
+                    // Clear prefill values
+                    prefillDocketNumber = nil
+                    prefillJobName = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         onConfirm()
                     }
-                }
+                },
+                initialDocketNumber: prefillDocketNumber,
+                initialJobName: prefillJobName
             )
+            .id("\(prefillDocketNumber ?? "nil")_\(prefillJobName ?? "nil")") // Force recreation when prefill values change
+            .onDisappear {
+                // Clear prefill values when sheet closes
+                prefillDocketNumber = nil
+                prefillJobName = nil
+            }
+        }
+        .sheet(isPresented: $showAsanaSearchSheet) {
+            if let cacheManager = cacheManager {
+                QuickDocketSearchView(
+                    isPresented: $showAsanaSearchSheet,
+                    initialText: searchText,
+                    settingsManager: settingsManager,
+                    cacheManager: cacheManager,
+                    onDocketSelectedForFolder: { docket in
+                        // When a docket is selected from Asana, pre-fill the new folder form
+                        // Close Asana search first
+                        showAsanaSearchSheet = false
+                        // Set values and open sheet - use Task to ensure state updates
+                        Task { @MainActor in
+                            prefillDocketNumber = docket.number
+                            prefillJobName = docket.jobName
+                            // Small delay to ensure state is updated
+                            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                            showNewDocketSheet = true
+                        }
+                    }
+                )
+            }
         }
         // Native Keyboard Navigation
         .onKeyPress(.upArrow) {
@@ -1614,7 +1853,7 @@ struct SearchView: View {
             .padding()
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 650, height: 500)
+        .frame(minWidth: 400, idealWidth: 650, maxWidth: 650, minHeight: 300)
         .onAppear {
             // Set initial focus when view appears
             isSearchFieldFocused = true
@@ -1944,11 +2183,15 @@ struct QuickDocketSearchView: View {
     @State private var sortOrder: DocketSortOrder = .recentlyUpdated
     @State private var hasAutoSelectedInitial = false // Track if we've done initial auto-selection
 
-    init(isPresented: Binding<Bool>, initialText: String, settingsManager: SettingsManager, cacheManager: AsanaCacheManager) {
+    // Optional callback for when a docket is selected for creating a new folder (used when opened from DocketSearchView)
+    var onDocketSelectedForFolder: ((DocketInfo) -> Void)? = nil
+    
+    init(isPresented: Binding<Bool>, initialText: String, settingsManager: SettingsManager, cacheManager: AsanaCacheManager, onDocketSelectedForFolder: ((DocketInfo) -> Void)? = nil) {
         self._isPresented = isPresented
         self.initialText = initialText
         self.settingsManager = settingsManager
         self.cacheManager = cacheManager
+        self.onDocketSelectedForFolder = onDocketSelectedForFolder
         self._searchText = State(initialValue: initialText)
         self._metadataManager = StateObject(wrappedValue: DocketMetadataManager(settings: settingsManager.currentSettings))
     }
@@ -1963,7 +2206,7 @@ struct QuickDocketSearchView: View {
             resultsListSection
             infoBarSection
         }
-        .frame(width: 600, height: 500)
+        .frame(minWidth: 400, idealWidth: 600, maxWidth: 600, minHeight: 300)
         .sheet(isPresented: $showSettingsSheet) {
             SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
                 .environmentObject(sessionManager)
@@ -2013,10 +2256,16 @@ struct QuickDocketSearchView: View {
             return .handled
         }
         .onKeyPress(.return) {
-            // Enter key opens the metadata editor for selected docket
-            if isListFocused, selectedDocket != nil {
-                showMetadataEditor = true
-                return .handled
+            // Enter key: if callback provided, use selected docket for new folder; otherwise open metadata editor
+            if isListFocused, let docket = selectedDocket {
+                if let callback = onDocketSelectedForFolder {
+                    callback(docket)
+                    isPresented = false
+                    return .handled
+                } else {
+                    showMetadataEditor = true
+                    return .handled
+                }
             }
             return .ignored
         }
@@ -2255,6 +2504,11 @@ struct QuickDocketSearchView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: {
                 selectedDocket = docket
+                // If callback is provided (opened from DocketSearchView), use docket for new folder
+                if let callback = onDocketSelectedForFolder {
+                    callback(docket)
+                    isPresented = false
+                }
             }) {
                 docketRowContent(docket: docket)
             }
@@ -2262,9 +2516,11 @@ struct QuickDocketSearchView: View {
             .tag(docket.id)
             .id(docket.id)
             .onTapGesture(count: 2) {
-                // Double-click opens metadata editor
-                selectedDocket = docket
-                showMetadataEditor = true
+                // Double-click opens metadata editor (only if not using callback)
+                if onDocketSelectedForFolder == nil {
+                    selectedDocket = docket
+                    showMetadataEditor = true
+                }
             }
             
             if let subtasks = docket.subtasks, !subtasks.isEmpty {
@@ -2387,7 +2643,13 @@ struct QuickDocketSearchView: View {
     private func simpleDocketRow(docket: DocketInfo) -> some View {
         Button(action: {
             selectedDocket = docket
-            showMetadataEditor = true
+            // If callback is provided (opened from DocketSearchView), use docket for new folder
+            if let callback = onDocketSelectedForFolder {
+                callback(docket)
+                isPresented = false
+            } else {
+                showMetadataEditor = true
+            }
         }) {
             HStack(spacing: 12) {
                 Text(docket.number)
@@ -2543,45 +2805,34 @@ struct QuickDocketSearchView: View {
     // MARK: - Helper Functions
     
     func loadDockets() {
-        print("🔵 [ContentView] loadDockets() called")
         var settings = settingsManager.currentSettings
-        print("🔵 [ContentView] Docket source: \(settings.docketSource)")
-        
-        // TEMPORARILY DISABLED FOR ASANA DEBUGGING - Force Asana
+
+        // Ensure Asana is selected (currently the only supported source)
         if settings.docketSource != .asana {
-            print("⚠️ [ContentView] WARNING: Docket source is \(settings.docketSource), forcing to Asana for debugging")
             settings.docketSource = .asana
             settingsManager.currentSettings = settings
             settingsManager.saveCurrentProfile()
         }
-        
-        // TEMPORARILY DISABLED FOR ASANA DEBUGGING - Only Asana is used
-        // Use the selected docket source (mutually exclusive)
+
+        // Use Asana cache-based loading
         switch settings.docketSource {
         case .asana:
-            print("🔵 [ContentView] Using Asana source (cache-based)")
-            // Asana now uses cache - sync happens in onAppear of QuickDocketSearchView
-            // Just load from cache if available
+            // Asana uses cache - sync happens in onAppear of QuickDocketSearchView
             let cachedDockets = cacheManager.loadCachedDockets()
             if !cachedDockets.isEmpty {
                 allDockets = cachedDockets
                 filteredDockets = cachedDockets
                 applySorting()
-                print("🟢 [ContentView] Loaded \(cachedDockets.count) dockets from cache")
-        } else {
-                print("🔵 [ContentView] Cache is empty, will sync on search view appear")
             }
             isScanning = false
         case .csv:
-            // TEMPORARILY DISABLED
-            asanaError = "CSV integration temporarily disabled for Asana debugging"
+            // CSV source not currently supported
+            asanaError = "CSV integration is currently unavailable. Please use Asana."
             isScanning = false
-            // loadDocketsFromCSV()
         case .server:
-            // TEMPORARILY DISABLED
-            asanaError = "Server integration temporarily disabled for Asana debugging"
+            // Server source not currently supported
+            asanaError = "Server integration is currently unavailable. Please use Asana."
             isScanning = false
-            // scanDocketsFromServer()
         }
     }
     
@@ -2927,11 +3178,14 @@ struct QuickDocketSearchView: View {
         let sorted = docketsToSort.sorted { d1, d2 in
             switch sortOrder {
             case .recentlyUpdated:
-                if let date1 = d1.updatedAt, let date2 = d2.updatedAt {
+                // Most recently added first (use createdAt, fallback to updatedAt, nil dates go to end)
+                let date1 = d1.createdAt ?? d1.updatedAt
+                let date2 = d2.createdAt ?? d2.updatedAt
+                if let date1 = date1, let date2 = date2 {
                     return date1 > date2
-                } else if d1.updatedAt != nil {
+                } else if date1 != nil {
                     return true
-                } else if d2.updatedAt != nil {
+                } else if date2 != nil {
                     return false
                 }
                 if let n1 = Int(d1.number.filter { $0.isNumber }),
@@ -3068,11 +3322,14 @@ struct QuickDocketSearchView: View {
         let sorted = matched.sorted { d1, d2 in
             switch sortOrder {
             case .recentlyUpdated:
-                if let date1 = d1.updatedAt, let date2 = d2.updatedAt {
+                // Most recently added first (use createdAt, fallback to updatedAt, nil dates go to end)
+                let date1 = d1.createdAt ?? d1.updatedAt
+                let date2 = d2.createdAt ?? d2.updatedAt
+                if let date1 = date1, let date2 = date2 {
                     return date1 > date2
-                } else if d1.updatedAt != nil {
+                } else if date1 != nil {
                     return true
-                } else if d2.updatedAt != nil {
+                } else if date2 != nil {
                     return false
                 }
                 if let n1 = Int(d1.number.filter { $0.isNumber }),
@@ -3159,21 +3416,37 @@ struct KeyboardHandlersModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onKeyPress(.leftArrow) {
+                // Don't handle arrow keys if in layout edit mode
+                if LayoutEditManager.shared.isEditMode {
+                    return .ignored
+                }
                 isKeyboardMode = true
                 moveGridFocus(.left)
                 return .handled
             }
             .onKeyPress(.rightArrow) {
+                // Don't handle arrow keys if in layout edit mode
+                if LayoutEditManager.shared.isEditMode {
+                    return .ignored
+                }
                 isKeyboardMode = true
                 moveGridFocus(.right)
                 return .handled
             }
             .onKeyPress(.upArrow) {
+                // Don't handle arrow keys if in layout edit mode
+                if LayoutEditManager.shared.isEditMode {
+                    return .ignored
+                }
                 isKeyboardMode = true
                 moveGridFocus(.up)
                 return .handled
             }
             .onKeyPress(.downArrow) {
+                // Don't handle arrow keys if in layout edit mode
+                if LayoutEditManager.shared.isEditMode {
+                    return .ignored
+                }
                 isKeyboardMode = true
                 moveGridFocus(.down)
                 return .handled
@@ -3347,7 +3620,8 @@ struct SheetsModifier: ViewModifier {
                             )
                             pendingJobType = nil
                         }
-                    }
+                    },
+                    cacheManager: cacheManager
                 )
             }
             .sheet(isPresented: $showQuickSearchSheet) {
@@ -3659,6 +3933,35 @@ struct WorkspaceMenuButton: View {
         .onHover { hovering in
             isHovered = hovering
             }
+    }
+}
+
+// MARK: - Dashboard Button
+
+struct DashboardButton: View {
+    @ObservedObject var settingsManager: SettingsManager
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: {
+            switchWindowMode(.dashboard)
+        }) {
+            Image(systemName: "chart.bar.xaxis")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(isHovered ? .primary : .secondary)
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(isHovered ? Color.primary.opacity(0.1) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(true)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
     }
 }
 

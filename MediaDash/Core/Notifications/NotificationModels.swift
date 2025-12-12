@@ -2,9 +2,11 @@ import Foundation
 import SwiftUI
 
 /// Types of notifications
-enum NotificationType: String, Codable, CaseIterable {
+/// Marked as @frozen for performance optimization - enum cases are stable
+@frozen public enum NotificationType: String, Codable, CaseIterable {
     case newDocket = "new_docket"
     case mediaFiles = "media_files" // Internal name kept for compatibility, displayed as "File Deliveries"
+    case request = "request" // Requests for the media team
     case error = "error"
     case info = "info"
     case junk = "junk" // Ads, promos, spam mistakenly classified
@@ -16,6 +18,7 @@ enum NotificationType: String, Codable, CaseIterable {
         switch self {
         case .newDocket: return "New Docket"
         case .mediaFiles: return "File Delivery"
+        case .request: return "Request"
         case .error: return "Error"
         case .info: return "Info"
         case .junk: return "Junk"
@@ -29,6 +32,7 @@ enum NotificationType: String, Codable, CaseIterable {
         switch self {
         case .newDocket: return "doc.badge.plus"
         case .mediaFiles: return "arrow.down.doc"
+        case .request: return "hand.raised"
         case .error: return "exclamationmark.triangle"
         case .info: return "info.circle"
         case .junk: return "trash"
@@ -42,6 +46,7 @@ enum NotificationType: String, Codable, CaseIterable {
         switch self {
         case .newDocket: return .blue
         case .mediaFiles: return .green
+        case .request: return .orange
         case .error: return .red
         case .info: return .orange
         case .junk: return .gray
@@ -52,7 +57,7 @@ enum NotificationType: String, Codable, CaseIterable {
     
     /// Types available for manual reclassification
     static var reclassifiableTypes: [NotificationType] {
-        [.newDocket, .mediaFiles, .junk, .skipped]
+        [.newDocket, .mediaFiles, .request, .junk, .skipped]
     }
 }
 
@@ -73,6 +78,7 @@ struct Notification: Identifiable, Codable, Equatable {
     let timestamp: Date
     var status: NotificationStatus
     var archivedAt: Date? // When the notification was archived
+    var completedAt: Date? // When the notification was marked as complete (for request notifications)
     var threadId: String? // Gmail thread ID for tracking replies
     var isGrabbed: Bool = false // Whether a media team member has "grabbed" this thread
     var isPriorityAssist: Bool = false // Whether this needs priority assistance (couldn't grab file)
@@ -88,7 +94,8 @@ struct Notification: Identifiable, Codable, Equatable {
     var emailSubject: String? // Original email subject for preview
     var emailBody: String? // Original email body for preview
     var fileLinks: [String]? // File hosting links extracted from email (for File Delivery notifications)
-    
+    var fileLinkDescriptions: [String]? // Descriptions of what each link contains (parallel array to fileLinks)
+
     // CodeMind classification metadata (for feedback/learning)
     var codeMindClassification: CodeMindClassificationMetadata? // Stores classification result for feedback
     
@@ -113,6 +120,7 @@ struct Notification: Identifiable, Codable, Equatable {
         timestamp: Date = Date(),
         status: NotificationStatus = .pending,
         archivedAt: Date? = nil,
+        completedAt: Date? = nil,
         docketNumber: String? = nil,
         jobName: String? = nil,
         emailId: String? = nil,
@@ -121,6 +129,7 @@ struct Notification: Identifiable, Codable, Equatable {
         emailSubject: String? = nil,
         emailBody: String? = nil,
         fileLinks: [String]? = nil,
+        fileLinkDescriptions: [String]? = nil,
         threadId: String? = nil,
         isGrabbed: Bool = false,
         isPriorityAssist: Bool = false,
@@ -135,6 +144,7 @@ struct Notification: Identifiable, Codable, Equatable {
         self.timestamp = timestamp
         self.status = status
         self.archivedAt = archivedAt
+        self.completedAt = completedAt
         self.docketNumber = docketNumber
         self.jobName = jobName
         self.emailId = emailId
@@ -144,6 +154,7 @@ struct Notification: Identifiable, Codable, Equatable {
         self.emailSubject = emailSubject
         self.emailBody = emailBody
         self.fileLinks = fileLinks
+        self.fileLinkDescriptions = fileLinkDescriptions
         self.threadId = threadId
         self.isGrabbed = isGrabbed
         self.isPriorityAssist = isPriorityAssist

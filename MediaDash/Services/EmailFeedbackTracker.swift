@@ -1,59 +1,106 @@
 import Foundation
 
+// MARK: - Feedback Models (nonisolated for background encoding/decoding)
+
+/// Feedback data for a single email
+struct EmailFeedback: Codable, Equatable {
+    let emailId: String
+    let wasCorrect: Bool
+    let rating: Int
+    let timestamp: Date
+    let correction: String?
+    let comment: String?
+    
+    init(emailId: String, wasCorrect: Bool, rating: Int, timestamp: Date = Date(), correction: String? = nil, comment: String? = nil) {
+        self.emailId = emailId
+        self.wasCorrect = wasCorrect
+        self.rating = rating
+        self.timestamp = timestamp
+        self.correction = correction
+        self.comment = comment
+    }
+}
+
+/// Interaction types that can be tracked per email
+enum InteractionType: String, Codable {
+    case feedbackThumbsUp = "feedback_thumbs_up"
+    case feedbackThumbsDown = "feedback_thumbs_down"
+    case reclassified = "reclassified"
+    case approved = "approved"
+    case grabbed = "grabbed"
+}
+
+/// Interaction record for tracking user actions
+struct EmailInteraction: Codable, Equatable {
+    let emailId: String
+    let interactionType: InteractionType
+    let timestamp: Date
+    let details: [String: String]? // Additional context (e.g., "fromType": "newDocket", "toType": "junk")
+    
+    init(emailId: String, interactionType: InteractionType, timestamp: Date = Date(), details: [String: String]? = nil) {
+        self.emailId = emailId
+        self.interactionType = interactionType
+        self.timestamp = timestamp
+        self.details = details
+    }
+}
+
+/// Storage structure
+/// Structs are value types and don't need actor isolation - can be encoded/decoded in background threads
+/// Marked as Sendable to indicate it's safe to use across isolation domains
+struct FeedbackStorage: Codable, Sendable {
+    var feedback: [String: EmailFeedback] = [:] // Keyed by emailId
+    var interactions: [String: [EmailInteraction]] = [:] // Keyed by emailId, array of interactions
+}
+
+// Nonisolated helper function for encoding FeedbackStorage in background threads
+// FeedbackStorage is a value type and encoding works correctly in background threads.
+// We manually encode to avoid Swift 6's strict concurrency checking for Codable conformance.
+nonisolated func encodeFeedbackStorage(_ storage: FeedbackStorage) -> Data? {
+    // Manually encode using JSONSerialization to avoid Codable conformance isolation issues
+    // Convert to dictionary first, then serialize
+    var dict: [String: Any] = [:]
+    
+    // Encode feedback
+    var feedbackDict: [String: [String: Any]] = [:]
+    for (key, value) in storage.feedback {
+        feedbackDict[key] = [
+            "emailId": value.emailId,
+            "wasCorrect": value.wasCorrect,
+            "rating": value.rating,
+            "timestamp": value.timestamp.timeIntervalSince1970,
+            "correction": value.correction as Any,
+            "comment": value.comment as Any
+        ]
+    }
+    dict["feedback"] = feedbackDict
+    
+    // Encode interactions
+    var interactionsDict: [String: [[String: Any]]] = [:]
+    for (key, interactions) in storage.interactions {
+        interactionsDict[key] = interactions.map { interaction in
+            var interactionDict: [String: Any] = [
+                "emailId": interaction.emailId,
+                "interactionType": interaction.interactionType.rawValue,
+                "timestamp": interaction.timestamp.timeIntervalSince1970
+            ]
+            if let details = interaction.details {
+                interactionDict["details"] = details
+            }
+            return interactionDict
+        }
+    }
+    dict["interactions"] = interactionsDict
+    
+    // Serialize to JSON data
+    return try? JSONSerialization.data(withJSONObject: dict)
+}
+
 /// Tracks feedback and interactions per email ID for persistent storage
 /// This allows the app to remember feedback even if emails are marked unread and re-scanned
 @MainActor
 class EmailFeedbackTracker {
     static let shared = EmailFeedbackTracker()
-    
-    /// Feedback data for a single email
-    struct EmailFeedback: Codable, Equatable {
-        let emailId: String
-        let wasCorrect: Bool
-        let rating: Int
-        let timestamp: Date
-        let correction: String?
-        let comment: String?
-        
-        init(emailId: String, wasCorrect: Bool, rating: Int, timestamp: Date = Date(), correction: String? = nil, comment: String? = nil) {
-            self.emailId = emailId
-            self.wasCorrect = wasCorrect
-            self.rating = rating
-            self.timestamp = timestamp
-            self.correction = correction
-            self.comment = comment
-        }
-    }
-    
-    /// Interaction types that can be tracked per email
-    enum InteractionType: String, Codable {
-        case feedbackThumbsUp = "feedback_thumbs_up"
-        case feedbackThumbsDown = "feedback_thumbs_down"
-        case reclassified = "reclassified"
-        case approved = "approved"
-        case grabbed = "grabbed"
-    }
-    
-    /// Interaction record for tracking user actions
-    struct EmailInteraction: Codable, Equatable {
-        let emailId: String
-        let interactionType: InteractionType
-        let timestamp: Date
-        let details: [String: String]? // Additional context (e.g., "fromType": "newDocket", "toType": "junk")
-        
-        init(emailId: String, interactionType: InteractionType, timestamp: Date = Date(), details: [String: String]? = nil) {
-            self.emailId = emailId
-            self.interactionType = interactionType
-            self.timestamp = timestamp
-            self.details = details
-        }
-    }
-    
-    /// Storage structure
-    private struct FeedbackStorage: Codable {
-        var feedback: [String: EmailFeedback] = [:] // Keyed by emailId
-        var interactions: [String: [EmailInteraction]] = [:] // Keyed by emailId, array of interactions
-    }
     
     private var storage = FeedbackStorage()
     private let storageURL: URL
@@ -143,6 +190,10 @@ class EmailFeedbackTracker {
     // MARK: - Storage Management
     
     private func loadStorage() {
+        // Load storage synchronously during init (before UI is shown)
+        // This is acceptable since it only happens once at startup
+        // For better performance, we could make init async, but that requires
+        // changing the singleton pattern
         guard FileManager.default.fileExists(atPath: storageURL.path),
               let data = try? Data(contentsOf: storageURL),
               let loaded = try? JSONDecoder().decode(FeedbackStorage.self, from: data) else {
@@ -154,15 +205,24 @@ class EmailFeedbackTracker {
     }
     
     private func saveStorage() {
-        guard let data = try? JSONEncoder().encode(storage) else {
-            print("EmailFeedbackTracker: Failed to encode feedback storage")
-            return
-        }
+        // Capture storage data before moving to background thread
+        // This ensures we're working with a snapshot and don't need main actor access
+        let storageToSave = storage
+        let urlToSave = storageURL
         
-        do {
-            try data.write(to: storageURL)
-        } catch {
-            print("EmailFeedbackTracker: Failed to save feedback storage: \(error.localizedDescription)")
+        // Move file I/O off main actor to prevent blocking UI
+        Task.detached(priority: .utility) {
+            // Use the nonisolated helper function to ensure encoding happens in background thread
+            guard let data = encodeFeedbackStorage(storageToSave) else {
+                print("EmailFeedbackTracker: Failed to encode feedback storage")
+                return
+            }
+            
+            do {
+                try data.write(to: urlToSave)
+            } catch {
+                print("EmailFeedbackTracker: Failed to save feedback storage: \(error.localizedDescription)")
+            }
         }
     }
     

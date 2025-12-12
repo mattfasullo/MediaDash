@@ -1,6 +1,7 @@
 import Foundation
 import CodeMind
 import Combine
+import AppKit
 
 /// Service that uses CodeMind to classify and understand email content
 /// for identifying new docket emails and file delivery emails
@@ -198,6 +199,159 @@ class CodeMindEmailClassifier: ObservableObject {
         }
     }
     
+    /// Extract email signature from email body
+    /// Signatures typically appear after separators like "--", "---", "__", or at the end
+    /// - Parameter body: The email body text (may contain HTML)
+    /// - Returns: The signature text, or empty string if not found
+    private func extractEmailSignature(from body: String?) -> String {
+        guard let body = body else { return "" }
+        
+        // First, try to strip HTML tags for better text extraction
+        var plainBody = body
+        // Simple HTML tag removal (basic but effective for most cases)
+        if let data = body.data(using: .utf8),
+           let attributedString = try? NSAttributedString(
+               data: data,
+               options: [.documentType: NSAttributedString.DocumentType.html, .characterEncoding: String.Encoding.utf8.rawValue],
+               documentAttributes: nil
+           ) {
+            plainBody = attributedString.string
+        }
+        
+        // Common signature separators (check both with and without newlines)
+        // Signatures are typically preceded by "-- " or similar on a line by itself
+        let separators = [
+            "\n-- \n", "\n--\n",           // Standard signature separator
+            "\n--- \n", "\n---\n",         // Alternative separator
+            "\n__ \n", "\n__\n",           // Another variant
+            "\r\n-- \r\n", "\r\n--\r\n",  // Windows line endings
+            "-- \n", "--\n",               // At start of line (less common but possible)
+            "\n\n-- ", "\n\n--",           // After double newline
+        ]
+        
+        // Try to find signature after separator
+        for separator in separators {
+            if let range = plainBody.range(of: separator, options: .caseInsensitive) {
+                let signatureStart = range.upperBound
+                let signature = String(plainBody[signatureStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                // Only return if we found something meaningful (more than 10 chars)
+                if signature.count > 10 {
+                    return signature
+                }
+            }
+        }
+        
+        // If no separator found, be very conservative - don't assume random parts are signatures
+        // Only look at the very last block if it has clear signature characteristics
+        let blocks = plainBody.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        
+        // Only check the very last block if it exists and is reasonably sized (signatures are usually compact)
+        if let lastBlock = blocks.last, lastBlock.count < 300 {
+            let lowerBlock = lastBlock.lowercased()
+            // Signature must have clear indicators: email domain or phone AND company/name info
+            let hasGraysonEmail = lastBlock.range(of: #"[\w\.-]+@grayson[\w\.-]*"#, options: [.regularExpression, .caseInsensitive]) != nil
+            let hasPhone = (lowerBlock.contains("phone") || lowerBlock.contains("mobile") || lowerBlock.contains("cell")) && 
+                          lastBlock.range(of: #"[\d\s\-\(\)]{10,}"#, options: .regularExpression) != nil
+            let hasGraysonCompany = lowerBlock.contains("grayson music") || lowerBlock.contains("graysonmusicgroup")
+            
+            // Only treat as signature if it has email domain OR (phone AND company name)
+            // This prevents treating email body content as signatures
+            if hasGraysonEmail || (hasPhone && hasGraysonCompany) {
+                return lastBlock
+            }
+        }
+        
+        // No signature found - return empty string rather than guessing
+        return ""
+    }
+    
+    /// Check if the sender is a Grayson employee and has "Producer" in their email signature
+    /// - Parameters:
+    ///   - from: Sender email address
+    ///   - body: Email body text
+    /// - Returns: True if sender is a Grayson employee with Producer in signature
+    private func isValidGraysonProducerEmail(from: String?, body: String?) -> Bool {
+        // Check if sender is a Grayson employee (domain check)
+        guard let fromEmail = from?.lowercased() else { 
+            CodeMindLogger.shared.log(.debug, "Signature check failed: no sender email", category: .classification)
+            return false 
+        }
+        let isGraysonEmployee = fromEmail.contains("@graysonmusicgroup.com") || 
+                               fromEmail.contains("@grayson")
+        
+        // Extract signature from body
+        let signature = extractEmailSignature(from: body)
+        
+        // Log what we found for debugging
+        if signature.isEmpty {
+            CodeMindLogger.shared.log(.debug, "Signature check: No signature found in email body", category: .classification, metadata: [
+                "from": fromEmail,
+                "isGraysonEmployee": "\(isGraysonEmployee)"
+            ])
+        } else {
+            CodeMindLogger.shared.log(.debug, "Signature check: Found signature (length: \(signature.count))", category: .classification, metadata: [
+                "from": fromEmail,
+                "isGraysonEmployee": "\(isGraysonEmployee)",
+                "signaturePreview": String(signature.prefix(200))
+            ])
+        }
+        
+        let signatureLower = signature.lowercased()
+        
+        // Check for "Producer" or variations in signature ONLY
+        // Use explicit positive matching - only match actual Producer titles
+        // Match specific phrases that unambiguously indicate a Producer role
+        
+        // Valid Producer titles/phrases (explicit matches only)
+        let producerPhrases = [
+            "music producer",
+            "executive producer", 
+            "associate producer",
+            "co-producer",
+            "co producer"
+        ]
+        
+        // Check for full producer phrases first (these are unambiguous)
+        let hasProducerPhrase = producerPhrases.contains { phrase in
+            signatureLower.contains(phrase)
+        }
+        
+        // Check for standalone "Producer" title - must be:
+        // 1. At start of line/string: "Producer" (title at beginning)
+        // 2. Preceded by valid prefix words: "Music Producer", "Executive Producer", etc.
+        // We explicitly don't match if preceded by "Creative" or other non-Producer modifiers
+        
+        // First check if "Producer" appears at the start (like a job title line)
+        let producerAtStart = signatureLower.hasPrefix("producer") || 
+                             signatureLower.range(of: #"^\s*producer\s"#, options: [.regularExpression]) != nil ||
+                             signatureLower.range(of: #"\n\s*producer\s"#, options: [.regularExpression]) != nil
+        
+        // Then check for "Producer" with approved prefixes (Music, Executive, Associate, Co)
+        let producerWithValidPrefix = signatureLower.range(of: #"(music|executive|associate|co[- ])producer"#, options: [.regularExpression]) != nil
+        
+        let hasStandaloneProducer = producerAtStart || producerWithValidPrefix
+        
+        let signatureHasProducer = hasProducerPhrase || hasStandaloneProducer
+        
+        // REQUIRED: Must be a Grayson employee (domain check is mandatory)
+        // AND must have Producer in signature
+        let isValid = isGraysonEmployee && signatureHasProducer
+        
+        if !isValid {
+            CodeMindLogger.shared.log(.info, "Signature check failed", category: .classification, metadata: [
+                "from": fromEmail,
+                "isGraysonEmployee": "\(isGraysonEmployee)",
+                "signatureHasProducer": "\(signatureHasProducer)",
+                "signatureFound": "\(!signature.isEmpty)",
+                "reason": !isGraysonEmployee ? "Not a Grayson employee (domain check failed)" : "No Producer title in signature"
+            ])
+        }
+        
+        return isValid
+    }
+    
     /// Process a prompt with automatic retry for rate limit errors
     /// - Parameters:
     ///   - prompt: The prompt to send
@@ -316,6 +470,27 @@ class CodeMindEmailClassifier: ObservableObject {
         let forceNewDocket = rulesResult.shouldClassifyAs == "newDocket"
         let confidenceModifier = rulesResult.confidenceModifier
         
+        // CRITICAL: Only process new docket emails from Grayson employees who are Producers
+        // Check if sender is a Grayson employee with "Producer" in their email signature
+        if !isValidGraysonProducerEmail(from: from, body: body) {
+            CodeMindLogger.shared.log(.info, "Email filtered out - sender is not a Grayson Producer", category: .classification, metadata: [
+                "subject": subject ?? "nil",
+                "from": from ?? "unknown",
+                "action": "Email will not be processed as new docket"
+            ])
+            print("ℹ️ CodeMindEmailClassifier: Email filtered - sender is not a Grayson Producer - Subject: \(subject ?? "nil"), From: \(from ?? "unknown")")
+            let emptyResponse = CodeMindResponse(content: "{}", toolResults: [])
+            let filteredClassification = DocketEmailClassification(
+                isNewDocket: false,
+                confidence: 0.0,
+                docketNumber: nil,
+                jobName: nil,
+                reasoning: "Email is not from a Grayson employee with 'Producer' in their email signature - only Producers send new docket emails",
+                extractedMetadata: nil
+            )
+            return (filteredClassification, emptyResponse)
+        }
+        
         guard codeMind != nil else {
             print("❌ CodeMind not initialized")
             CodeMindLogger.shared.log(.error, "❌ CodeMind not initialized", category: .classification)
@@ -356,6 +531,13 @@ class CodeMindEmailClassifier: ObservableObject {
             "fromEmail": from ?? "nil",
             "hasThreadId": threadId != nil
         ])
+        
+        // Get valid year prefixes dynamically based on current date
+        let validYearPrefixes = getValidYearPrefixes()
+        let validYearPrefixesString = validYearPrefixes.map { String(format: "%02d", $0) }.joined(separator: "\", \"")
+        let validYearPrefixesList = validYearPrefixes.map { String(format: "%02d", $0) }.joined(separator: ", ")
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let currentYearLastTwo = currentYear % 100
         
         let prompt = """
         You must respond with ONLY valid JSON. Do not include any text, explanation, or content before or after the JSON object.
@@ -404,13 +586,21 @@ class CodeMindEmailClassifier: ObservableObject {
            - Outgoing = isNewDocket: false (docket already exists if you're sending work)
         2. Determine if this email is announcing a new docket/job (not a reply, not a file delivery, not a status update, NOT an outgoing delivery)
         3. CRITICAL REQUIREMENT: A valid docket number is MANDATORY for new docket emails
-           - If you cannot find a valid docket number (exactly 5 digits, optionally with "-US" suffix), you MUST set isNewDocket: false
+           - If you cannot find a valid docket number, you MUST set isNewDocket: false
            - DO NOT classify as new docket if docket number is missing, unclear, or invalid
-           - Docket numbers MUST be exactly 5 digits (e.g., "25493", "12345")
-           - Numbers with fewer or more than 5 digits are NOT valid docket numbers
-           - If multiple docket numbers are mentioned, include ALL of them separated by comma (e.g., "25493, 25495")
-        4. If it IS a new docket email (AND has a valid docket number), extract:
-           - Docket number: MUST be exactly 5 digits (e.g., "25493"), optionally with "-US" suffix (e.g., "25493-US")
+           - Docket numbers MUST be exactly 5 digits AND start with one of these valid year prefixes: "\(validYearPrefixesString)"
+           - Current year is \(currentYear) (prefix: \(String(format: "%02d", currentYearLastTwo))), so valid prefixes include: \(validYearPrefixesList)
+           - Valid docket numbers can be from:
+             * Current year (\(String(format: "%02d", currentYearLastTwo))xxx) - most common for new dockets
+             * Next year (\(String(format: "%02d", (currentYearLastTwo + 1) % 100))xxx) - for planning ahead
+             * Previous years (for revivals, e.g., "we're reviving a docket from 2021" would be 21xxx)
+             * Future years (for long-term planning, up to 2-3 years ahead)
+           - Examples of VALID docket numbers (based on current date): \(validYearPrefixes.prefix(3).map { "\(String(format: "%02d", $0))493" }.joined(separator: ", "))
+           - Examples of INVALID docket numbers: "12345", "87654", "1234", "123456" (these don't match valid year prefixes)
+           - Numbers starting with anything other than the valid year prefixes listed above are NOT valid docket numbers
+           - If multiple valid docket numbers are mentioned, include ALL of them separated by comma (e.g., "25493, 25495")
+        4. If it IS a new docket email (AND has a valid docket number with one of the valid year prefixes), extract:
+           - Docket number: MUST start with one of the valid year prefixes (\(validYearPrefixesList)) and be exactly 5 digits, optionally with "-US" suffix (e.g., "25493-US")
              If no valid docket number found, set isNewDocket: false
            - Job name/Client name (the project or client name)
            - Any other relevant metadata
@@ -418,7 +608,7 @@ class CodeMindEmailClassifier: ObservableObject {
         {
           "isNewDocket": true/false,
           "confidence": 0.0-1.0,
-          "docketNumber": "12345" or null,
+          "docketNumber": "25493" or null,
           "jobName": "Client Name" or null,
           "reasoning": "Brief explanation - MUST mention: 1) Email direction (incoming/outgoing/internal), 2) Why this is/isn't a new docket based on direction, 3) If docket number was found or not",
           "extractedMetadata": {
@@ -427,8 +617,8 @@ class CodeMindEmailClassifier: ObservableObject {
             "projectManager": "PM name if mentioned"
           }
         }
-        
-        REMEMBER: If no valid docket number is found, isNewDocket MUST be false. Docket numbers are REQUIRED.
+
+        REMEMBER: If no valid docket number starting with one of the valid year prefixes (\(validYearPrefixesList)) is found, isNewDocket MUST be false. Docket numbers MUST start with one of these valid prefixes.
         
         CRITICAL: Respond with ONLY the JSON object above. No markdown, no code blocks, no explanations, no additional text. Start with { and end with }.
         """
@@ -2600,6 +2790,48 @@ class CodeMindEmailClassifier: ObservableObject {
     }
     
     /// Check if email domain matches company domain
+    /// Get valid year prefixes for docket numbers based on current date
+    /// - Returns: Array of valid two-digit year prefixes (e.g., [21, 22, 23, 24, 25, 26, 27])
+    private func getValidYearPrefixes() -> [Int] {
+        let calendar = Calendar.current
+        let currentYear = calendar.component(.year, from: Date())
+        let currentYearLastTwo = currentYear % 100
+        
+        var validYears: [Int] = []
+        
+        // Current year: always valid
+        validYears.append(currentYearLastTwo)
+        
+        // Next year: valid for planning ahead
+        validYears.append((currentYearLastTwo + 1) % 100)
+        
+        // Future years: allow 1-2 years ahead for planning (but not too far)
+        for i in 2...3 {
+            let futureYear = (currentYearLastTwo + i) % 100
+            // Only include if it's reasonable (not wrapping around too far)
+            if futureYear > currentYearLastTwo || futureYear < 10 {
+                validYears.append(futureYear)
+            }
+        }
+        
+        // Previous years: allow last 10-15 years for revivals
+        // This handles cases like "we're reviving a docket from 2021"
+        // If we're in 2025 (25), we want: 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10
+        // We want to avoid wrapping to 99, 98, etc. (which would be 1999, 1998 - too old)
+        for i in 1...15 {
+            let pastYear = (currentYearLastTwo - i + 100) % 100
+            // Only include if it's within reasonable range
+            // If pastYear <= currentYearLastTwo, it's definitely a valid past year (e.g., 24 <= 25)
+            // If pastYear > currentYearLastTwo, it wrapped around to 1900s (e.g., 99 > 25 means 1999), so skip it
+            if pastYear <= currentYearLastTwo {
+                validYears.append(pastYear)
+            }
+        }
+        
+        // Remove duplicates and sort
+        return Array(Set(validYears)).sorted()
+    }
+    
     private func isCompanyEmailDomain(_ domain: String) -> Bool {
         let companyDomains = ["graysonmusicgroup.com", "graysonmusic.com"]
         return companyDomains.contains(domain.lowercased())

@@ -23,11 +23,16 @@ class AsanaCacheManager: ObservableObject {
     private var serverBasePath: String?
     private var serverConnectionURL: String?
     
-    // Periodic status check timer (nonisolated for deinit access)
+    // Periodic status check timer
+    // Note: Using nonisolated(unsafe) to allow cleanup from deinit.
+    // This is safe because timers are only invalidated (not created) from nonisolated context.
     nonisolated(unsafe) private var statusCheckTimer: Timer?
-    
-    // Periodic sync timer for automatic change detection (nonisolated for deinit access)
+
+    // Periodic sync timer for automatic change detection
     nonisolated(unsafe) private var syncTimer: Timer?
+
+    // Flag to prevent operations after shutdown
+    private var isShuttingDown = false
     
     // Store sync settings for periodic background sync
     private var syncWorkspaceID: String?
@@ -163,14 +168,16 @@ class AsanaCacheManager: ObservableObject {
     private func startPeriodicStatusCheck() {
         // Stop existing timer if any
         statusCheckTimer?.invalidate()
-        
-        // Create new timer that checks status every 5 seconds
-        statusCheckTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+
+        // Create new timer that checks status every 30 seconds (reduced from 5 seconds)
+        // Cache status doesn't change frequently enough to justify checking every 5 seconds,
+        // and the frequent file I/O was causing UI sluggishness
+        statusCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.updateCacheStatus()
             }
         }
-        
+
         // Add timer to run loop so it works even when app is active
         if let timer = statusCheckTimer {
             RunLoop.main.add(timer, forMode: .common)
@@ -189,12 +196,22 @@ class AsanaCacheManager: ObservableObject {
     
     nonisolated deinit {
         // Invalidate timers from deinit (runs in nonisolated context)
-        if let timer = statusCheckTimer {
-            timer.invalidate()
-        }
-        if let timer = syncTimer {
-            timer.invalidate()
-        }
+        // Note: We can only invalidate here, not set to nil, but that's sufficient
+        // because invalidation prevents the timer from firing again
+        statusCheckTimer?.invalidate()
+        syncTimer?.invalidate()
+    }
+
+    /// Call this to cleanly shut down the cache manager before releasing it
+    func shutdown() {
+        isShuttingDown = true
+
+        // Stop all timers
+        statusCheckTimer?.invalidate()
+        statusCheckTimer = nil
+
+        syncTimer?.invalidate()
+        syncTimer = nil
     }
     
     /// Start periodic background sync to detect changes automatically
@@ -205,7 +222,11 @@ class AsanaCacheManager: ObservableObject {
         // Create new timer that performs incremental sync every 5 minutes (300 seconds)
         syncTimer = Timer.scheduledTimer(withTimeInterval: 300.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                await self?.performBackgroundSync()
+                guard let self = self else {
+                    print("⚠️ [Background Sync] Cache manager deallocated - periodic sync stopped")
+                    return
+                }
+                await self.performBackgroundSync()
             }
         }
         
@@ -593,8 +614,9 @@ class AsanaCacheManager: ObservableObject {
                !cached.dockets.isEmpty {
                 print("🌱 [Cache] Shared cache doesn't exist, seeding from local cache...")
                 do {
-                    try await saveToSharedCache(dockets: cached.dockets, url: sharedCacheURL)
-                    print("🟢 [Cache] Seeded shared cache with \(cached.dockets.count) dockets from local cache")
+                    // Preserve the local cache's timestamp when seeding
+                    try await saveToSharedCache(dockets: cached.dockets, url: sharedCacheURL, lastSync: cached.lastSync)
+                    print("🟢 [Cache] Seeded shared cache with \(cached.dockets.count) dockets from local cache (preserved timestamp: \(cached.lastSync))")
                 } catch {
                     print("⚠️ [Cache] Failed to seed shared cache: \(error.localizedDescription)")
                 }
@@ -889,41 +911,26 @@ class AsanaCacheManager: ObservableObject {
         lastSyncDate = cached.lastSync
     }
     
-    /// Check if cache should be synced (stale or missing) - checks shared cache first
+    /// Check if cache should be synced (stale or missing)
+    /// Note: This now only checks local cache timestamp - shared cache is no longer used as a sync-skip signal
+    /// because that was preventing new dockets from being fetched
     func shouldSync(maxAgeMinutes: Int = 60) -> Bool {
-        // Check shared cache first if enabled
-        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
-            let fileURL = getFileURL(from: sharedURL)
-            if let data = try? Data(contentsOf: fileURL),
-               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
-                let lastSync = cached.lastSync
-                let age = Date().timeIntervalSince(lastSync)
-                let shouldSync = age > Double(maxAgeMinutes * 60)
-                
-                if shouldSync {
-                    print("🔵 [Cache] Shared cache is stale (\(Int(age / 60)) minutes old), should sync")
-                } else {
-                    print("🟢 [Cache] Shared cache is fresh (\(Int(age / 60)) minutes old), no sync needed")
-                }
-                return shouldSync
-            }
-        }
-        
-        // Fallback to local cache check
+        // Only check local cache - the shared cache timestamp was causing sync skips
+        // that prevented new dockets from ever being fetched
         guard let lastSync = lastSyncDate else {
             print("🔵 [Cache] No cache exists, should sync")
             return true
         }
-        
+
         let age = Date().timeIntervalSince(lastSync)
         let shouldSync = age > Double(maxAgeMinutes * 60)
-        
+
         if shouldSync {
             print("🔵 [Cache] Cache is stale (\(Int(age / 60)) minutes old), should sync")
         } else {
             print("🟢 [Cache] Cache is fresh (\(Int(age / 60)) minutes old), no sync needed")
         }
-        
+
         return shouldSync
     }
     
@@ -944,29 +951,10 @@ class AsanaCacheManager: ObservableObject {
             syncPhase = ""
         }
         
-        // Try shared cache first if enabled
-        if useSharedCache, let cacheURL = sharedCacheURL, !cacheURL.isEmpty {
-            print("🔵 [Cache] Attempting to fetch from shared cache: \(cacheURL)")
-            
-            do {
-                let dockets = try await fetchFromSharedCache(url: cacheURL)
-                print("🟢 [Cache] Successfully fetched \(dockets.count) dockets from shared cache")
-                
-                // Update local cache from shared cache
-                saveCachedDockets(dockets)
-                
-                // Update cache status after sync
-                updateCacheStatus()
-                
-                print("🟢 [Cache] Shared cache sync complete!")
-                return
-            } catch {
-                print("⚠️ [Cache] Failed to fetch from shared cache: \(error.localizedDescription)")
-                print("🔄 [Cache] Falling back to local Asana sync...")
-                // Fall through to local sync
-            }
-        }
-        
+        // Always sync from Asana API to get fresh data
+        // The shared cache is used as a fallback when Asana is unavailable, not as a replacement for syncing
+        // Note: We removed the "fresh shared cache" shortcut that was preventing new dockets from being fetched
+
         // Local sync with Asana API
         print("🔵 [Cache] Starting local sync with Asana...")
         
@@ -980,25 +968,26 @@ class AsanaCacheManager: ObservableObject {
         // Load existing cache to get lastSync timestamp and existing dockets
         let existingDockets = loadCachedDockets()
         let existingCache: CachedDockets?
-        
+
         // Try to get the actual CachedDockets object to access lastSync
-        var lastSyncDate: Date? = nil
+        // Use a different name to avoid shadowing the class property `lastSyncDate`
+        var existingLastSync: Date? = nil
         if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
             do {
                 let fileURL = getFileURL(from: sharedURL)
                 let data = try Data(contentsOf: fileURL)
                 existingCache = try JSONDecoder().decode(CachedDockets.self, from: data)
-                lastSyncDate = existingCache?.lastSync
+                existingLastSync = existingCache?.lastSync
             } catch {
                 existingCache = nil
             }
         }
-        
-        if lastSyncDate == nil {
+
+        if existingLastSync == nil {
             // Try local cache
             if let data = try? Data(contentsOf: cacheURL),
                let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
-                lastSyncDate = cached.lastSync
+                existingLastSync = cached.lastSync
             }
         }
         
@@ -1008,7 +997,7 @@ class AsanaCacheManager: ObservableObject {
         // 2. Cache is older than 7 days (to catch any missed dockets)
         // 3. Cache is empty
         let shouldDoFullSync: Bool
-        if let lastSync = lastSyncDate, !existingDockets.isEmpty {
+        if let lastSync = existingLastSync, !existingDockets.isEmpty {
             let daysSinceSync = Date().timeIntervalSince(lastSync) / (24 * 60 * 60)
             shouldDoFullSync = daysSinceSync > 7 // Force full sync if cache is older than 7 days
             if shouldDoFullSync {
@@ -1018,12 +1007,12 @@ class AsanaCacheManager: ObservableObject {
             shouldDoFullSync = true
             print("🔄 [Cache] Performing FULL sync (no existing cache or cache is empty)")
         }
-        
+
         let isIncremental = !shouldDoFullSync
-        let modifiedSince = isIncremental ? lastSyncDate : nil
-        
+        let modifiedSince = isIncremental ? existingLastSync : nil
+
         if isIncremental {
-            print("🔄 [Cache] Performing INCREMENTAL sync (modified since \(lastSyncDate!))")
+            print("🔄 [Cache] Performing INCREMENTAL sync (modified since \(existingLastSync!))")
         }
         
         // Fetch dockets from Asana (incremental if we have a lastSync date)
@@ -1072,30 +1061,35 @@ class AsanaCacheManager: ObservableObject {
         }
         
         // Save to SHARED cache FIRST (primary)
+        // We just fetched fresh data from Asana, so ALWAYS save it
+        // The previous logic that compared timestamps was buggy and caused the cache to get stuck
+        let syncTimestamp = Date()
         if let sharedCacheURL = sharedCacheURL, !sharedCacheURL.isEmpty {
             do {
-                try await saveToSharedCache(dockets: mergedDockets, url: sharedCacheURL)
-                print("🟢 [Cache] Saved \(mergedDockets.count) dockets to SHARED cache")
+                try await saveToSharedCache(dockets: mergedDockets, url: sharedCacheURL, lastSync: syncTimestamp)
+                print("🟢 [Cache] Saved \(mergedDockets.count) dockets to SHARED cache (timestamp: \(syncTimestamp))")
             } catch {
                 print("⚠️ [Cache] Failed to save to shared cache: \(error.localizedDescription)")
                 // Continue anyway - still save to local
             }
         }
         
-        // Then save to local cache (fallback)
-        saveCachedDockets(mergedDockets)
-        
+        // Then save to local cache (fallback) with the SAME timestamp as shared cache
+        // This ensures both caches stay in sync and prevents timestamp comparison issues
+        saveCachedDocketsWithTimestamp(mergedDockets, lastSync: syncTimestamp)
+
         // Update cache status after sync
         updateCacheStatus()
-        
-        print("🟢 [Cache] Sync complete!")
+
+        print("🟢 [Cache] Sync complete! (timestamp: \(syncTimestamp))")
     }
     
     /// Save dockets to shared cache file (public for manual seeding)
-    nonisolated func saveToSharedCache(dockets: [DocketInfo], url: String) async throws {
+    nonisolated func saveToSharedCache(dockets: [DocketInfo], url: String, lastSync: Date? = nil) async throws {
         // Create CachedDockets and encode it in a nonisolated context
         // Use a nonisolated helper function to ensure encoding happens off the main actor
-        let data = try await encodeCachedDockets(dockets: dockets)
+        let syncTimestamp = lastSync ?? Date()
+        let data = try await encodeCachedDockets(dockets: dockets, lastSync: syncTimestamp)
         
         // Get the file URL (this handles directory vs file path)
         let fileURL = getFileURL(from: url)
@@ -1144,9 +1138,9 @@ class AsanaCacheManager: ObservableObject {
     }
     
     /// Encode CachedDockets in a nonisolated context
-    nonisolated private func encodeCachedDockets(dockets: [DocketInfo]) async throws -> Data {
+    nonisolated private func encodeCachedDockets(dockets: [DocketInfo], lastSync: Date = Date()) async throws -> Data {
         return try await Task.detached(priority: .utility) {
-            let cached = CachedDockets(dockets: dockets, lastSync: Date())
+            let cached = CachedDockets(dockets: dockets, lastSync: lastSync)
             let encoder = JSONEncoder()
             return try encoder.encode(cached)
         }.value
@@ -1235,12 +1229,15 @@ class AsanaCacheManager: ObservableObject {
         let sorted = results.sorted { d1, d2 in
             switch sortOrder {
             case .recentlyUpdated:
-                // Most recently updated first (nil dates go to end)
-                if let date1 = d1.updatedAt, let date2 = d2.updatedAt {
+                // Most recently added first (use createdAt, fallback to updatedAt, nil dates go to end)
+                // Use createdAt (when docket was added to Asana) for sorting, not modified_at
+                let date1 = d1.createdAt ?? d1.updatedAt
+                let date2 = d2.createdAt ?? d2.updatedAt
+                if let date1 = date1, let date2 = date2 {
                     return date1 > date2
-                } else if d1.updatedAt != nil {
+                } else if date1 != nil {
                     return true
-                } else if d2.updatedAt != nil {
+                } else if date2 != nil {
                     return false
                 }
                 // If both nil, fall back to docket number descending

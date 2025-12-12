@@ -115,8 +115,12 @@ struct CodeMindBrainView: View {
                 // Run data fusion first to ensure all data is up to date
                 await CodeMindDataFusion.shared.runFusion()
                 await dataProvider.refreshNodes()
-                physics.initializeNodes(dataProvider.nodes)
-                physics.start()
+
+                // Only initialize physics if we have nodes
+                if !dataProvider.nodes.isEmpty {
+                    physics.initializeNodes(dataProvider.nodes)
+                    physics.start()
+                }
             }
         }
         .onDisappear {
@@ -1147,19 +1151,31 @@ class NodePhysicsEngine: ObservableObject {
         velocities[nodeId] = .zero
     }
     
+    private var isRunning = false
+
     func start() {
+        guard !isRunning else { return }
+        isRunning = true
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        // Reduced from 60fps to 30fps - physics doesn't need 60fps and was causing UI sluggishness
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor [weak self] in
-                self?.step()
+                guard let self = self, self.isRunning else { return }
+                self.step()
             }
         }
     }
-    
+
     func stop() {
+        isRunning = false
         timer?.invalidate()
         timer = nil
+    }
+
+    deinit {
+        // Ensure timer is cleaned up even if stop() wasn't called
+        timer?.invalidate()
     }
     
     private func step() {
@@ -1359,60 +1375,6 @@ class NodePhysicsEngine: ObservableObject {
             positions[id] = adjustedPos
             resolvedIds.insert(id)
         }
-    }
-}
-
-// MARK: - Legacy Node View (kept for compatibility)
-
-struct NodeView: View {
-    let node: BrainNode
-    let isSelected: Bool
-    let isHovered: Bool
-    
-    private var nodeSize: CGFloat {
-        switch node.category {
-        case .core: return 56
-        case .docket: return 44
-        case .rule: return 40
-        case .emailThread, .session: return 36
-        case .suggestion, .conflict: return 32
-        default: return 36
-        }
-    }
-    
-    var body: some View {
-        ZStack {
-            if node.isHighlighted || isSelected {
-                Circle()
-                    .fill(node.category.color.opacity(0.3))
-                    .frame(width: nodeSize + 12, height: nodeSize + 12)
-                    .blur(radius: 6)
-            }
-            
-            Circle()
-                .fill(node.category.color.opacity(isHovered ? 0.3 : 0.15))
-                .frame(width: nodeSize, height: nodeSize)
-                .overlay(
-                    Circle()
-                        .stroke(
-                            node.category.color,
-                            lineWidth: isSelected ? 3 : (isHovered ? 2 : 1.5)
-                        )
-                )
-            
-            Image(systemName: node.category.icon)
-                .font(.system(size: nodeSize * 0.35))
-                .foregroundColor(node.category.color)
-            
-            if node.hasIssue {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 10, height: 10)
-                    .offset(x: nodeSize * 0.35, y: -nodeSize * 0.35)
-            }
-        }
-        .animation(.easeInOut(duration: 0.15), value: isHovered)
-        .animation(.easeInOut(duration: 0.15), value: isSelected)
     }
 }
 

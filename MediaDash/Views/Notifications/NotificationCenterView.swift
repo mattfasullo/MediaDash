@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Information about where a docket already exists
 struct DocketExistenceInfo {
@@ -43,6 +44,7 @@ struct NotificationCenterView: View {
     enum NotificationTab {
         case newDockets
         case fileDeliveries
+        case requests
     }
     
     // Computed properties for filtered notifications (cached to avoid repeated filtering)
@@ -104,14 +106,19 @@ struct NotificationCenterView: View {
         }
     }
     
-    // Regular new docket notifications (excluding media files and low confidence)
+    // Regular new docket notifications (excluding media files, requests, and low confidence)
     private var regularNewDocketNotifications: [Notification] {
-        regularNotifications.filter { $0.type != .mediaFiles }
+        regularNotifications.filter { $0.type == .newDocket }
     }
     
     // Regular file delivery notifications
     private var regularFileDeliveryNotifications: [Notification] {
         regularNotifications.filter { $0.type == .mediaFiles }
+    }
+    
+    // Regular request notifications (including completed ones, which will be greyed out)
+    private var regularRequestNotifications: [Notification] {
+        allActiveNotifications.filter { $0.type == .request }
     }
     
     private var archivedNotifications: [Notification] {
@@ -392,11 +399,42 @@ struct NotificationCenterView: View {
                                             .opacity(0.7)
                                     }
                                 }
-                                .foregroundColor(selectedTab == .fileDeliveries ? .orange : .secondary)
+                                .foregroundColor(selectedTab == .fileDeliveries ? .green : .secondary)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
                                 .background(
                                     selectedTab == .fileDeliveries
+                                        ? Color.green.opacity(0.1)
+                                        : Color.clear
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Divider()
+                                .frame(height: 20)
+                            
+                            // Requests tab
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    selectedTab = .requests
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "hand.raised.fill")
+                                        .font(.system(size: 11))
+                                    Text("Requests")
+                                        .font(.system(size: 12, weight: .medium))
+                                    if !regularRequestNotifications.isEmpty {
+                                        Text("(\(regularRequestNotifications.count))")
+                                            .font(.system(size: 11))
+                                            .opacity(0.7)
+                                    }
+                                }
+                                .foregroundColor(selectedTab == .requests ? .orange : .secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(
+                                    selectedTab == .requests
                                         ? Color.orange.opacity(0.1)
                                         : Color.clear
                                 )
@@ -503,13 +541,42 @@ struct NotificationCenterView: View {
                                     
                                     Divider()
                                 }
+                            } else if selectedTab == .requests && !regularRequestNotifications.isEmpty {
+                                ForEach(regularRequestNotifications) { notification in
+                                    NotificationRowView(
+                                        notificationId: notification.id,
+                                        notificationCenter: notificationCenter,
+                                        emailScanningService: emailScanningService,
+                                        mediaManager: mediaManager,
+                                        settingsManager: settingsManager,
+                                        processingNotification: $processingNotification,
+                                        debugInfo: $debugInfo,
+                                        showDebugInfo: $showDebugInfo
+                                    )
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 8)
+                                    
+                                    Divider()
+                                }
                             } else if notificationsForReview.isEmpty {
                                 // Empty state for selected tab (only show if no review items)
                                 VStack(spacing: 12) {
-                                    Image(systemName: selectedTab == .newDockets ? "doc.text" : "link.circle")
+                                    Image(systemName: {
+                                        switch selectedTab {
+                                        case .newDockets: return "doc.text"
+                                        case .fileDeliveries: return "link.circle"
+                                        case .requests: return "hand.raised"
+                                        }
+                                    }())
                                         .font(.system(size: 40))
                                         .foregroundColor(.secondary)
-                                    Text("No \(selectedTab == .newDockets ? "new docket" : "file delivery") notifications")
+                                    Text({
+                                        switch selectedTab {
+                                        case .newDockets: return "No new docket notifications"
+                                        case .fileDeliveries: return "No file delivery notifications"
+                                        case .requests: return "No request notifications"
+                                        }
+                                    }())
                                         .font(.system(size: 14))
                                         .foregroundColor(.secondary)
                                 }
@@ -783,6 +850,12 @@ struct NotificationCenterView: View {
         .onAppear {
             // Clean up old archived notifications
             notificationCenter.cleanupOldArchivedNotifications()
+            // Clean up old completed requests (older than 24 hours)
+            notificationCenter.cleanupOldCompletedRequests()
+            // Sync completion status from shared cache
+            Task {
+                await notificationCenter.syncCompletionStatus()
+            }
             
             // Auto-select tab if current selection is empty
             if selectedTab == .newDockets && activeNotifications.isEmpty && !mediaFileNotifications.isEmpty {
@@ -838,8 +911,7 @@ struct NotificationCenterView: View {
         
         debugMessages.append("📋 Settings Check:")
         debugMessages.append("  Gmail Enabled: \(settings.gmailEnabled)")
-        debugMessages.append("  Gmail Search Terms: \(settings.gmailSearchTerms.isEmpty ? "(none - using default)" : settings.gmailSearchTerms.joined(separator: ", "))")
-        debugMessages.append("  Gmail Query: \(settings.gmailQuery.isEmpty ? "(none)" : settings.gmailQuery)")
+        debugMessages.append("  Scanning: All unread emails (no filtering)")
         debugMessages.append("  Custom Parsing Patterns: \(settings.docketParsingPatterns.isEmpty ? "(none - using default)" : "\(settings.docketParsingPatterns.count) pattern(s)")")
         if !settings.docketParsingPatterns.isEmpty {
             for (index, pattern) in settings.docketParsingPatterns.enumerated() {
@@ -867,31 +939,11 @@ struct NotificationCenterView: View {
             return
         }
         
-        // Build query (same logic as EmailScanningService)
-        let baseQuery: String
-        if !settings.gmailSearchTerms.isEmpty {
-            // Build OR query for each term
-            let queryParts = settings.gmailSearchTerms.flatMap { term in
-                [
-                    "label:\"\(term)\"",
-                    "subject:\"\(term)\"",
-                    "\"\(term)\""
-                ]
-            }
-            baseQuery = "(\(queryParts.joined(separator: " OR ")))"
-        } else if !settings.gmailQuery.isEmpty {
-            baseQuery = settings.gmailQuery
-        } else {
-            baseQuery = "\"new docket\" OR \"new docket -\" OR \"docket -\""
-        }
-        
-        let query = "(\(baseQuery) OR \"new docket\" OR \"new docket -\" OR \"docket -\" OR \"New docket\") is:unread"
+        // Always scan all unread emails - classifier determines relevance
+        let query = "is:unread"
         
         debugMessages.append("🔍 Query Configuration:")
-        debugMessages.append("  Search Terms: \(settings.gmailSearchTerms.isEmpty ? "(none)" : settings.gmailSearchTerms.joined(separator: ", "))")
-        debugMessages.append("  Custom Query: \(settings.gmailQuery.isEmpty ? "(none)" : settings.gmailQuery)")
-        debugMessages.append("  Base Query: \(baseQuery)")
-        debugMessages.append("  Full Query: \(query)")
+        debugMessages.append("  Query: \(query) (scanning all unread emails)")
         debugMessages.append("")
         
         // Try to fetch emails
@@ -1174,6 +1226,7 @@ struct NotificationRowView: View {
     @State private var hasSubmittedFeedback = false // Track locally to force UI refresh
     @State private var showCustomClassificationDialog = false
     @State private var customClassificationText = ""
+    @State private var showClassificationDetails = false
     
     // Get current notification from center (always up-to-date)
     private var notification: Notification? {
@@ -1218,6 +1271,8 @@ struct NotificationRowView: View {
                         // Hover state - darker for visibility
                         if notification.type == .mediaFiles {
                             Color.orange.opacity(0.15)
+                        } else if notification.type == .request && notification.status == .completed {
+                            Color.gray.opacity(0.1)
                         } else {
                             Color.blue.opacity(0.1)
                         }
@@ -1228,6 +1283,9 @@ struct NotificationRowView: View {
                         } else {
                             Color.blue.opacity(0.05)
                         }
+                    } else if notification.type == .request && notification.status == .completed {
+                        // Completed request - greyed out
+                        Color.gray.opacity(0.05)
                     } else {
                         Color.clear
                     }
@@ -1237,6 +1295,7 @@ struct NotificationRowView: View {
             }
         )
         .cornerRadius(8)
+        .opacity(notification.type == .request && notification.status == .completed ? 0.6 : 1.0)
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovered = hovering
@@ -1358,6 +1417,15 @@ struct NotificationRowView: View {
                 }
             )
         }
+        .onChange(of: showClassificationDetails) { _, isPresented in
+            if isPresented, let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                ClassificationDetailsWindowManager.shared.showWindow(notification: currentNotification) {
+                    showClassificationDetails = false
+                }
+            } else if !isPresented {
+                ClassificationDetailsWindowManager.shared.hideWindow()
+            }
+        }
     }
     
     /// Mark email as read if notification has an emailId
@@ -1459,6 +1527,8 @@ struct NotificationRowView: View {
     private func notificationActionsView(notification: Notification) -> some View {
         if notification.type == .newDocket && notification.status == .pending && notification.archivedAt == nil {
             newDocketActionsView(notification: notification)
+        } else if notification.type == .request {
+            requestActionsView(notification: notification)
         } else if notification.status == .dismissed && notification.archivedAt != nil {
             HStack(spacing: 4) {
                 Image(systemName: "archivebox.fill")
@@ -1478,6 +1548,40 @@ struct NotificationRowView: View {
                     .font(.system(size: 10))
                     .foregroundColor(.green)
             }
+        }
+    }
+    
+    /// Helper view for request notification actions
+    @ViewBuilder
+    private func requestActionsView(notification: Notification) -> some View {
+        if notification.status == .completed {
+            HStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.system(size: 12))
+                    Text("Completed")
+                        .font(.system(size: 10))
+                        .foregroundColor(.green)
+                }
+                
+                Button("Mark Incomplete") {
+                    Task {
+                        await notificationCenter.markRequestIncomplete(notification)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        } else {
+            Button("Mark Complete") {
+                Task {
+                    await notificationCenter.markRequestComplete(notification)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(processingNotification == notificationId)
         }
     }
     
@@ -1592,11 +1696,12 @@ struct NotificationRowView: View {
     private func notificationHeaderView(notification: Notification) -> some View {
         HStack {
             Image(systemName: iconForType(notification.type))
-                .foregroundColor(colorForType(notification.type))
+                .foregroundColor(notification.type == .request && notification.status == .completed ? .gray : colorForType(notification.type))
                 .font(.system(size: 14))
             
             Text(notification.title)
                 .font(.system(size: 13, weight: .medium))
+                .foregroundColor(notification.type == .request && notification.status == .completed ? .secondary : .primary)
             
             Spacer()
             
@@ -1675,6 +1780,8 @@ struct NotificationRowView: View {
             newDocketContentView(notification: notification)
         } else if notification.type == .mediaFiles {
             mediaFilesContentView(notification: notification)
+        } else if notification.type == .request {
+            requestContentView(notification: notification)
         } else {
             Text(notification.message)
                 .font(.system(size: 12))
@@ -1715,9 +1822,35 @@ struct NotificationRowView: View {
                 }
                 .padding(.top, 2)
             }
-            
-            if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
+
+            // Show feedback UI if CodeMind metadata exists (whether used or skipped)
+            // This allows users to provide feedback even when CodeMind was skipped
+            if let codeMindMeta = notification.codeMindClassification {
                 codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
+            }
+        }
+    }
+
+    /// Helper view for request notification content
+    @ViewBuilder
+    private func requestContentView(notification: Notification) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(notification.message)
+                .font(.system(size: 12))
+                .foregroundColor(notification.status == .completed ? .secondary.opacity(0.7) : .secondary)
+            
+            producerInfoView(notification: notification)
+            codeMindConfidenceView(notification: notification)
+            emailPreviewSection(notification: notification)
+            
+            // Show feedback UI if CodeMind was used OR if CodeMind is available but was skipped
+            if let codeMindMeta = notification.codeMindClassification {
+                if codeMindMeta.wasUsed {
+                    codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
+                } else {
+                    // CodeMind metadata exists but wasn't used (e.g., was skipped)
+                    codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
+                }
             }
         }
     }
@@ -1725,16 +1858,19 @@ struct NotificationRowView: View {
     /// Helper view for file links list
     @ViewBuilder
     private func fileLinksListView(notification: Notification, links: [String]) -> some View {
+        let descriptions = notification.fileLinkDescriptions ?? []
+
         VStack(alignment: .leading, spacing: 6) {
             Text("File Links:")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(.secondary)
-            
+
             ForEach(Array(links.enumerated()), id: \.offset) { index, link in
+                let description = index < descriptions.count ? descriptions[index] : nil
                 if URL(string: link) != nil {
-                    validLinkButton(notification: notification, link: link, allLinks: links)
+                    validLinkButton(notification: notification, link: link, description: description, allLinks: links)
                 } else {
-                    invalidLinkView(notification: notification, link: link)
+                    invalidLinkView(notification: notification, link: link, description: description)
                 }
             }
         }
@@ -1743,7 +1879,7 @@ struct NotificationRowView: View {
     
     /// Helper view for a valid link button
     @ViewBuilder
-    private func validLinkButton(notification: Notification, link: String, allLinks: [String]) -> some View {
+    private func validLinkButton(notification: Notification, link: String, description: String?, allLinks: [String]) -> some View {
         Button(action: {
             openLinkInBrowser(link)
             if let emailId = notification.emailId {
@@ -1752,6 +1888,19 @@ struct NotificationRowView: View {
             }
         }) {
             VStack(alignment: .leading, spacing: 4) {
+                // Show description if available
+                if let desc = description, !desc.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.text.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(.primary.opacity(0.7))
+                        Text(desc)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.primary)
+                            .lineLimit(2)
+                    }
+                }
+
                 HStack(spacing: 6) {
                     Image(systemName: "link.circle.fill")
                         .font(.system(size: 11))
@@ -1766,7 +1915,7 @@ struct NotificationRowView: View {
                         .font(.system(size: 9))
                         .foregroundColor(.blue.opacity(0.7))
                 }
-                
+
                 if allLinks.count > 1, let sourceEmail = notification.sourceEmail {
                     HStack(spacing: 4) {
                         Image(systemName: "person.fill")
@@ -1800,7 +1949,7 @@ struct NotificationRowView: View {
     
     /// Helper view for invalid link
     @ViewBuilder
-    private func invalidLinkView(notification: Notification, link: String) -> some View {
+    private func invalidLinkView(notification: Notification, link: String, description: String?) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -1811,12 +1960,25 @@ struct NotificationRowView: View {
                     .foregroundColor(.orange)
                 Spacer()
             }
-            
+
+            // Show description if available
+            if let desc = description, !desc.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.text.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(.primary.opacity(0.7))
+                    Text(desc)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                }
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 Text("Unable to parse link from email. The link may be malformed or incomplete.")
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
-                
+
                 Text("Extracted: \(link.prefix(100))")
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(.secondary.opacity(0.7))
@@ -2007,14 +2169,14 @@ struct NotificationRowView: View {
             .padding(.top, 2)
             .help(reasoning ?? "No reasoning provided")
             .onTapGesture {
-                // Show reasoning in a popover or alert when clicked
-                if let reasoning = reasoning {
-                    let alert = NSAlert()
-                    alert.messageText = "CodeMind Reasoning"
-                    alert.informativeText = reasoning
-                    alert.alertStyle = .informational
-                    alert.addButton(withTitle: "OK")
-                    alert.runModal()
+                showClassificationDetails = true
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
                 }
             }
         }
@@ -2129,7 +2291,7 @@ struct NotificationRowView: View {
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 10))
                 .foregroundColor(.purple)
-            Text("AI Classification")
+            Text("CodeMind Classification")
                 .font(.system(size: 9, weight: .medium))
                 .foregroundColor(.secondary)
             
@@ -2528,6 +2690,8 @@ struct NotificationRowView: View {
             return "folder.badge.plus"
         case .mediaFiles:
             return "link.circle.fill"
+        case .request:
+            return "hand.raised.fill"
         case .error:
             return "exclamationmark.triangle.fill"
         case .info:
@@ -2546,7 +2710,9 @@ struct NotificationRowView: View {
         case .newDocket:
             return .blue
         case .mediaFiles:
-            return .orange // Different color for file deliveries
+            return .green // Different color for file deliveries
+        case .request:
+            return .orange
         case .error:
             return .red
         case .info:
@@ -2711,6 +2877,12 @@ struct NotificationRowView: View {
         // CodeMind MindMap options
         if notification.codeMindClassification?.wasUsed == true {
             Button(action: {
+                showClassificationDetails = true
+            }) {
+                Label("View Classification Details", systemImage: "info.circle")
+            }
+            
+            Button(action: {
                 // Navigate to this classification in the brain view
                 CodeMindBrainNavigator.shared.navigateToClassification(subject: notification.emailSubject ?? notification.title)
             }) {
@@ -2722,7 +2894,7 @@ struct NotificationRowView: View {
                 CodeMindBrainNavigator.shared.createRuleForEmail(
                     subject: notification.emailSubject ?? notification.title,
                     from: notification.sourceEmail,
-                    classificationType: notification.type == .newDocket ? "newDocket" : "fileDelivery"
+                    classificationType: notification.type == .newDocket ? "newDocket" : (notification.type == .request ? "request" : "fileDelivery")
                 )
             }) {
                 Label("Create Classification Rule", systemImage: "plus.circle")
@@ -2781,6 +2953,20 @@ struct NotificationRowView: View {
                 Label("File Delivery", systemImage: "arrow.down.doc")
             }
             .disabled(notification.type == .mediaFiles)
+            
+            Button(action: {
+                Task {
+                    await notificationCenter.reclassify(
+                        notification,
+                        to: .request,
+                        autoArchive: false,
+                        emailScanningService: emailScanningService
+                    )
+                }
+            }) {
+                Label("Request", systemImage: "hand.raised")
+            }
+            .disabled(notification.type == .request)
             
             Divider()
             
@@ -3000,10 +3186,252 @@ struct CustomClassificationDialog: View {
             }
         }
         .padding(20)
-        .frame(width: 400)
+        .frame(width: 400, height: 200)
         .onAppear {
             isTextFieldFocused = true
         }
+    }
+}
+
+/// View showing detailed CodeMind classification information
+struct ClassificationDetailsView: View {
+    let notification: Notification
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // Header
+            HStack {
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 24))
+                    .foregroundColor(.blue)
+                Text("CodeMind Classification Details")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            
+            Divider()
+            
+            if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Classification Type
+                        InfoRow(label: "Classification Type", value: codeMindMeta.classificationType.capitalized)
+                        
+                        // Confidence
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Confidence")
+                                    .font(.headline)
+                                Spacer()
+                                Text("\(Int(codeMindMeta.confidence * 100))%")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundColor(confidenceColor(codeMindMeta.confidence))
+                            }
+                            ProgressView(value: codeMindMeta.confidence)
+                                .tint(confidenceColor(codeMindMeta.confidence))
+                        }
+                        .padding()
+                        .background(Color.secondary.opacity(0.1))
+                        .cornerRadius(8)
+                        
+                        // Reasoning
+                        if let reasoning = codeMindMeta.reasoning, !reasoning.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Reasoning")
+                                    .font(.headline)
+                                Text(reasoning)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                                    .textSelection(.enabled)
+                                    .padding()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.secondary.opacity(0.05))
+                                    .cornerRadius(8)
+                            }
+                        }
+                        
+                        // Extracted Data
+                        if let extractedData = codeMindMeta.extractedData, !extractedData.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Extracted Information")
+                                    .font(.headline)
+                                ForEach(Array(extractedData.keys.sorted()), id: \.self) { key in
+                                    InfoRow(
+                                        label: key.capitalized.replacingOccurrences(of: "_", with: " "),
+                                        value: extractedData[key] ?? "N/A"
+                                    )
+                                }
+                            }
+                            .padding()
+                            .background(Color.secondary.opacity(0.05))
+                            .cornerRadius(8)
+                        }
+                        
+                        // Email Information
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Email Information")
+                                .font(.headline)
+                            if let subject = notification.emailSubject {
+                                InfoRow(label: "Subject", value: subject)
+                            }
+                            if let from = notification.sourceEmail {
+                                InfoRow(label: "From", value: from)
+                            }
+                            if let emailId = notification.emailId {
+                                InfoRow(label: "Email ID", value: String(emailId.prefix(20)) + "...")
+                            }
+                        }
+                        .padding()
+                        .background(Color.secondary.opacity(0.05))
+                        .cornerRadius(8)
+                    }
+                }
+            } else {
+                VStack(spacing: 16) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No CodeMind Classification")
+                        .font(.headline)
+                    Text("This notification was not classified using CodeMind.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 40)
+            }
+            
+            Spacer()
+            
+            // Close button
+            HStack {
+                Spacer()
+                Button("Close") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 600, height: 500)
+    }
+    
+    private func confidenceColor(_ confidence: Double) -> Color {
+        if confidence >= 0.8 {
+            return .green
+        } else if confidence >= 0.6 {
+            return .orange
+        } else {
+            return .red
+        }
+    }
+}
+
+/// Helper view for displaying key-value pairs
+struct InfoRow: View {
+    let label: String
+    let value: String
+    
+    var body: some View {
+        HStack(alignment: .top) {
+            Text(label + ":")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 120, alignment: .leading)
+            Text(value)
+                .font(.system(size: 12))
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Window manager for classification details window
+@MainActor
+class ClassificationDetailsWindowManager {
+    static let shared = ClassificationDetailsWindowManager()
+    
+    private var window: NSWindow?
+    private var onClose: (() -> Void)?
+    
+    private init() {}
+    
+    func showWindow(notification: Notification, onClose: @escaping () -> Void) {
+        // Close existing window if open
+        hideWindow()
+        
+        self.onClose = onClose
+        
+        let contentView = ClassificationDetailsView(notification: notification)
+            .environment(\.dismiss, DismissAction(action: { [weak self] in
+                self?.hideWindow()
+            }))
+        
+        let hostingController = NSHostingController(rootView: contentView)
+        
+        window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        
+        guard let window = window else { return }
+        
+        window.contentViewController = hostingController
+        window.title = "CodeMind Classification Details"
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.level = .floating // Ensure it appears above other windows
+        window.isReleasedWhenClosed = false
+        
+        // Handle window close
+        let weakSelf = self
+        Foundation.NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: OperationQueue.main
+        ) { (_: Foundation.Notification) in
+            Task { @MainActor [weak weakSelf] in
+                weakSelf?.hideWindow()
+            }
+        }
+    }
+    
+    func hideWindow() {
+        window?.close()
+        window = nil
+        onClose?()
+        onClose = nil
+    }
+}
+
+/// Custom DismissAction for window-based dismissal
+struct DismissAction {
+    let action: () -> Void
+    
+    func callAsFunction() {
+        action()
+    }
+}
+
+extension EnvironmentValues {
+    var dismiss: DismissAction {
+        get { self[DismissKey.self] }
+        set { self[DismissKey.self] = newValue }
+    }
+    
+    private struct DismissKey: EnvironmentKey {
+        static let defaultValue = DismissAction(action: {})
     }
 }
 
