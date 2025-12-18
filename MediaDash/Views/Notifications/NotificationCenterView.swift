@@ -21,6 +21,11 @@ struct DocketExistenceInfo {
 
 /// Expandable notification center view
 struct NotificationCenterView: View {
+    // Feature flags - set to false to disable features
+    // TODO: Re-enable these features in the future by setting to true
+    private static let enableFileDeliveryFeature = false
+    private static let enableRequestFeature = false
+    
     @ObservedObject var notificationCenter: NotificationCenter
     @ObservedObject var emailScanningService: EmailScanningService
     @ObservedObject var mediaManager: MediaManager
@@ -35,7 +40,7 @@ struct NotificationCenterView: View {
     @State private var showDebugInfo = false
     @State private var isArchivedExpanded = false
     @State private var isFileDeliveriesExpanded = true // Default to expanded (keeping for archived section)
-    @State private var selectedTab: NotificationTab = .newDockets // Tab selection
+    @State private var selectedTab: NotificationTab = .newDockets // Tab selection - will be reset if disabled tab is selected
     @State private var isForReviewExpanded = true // Default to expanded for visibility
     @State private var cacheInfo: String?
     @State private var showCacheInfo = false
@@ -80,30 +85,14 @@ struct NotificationCenterView: View {
         allActiveNotifications.filter { $0.type != .mediaFiles }
     }
     
-    // Notifications that need review (low confidence)
-    private var notificationsForReview: [Notification] {
-        let threshold = settingsManager.currentSettings.codeMindReviewThreshold
-        return allActiveNotifications.filter { notification in
-            guard let codeMindMeta = notification.codeMindClassification,
-                  codeMindMeta.wasUsed else {
-                return false // Only show CodeMind-classified notifications
-            }
-            return codeMindMeta.confidence < threshold
-        }
+    // All active notifications (no longer separated by confidence)
+    private var regularNotifications: [Notification] {
+        return allActiveNotifications
     }
     
-    // Regular notifications (above confidence threshold)
-    private var regularNotifications: [Notification] {
-        let threshold = settingsManager.currentSettings.codeMindReviewThreshold
-        return allActiveNotifications.filter { notification in
-            // For CodeMind-classified notifications, check confidence
-            if let codeMindMeta = notification.codeMindClassification,
-               codeMindMeta.wasUsed {
-                return codeMindMeta.confidence >= threshold
-            }
-            // For non-CodeMind notifications, include them in regular list
-            return true
-        }
+    // Empty array - no longer using "For Review" section
+    private var notificationsForReview: [Notification] {
+        return []
     }
     
     // Regular new docket notifications (excluding media files, requests, and low confidence)
@@ -126,231 +115,303 @@ struct NotificationCenterView: View {
     }
     
     var body: some View {
+        // Ensure selectedTab is valid (not a disabled tab) - reset to newDockets if disabled tab is selected
+        if selectedTab == .fileDeliveries && !Self.enableFileDeliveryFeature {
+            selectedTab = .newDockets
+        }
+        if selectedTab == .requests && !Self.enableRequestFeature {
+            selectedTab = .newDockets
+        }
+        
+        return mainContent
+    }
+    
+    private var mainContent: some View {
         VStack(spacing: 0) {
-            // Header (double-click to toggle lock)
-            HStack {
-                Text("Notifications")
-                    .font(.system(size: 16, weight: .semibold))
-                
-                Spacer()
-                
-                if notificationCenter.unreadCount > 0 {
-                    Text("\(notificationCenter.unreadCount) new")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                
-                // Email refresh button
-                EmailRefreshButton(
-                    notificationCenter: notificationCenter,
-                    grabbedIndicatorService: notificationCenter.grabbedIndicatorService
-                )
-                    .environmentObject(emailScanningService)
-                
-                // Lock/Unlock toggle
-                Button(action: {
-                    let manager = NotificationWindowManager.shared
-                    manager.setLocked(!manager.isLocked)
-                    // Update settings
-                    var updatedSettings = settingsManager.currentSettings
-                    updatedSettings.notificationWindowLocked = manager.isLocked
-                    settingsManager.currentSettings = updatedSettings
-                    settingsManager.saveCurrentProfile()
-                }) {
-                    Image(systemName: NotificationWindowManager.shared.isLocked ? "lock.fill" : "lock.open.fill")
-                        .foregroundColor(.secondary)
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.plain)
-                .help(NotificationWindowManager.shared.isLocked ? "Unlock window (detach from main window)" : "Lock window (follow main window)")
-                
-                Button(action: {
-                    NotificationWindowManager.shared.hideNotificationWindow()
-                    isExpanded = false
-                }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Close")
+            headerSection
+            
+            Divider()
+            
+            gmailStatusBanner
+            
+            mainNotificationContent
+        }
+        .frame(width: 400, height: 500)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(nsColor: .windowBackgroundColor))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.clear)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
+        .onChange(of: activeNotifications.count) { oldCount, newCount in
+            if selectedTab == .newDockets && newCount == 0 && !mediaFileNotifications.isEmpty && Self.enableFileDeliveryFeature {
+                selectedTab = .fileDeliveries
+            } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && newCount > 0 {
+                selectedTab = .newDockets
             }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2) {
-                // Double-click to toggle lock/unlock
+        }
+        .onChange(of: mediaFileNotifications.count) { oldCount, newCount in
+            if selectedTab == .fileDeliveries && newCount == 0 && !activeNotifications.isEmpty {
+                selectedTab = .newDockets
+            }
+        }
+        .onChange(of: settingsManager.currentSettings.simianWebhookURL) { _, _ in
+            // Refresh when Simian webhook URL changes
+        }
+        .onAppear {
+            handleViewAppear()
+        }
+    }
+    
+    private var headerSection: some View {
+        HStack {
+            Text("Notifications")
+                .font(.system(size: 16, weight: .semibold))
+            
+            Spacer()
+            
+            if notificationCenter.unreadCount > 0 {
+                Text("\(notificationCenter.unreadCount) new")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            
+            EmailRefreshButton(
+                notificationCenter: notificationCenter,
+                grabbedIndicatorService: notificationCenter.grabbedIndicatorService
+            )
+                .environmentObject(emailScanningService)
+            
+            Button(action: {
                 let manager = NotificationWindowManager.shared
                 manager.setLocked(!manager.isLocked)
-                // Update settings
                 var updatedSettings = settingsManager.currentSettings
                 updatedSettings.notificationWindowLocked = manager.isLocked
                 settingsManager.currentSettings = updatedSettings
                 settingsManager.saveCurrentProfile()
+            }) {
+                Image(systemName: NotificationWindowManager.shared.isLocked ? "lock.fill" : "lock.open.fill")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 12))
             }
+            .buttonStyle(.plain)
+            .help(NotificationWindowManager.shared.isLocked ? "Unlock window (detach from main window)" : "Lock window (follow main window)")
             
-            Divider()
-            
-            // Check Gmail connection status
+            Button(action: {
+                NotificationWindowManager.shared.hideNotificationWindow()
+                isExpanded = false
+            }) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Close")
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            let manager = NotificationWindowManager.shared
+            manager.setLocked(!manager.isLocked)
+            var updatedSettings = settingsManager.currentSettings
+            updatedSettings.notificationWindowLocked = manager.isLocked
+            settingsManager.currentSettings = updatedSettings
+            settingsManager.saveCurrentProfile()
+        }
+    }
+    
+    private var gmailStatusBanner: some View {
+        Group {
             let isGmailConnected = emailScanningService.gmailService.isAuthenticated
             let gmailEnabled = settingsManager.currentSettings.gmailEnabled
             
-            // Gmail disabled banner (if Gmail is disabled)
             if !gmailEnabled {
-                VStack(spacing: 0) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "envelope.slash.fill")
-                            .foregroundColor(.secondary)
-                            .font(.system(size: 14))
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Gmail Integration Disabled")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("Email notifications are disabled. Enable in Settings to receive new docket and file delivery notifications")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Spacer()
-                        
-                        Button("Settings") {
-                            showSettings = true
-                            NotificationWindowManager.shared.hideNotificationWindow()
-                            isExpanded = false
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.secondary.opacity(0.1))
-                    
-                    Divider()
-                }
+                gmailDisabledBanner
+            } else if gmailEnabled && !isGmailConnected {
+                gmailNotConnectedBanner
             }
-            // Gmail connection warning banner (if Gmail is enabled but not connected)
-            else if gmailEnabled && !isGmailConnected {
-                VStack(spacing: 0) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                            .font(.system(size: 14))
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Gmail Not Connected")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("Email notifications are disabled")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Spacer()
-                        
-                        Button("Settings") {
-                            showSettings = true
-                            NotificationWindowManager.shared.hideNotificationWindow()
-                            isExpanded = false
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.orange.opacity(0.1))
-                    
-                    Divider()
+        }
+    }
+    
+    private var gmailDisabledBanner: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "envelope.slash.fill")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 14))
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Gmail Integration Disabled")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Email notifications are disabled. Enable in Settings to receive new docket and file delivery notifications")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
                 }
+                
+                Spacer()
+                
+                Button("Settings") {
+                    showSettings = true
+                    NotificationWindowManager.shared.hideNotificationWindow()
+                    isExpanded = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.1))
+            
+            Divider()
+        }
+    }
+    
+    private var gmailNotConnectedBanner: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                    .font(.system(size: 14))
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Gmail Not Connected")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Email notifications are disabled")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Button("Settings") {
+                    showSettings = true
+                    NotificationWindowManager.shared.hideNotificationWindow()
+                    isExpanded = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.orange.opacity(0.1))
+            
+            Divider()
+        }
+    }
+    
+    private var mainNotificationContent: some View {
+        Group {
+            let isGmailConnected = emailScanningService.gmailService.isAuthenticated
+            let gmailEnabled = settingsManager.currentSettings.gmailEnabled
+            
+            if gmailEnabled && !isGmailConnected {
+                gmailNotConnectedEmptyState
+            } else if !gmailEnabled && notificationsForReview.isEmpty && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
+                gmailDisabledEmptyState
+            } else if notificationsForReview.isEmpty && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
+                noNotificationsEmptyState
+            } else {
+                notificationListContent
+            }
+        }
+    }
+    
+    private var gmailNotConnectedEmptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 40))
+                .foregroundColor(.orange)
+            
+            VStack(spacing: 8) {
+                Text("Gmail Not Connected")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                
+                Text("Connect to Gmail to receive email notifications for new dockets")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
             }
             
-            // Show Gmail connection status if Gmail is enabled but not connected (empty state)
-            if gmailEnabled && !isGmailConnected {
-                VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 40))
-                        .foregroundColor(.orange)
-                    
-                    VStack(spacing: 8) {
-                        Text("Gmail Not Connected")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.primary)
-                        
-                        Text("Connect to Gmail to receive email notifications for new dockets")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 20)
-                    }
-                    
-                    Button("Open Settings") {
-                        showSettings = true
-                        // Close notification window when opening settings
-                        NotificationWindowManager.shared.hideNotificationWindow()
-                        isExpanded = false
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
-            } else if !gmailEnabled && notificationsForReview.isEmpty && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
-                // Show message when Gmail is disabled
-                VStack(spacing: 16) {
-                    Image(systemName: "envelope.slash.fill")
-                        .font(.system(size: 40))
-                        .foregroundColor(.secondary)
-                    
-                    VStack(spacing: 8) {
-                        Text("Gmail Integration Disabled")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.primary)
-                        
-                        Text("Enable Gmail integration in Settings to receive email notifications for new dockets and file deliveries")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 20)
-                    }
-                    
-                    Button("Open Settings") {
-                        showSettings = true
-                        // Close notification window when opening settings
-                        NotificationWindowManager.shared.hideNotificationWindow()
-                        isExpanded = false
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
-            } else if notificationsForReview.isEmpty && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
-                VStack(spacing: 12) {
-                    if isScanningEmails {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                        Text("Scanning for unread emails...")
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary)
-                    } else {
-                    Image(systemName: "bell.slash")
-                        .font(.system(size: 40))
-                        .foregroundColor(.secondary)
-                    Text("No notifications")
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                        if let status = lastScanStatus {
-                            Text(status)
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                                .padding(.top, 4)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
+            Button("Open Settings") {
+                showSettings = true
+                NotificationWindowManager.shared.hideNotificationWindow()
+                isExpanded = false
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+    
+    private var gmailDisabledEmptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "envelope.slash.fill")
+                .font(.system(size: 40))
+                .foregroundColor(.secondary)
+            
+            VStack(spacing: 8) {
+                Text("Gmail Integration Disabled")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                
+                Text("Enable Gmail integration in Settings to receive email notifications for new dockets and file deliveries")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+            }
+            
+            Button("Open Settings") {
+                showSettings = true
+                NotificationWindowManager.shared.hideNotificationWindow()
+                isExpanded = false
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+    
+    private var noNotificationsEmptyState: some View {
+        VStack(spacing: 12) {
+            if isScanningEmails {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("Scanning for unread emails...")
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
             } else {
-                VStack(spacing: 0) {
-                    // Tabs for notification types
-                    if !mediaFileNotifications.isEmpty || !activeNotifications.isEmpty || !notificationsForReview.isEmpty {
-                        HStack(spacing: 0) {
+                Image(systemName: "bell.slash")
+                    .font(.system(size: 40))
+                    .foregroundColor(.secondary)
+                Text("No notifications")
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+                if let status = lastScanStatus {
+                    Text(status)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+    
+    private var notificationListContent: some View {
+        VStack(spacing: 0) {
+            // Tabs for notification types
+            if !mediaFileNotifications.isEmpty || !activeNotifications.isEmpty || !notificationsForReview.isEmpty {
+                HStack(spacing: 0) {
                             // New Dockets tab
                             Button(action: {
                                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -379,260 +440,282 @@ struct NotificationCenterView: View {
                             }
                             .buttonStyle(.plain)
                             
-                            Divider()
-                                .frame(height: 20)
-                            
-                            // File Deliveries tab
-                            Button(action: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    selectedTab = .fileDeliveries
-                                }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "link.circle.fill")
-                                        .font(.system(size: 11))
-                                    Text("File Deliveries")
-                                        .font(.system(size: 12, weight: .medium))
-                                    if !regularFileDeliveryNotifications.isEmpty {
-                                        Text("(\(regularFileDeliveryNotifications.count))")
-                                            .font(.system(size: 11))
-                                            .opacity(0.7)
-                                    }
-                                }
-                                .foregroundColor(selectedTab == .fileDeliveries ? .green : .secondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(
-                                    selectedTab == .fileDeliveries
-                                        ? Color.green.opacity(0.1)
-                                        : Color.clear
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            
-                            Divider()
-                                .frame(height: 20)
-                            
-                            // Requests tab
-                            Button(action: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    selectedTab = .requests
-                                }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "hand.raised.fill")
-                                        .font(.system(size: 11))
-                                    Text("Requests")
-                                        .font(.system(size: 12, weight: .medium))
-                                    if !regularRequestNotifications.isEmpty {
-                                        Text("(\(regularRequestNotifications.count))")
-                                            .font(.system(size: 11))
-                                            .opacity(0.7)
-                                    }
-                                }
-                                .foregroundColor(selectedTab == .requests ? .orange : .secondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(
-                                    selectedTab == .requests
-                                        ? Color.orange.opacity(0.1)
-                                        : Color.clear
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .background(Color(nsColor: .separatorColor).opacity(0.3))
-                        .overlay(
-                            Rectangle()
-                                .frame(height: 1)
-                                .foregroundColor(Color(nsColor: .separatorColor)),
-                            alignment: .bottom
-                        )
-                        
-                        Divider()
-                    }
-                    
-                    // Content for selected tab
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            // "For Review" section (low confidence notifications)
-                            if !notificationsForReview.isEmpty {
+                            // FEATURE FLAG: File delivery tab is hidden when disabled
+                            if Self.enableFileDeliveryFeature {
+                                Divider()
+                                    .frame(height: 20)
+                                
+                                // File Deliveries tab
                                 Button(action: {
-                                    withAnimation {
-                                        isForReviewExpanded.toggle()
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        selectedTab = .fileDeliveries
                                     }
                                 }) {
-                                    HStack {
-                                        Image(systemName: isForReviewExpanded ? "chevron.down" : "chevron.right")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(.orange)
-                                        Image(systemName: "exclamationmark.triangle.fill")
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "link.circle.fill")
                                             .font(.system(size: 11))
-                                            .foregroundColor(.orange)
-                                        Text("For Review")
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .foregroundColor(.orange)
-                                        Text("(\(notificationsForReview.count))")
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.orange.opacity(0.7))
-                                        Spacer()
+                                        Text("File Deliveries")
+                                            .font(.system(size: 12, weight: .medium))
+                                        if !regularFileDeliveryNotifications.isEmpty {
+                                            Text("(\(regularFileDeliveryNotifications.count))")
+                                                .font(.system(size: 11))
+                                                .opacity(0.7)
+                                        }
                                     }
-                                    .padding(.horizontal)
+                                    .foregroundColor(selectedTab == .fileDeliveries ? .green : .secondary)
+                                    .frame(maxWidth: .infinity)
                                     .padding(.vertical, 10)
-                                    .background(Color.orange.opacity(0.1))
+                                    .background(
+                                        selectedTab == .fileDeliveries
+                                            ? Color.green.opacity(0.1)
+                                            : Color.clear
+                                    )
                                 }
                                 .buttonStyle(.plain)
-                                
-                                if isForReviewExpanded {
-                                    ForEach(notificationsForReview) { notification in
-                                    NotificationRowView(
-                                        notificationId: notification.id,
-                                        notificationCenter: notificationCenter,
-                                        emailScanningService: emailScanningService,
-                                        mediaManager: mediaManager,
-                                        settingsManager: settingsManager,
-                                        processingNotification: $processingNotification,
-                                        debugInfo: $debugInfo,
-                                        showDebugInfo: $showDebugInfo
-                                    )
-                                    .padding(.horizontal)
-                                    .padding(.vertical, 8)
-                                        .background(Color.orange.opacity(0.05))
-                                    
-                                    Divider()
-                                }
-                                }
-                                
-                                Divider()
-                                    .padding(.vertical, 4)
                             }
                             
-                            if selectedTab == .newDockets && !regularNewDocketNotifications.isEmpty {
-                                ForEach(regularNewDocketNotifications) { notification in
-                                    NotificationRowView(
-                                        notificationId: notification.id,
-                                        notificationCenter: notificationCenter,
-                                        emailScanningService: emailScanningService,
-                                        mediaManager: mediaManager,
-                                        settingsManager: settingsManager,
-                                        processingNotification: $processingNotification,
-                                        debugInfo: $debugInfo,
-                                        showDebugInfo: $showDebugInfo
-                                    )
-                                    .padding(.horizontal)
-                                    .padding(.vertical, 8)
-                                    
-                                    Divider()
-                                }
-                            } else if selectedTab == .fileDeliveries && !regularFileDeliveryNotifications.isEmpty {
-                                ForEach(regularFileDeliveryNotifications) { notification in
-                                    NotificationRowView(
-                                        notificationId: notification.id,
-                                        notificationCenter: notificationCenter,
-                                        emailScanningService: emailScanningService,
-                                        mediaManager: mediaManager,
-                                        settingsManager: settingsManager,
-                                        processingNotification: $processingNotification,
-                                        debugInfo: $debugInfo,
-                                        showDebugInfo: $showDebugInfo
-                                    )
-                                    .padding(.horizontal)
-                                    .padding(.vertical, 8)
-                                    
-                                    Divider()
-                                }
-                            } else if selectedTab == .requests && !regularRequestNotifications.isEmpty {
-                                ForEach(regularRequestNotifications) { notification in
-                                    NotificationRowView(
-                                        notificationId: notification.id,
-                                        notificationCenter: notificationCenter,
-                                        emailScanningService: emailScanningService,
-                                        mediaManager: mediaManager,
-                                        settingsManager: settingsManager,
-                                        processingNotification: $processingNotification,
-                                        debugInfo: $debugInfo,
-                                        showDebugInfo: $showDebugInfo
-                                    )
-                                    .padding(.horizontal)
-                                    .padding(.vertical, 8)
-                                    
-                                    Divider()
-                                }
-                            } else if notificationsForReview.isEmpty {
-                                // Empty state for selected tab (only show if no review items)
-                                VStack(spacing: 12) {
-                                    Image(systemName: {
-                                        switch selectedTab {
-                                        case .newDockets: return "doc.text"
-                                        case .fileDeliveries: return "link.circle"
-                                        case .requests: return "hand.raised"
+                            // FEATURE FLAG: Request tab is hidden when disabled
+                            if Self.enableRequestFeature {
+                                Divider()
+                                    .frame(height: 20)
+                                
+                                // Requests tab
+                                Button(action: {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        selectedTab = .requests
+                                    }
+                                }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "hand.raised.fill")
+                                            .font(.system(size: 11))
+                                        Text("Requests")
+                                            .font(.system(size: 12, weight: .medium))
+                                        if !regularRequestNotifications.isEmpty {
+                                            Text("(\(regularRequestNotifications.count))")
+                                                .font(.system(size: 11))
+                                                .opacity(0.7)
                                         }
-                                    }())
-                                        .font(.system(size: 40))
-                                        .foregroundColor(.secondary)
-                                    Text({
-                                        switch selectedTab {
-                                        case .newDockets: return "No new docket notifications"
-                                        case .fileDeliveries: return "No file delivery notifications"
-                                        case .requests: return "No request notifications"
-                                        }
-                                    }())
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.secondary)
+                                    }
+                                    .foregroundColor(selectedTab == .requests ? .orange : .secondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(
+                                        selectedTab == .requests
+                                            ? Color.orange.opacity(0.1)
+                                            : Color.clear
+                                    )
                                 }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 40)
+                                .buttonStyle(.plain)
+                            }
+                }
+                .background(Color(nsColor: .separatorColor).opacity(0.3))
+                .overlay(
+                    Rectangle()
+                        .frame(height: 1)
+                        .foregroundColor(Color(nsColor: .separatorColor)),
+                    alignment: .bottom
+                )
+                
+                Divider()
+            }
+            
+            // Content for selected tab
+            ScrollView {
+                VStack(spacing: 0) {
+                    // "For Review" section (low confidence notifications)
+                    if !notificationsForReview.isEmpty {
+                        Button(action: {
+                            withAnimation {
+                                isForReviewExpanded.toggle()
+                            }
+                        }) {
+                            HStack {
+                                Image(systemName: isForReviewExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.orange)
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.orange)
+                                Text("For Review")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.orange)
+                                Text("(\(notificationsForReview.count))")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.orange.opacity(0.7))
+                                Spacer()
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 10)
+                            .background(Color.orange.opacity(0.1))
+                        }
+                        .buttonStyle(.plain)
+                        
+                        if isForReviewExpanded {
+                            ForEach(notificationsForReview) { notification in
+                                NotificationRowView(
+                                        notificationId: notification.id,
+                                        notificationCenter: notificationCenter,
+                                        emailScanningService: emailScanningService,
+                                        mediaManager: mediaManager,
+                                        settingsManager: settingsManager,
+                                        processingNotification: $processingNotification,
+                                        debugInfo: $debugInfo,
+                                        showDebugInfo: $showDebugInfo
+                                )
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                                .background(Color.orange.opacity(0.05))
+                                
+                                Divider()
                             }
                         }
                         
-                        // Archived notifications (collapsible)
-                        if !archivedNotifications.isEmpty {
+                        Divider()
+                            .padding(.vertical, 4)
+                    }
+                    
+                    if selectedTab == .newDockets && !regularNewDocketNotifications.isEmpty {
+                        ForEach(regularNewDocketNotifications) { notification in
+                            NotificationRowView(
+                                notificationId: notification.id,
+                                notificationCenter: notificationCenter,
+                                emailScanningService: emailScanningService,
+                                mediaManager: mediaManager,
+                                settingsManager: settingsManager,
+                                processingNotification: $processingNotification,
+                                debugInfo: $debugInfo,
+                                showDebugInfo: $showDebugInfo
+                            )
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            
                             Divider()
+                        }
+                    } else if Self.enableFileDeliveryFeature && selectedTab == .fileDeliveries && !regularFileDeliveryNotifications.isEmpty {
+                        ForEach(regularFileDeliveryNotifications) { notification in
+                            NotificationRowView(
+                                notificationId: notification.id,
+                                notificationCenter: notificationCenter,
+                                emailScanningService: emailScanningService,
+                                mediaManager: mediaManager,
+                                settingsManager: settingsManager,
+                                processingNotification: $processingNotification,
+                                debugInfo: $debugInfo,
+                                showDebugInfo: $showDebugInfo
+                            )
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
                             
-                            Button(action: {
-                                withAnimation {
-                                    isArchivedExpanded.toggle()
-                                }
-                            }) {
-                                HStack {
-                                    Image(systemName: isArchivedExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                    Text("Archived (\(archivedNotifications.count))")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(.secondary)
-                                    Spacer()
-                                }
-                                .padding(.horizontal)
-                                .padding(.vertical, 8)
-                            }
-                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    } else if Self.enableRequestFeature && selectedTab == .requests && !regularRequestNotifications.isEmpty {
+                        ForEach(regularRequestNotifications) { notification in
+                            NotificationRowView(
+                                notificationId: notification.id,
+                                notificationCenter: notificationCenter,
+                                emailScanningService: emailScanningService,
+                                mediaManager: mediaManager,
+                                settingsManager: settingsManager,
+                                processingNotification: $processingNotification,
+                                debugInfo: $debugInfo,
+                                showDebugInfo: $showDebugInfo
+                            )
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
                             
-                            if isArchivedExpanded {
-                                ForEach(archivedNotifications) { notification in
-                                    NotificationRowView(
-                                        notificationId: notification.id,
-                                        notificationCenter: notificationCenter,
-                                        emailScanningService: emailScanningService,
-                                        mediaManager: mediaManager,
-                                        settingsManager: settingsManager,
-                                        processingNotification: $processingNotification,
-                                        debugInfo: $debugInfo,
-                                        showDebugInfo: $showDebugInfo
-                                    )
-                                    .padding(.horizontal)
-                                    .padding(.vertical, 8)
-                                    .opacity(0.6)
-                                    
-                                    Divider()
-                                }
+                            Divider()
+                        }
+                    } else if notificationsForReview.isEmpty {
+                        // Empty state for selected tab (only show if no review items)
+                        // FEATURE FLAG: Only show empty state for enabled tabs
+                        if (selectedTab == .newDockets) ||
+                           (Self.enableFileDeliveryFeature && selectedTab == .fileDeliveries) ||
+                           (Self.enableRequestFeature && selectedTab == .requests) {
+                            VStack(spacing: 12) {
+                                Image(systemName: {
+                                    switch selectedTab {
+                                    case .newDockets: return "doc.text"
+                                    case .fileDeliveries: return "link.circle"
+                                    case .requests: return "hand.raised"
+                                    }
+                                }())
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.secondary)
+                                Text({
+                                    switch selectedTab {
+                                    case .newDockets: return "No new docket notifications"
+                                    case .fileDeliveries: return "No file delivery notifications"
+                                    case .requests: return "No request notifications"
+                                    }
+                                }())
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.secondary)
                             }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 40)
+                        }
+                    }
+                }
+                
+                // Archived notifications (collapsible)
+                if !archivedNotifications.isEmpty {
+                    Divider()
+                    
+                    Button(action: {
+                        withAnimation {
+                            isArchivedExpanded.toggle()
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: isArchivedExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            Text("Archived (\(archivedNotifications.count))")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    
+                    if isArchivedExpanded {
+                        ForEach(archivedNotifications) { notification in
+                            NotificationRowView(
+                                notificationId: notification.id,
+                                notificationCenter: notificationCenter,
+                                emailScanningService: emailScanningService,
+                                mediaManager: mediaManager,
+                                settingsManager: settingsManager,
+                                processingNotification: $processingNotification,
+                                debugInfo: $debugInfo,
+                                showDebugInfo: $showDebugInfo
+                            )
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .opacity(0.6)
+                            
+                            Divider()
                         }
                     }
                 }
             }
             
-            // Footer
+            footerSection
+            
+            if showDebugInfo {
+                debugInfoPanel
+            }
+            
+            if showCacheInfo {
+                cacheInfoPanel
+            }
+        }
+    }
+    
+    private var footerSection: some View {
+        VStack(spacing: 0) {
             Divider()
             HStack {
                 // Last scan status indicator
@@ -707,193 +790,169 @@ struct NotificationCenterView: View {
             }
             .padding(8)
             .background(Color(nsColor: .controlBackgroundColor))
-            
-            // Debug info panel
-            if showDebugInfo {
-                Divider()
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Debug Output")
-                            .font(.system(size: 11, weight: .semibold))
-                        Spacer()
-                        if let debugInfo = debugInfo {
-                            Button(action: {
-                                let pasteboard = NSPasteboard.general
-                                pasteboard.clearContents()
-                                pasteboard.setString(debugInfo, forType: .string)
-                            }) {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.system(size: 10))
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Copy debug output")
-                        }
-                        Button("Close") {
-                            showDebugInfo = false
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 10))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.top, 8)
-                    
-                    if let debugInfo = debugInfo {
-                        ScrollView {
-                            Text(debugInfo)
-                                .font(.system(size: 10, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                                .padding(8)
-                        }
-                        .frame(height: 200)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .cornerRadius(4)
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 8)
-                    } else {
-                        Text("Running debug scan...")
+        }
+    }
+    
+    private var debugInfoPanel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider()
+            HStack {
+                Text("Debug Output")
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer()
+                if let debugInfo = debugInfo {
+                    Button(action: {
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(debugInfo, forType: .string)
+                    }) {
+                        Image(systemName: "doc.on.doc")
                             .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
                     }
+                    .buttonStyle(.borderless)
+                    .help("Copy debug output")
                 }
-                .background(Color(nsColor: .controlBackgroundColor))
-            }
-            
-            // Cache info panel
-            if showCacheInfo {
-                Divider()
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Company Name Cache")
-                            .font(.system(size: 11, weight: .semibold))
-                        Spacer()
-                        if let cacheInfo = cacheInfo {
-                            Button(action: {
-                                let pasteboard = NSPasteboard.general
-                                pasteboard.clearContents()
-                                pasteboard.setString(cacheInfo, forType: .string)
-                            }) {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.system(size: 10))
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Copy cache info")
-                        }
-                        Button("Close") {
-                            showCacheInfo = false
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 10))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.top, 8)
-                    
-                    if isLoadingCache {
-                        HStack {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                            Text("Loading cache...")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
-                    } else if let cacheInfo = cacheInfo {
-                        ScrollView {
-                            Text(cacheInfo)
-                                .font(.system(size: 10, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                                .padding(8)
-                        }
-                        .frame(height: 300)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .cornerRadius(4)
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 8)
-                    } else {
-                        Text("Loading cache...")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                    }
+                Button("Close") {
+                    showDebugInfo = false
                 }
-                .background(Color(nsColor: .controlBackgroundColor))
+                .buttonStyle(.borderless)
+                .font(.system(size: 10))
             }
-        }
-        .frame(width: 400, height: 500)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(nsColor: .windowBackgroundColor))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12)) // Ensure content is clipped to rounded corners
-        .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
-        .onChange(of: activeNotifications.count) { oldCount, newCount in
-            // Auto-select tab if current selection is empty
-            if selectedTab == .newDockets && newCount == 0 && !mediaFileNotifications.isEmpty {
-                selectedTab = .fileDeliveries
-            } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && newCount > 0 {
-                selectedTab = .newDockets
-            }
-        }
-        .onChange(of: mediaFileNotifications.count) { oldCount, newCount in
-            // Auto-select tab if current selection is empty
-            if selectedTab == .fileDeliveries && newCount == 0 && !activeNotifications.isEmpty {
-                selectedTab = .newDockets
-            } else if selectedTab == .newDockets && activeNotifications.isEmpty && newCount > 0 {
-                selectedTab = .fileDeliveries
-            }
-        }
-        .onAppear {
-            // Clean up old archived notifications
-            notificationCenter.cleanupOldArchivedNotifications()
-            // Clean up old completed requests (older than 24 hours)
-            notificationCenter.cleanupOldCompletedRequests()
-            // Sync completion status from shared cache
-            Task {
-                await notificationCenter.syncCompletionStatus()
-            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
             
-            // Auto-select tab if current selection is empty
-            if selectedTab == .newDockets && activeNotifications.isEmpty && !mediaFileNotifications.isEmpty {
-                selectedTab = .fileDeliveries
-            } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && !activeNotifications.isEmpty {
-                selectedTab = .newDockets
-            }
-            
-            // Only auto-scan if last scan was more than 30 seconds ago (debounce to avoid slowdown)
-            let timeSinceLastScan = emailScanningService.lastScanTime.map { Date().timeIntervalSince($0) } ?? Double.infinity
-            let scanThreshold: TimeInterval = 30 // 30 seconds
-            let shouldAutoScan = timeSinceLastScan > scanThreshold
-            
-            if shouldAutoScan {
-                // Auto-fetch unread emails when notification window opens (don't force rescan on appear)
-                Task {
-                    isScanningEmails = true
-                    lastScanStatus = nil
-                    await emailScanningService.scanUnreadEmails(forceRescan: false)
-                    isScanningEmails = false
-                    
-                    // Update status message
-                    let activeCount = notificationCenter.activeNotifications.count
-                    if activeCount == 0 {
-                        lastScanStatus = "No unread docket emails found"
-                    } else {
-                        lastScanStatus = "Found \(activeCount) notification\(activeCount == 1 ? "" : "s")"
-                    }
+            if let debugInfo = debugInfo {
+                ScrollView {
+                    Text(debugInfo)
+                        .font(.system(size: 10, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(8)
                 }
+                .frame(height: 200)
+                .background(Color(nsColor: .textBackgroundColor))
+                .cornerRadius(4)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
             } else {
-                // Show cached results - scan was recent, no need to rescan
-                let timeAgo = Int(timeSinceLastScan)
-                if timeAgo < 60 {
-                    lastScanStatus = "Last scan: \(timeAgo)s ago"
-                } else {
-                    let minutesAgo = timeAgo / 60
-                    lastScanStatus = "Last scan: \(minutesAgo)m ago"
+                Text("Running debug scan...")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+    
+    private var cacheInfoPanel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider()
+            HStack {
+                Text("Company Name Cache")
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer()
+                if let cacheInfo = cacheInfo {
+                    Button(action: {
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(cacheInfo, forType: .string)
+                    }) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Copy cache info")
                 }
+                Button("Close") {
+                    showCacheInfo = false
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 10))
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+            
+            if isLoadingCache {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    Text("Loading cache...")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 40)
+            } else if let cacheInfo = cacheInfo {
+                ScrollView {
+                    Text(cacheInfo)
+                        .font(.system(size: 10, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(8)
+                }
+                .frame(height: 300)
+                .background(Color(nsColor: .textBackgroundColor))
+                .cornerRadius(4)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            } else {
+                Text("Loading cache...")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+    
+    private func handleViewAppear() {
+        // Clean up old archived notifications
+        notificationCenter.cleanupOldArchivedNotifications()
+        // Clean up old completed requests (older than 24 hours)
+        notificationCenter.cleanupOldCompletedRequests()
+        // Sync completion status from shared cache
+        Task {
+            await notificationCenter.syncCompletionStatus()
+        }
+        
+        // Auto-select tab if current selection is empty
+        if selectedTab == .newDockets && activeNotifications.isEmpty && !mediaFileNotifications.isEmpty {
+            selectedTab = .fileDeliveries
+        } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && !activeNotifications.isEmpty {
+            selectedTab = .newDockets
+        }
+        
+        // Only auto-scan if last scan was more than 30 seconds ago (debounce to avoid slowdown)
+        let timeSinceLastScan = emailScanningService.lastScanTime.map { Date().timeIntervalSince($0) } ?? Double.infinity
+        let scanThreshold: TimeInterval = 30 // 30 seconds
+        let shouldAutoScan = timeSinceLastScan > scanThreshold
+        
+        if shouldAutoScan {
+            // Auto-fetch unread emails when notification window opens (don't force rescan on appear)
+            Task {
+                isScanningEmails = true
+                lastScanStatus = nil
+                await emailScanningService.scanUnreadEmails(forceRescan: false)
+                isScanningEmails = false
+                
+                // Update status message
+                let activeCount = notificationCenter.activeNotifications.count
+                if activeCount == 0 {
+                    lastScanStatus = "No unread docket emails found"
+                } else {
+                    lastScanStatus = "Found \(activeCount) notification\(activeCount == 1 ? "" : "s")"
+                }
+            }
+        } else {
+            // Show cached results - scan was recent, no need to rescan
+            let timeAgo = Int(timeSinceLastScan)
+            if timeAgo < 60 {
+                lastScanStatus = "Last scan: \(timeAgo)s ago"
+            } else {
+                let minutesAgo = timeAgo / 60
+                lastScanStatus = "Last scan: \(minutesAgo)m ago"
             }
         }
     }
@@ -1224,9 +1283,6 @@ struct NotificationRowView: View {
     @State private var feedbackComment = ""
     @State private var isSubmittingFeedback = false
     @State private var hasSubmittedFeedback = false // Track locally to force UI refresh
-    @State private var showCustomClassificationDialog = false
-    @State private var customClassificationText = ""
-    @State private var showClassificationDetails = false
     
     // Get current notification from center (always up-to-date)
     private var notification: Notification? {
@@ -1379,52 +1435,7 @@ struct NotificationRowView: View {
             Text("Did you successfully grab the file?")
         }
         .sheet(isPresented: $showFeedbackDialog) {
-            CodeMindFeedbackDialog(
-                isPresented: $showFeedbackDialog,
-                correction: $feedbackCorrection,
-                comment: $feedbackComment,
-                onSubmit: {
-                    Task {
-                        await submitFeedback(
-                            notificationId: notificationId,
-                            wasCorrect: false,
-                            rating: 1,
-                            correction: feedbackCorrection.isEmpty ? nil : feedbackCorrection,
-                            comment: feedbackComment.isEmpty ? nil : feedbackComment
-                        )
-                    }
-                }
-            )
-        }
-        .sheet(isPresented: $showCustomClassificationDialog) {
-            CustomClassificationDialog(
-                isPresented: $showCustomClassificationDialog,
-                classificationText: $customClassificationText,
-                onConfirm: {
-                    guard let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }),
-                          !customClassificationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        return
-                    }
-                    Task {
-                        await notificationCenter.reclassify(
-                            currentNotification,
-                            toCustomType: customClassificationText,
-                            autoArchive: false,
-                            emailScanningService: emailScanningService
-                        )
-                    }
-                    customClassificationText = ""
-                }
-            )
-        }
-        .onChange(of: showClassificationDetails) { _, isPresented in
-            if isPresented, let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                ClassificationDetailsWindowManager.shared.showWindow(notification: currentNotification) {
-                    showClassificationDetails = false
-                }
-            } else if !isPresented {
-                ClassificationDetailsWindowManager.shared.hideWindow()
-            }
+            EmptyView() // Feedback removed
         }
     }
     
@@ -1469,7 +1480,7 @@ struct NotificationRowView: View {
             return
         }
         
-        await emailScanningService.provideCodeMindFeedback(
+        await emailScanningService.provideFeedback(
             for: notificationId,
             rating: rating,
             wasCorrect: wasCorrect,
@@ -1486,28 +1497,7 @@ struct NotificationRowView: View {
                 return
             }
             
-            if wasCorrect {
-                // Thumbs up: Boost confidence above threshold to move it from "For Review" to regular section
-                if let codeMindMeta = updatedNotification.codeMindClassification,
-                   codeMindMeta.wasUsed {
-                    let threshold = settingsManager.currentSettings.codeMindReviewThreshold
-                    // If it's currently below threshold (in "For Review"), boost it above
-                    if codeMindMeta.confidence < threshold {
-                        // Create new metadata with boosted confidence
-                        let boostedConfidence = min(1.0, threshold + 0.01) // Boost to just above threshold
-                        let newMetadata = CodeMindClassificationMetadata(
-                            wasUsed: codeMindMeta.wasUsed,
-                            confidence: boostedConfidence,
-                            reasoning: codeMindMeta.reasoning,
-                            classificationType: codeMindMeta.classificationType,
-                            extractedData: codeMindMeta.extractedData
-                        )
-                        // Update the notification's CodeMind metadata
-                        notificationCenter.updateCodeMindMetadata(updatedNotification, metadata: newMetadata)
-                        print("📋 NotificationCenterView: ✅ Boosted confidence from \(Int(codeMindMeta.confidence * 100))% to \(Int(boostedConfidence * 100))% - moved from 'For Review' to regular section")
-                    }
-                }
-            } else {
+            if !wasCorrect {
                 // Thumbs down: Remove the notification and mark email as read
                 markEmailAsReadIfNeeded(updatedNotification)
                 notificationCenter.remove(updatedNotification, emailScanningService: emailScanningService)
@@ -1588,26 +1578,73 @@ struct NotificationRowView: View {
     /// Helper view for new docket actions
     @ViewBuilder
     private func newDocketActionsView(notification: Notification) -> some View {
-        let docketAlreadyExists = checkIfDocketExists(notification: notification)
+        // Update duplicate detection flags
+        let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) ?? notification
+        let isInWorkPicture = checkIfInWorkPicture(notification: currentNotification)
+        let isInSimian = currentNotification.isInSimian
         
         VStack(alignment: .leading, spacing: 8) {
+            // Visual indicators for duplicates
+            if isInWorkPicture || isInSimian {
+                HStack(spacing: 8) {
+                    if isInWorkPicture {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.green)
+                            Text("Already in Work Picture")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    if isInSimian {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.blue)
+                            Text("Already in Simian")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(4)
+            }
+            
             Toggle("Create Work Picture Folder", isOn: workPictureBinding())
                 .font(.system(size: 11))
-                .disabled(docketAlreadyExists)
-                .opacity(docketAlreadyExists ? 0.5 : 1.0)
+                .disabled(isInWorkPicture)
+                .opacity(isInWorkPicture ? 0.5 : 1.0)
             
             Toggle("Create Simian Job", isOn: simianJobBinding())
                 .font(.system(size: 11))
-                .disabled(true)
-                .opacity(0.5)
+                .disabled(isInSimian || isInWorkPicture)
+                .opacity((isInSimian || isInWorkPicture) ? 0.5 : 1.0)
             
-            if notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob == true {
+            if notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob == true && !isInSimian && !isInWorkPicture {
                 projectManagerFieldView(notification: notification)
             }
             
             approveArchiveButtons(notification: notification)
         }
         .padding(.top, 4)
+        .onAppear {
+            // Update duplicate detection when view appears
+            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                notificationCenter.updateDuplicateDetection(currentNotification, mediaManager: mediaManager, settingsManager: settingsManager)
+            }
+        }
+    }
+    
+    private func checkIfInWorkPicture(notification: Notification) -> Bool {
+        if let docketNumber = notification.docketNumber, docketNumber != "TBD",
+           let jobName = notification.jobName {
+            return docketExists(docketNumber: docketNumber, jobName: jobName)
+        }
+        return false
     }
     
     private func checkIfDocketExists(notification: Notification) -> Bool {
@@ -1823,11 +1860,6 @@ struct NotificationRowView: View {
                 .padding(.top, 2)
             }
 
-            // Show feedback UI if CodeMind metadata exists (whether used or skipped)
-            // This allows users to provide feedback even when CodeMind was skipped
-            if let codeMindMeta = notification.codeMindClassification {
-                codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
-            }
         }
     }
 
@@ -1840,18 +1872,7 @@ struct NotificationRowView: View {
                 .foregroundColor(notification.status == .completed ? .secondary.opacity(0.7) : .secondary)
             
             producerInfoView(notification: notification)
-            codeMindConfidenceView(notification: notification)
             emailPreviewSection(notification: notification)
-            
-            // Show feedback UI if CodeMind was used OR if CodeMind is available but was skipped
-            if let codeMindMeta = notification.codeMindClassification {
-                if codeMindMeta.wasUsed {
-                    codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
-                } else {
-                    // CodeMind metadata exists but wasn't used (e.g., was skipped)
-                    codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
-                }
-            }
         }
     }
     
@@ -2052,29 +2073,7 @@ struct NotificationRowView: View {
             }
             
             producerInfoView(notification: notification)
-            codeMindConfidenceView(notification: notification)
             emailPreviewSection(notification: notification)
-            
-            // Show feedback UI if CodeMind was used OR if CodeMind is available but was skipped
-            // This allows users to provide feedback even when CodeMind was skipped
-            if let codeMindMeta = notification.codeMindClassification {
-                if codeMindMeta.wasUsed {
-                    codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
-                } else {
-                    // CodeMind metadata exists but wasn't used (e.g., was skipped)
-                    // Still show feedback UI so users can provide feedback about the classification
-                    codeMindFeedbackUI(notification: notification, codeMindMeta: codeMindMeta)
-                }
-            } else {
-                // Debug: Log when CodeMind metadata is missing
-                #if DEBUG
-                let _ = print("NotificationCenterView: ⚠️ CodeMind metadata is nil for notification \(notification.id) - feedback UI will not show")
-                let _ = print("  - Notification type: \(notification.type)")
-                let _ = print("  - Has emailId: \(notification.emailId != nil)")
-                let _ = print("  - Has codeMindClassification: \(notification.codeMindClassification != nil)")
-                #endif
-                EmptyView()
-            }
         }
     }
     
@@ -2144,42 +2143,10 @@ struct NotificationRowView: View {
         }
     }
     
-    /// Helper view for CodeMind confidence indicator
+    /// Helper view for confidence indicator (removed - no longer used)
     @ViewBuilder
-    private func codeMindConfidenceView(notification: Notification) -> some View {
-        if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
-            let confidence = codeMindMeta.confidence
-            let threshold = settingsManager.currentSettings.codeMindReviewThreshold
-            let isLowConfidence = confidence < threshold
-            let reasoning = codeMindMeta.reasoning
-            
-            HStack(spacing: 4) {
-                Image(systemName: isLowConfidence ? "exclamationmark.triangle.fill" : "brain.head.profile")
-                    .font(.system(size: 9))
-                    .foregroundColor(isLowConfidence ? .orange : .blue.opacity(0.7))
-                Text("Confidence: \(Int(confidence * 100))%")
-                    .font(.system(size: 10, weight: isLowConfidence ? .semibold : .regular))
-                    .foregroundColor(isLowConfidence ? .orange : .secondary.opacity(0.8))
-                if isLowConfidence {
-                    Text("(Needs Review)")
-                        .font(.system(size: 9))
-                        .foregroundColor(.orange)
-                }
-            }
-            .padding(.top, 2)
-            .help(reasoning ?? "No reasoning provided")
-            .onTapGesture {
-                showClassificationDetails = true
-            }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-                if hovering {
-                    NSCursor.pointingHand.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
-        }
+    private func confidenceView(notification: Notification) -> some View {
+        EmptyView()
     }
     
     /// Helper view for email preview section
@@ -2274,80 +2241,6 @@ struct NotificationRowView: View {
         .padding(.top, 6)
     }
     
-    /// Helper view for CodeMind feedback UI to reduce view complexity
-    @ViewBuilder
-    private func codeMindFeedbackUI(notification: Notification, codeMindMeta: CodeMindClassificationMetadata) -> some View {
-        // Always check persistent storage - this is the source of truth
-        // Get current notification from center to ensure we have the latest emailId
-        let currentNotification = notificationCenter.notifications.first(where: { $0.id == notification.id }) ?? notification
-        let emailId = currentNotification.emailId ?? notification.emailId
-        // Only check for existing feedback if we have an emailId - if emailId is nil, show feedback options
-        let hasExistingFeedback = emailId != nil && (EmailFeedbackTracker.shared.hasFeedback(for: emailId!) || hasSubmittedFeedback)
-        
-        Divider()
-            .padding(.vertical, 4)
-        
-        HStack(spacing: 8) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 10))
-                .foregroundColor(.purple)
-            Text("CodeMind Classification")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(.secondary)
-            
-            // Only show confidence if CodeMind was actually used
-            // When wasUsed is false, CodeMind was skipped and confidence is meaningless (set to 0.0)
-            if codeMindMeta.wasUsed {
-            Text("(\(Int(codeMindMeta.confidence * 100))% confidence)")
-                .font(.system(size: 8))
-                .foregroundColor(.secondary.opacity(0.7))
-            } else {
-                Text("(skipped)")
-                    .font(.system(size: 8))
-                    .foregroundColor(.secondary.opacity(0.5))
-            }
-            
-            Spacer()
-            
-            if !hasExistingFeedback {
-                HStack(spacing: 4) {
-                    Button(action: {
-                        Task {
-                            await submitFeedback(notificationId: notification.id, wasCorrect: true, rating: 5)
-                        }
-                    }) {
-                        Image(systemName: "hand.thumbsup.fill")
-                            .font(.system(size: 11))
-                            .foregroundColor(.green)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Classification was correct")
-                    .disabled(isSubmittingFeedback)
-                    
-                    Button(action: {
-                        showFeedbackDialog = true
-                    }) {
-                        Image(systemName: "hand.thumbsdown.fill")
-                            .font(.system(size: 11))
-                            .foregroundColor(.red)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Classification was incorrect")
-                    .disabled(isSubmittingFeedback)
-                }
-            } else {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(.green)
-                    Text("Feedback submitted")
-                        .font(.system(size: 8))
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding(.top, 4)
-    }
     
     private func sendGrabbedReply() {
         guard let emailId = pendingEmailIdForReply else { return }
@@ -2596,6 +2489,12 @@ struct NotificationRowView: View {
                 // Create Work Picture folder if requested
                 if updatedNotification.shouldCreateWorkPicture {
                     try await emailScanningService.createDocketFromNotification(updatedNotification)
+                    // Mark as in Work Picture when successfully created
+                    await MainActor.run {
+                        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                            notificationCenter.updateDuplicateDetection(currentNotification, mediaManager: mediaManager, settingsManager: settingsManager)
+                        }
+                    }
                 }
                 
                 // Create Simian job via Zapier webhook if enabled and requested
@@ -2613,6 +2512,12 @@ struct NotificationRowView: View {
                             projectManager: projectManager,
                             projectTemplate: settingsManager.currentSettings.simianProjectTemplate
                         )
+                        // Mark as in Simian when successfully created
+                        await MainActor.run {
+                            if let updatedNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                                notificationCenter.markAsInSimian(updatedNotification)
+                            }
+                        }
                         // DEBUG: Commented out for performance
                         // print("✅ Simian job creation requested for \(finalDocketNumber): \(jobName)")
                     } catch {
@@ -2654,20 +2559,11 @@ struct NotificationRowView: View {
                             details: details.isEmpty ? nil : details
                         )
                     }
-                    
-                    // Check if docket already exists before marking as completed
-                    // If it exists, just remove the notification instead
-                    if let docketNumber = updatedNotification.docketNumber,
-                       let jobName = updatedNotification.jobName {
-                        let docketName = "\(docketNumber)_\(jobName)"
-                        if mediaManager.dockets.contains(docketName) {
-                            // Docket already exists, remove notification instead of marking as completed
-                            notificationCenter.remove(updatedNotification, emailScanningService: emailScanningService)
-                            return
-                        }
-                    }
-                    // Update notification status to completed
-                    notificationCenter.updateStatus(updatedNotification, to: .completed, emailScanningService: emailScanningService)
+                }
+                
+                // Remove notification after approval (email is already marked as read)
+                if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                    await notificationCenter.remove(currentNotification, emailScanningService: emailScanningService)
                 }
             } catch {
                 await MainActor.run {
@@ -2700,8 +2596,6 @@ struct NotificationRowView: View {
             return "trash.fill"
         case .skipped:
             return "forward.fill"
-        case .custom:
-            return "tag.fill"
         }
     }
     
@@ -2721,8 +2615,6 @@ struct NotificationRowView: View {
             return .gray
         case .skipped:
             return .secondary
-        case .custom:
-            return .purple
         }
     }
     
@@ -2874,34 +2766,6 @@ struct NotificationRowView: View {
         
         Divider()
         
-        // CodeMind MindMap options
-        if notification.codeMindClassification?.wasUsed == true {
-            Button(action: {
-                showClassificationDetails = true
-            }) {
-                Label("View Classification Details", systemImage: "info.circle")
-            }
-            
-            Button(action: {
-                // Navigate to this classification in the brain view
-                CodeMindBrainNavigator.shared.navigateToClassification(subject: notification.emailSubject ?? notification.title)
-            }) {
-                Label("View in MindMap", systemImage: "brain")
-            }
-            
-            Button(action: {
-                // Create a rule based on this email
-                CodeMindBrainNavigator.shared.createRuleForEmail(
-                    subject: notification.emailSubject ?? notification.title,
-                    from: notification.sourceEmail,
-                    classificationType: notification.type == .newDocket ? "newDocket" : (notification.type == .request ? "request" : "fileDelivery")
-                )
-            }) {
-                Label("Create Classification Rule", systemImage: "plus.circle")
-            }
-            
-            Divider()
-        }
         
         // Open email in browser
         if let emailId = notification.emailId {
@@ -2924,112 +2788,13 @@ struct NotificationRowView: View {
         
         Divider()
         
-        // Re-classify submenu
-        Menu {
-            Button(action: {
-                Task {
-                    await notificationCenter.reclassify(
-                        notification,
-                        to: .newDocket,
-                        autoArchive: false,
-                        emailScanningService: emailScanningService
-                    )
-                }
-            }) {
-                Label("New Docket", systemImage: "doc.badge.plus")
+        // Remove notification (marks email as read)
+        Button(action: {
+            Task {
+                await notificationCenter.remove(notification, emailScanningService: emailScanningService)
             }
-            .disabled(notification.type == .newDocket)
-            
-            Button(action: {
-                Task {
-                    await notificationCenter.reclassify(
-                        notification,
-                        to: .mediaFiles,
-                        autoArchive: false,
-                        emailScanningService: emailScanningService
-                    )
-                }
-            }) {
-                Label("File Delivery", systemImage: "arrow.down.doc")
-            }
-            .disabled(notification.type == .mediaFiles)
-            
-            Button(action: {
-                Task {
-                    await notificationCenter.reclassify(
-                        notification,
-                        to: .request,
-                        autoArchive: false,
-                        emailScanningService: emailScanningService
-                    )
-                }
-            }) {
-                Label("Request", systemImage: "hand.raised")
-            }
-            .disabled(notification.type == .request)
-            
-            Divider()
-            
-            Button(action: {
-                Task {
-                    await notificationCenter.markAsJunk(notification, emailScanningService: emailScanningService)
-                }
-            }) {
-                Label("Junk (Ads/Promos)", systemImage: "trash")
-            }
-            
-            Button(action: {
-                Task {
-                    await notificationCenter.skip(notification, emailScanningService: emailScanningService)
-                }
-            }) {
-                Label("Skip (Remove)", systemImage: "forward")
-            }
-            
-            Divider()
-            
-            // Recent custom classifications
-            let recentCustomTypes = RecentCustomClassificationsManager.shared.getRecent()
-            if !recentCustomTypes.isEmpty {
-                ForEach(recentCustomTypes, id: \.self) { customType in
-                    Button(action: {
-                        Task {
-                            await notificationCenter.reclassify(
-                                notification,
-                                toCustomType: customType,
-                                autoArchive: false,
-                                emailScanningService: emailScanningService
-                            )
-                        }
-                    }) {
-                        Label(customType, systemImage: "tag")
-                    }
-                    .disabled(notification.type == .custom && notification.customTypeName == customType)
-                }
-                
-                Divider()
-            }
-            
-            // Other option
-            Button(action: {
-                customClassificationText = ""
-                showCustomClassificationDialog = true
-            }) {
-                Label("Other...", systemImage: "plus.circle")
-            }
-        } label: {
-            Label("Re-classify", systemImage: "arrow.triangle.2.circlepath")
-        }
-        
-        Divider()
-        
-        // Archive option
-        if notification.status == .pending && notification.archivedAt == nil {
-            Button(action: {
-                notificationCenter.archive(notification, emailScanningService: emailScanningService)
-            }) {
-                Label("Archive", systemImage: "archivebox")
-            }
+        }) {
+            Label("Remove", systemImage: "trash")
         }
     }
     
@@ -3141,297 +2906,5 @@ struct NotificationRowView: View {
     }
 }
 
-/// Dialog for entering custom classification type
-struct CustomClassificationDialog: View {
-    @Binding var isPresented: Bool
-    @Binding var classificationText: String
-    let onConfirm: () -> Void
-    
-    @FocusState private var isTextFieldFocused: Bool
-    
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("Custom Classification")
-                .font(.headline)
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Enter a custom classification name:")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                TextField("Classification name", text: $classificationText)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($isTextFieldFocused)
-                    .onSubmit {
-                        if !classificationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            onConfirm()
-                            isPresented = false
-                        }
-                    }
-            }
-            
-            HStack {
-                Button("Cancel") {
-                    classificationText = ""
-                    isPresented = false
-                }
-                .keyboardShortcut(.cancelAction)
-                
-                Button("OK") {
-                    onConfirm()
-                    isPresented = false
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(classificationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(20)
-        .frame(width: 400, height: 200)
-        .onAppear {
-            isTextFieldFocused = true
-        }
-    }
-}
 
-/// View showing detailed CodeMind classification information
-struct ClassificationDetailsView: View {
-    let notification: Notification
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            // Header
-            HStack {
-                Image(systemName: "brain.head.profile")
-                    .font(.system(size: 24))
-                    .foregroundColor(.blue)
-                Text("CodeMind Classification Details")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Spacer()
-                Button(action: { dismiss() }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            
-            Divider()
-            
-            if let codeMindMeta = notification.codeMindClassification, codeMindMeta.wasUsed {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        // Classification Type
-                        InfoRow(label: "Classification Type", value: codeMindMeta.classificationType.capitalized)
-                        
-                        // Confidence
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Confidence")
-                                    .font(.headline)
-                                Spacer()
-                                Text("\(Int(codeMindMeta.confidence * 100))%")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundColor(confidenceColor(codeMindMeta.confidence))
-                            }
-                            ProgressView(value: codeMindMeta.confidence)
-                                .tint(confidenceColor(codeMindMeta.confidence))
-                        }
-                        .padding()
-                        .background(Color.secondary.opacity(0.1))
-                        .cornerRadius(8)
-                        
-                        // Reasoning
-                        if let reasoning = codeMindMeta.reasoning, !reasoning.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Reasoning")
-                                    .font(.headline)
-                                Text(reasoning)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                                    .textSelection(.enabled)
-                                    .padding()
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.secondary.opacity(0.05))
-                                    .cornerRadius(8)
-                            }
-                        }
-                        
-                        // Extracted Data
-                        if let extractedData = codeMindMeta.extractedData, !extractedData.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Extracted Information")
-                                    .font(.headline)
-                                ForEach(Array(extractedData.keys.sorted()), id: \.self) { key in
-                                    InfoRow(
-                                        label: key.capitalized.replacingOccurrences(of: "_", with: " "),
-                                        value: extractedData[key] ?? "N/A"
-                                    )
-                                }
-                            }
-                            .padding()
-                            .background(Color.secondary.opacity(0.05))
-                            .cornerRadius(8)
-                        }
-                        
-                        // Email Information
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Email Information")
-                                .font(.headline)
-                            if let subject = notification.emailSubject {
-                                InfoRow(label: "Subject", value: subject)
-                            }
-                            if let from = notification.sourceEmail {
-                                InfoRow(label: "From", value: from)
-                            }
-                            if let emailId = notification.emailId {
-                                InfoRow(label: "Email ID", value: String(emailId.prefix(20)) + "...")
-                            }
-                        }
-                        .padding()
-                        .background(Color.secondary.opacity(0.05))
-                        .cornerRadius(8)
-                    }
-                }
-            } else {
-                VStack(spacing: 16) {
-                    Image(systemName: "brain.head.profile")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-                    Text("No CodeMind Classification")
-                        .font(.headline)
-                    Text("This notification was not classified using CodeMind.")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 40)
-            }
-            
-            Spacer()
-            
-            // Close button
-            HStack {
-                Spacer()
-                Button("Close") {
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(20)
-        .frame(width: 600, height: 500)
-    }
-    
-    private func confidenceColor(_ confidence: Double) -> Color {
-        if confidence >= 0.8 {
-            return .green
-        } else if confidence >= 0.6 {
-            return .orange
-        } else {
-            return .red
-        }
-    }
-}
-
-/// Helper view for displaying key-value pairs
-struct InfoRow: View {
-    let label: String
-    let value: String
-    
-    var body: some View {
-        HStack(alignment: .top) {
-            Text(label + ":")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.secondary)
-                .frame(width: 120, alignment: .leading)
-            Text(value)
-                .font(.system(size: 12))
-                .foregroundColor(.primary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-/// Window manager for classification details window
-@MainActor
-class ClassificationDetailsWindowManager {
-    static let shared = ClassificationDetailsWindowManager()
-    
-    private var window: NSWindow?
-    private var onClose: (() -> Void)?
-    
-    private init() {}
-    
-    func showWindow(notification: Notification, onClose: @escaping () -> Void) {
-        // Close existing window if open
-        hideWindow()
-        
-        self.onClose = onClose
-        
-        let contentView = ClassificationDetailsView(notification: notification)
-            .environment(\.dismiss, DismissAction(action: { [weak self] in
-                self?.hideWindow()
-            }))
-        
-        let hostingController = NSHostingController(rootView: contentView)
-        
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        
-        guard let window = window else { return }
-        
-        window.contentViewController = hostingController
-        window.title = "CodeMind Classification Details"
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        window.level = .floating // Ensure it appears above other windows
-        window.isReleasedWhenClosed = false
-        
-        // Handle window close
-        let weakSelf = self
-        Foundation.NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: OperationQueue.main
-        ) { (_: Foundation.Notification) in
-            Task { @MainActor [weak weakSelf] in
-                weakSelf?.hideWindow()
-            }
-        }
-    }
-    
-    func hideWindow() {
-        window?.close()
-        window = nil
-        onClose?()
-        onClose = nil
-    }
-}
-
-/// Custom DismissAction for window-based dismissal
-struct DismissAction {
-    let action: () -> Void
-    
-    func callAsFunction() {
-        action()
-    }
-}
-
-extension EnvironmentValues {
-    var dismiss: DismissAction {
-        get { self[DismissKey.self] }
-        set { self[DismissKey.self] = newValue }
-    }
-    
-    private struct DismissKey: EnvironmentKey {
-        static let defaultValue = DismissAction(action: {})
-    }
-}
 

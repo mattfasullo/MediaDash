@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A8C1786D0D0047CD8E98469A /* CodeMind in Frameworks */ = {isa = PBXBuildFile; productRef = 450CBDF0A6724CD088E650F9 /* CodeMind */; };
 		EF7B667D2ECD49B80002FEED /* MediaManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7B667C2ECD49B10002FEED /* MediaManager.swift */; };
 		EF9222E22ECFA7D500DD3992 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = EF9222E12ECFA7D500DD3992 /* Sparkle */; };
 /* End PBXBuildFile section */
@@ -73,7 +72,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				EF9222E22ECFA7D500DD3992 /* Sparkle in Frameworks */,
-				A8C1786D0D0047CD8E98469A /* CodeMind in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -136,7 +134,6 @@
 			name = MediaDash;
 			packageProductDependencies = (
 				EF9222E12ECFA7D500DD3992 /* Sparkle */,
-				450CBDF0A6724CD088E650F9 /* CodeMind */,
 			);
 			productName = MediaDash;
 			productReference = EF7B66522ECD48C80002FEED /* MediaDash.app */;
@@ -196,7 +193,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2610;
-				LastUpgradeCheck = 2610;
+				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					EF7B66512ECD48C80002FEED = {
 						CreatedOnToolsVersion = 26.1.1;
@@ -222,7 +219,6 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				EF9222E02ECFA7D500DD3992 /* XCRemoteSwiftPackageReference "Sparkle" */,
-				5E8623462EEE46D48E1AFA7B /* XCLocalSwiftPackageReference "../Packages/CodeMind" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = EF7B66532ECD48C80002FEED /* Products */;
@@ -333,6 +329,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -358,6 +355,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -397,6 +395,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -415,6 +414,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -427,6 +427,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 92;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -462,6 +463,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 92;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -495,6 +497,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 92;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
@@ -516,6 +519,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 92;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
@@ -536,6 +540,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 92;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 0.9.2;
@@ -555,6 +560,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 92;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 0.9.2;
@@ -610,13 +616,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCLocalSwiftPackageReference section */
-		5E8623462EEE46D48E1AFA7B /* XCLocalSwiftPackageReference "../Packages/CodeMind" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/CodeMind;
-		};
-/* End XCLocalSwiftPackageReference section */
-
 /* Begin XCRemoteSwiftPackageReference section */
 		EF9222E02ECFA7D500DD3992 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -629,11 +628,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		450CBDF0A6724CD088E650F9 /* CodeMind */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5E8623462EEE46D48E1AFA7B /* XCLocalSwiftPackageReference "../Packages/CodeMind" */;
-			productName = CodeMind;
-		};
 		EF9222E12ECFA7D500DD3992 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = EF9222E02ECFA7D500DD3992 /* XCRemoteSwiftPackageReference "Sparkle" */;

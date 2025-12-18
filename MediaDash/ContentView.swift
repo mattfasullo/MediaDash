@@ -235,6 +235,10 @@ struct ContentView: View {
                 .keyboardShortcut("`", modifiers: .command)
                 .hidden()
             )
+            .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("OpenSettings"))) { _ in
+                // Open settings when requested (e.g., from menu bar status item)
+                showSettingsSheet = true
+            }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("windowModeChanged"))) { notification in
                 // Reload settings when window mode changes (e.g., from fullscreen)
                 settingsManager.reloadCurrentProfile()
@@ -305,7 +309,6 @@ struct ContentView: View {
                     .focused($mainViewFocused)
                     .focusEffectDisabled()
                     
-                    CodeMindActivityOverlay()
                 }
                 .overlay(alignment: .topLeading) {
                     // Layout Edit Mode Indicator
@@ -407,7 +410,6 @@ struct ContentView: View {
                     .focused($mainViewFocused)
                     .focusEffectDisabled()
                     
-                    CodeMindActivityOverlay()
                 }
                 .overlay(alignment: .topTrailing) {
                     // Dashboard button in very top right - only in compact mode
@@ -1853,7 +1855,7 @@ struct SearchView: View {
             .padding()
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(minWidth: 400, idealWidth: 650, maxWidth: 650, minHeight: 300)
+        .frame(width: 650, height: 600)
         .onAppear {
             // Set initial focus when view appears
             isSearchFieldFocused = true
@@ -3825,12 +3827,15 @@ struct EmailRefreshButton: View {
                 isRefreshing = true
                 statusMessage = nil
                 
-                Task {
+                Task { @MainActor in
+                    // Capture the service to avoid environment object wrapper issues
+                    let service = emailScanningService
+                    
                     // Get notification count before scan
                     let beforeCount = notificationCenter?.notifications.filter { $0.status == .pending }.count ?? 0
                     
                     // Use scanUnreadEmails with forceRescan to rescan even if notifications exist
-                    await emailScanningService.scanUnreadEmails(forceRescan: true)
+                    await service.scanUnreadEmails(forceRescan: true)
                     
                     // After scanning, immediately check for grabbed replies
                     if let grabbedService = grabbedIndicatorService {

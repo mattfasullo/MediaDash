@@ -49,22 +49,6 @@ struct MediaDashApp: App {
             }
             
             CommandGroup(after: .toolbar) {
-                Button("CodeMind Debug Window") {
-                    CodeMindDebugWindowManager.shared.toggleDebugWindow()
-                }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-                
-                Divider()
-                
-                Button("Toggle CodeMind Overlay") {
-                    Task { @MainActor in
-                        CodeMindActivityManager.shared.toggle()
-                    }
-                }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
-                
-                Divider()
-                
                 Button("Toggle Layout Edit Mode") {
                     LayoutEditManager.shared.toggleEditMode()
                 }

@@ -50,9 +50,9 @@ struct OnboardingView: View {
     @State private var currentStep: OnboardingStep = .welcome
     @State private var serverBasePath: String = ""
     @State private var sessionsBasePath: String = ""
-    @State private var selectedDocketSource: DocketSource = .csv
-    @State private var enableGmail: Bool = false
-    @State private var enableAsana: Bool = false
+    @State private var selectedDocketSource: DocketSource = .asana
+    @State private var enableGmail: Bool = true
+    @State private var enableAsana: Bool = true
     @State private var isPathValid: Bool? = nil
     @State private var isSessionsPathValid: Bool? = nil
     @State private var animateContent: Bool = false

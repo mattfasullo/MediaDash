@@ -343,12 +343,6 @@ struct DashboardTopBar: View {
                 .buttonStyle(.plain)
                 .help("Job Info (⌘D)")
                 
-                // CodeMind Chat Button
-                CodeMindChatButton(
-                    emailScanningService: emailScanningService,
-                    showSettings: $showSettingsSheet
-                )
-                
                 // Status indicators
                 if let cache = cacheManager {
                     ServerStatusIndicator(
@@ -1175,14 +1169,6 @@ struct StatusPanelView: View {
                         CacheStatusIndicator(cacheManager: cacheManager)
                     }
                 }
-                
-                // CodeMind Status
-                StatusCard(title: "CodeMind") {
-                    CodeMindChatButton(
-                        emailScanningService: emailScanningService,
-                        showSettings: $showSettings
-                    )
-                }
             }
             .padding(16)
         }
@@ -1642,24 +1628,14 @@ struct DashboardNotificationsPanel: View {
         case .requests:
             return active.filter { $0.type == .request }
         case .forReview:
-            let threshold = settingsManager.currentSettings.codeMindReviewThreshold
-            return active.filter { notification in
-                if let meta = notification.codeMindClassification, meta.wasUsed {
-                    return meta.confidence < threshold
-                }
-                return false
-            }
+            // For review filter (no longer available)
+            return []
         }
     }
     
     private var reviewCount: Int {
-        let threshold = settingsManager.currentSettings.codeMindReviewThreshold
-        return notificationCenter.activeNotifications.filter { notification in
-            if let meta = notification.codeMindClassification, meta.wasUsed {
-                return meta.confidence < threshold
-            }
-            return false
-        }.count
+        // Review count (no longer available)
+        return 0
     }
     
     var body: some View {
@@ -1775,8 +1751,6 @@ struct DashboardNotificationCard: View {
     @State private var editedJobName = ""
     @State private var showDocketInputDialog = false
     @State private var inputDocketNumber = ""
-    @State private var showCustomClassificationDialog = false
-    @State private var customClassificationText = ""
     
     private var typeIcon: String {
         switch notification.type {
@@ -1786,7 +1760,6 @@ struct DashboardNotificationCard: View {
         case .error: return "exclamationmark.triangle.fill"
         case .info: return "info.circle.fill"
         case .junk, .skipped: return "xmark.circle.fill"
-        case .custom: return "tag.fill"
         }
     }
     
@@ -1798,7 +1771,6 @@ struct DashboardNotificationCard: View {
         case .error: return .red
         case .info: return .cyan
         case .junk, .skipped: return .gray
-        case .custom: return .orange
         }
     }
     
@@ -1850,25 +1822,6 @@ struct DashboardNotificationCard: View {
                         let finalDocketNumber = inputDocketNumber.isEmpty ? generateAutoDocketNumber() : inputDocketNumber
                         notificationCenter.updateDocketNumber(currentNotification, to: finalDocketNumber)
                         inputDocketNumber = ""
-                    }
-                }
-            )
-        }
-        .sheet(isPresented: $showCustomClassificationDialog) {
-            CustomClassificationDialog(
-                isPresented: $showCustomClassificationDialog,
-                classificationText: $customClassificationText,
-                onConfirm: {
-                    if !customClassificationText.isEmpty {
-                        RecentCustomClassificationsManager.shared.add(customClassificationText)
-                        Task {
-                            await notificationCenter.reclassify(
-                                notification,
-                                toCustomType: customClassificationText,
-                                autoArchive: false,
-                                emailScanningService: emailScanningService
-                            )
-                        }
                     }
                 }
             )
@@ -1930,23 +1883,8 @@ struct DashboardNotificationCard: View {
     
     @ViewBuilder
     private var confidenceIndicator: some View {
-        if let meta = notification.codeMindClassification, meta.wasUsed {
-            let threshold = settingsManager.currentSettings.codeMindReviewThreshold
-            let isLow = meta.confidence < threshold
-            let color: Color = isLow ? .orange : .green
-            let icon = isLow ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
-            
-            HStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 8))
-                Text("\(Int(meta.confidence * 100))%")
-                    .font(.system(size: 8, weight: .semibold))
-            }
-            .foregroundColor(color)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(color.opacity(0.15)))
-        }
+        // Confidence indicator (no longer available)
+        EmptyView()
     }
     
     private var expandButton: some View {
@@ -2027,26 +1965,7 @@ struct DashboardNotificationCard: View {
         
         Divider()
         
-        // CodeMind MindMap options
-        if notification.codeMindClassification?.wasUsed == true {
-            Button(action: {
-                CodeMindBrainNavigator.shared.navigateToClassification(subject: notification.emailSubject ?? notification.title)
-            }) {
-                Label("View in MindMap", systemImage: "brain")
-            }
-            
-            Button(action: {
-                CodeMindBrainNavigator.shared.createRuleForEmail(
-                    subject: notification.emailSubject ?? notification.title,
-                    from: notification.sourceEmail,
-                    classificationType: notification.type == .newDocket ? "newDocket" : "fileDelivery"
-                )
-            }) {
-                Label("Create Classification Rule", systemImage: "plus.circle")
-            }
-            
-            Divider()
-        }
+        // MindMap options removed
         
         // Open email in browser
         if let emailId = notification.emailId {
@@ -2064,80 +1983,13 @@ struct DashboardNotificationCard: View {
         
         Divider()
         
-        // Re-classify submenu
-        Menu {
-            Button(action: {
-                Task {
-                    await notificationCenter.reclassify(notification, to: .newDocket, autoArchive: false, emailScanningService: emailScanningService)
-                }
-            }) {
-                Label("New Docket", systemImage: "doc.badge.plus")
+        // Remove notification (marks email as read)
+        Button(action: {
+            Task {
+                await notificationCenter.remove(notification, emailScanningService: emailScanningService)
             }
-            .disabled(notification.type == .newDocket)
-            
-            Button(action: {
-                Task {
-                    await notificationCenter.reclassify(notification, to: .mediaFiles, autoArchive: false, emailScanningService: emailScanningService)
-                }
-            }) {
-                Label("File Delivery", systemImage: "arrow.down.doc")
-            }
-            .disabled(notification.type == .mediaFiles)
-            
-            Divider()
-            
-            Button(action: {
-                Task {
-                    await notificationCenter.markAsJunk(notification, emailScanningService: emailScanningService)
-                }
-            }) {
-                Label("Junk (Ads/Promos)", systemImage: "trash")
-            }
-            
-            Button(action: {
-                Task {
-                    await notificationCenter.skip(notification, emailScanningService: emailScanningService)
-                }
-            }) {
-                Label("Skip (Remove)", systemImage: "forward")
-            }
-            
-            Divider()
-            
-            // Recent custom classifications
-            let recentCustomTypes = RecentCustomClassificationsManager.shared.getRecent()
-            if !recentCustomTypes.isEmpty {
-                ForEach(recentCustomTypes, id: \.self) { customType in
-                    Button(action: {
-                        Task {
-                            await notificationCenter.reclassify(notification, toCustomType: customType, autoArchive: false, emailScanningService: emailScanningService)
-                        }
-                    }) {
-                        Label(customType, systemImage: "tag")
-                    }
-                    .disabled(notification.type == .custom && notification.customTypeName == customType)
-                }
-                
-                Divider()
-            }
-            
-            Button(action: {
-                customClassificationText = ""
-                showCustomClassificationDialog = true
-            }) {
-                Label("Other...", systemImage: "plus.circle")
-            }
-        } label: {
-            Label("Re-classify", systemImage: "arrow.triangle.2.circlepath")
-        }
-        
-        Divider()
-        
-        // Archive option
-        if notification.status == .pending && notification.archivedAt == nil {
-            Button(action: { notificationCenter.archive(notification, emailScanningService: emailScanningService) }) {
-                Label("Archive", systemImage: "archivebox")
-            }
+        }) {
+            Label("Remove", systemImage: "trash")
         }
     }
     

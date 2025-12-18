@@ -13,6 +13,9 @@ class AsanaCacheManager: ObservableObject {
     @Published var syncProgress: Double = 0  // 0.0 to 1.0
     @Published var syncPhase: String = ""    // Human-readable phase description
     
+    // Track the last reported progress to ensure monotonic increase
+    private var lastReportedProgress: Double = 0
+    
     // Cache file name - stores Asana docket data for fast offline search
     private let cacheFileName = "mediadash_docket_cache.json"
     private let legacyCacheFileName = "mediadash_docket_search_cache.json" // Old filename for migration
@@ -121,6 +124,10 @@ class AsanaCacheManager: ObservableObject {
         self.serverBasePath = serverBasePath
         self.serverConnectionURL = serverConnectionURL
         
+        // Reload lastSyncDate from cache (check shared first if enabled, then local)
+        // This ensures shouldSync() works correctly on app startup
+        reloadLastSyncDate()
+        
         // Defer cache status check to avoid modifying during view updates
         Task { @MainActor in
             updateCacheStatus()
@@ -149,19 +156,20 @@ class AsanaCacheManager: ObservableObject {
         startPeriodicStatusCheck()
     }
     
-    /// Update sync settings and start periodic background sync
+    /// Update sync settings (for manual sync only - automatic sync is handled by external service)
     func updateSyncSettings(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?) {
         self.syncWorkspaceID = workspaceID
         self.syncProjectID = projectID
         self.syncDocketField = docketField
         self.syncJobNameField = jobNameField
         
-        // Start periodic sync if settings are valid and authenticated
-        if (workspaceID != nil || projectID != nil) && SharedKeychainService.getAsanaAccessToken() != nil {
-            startPeriodicSync()
-        } else {
-            stopPeriodicSync()
-        }
+        // Reload lastSyncDate to ensure shouldSync() works correctly
+        // This is important because updateSyncSettings might be called before updateCacheSettings
+        reloadLastSyncDate()
+        
+        // Don't start automatic periodic sync - external service handles automatic updates
+        // Users can manually sync via the cache icon popup if needed
+        stopPeriodicSync()
     }
     
     /// Start periodic status checking to keep indicators updated
@@ -237,11 +245,8 @@ class AsanaCacheManager: ObservableObject {
         
         print("🔄 [Cache] Started periodic background sync (every 5 minutes)")
         
-        // Perform initial sync immediately (after a short delay to let app initialize)
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-            await performBackgroundSync()
-        }
+        // Note: This function should not be called anymore - automatic sync is handled by external service
+        // MediaDash only performs manual syncs via the UI
     }
     
     /// Stop periodic background sync
@@ -273,13 +278,11 @@ class AsanaCacheManager: ObservableObject {
             return
         }
         
-        // Don't sync if cache is very fresh (less than 30 seconds old) to avoid rapid successive syncs
-        if let lastSync = lastSyncDate {
-            let age = Date().timeIntervalSince(lastSync)
-            if age < 30 {
-                print("🔄 [Background Sync] Skipping - cache is very fresh (\(Int(age)) seconds old)")
-                return
-            }
+        // Use the same shouldSync logic to respect cache freshness (60 minutes default)
+        // This prevents unnecessary syncs on every app launch
+        guard shouldSync(maxAgeMinutes: 60) else {
+            print("🔄 [Background Sync] Skipping - cache is fresh, no sync needed")
+            return
         }
         
         print("🔄 [Background Sync] Starting incremental sync to detect changes...")
@@ -911,6 +914,32 @@ class AsanaCacheManager: ObservableObject {
         lastSyncDate = cached.lastSync
     }
     
+    /// Reload last sync date from cache (checks shared cache first if enabled, then local)
+    private func reloadLastSyncDate() {
+        // Try shared cache first if enabled
+        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+            let fileURL = getFileURL(from: sharedURL)
+            if let data = try? Data(contentsOf: fileURL),
+               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
+                lastSyncDate = cached.lastSync
+                print("🔄 [Cache] Reloaded lastSyncDate from shared cache: \(cached.lastSync)")
+                return
+            }
+            // Shared cache not available, fall through to local
+        }
+        
+        // Fall back to local cache
+        if let data = try? Data(contentsOf: cacheURL),
+           let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
+            lastSyncDate = cached.lastSync
+            print("🔄 [Cache] Reloaded lastSyncDate from local cache: \(cached.lastSync)")
+        } else {
+            // No cache found
+            lastSyncDate = nil
+            print("🔄 [Cache] No cache found, lastSyncDate is nil")
+        }
+    }
+    
     /// Check if cache should be synced (stale or missing)
     /// Note: This now only checks local cache timestamp - shared cache is no longer used as a sync-skip signal
     /// because that was preventing new dockets from being fetched
@@ -951,11 +980,40 @@ class AsanaCacheManager: ObservableObject {
             syncPhase = ""
         }
         
-        // Always sync from Asana API to get fresh data
-        // The shared cache is used as a fallback when Asana is unavailable, not as a replacement for syncing
-        // Note: We removed the "fresh shared cache" shortcut that was preventing new dockets from being fetched
+        // Check if shared cache is fresh and use it instead of syncing
+        // External service automatically updates the shared cache, so MediaDash should use it when available
+        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+            let fileURL = getFileURL(from: sharedURL)
+            if let data = try? Data(contentsOf: fileURL),
+               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data),
+               let lastSync = cached.lastSync {
+                let age = Date().timeIntervalSince(lastSync)
+                let maxAge: TimeInterval = 60 * 60 // 1 hour - consider cache fresh if updated within last hour
+                
+                if age < maxAge && !cached.dockets.isEmpty {
+                    // Shared cache is fresh - use it instead of syncing
+                    print("🟢 [Cache] Using fresh shared cache (updated \(Int(age / 60)) minutes ago)")
+                    
+                    // Save to local cache for consistency (preserve original sync timestamp)
+                    let cacheData = CachedDockets(dockets: cached.dockets, lastSync: lastSync)
+                    if let encoded = try? JSONEncoder().encode(cacheData) {
+                        try? encoded.write(to: cacheURL, options: .atomic)
+                    }
+                    
+                    // Update lastSyncDate property and save dockets
+                    self.lastSyncDate = lastSync
+                    saveCachedDockets(cached.dockets)
+                    
+                    return // Exit early - no sync needed!
+                } else {
+                    print("🔄 [Cache] Shared cache is stale (\(Int(age / 60)) minutes old) - will sync from Asana...")
+                }
+            } else {
+                print("🔄 [Cache] Shared cache not found or invalid - will sync from Asana...")
+            }
+        }
 
-        // Local sync with Asana API
+        // Local sync with Asana API (only if shared cache is stale/missing)
         print("🔵 [Cache] Starting local sync with Asana...")
         
         // Check if token exists
@@ -1016,6 +1074,9 @@ class AsanaCacheManager: ObservableObject {
         }
         
         // Fetch dockets from Asana (incremental if we have a lastSync date)
+        // Reset progress tracking
+        lastReportedProgress = 0
+        
         let fetchedDockets = try await asanaService.fetchDockets(
             workspaceID: workspaceID,
             projectID: projectID,
@@ -1023,9 +1084,13 @@ class AsanaCacheManager: ObservableObject {
             jobNameField: jobNameField,
             modifiedSince: modifiedSince,
             progressCallback: { [weak self] progress, phase in
-                Task { @MainActor in
-                    self?.syncProgress = progress
-                    self?.syncPhase = phase
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    // Ensure progress only increases (monotonic) to prevent jumping
+                    let clampedProgress = max(progress, self.lastReportedProgress)
+                    self.syncProgress = min(clampedProgress, 1.0) // Cap at 1.0
+                    self.syncPhase = phase
+                    self.lastReportedProgress = self.syncProgress
                 }
             }
         )
@@ -1341,6 +1406,9 @@ class AsanaCacheManager: ObservableObject {
         
         print("🔄 [Cache] Force FULL sync - fetching ALL dockets from Asana API directly...")
         
+        // Reset progress tracking
+        lastReportedProgress = 0
+        
         // Fetch ALL dockets from Asana (no modifiedSince = full fetch)
         let fetchedDockets = try await asanaService.fetchDockets(
             workspaceID: workspaceID,
@@ -1349,9 +1417,13 @@ class AsanaCacheManager: ObservableObject {
             jobNameField: jobNameField,
             modifiedSince: nil,  // Force full fetch
             progressCallback: { [weak self] progress, phase in
-                Task { @MainActor in
-                    self?.syncProgress = progress
-                    self?.syncPhase = phase
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    // Ensure progress only increases (monotonic) to prevent jumping
+                    let clampedProgress = max(progress, self.lastReportedProgress)
+                    self.syncProgress = min(clampedProgress, 1.0) // Cap at 1.0
+                    self.syncPhase = phase
+                    self.lastReportedProgress = self.syncProgress
                 }
             }
         )

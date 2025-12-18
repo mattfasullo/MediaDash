@@ -487,11 +487,18 @@ class AsanaService: ObservableObject {
         }
         
         if let workspaceID = finalWorkspaceID {
-            progressCallback?(0.05, "Fetching project list...")
+            let syncType = modifiedSince != nil ? "incremental" : "full"
+            progressCallback?(0.05, "Fetching project list (\(syncType) sync)...")
             
             // Fetch ALL projects (no limit to ensure we get all dockets)
+            // Note: Even for incremental sync, we must check all projects because
+            // Asana API doesn't support filtering projects by modification date
             let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: nil)
-            print("🔄 [SYNC] Found \(projects.count) projects, fetching ALL tasks from each...")
+            if modifiedSince != nil {
+                print("🔄 [SYNC] Found \(projects.count) projects, checking for updated tasks since \(modifiedSince!)...")
+            } else {
+                print("🔄 [SYNC] Found \(projects.count) projects, fetching ALL tasks from each (full sync)...")
+            }
             
             progressCallback?(0.08, "Found \(projects.count) projects")
             
@@ -506,11 +513,9 @@ class AsanaService: ObservableObject {
             let progressRange = progressEnd - progressStart
             
             // Fetch ALL tasks from each project (no limit to ensure we get all dockets)
+            // Note: Even for incremental sync, we must check all projects because
+            // Asana API doesn't support filtering projects by modification date
             for (index, project) in projects.enumerated() {
-                // Calculate progress within the task-fetching phase
-                let projectProgress = progressStart + (Double(index) / Double(projects.count)) * progressRange
-                progressCallback?(projectProgress, "Fetching project \(index + 1) of \(projects.count)...")
-                
                 // Only log every 10th project to reduce noise
                 if index % 10 == 0 || index == projects.count - 1 {
                     print("🔄 [SYNC] Progress: \(index + 1)/\(projects.count) projects")
@@ -518,8 +523,22 @@ class AsanaService: ObservableObject {
                 
                 do {
                     // Fetch tasks (incremental if modifiedSince provided)
+                    // Note: We only update progress AFTER completion to avoid jumping
                     let tasks = try await fetchTasks(workspaceID: workspaceID, projectID: project.gid, maxTasks: nil, modifiedSince: modifiedSince)
                     allTasks.append(contentsOf: tasks)
+                    
+                    // Update progress AFTER completing this project (ensures monotonic increase)
+                    let completedProjects = Double(index + 1)
+                    let completedProgress = progressStart + (completedProjects / Double(projects.count)) * progressRange
+                    // Ensure progress never exceeds the range
+                    let finalProgress = min(completedProgress, progressEnd)
+                    
+                    if modifiedSince != nil {
+                        progressCallback?(finalProgress, "Checked project \(index + 1) of \(projects.count)")
+                    } else {
+                        progressCallback?(finalProgress, "Fetched project \(index + 1) of \(projects.count)")
+                    }
+                    
                     if index % 10 == 0 || index == projects.count - 1 {
                         if let modifiedSince = modifiedSince {
                             print("   Project \(index + 1): \(tasks.count) tasks modified since \(modifiedSince)")
@@ -529,6 +548,11 @@ class AsanaService: ObservableObject {
                     }
                 } catch {
                     // Log error but continue with other projects
+                    // Still update progress even on error to keep it moving forward
+                    let completedProjects = Double(index + 1)
+                    let completedProgress = progressStart + (completedProjects / Double(projects.count)) * progressRange
+                    let finalProgress = min(completedProgress, progressEnd)
+                    progressCallback?(finalProgress, "Error on project \(index + 1), continuing...")
                     print("⚠️ [SYNC] Error fetching tasks from project \(index + 1): \(error.localizedDescription)")
                 }
             }

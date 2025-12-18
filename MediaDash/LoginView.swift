@@ -9,9 +9,18 @@ struct LoginView: View {
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var isLoggingIn = false
+    @State private var serverUsers: [String] = []
+    @State private var isLoadingServerUsers = false
+    @State private var profileToDelete: WorkspaceProfile?
+    @State private var showDeleteConfirmation = false
+    @State private var deleteConfirmationText = ""
     
     private var existingProfiles: [WorkspaceProfile] {
         sessionManager.getAllUserProfiles()
+    }
+    
+    private var isServerConnected: Bool {
+        sessionManager.isServerConnected()
     }
     
     private var logoImage: some View {
@@ -49,7 +58,7 @@ struct LoginView: View {
                     }
                     .padding(32)
                     .frame(width: 500)
-                    .frame(minHeight: 300, maxHeight: 500)
+                    .frame(minHeight: 300, maxHeight: 600)
                 }
                 .background(Color(nsColor: .windowBackgroundColor))
                 .cornerRadius(12)
@@ -59,10 +68,39 @@ struct LoginView: View {
             }
             .padding()
         }
+        .onAppear {
+            loadServerUsers()
+        }
         .alert("Error", isPresented: $showError) {
             Button("OK") { showError = false }
         } message: {
             Text(errorMessage)
+        }
+        .alert("Delete User", isPresented: $showDeleteConfirmation) {
+            TextField("Type 'delete' to confirm", text: $deleteConfirmationText)
+            Button("Cancel", role: .cancel) {
+                profileToDelete = nil
+                deleteConfirmationText = ""
+            }
+            Button("Delete", role: .destructive) {
+                if let profile = profileToDelete {
+                    deleteProfile(profile)
+                }
+                profileToDelete = nil
+                deleteConfirmationText = ""
+            }
+            .disabled(deleteConfirmationText.lowercased() != "delete")
+        } message: {
+            if let profile = profileToDelete {
+                let message: String
+                if profile.isLocal {
+                    message = "Are you sure you want to delete '\(profile.name)'? This will remove the profile from this computer. Type 'delete' to confirm."
+                } else {
+                    message = "Are you sure you want to delete '\(profile.name)'? This will remove the profile from both this computer and the server. Type 'delete' to confirm."
+                }
+                return Text(message)
+            }
+            return Text("")
         }
     }
 
@@ -75,30 +113,92 @@ struct LoginView: View {
                     .font(.headline)
                     .foregroundColor(.primary)
 
-                Text("Your settings will sync across all computers")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if isServerConnected {
+                    Text("Connected to server • Your settings will sync across all computers")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Server not connected • Using guest account")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if !showCreateNew && !existingProfiles.isEmpty {
-                // Show existing profiles
+            if !showCreateNew {
                 ScrollView {
                     VStack(spacing: 8) {
-                        ForEach(existingProfiles) { profile in
-                            ProfileButton(
-                                profile: profile,
-                                isLoggingIn: isLoggingIn
-                            ) {
-                                selectProfile(profile)
+                        if isLoadingServerUsers {
+                            HStack {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                Text("Loading users from server...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 8)
+                        } else {
+                            // Get all unique users (combine server users and local profiles, deduplicate)
+                            let allUsers = getAllUniqueUsers()
+                            
+                            if allUsers.isEmpty && !isServerConnected {
+                                // No users and server not connected - show guest option
+                                GuestAccountButton(isLoggingIn: isLoggingIn) {
+                                    useGuestAccount()
+                                }
+                            } else {
+                                // Show all users (server users first, then local-only profiles)
+                                ForEach(allUsers, id: \.username) { userInfo in
+                                    if userInfo.isOnServer {
+                                        ServerUserButton(
+                                            username: userInfo.username,
+                                            isLoggingIn: isLoggingIn,
+                                            onSelect: {
+                                                selectServerUser(userInfo.username)
+                                            },
+                                            onDelete: {
+                                                // For server users, we can delete even without a local profile
+                                                if let profile = userInfo.profile {
+                                                    profileToDelete = profile
+                                                } else {
+                                                    // Create a temporary profile for deletion confirmation
+                                                    let tempProfile = WorkspaceProfile.user(username: userInfo.username, settings: AppSettings.default)
+                                                    profileToDelete = tempProfile
+                                                }
+                                                showDeleteConfirmation = true
+                                            }
+                                        )
+                                    } else if let profile = userInfo.profile {
+                                        ProfileButton(
+                                            profile: profile,
+                                            isLoggingIn: isLoggingIn,
+                                            onDelete: {
+                                                profileToDelete = profile
+                                                showDeleteConfirmation = true
+                                            }
+                                        ) {
+                                            selectProfile(profile)
+                                        }
+                                    }
+                                }
+                                
+                                // Show guest account option if server not connected
+                                if !isServerConnected {
+                                    Divider()
+                                        .padding(.vertical, 4)
+                                    
+                                    GuestAccountButton(isLoggingIn: isLoggingIn) {
+                                        useGuestAccount()
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                .frame(maxHeight: 200)
+                .frame(maxHeight: 350)
             }
 
-            if showCreateNew || existingProfiles.isEmpty {
+            if showCreateNew {
                 // Show create new profile form
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Username or Email")
@@ -118,14 +218,14 @@ struct LoginView: View {
 
             // Action Buttons
             HStack(spacing: 12) {
-                if !showCreateNew && !existingProfiles.isEmpty {
+                if !showCreateNew {
                     Button(action: {
                         showCreateNew = true
                         username = ""
                     }) {
                         HStack {
                             Image(systemName: "plus.circle")
-                            Text("New Profile")
+                            Text("New User")
                         }
                         .font(.subheadline)
                         .frame(maxWidth: .infinity)
@@ -135,7 +235,19 @@ struct LoginView: View {
                     .disabled(isLoggingIn)
                 }
 
-                if showCreateNew || existingProfiles.isEmpty {
+                if showCreateNew {
+                    Button(action: {
+                        showCreateNew = false
+                        username = ""
+                    }) {
+                        Text("Cancel")
+                            .font(.subheadline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isLoggingIn)
+                    
                     Button(action: attemptUserLogin) {
                         HStack {
                             if isLoggingIn {
@@ -158,7 +270,94 @@ struct LoginView: View {
         }
     }
 
+    // MARK: - User List Management
+    
+    private struct UserInfo {
+        let username: String
+        let isOnServer: Bool
+        let profile: WorkspaceProfile?
+    }
+    
+    private func getAllUniqueUsers() -> [UserInfo] {
+        var userMap: [String: UserInfo] = [:]
+        
+        // Add server users
+        for serverUser in serverUsers {
+            let lowercased = serverUser.lowercased()
+            if userMap[lowercased] == nil {
+                // Check if we have a local profile for this user
+                let profile = existingProfiles.first { $0.username?.lowercased() == lowercased }
+                userMap[lowercased] = UserInfo(
+                    username: serverUser,
+                    isOnServer: true,
+                    profile: profile
+                )
+            }
+        }
+        
+        // Add local profiles that aren't on server
+        for profile in existingProfiles {
+            if let username = profile.username {
+                let lowercased = username.lowercased()
+                if userMap[lowercased] == nil {
+                    userMap[lowercased] = UserInfo(
+                        username: username,
+                        isOnServer: false,
+                        profile: profile
+                    )
+                }
+            }
+        }
+        
+        // Sort: server users first, then by username
+        return userMap.values.sorted { user1, user2 in
+            if user1.isOnServer && !user2.isOnServer {
+                return true
+            }
+            if !user1.isOnServer && user2.isOnServer {
+                return false
+            }
+            return user1.username.lowercased() < user2.username.lowercased()
+        }
+    }
+    
     // MARK: - Actions
+    
+    private func loadServerUsers() {
+        guard isServerConnected else {
+            serverUsers = []
+            return
+        }
+        
+        isLoadingServerUsers = true
+        Task {
+            let users = await sessionManager.getServerUsers()
+            await MainActor.run {
+                serverUsers = users
+                isLoadingServerUsers = false
+            }
+        }
+    }
+    
+    private func selectServerUser(_ username: String) {
+        isLoggingIn = true
+        
+        Task {
+            await sessionManager.loginWithUsername(username)
+            
+            await MainActor.run {
+                isLoggingIn = false
+                
+                // Check if login was successful
+                if case .loggedIn = sessionManager.authenticationState {
+                    // Successfully logged in
+                } else {
+                    errorMessage = "Failed to load settings. Please check your shared storage connection."
+                    showError = true
+                }
+            }
+        }
+    }
 
     private func selectProfile(_ profile: WorkspaceProfile) {
         guard let username = profile.username else { return }
@@ -179,6 +378,18 @@ struct LoginView: View {
                     errorMessage = "Failed to load settings. Please check your shared storage connection."
                     showError = true
                 }
+            }
+        }
+    }
+    
+    private func useGuestAccount() {
+        isLoggingIn = true
+        
+        Task {
+            sessionManager.createLocalWorkspace(name: "Guest")
+            
+            await MainActor.run {
+                isLoggingIn = false
             }
         }
     }
@@ -204,6 +415,94 @@ struct LoginView: View {
             }
         }
     }
+    
+    private func deleteProfile(_ profile: WorkspaceProfile) {
+        Task {
+            _ = await sessionManager.deleteProfile(profile)
+            await MainActor.run {
+                // Reload server users if connected
+                if isServerConnected {
+                    loadServerUsers()
+                }
+            }
+        }
+    }
+    
+    private func deleteServerUser(username: String) {
+        Task {
+            await sessionManager.deleteServerUser(username: username)
+            await MainActor.run {
+                // Reload server users if connected
+                if isServerConnected {
+                    loadServerUsers()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Server User Button
+
+struct ServerUserButton: View {
+    let username: String
+    let isLoggingIn: Bool
+    let onSelect: () -> Void
+    let onDelete: () -> Void
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                Image(systemName: "person.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(.green)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(username)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text("Server user")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                if isHovered && !isLoggingIn {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .padding(6)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hovering in
+                        // Prevent hover state from propagating
+                    }
+                }
+                
+                if isLoggingIn {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoggingIn)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
 }
 
 // MARK: - Profile Button
@@ -211,7 +510,9 @@ struct LoginView: View {
 struct ProfileButton: View {
     let profile: WorkspaceProfile
     let isLoggingIn: Bool
+    let onDelete: () -> Void
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -229,6 +530,67 @@ struct ProfileButton: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                }
+                
+                Spacer()
+                
+                if isHovered && !isLoggingIn {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .padding(6)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hovering in
+                        // Prevent hover state from propagating
+                    }
+                }
+                
+                if isLoggingIn {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoggingIn)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+}
+
+// MARK: - Guest Account Button
+
+struct GuestAccountButton: View {
+    let isLoggingIn: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "person.crop.circle.badge.questionmark")
+                    .font(.title2)
+                    .foregroundColor(.orange)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Guest Account")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text("Local only • No sync")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 
                 Spacer()

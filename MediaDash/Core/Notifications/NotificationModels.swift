@@ -11,7 +11,6 @@ import SwiftUI
     case info = "info"
     case junk = "junk" // Ads, promos, spam mistakenly classified
     case skipped = "skipped" // User chose to skip/ignore this notification
-    case custom = "custom" // Custom classification type with user-defined name
     
     /// Display name for the notification type
     var displayName: String {
@@ -23,7 +22,6 @@ import SwiftUI
         case .info: return "Info"
         case .junk: return "Junk"
         case .skipped: return "Skipped"
-        case .custom: return "Custom"
         }
     }
     
@@ -37,7 +35,6 @@ import SwiftUI
         case .info: return "info.circle"
         case .junk: return "trash"
         case .skipped: return "forward"
-        case .custom: return "tag"
         }
     }
     
@@ -51,7 +48,6 @@ import SwiftUI
         case .info: return .orange
         case .junk: return .gray
         case .skipped: return .secondary
-        case .custom: return .purple
         }
     }
     
@@ -96,9 +92,6 @@ struct Notification: Identifiable, Codable, Equatable {
     var fileLinks: [String]? // File hosting links extracted from email (for File Delivery notifications)
     var fileLinkDescriptions: [String]? // Descriptions of what each link contains (parallel array to fileLinks)
 
-    // CodeMind classification metadata (for feedback/learning)
-    var codeMindClassification: CodeMindClassificationMetadata? // Stores classification result for feedback
-    
     // Original values (for reset functionality)
     var originalDocketNumber: String?
     var originalJobName: String?
@@ -109,8 +102,10 @@ struct Notification: Identifiable, Codable, Equatable {
     var shouldCreateWorkPicture: Bool = true // Default to true
     var shouldCreateSimianJob: Bool = false
     
-    // Custom classification type name (used when type is .custom)
-    var customTypeName: String?
+    // Duplicate detection flags (computed/checked, not stored)
+    var isInWorkPicture: Bool = false // Whether docket folder exists in work picture
+    var isInSimian: Bool = false // Whether job already exists in Simian
+    
     
     init(
         id: UUID = UUID(),
@@ -134,8 +129,7 @@ struct Notification: Identifiable, Codable, Equatable {
         isGrabbed: Bool = false,
         isPriorityAssist: Bool = false,
         grabbedBy: String? = nil,
-        grabbedAt: Date? = nil,
-        customTypeName: String? = nil
+        grabbedAt: Date? = nil
     ) {
         self.id = id
         self.type = type
@@ -160,7 +154,6 @@ struct Notification: Identifiable, Codable, Equatable {
         self.isPriorityAssist = isPriorityAssist
         self.grabbedBy = grabbedBy
         self.grabbedAt = grabbedAt
-        self.customTypeName = customTypeName
         // Store original values for reset
         self.originalDocketNumber = docketNumber
         self.originalJobName = jobName
@@ -184,12 +177,4 @@ struct ParsedDocketNotification {
     let body: String?
 }
 
-/// Metadata about CodeMind classification for feedback purposes
-struct CodeMindClassificationMetadata: Codable, Equatable {
-    let wasUsed: Bool // Whether CodeMind was used for this classification
-    let confidence: Double // Confidence score (0.0-1.0)
-    let reasoning: String? // CodeMind's reasoning
-    let classificationType: String // "newDocket" or "fileDelivery"
-    let extractedData: [String: String]? // Extracted fields (docketNumber, jobName, etc.)
-}
 

@@ -951,6 +951,7 @@ class MediaManager: ObservableObject {
             var cumulativeBytesCopied: Int64 = 0
 
             var failedFiles: [String] = []
+            var workPictureDestinationFolder: URL? = nil
 
             if type == .workPicture || type == .both {
                 await MainActor.run {
@@ -983,6 +984,7 @@ class MediaManager: ObservableObject {
                 
                 let dateStr = self.formatDate(wpDate)
                 let destFolder = self.getNextFolder(base: base, date: dateStr)
+                workPictureDestinationFolder = destFolder
                 
                 // Check if folder already exists, if not create it
                 if !fm.fileExists(atPath: destFolder.path) {
@@ -1298,9 +1300,11 @@ class MediaManager: ObservableObject {
                 }
             }
 
-            // Capture failedFiles before entering MainActor context
+            // Capture failedFiles and folders before entering MainActor context
             let finalFailedFiles = failedFiles
             let prepFolderToOpen = prepDestinationFolder
+            let workPictureFolderToOpen = workPictureDestinationFolder
+            let jobType = type // Capture type for use in MainActor context
 
             let wasCancelled = await self.cancelRequested
 
@@ -1324,9 +1328,16 @@ class MediaManager: ObservableObject {
                     FloatingProgressManager.shared.complete(message: "Done!")
                     NSSound(named: "Glass")?.play()
 
-                    // Open prep folder if setting is enabled
-                    if let prepFolder = prepFolderToOpen, self.config.settings.openPrepFolderWhenDone {
-                        NSWorkspace.shared.open(prepFolder)
+                    // Open folders if settings are enabled
+                    if jobType == .prep || jobType == .both {
+                        if let prepFolder = prepFolderToOpen, self.config.settings.openPrepFolderWhenDone {
+                            NSWorkspace.shared.open(prepFolder)
+                        }
+                    }
+                    if jobType == .workPicture || jobType == .both {
+                        if let wpFolder = workPictureFolderToOpen, self.config.settings.openWorkPictureFolderWhenDone {
+                            NSWorkspace.shared.open(wpFolder)
+                        }
                     }
                 } else {
                     self.statusMessage = "Completed with \(finalFailedFiles.count) error(s)"

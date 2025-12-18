@@ -58,8 +58,6 @@ struct NotificationPopupView: View {
             return "trash.fill"
         case .skipped:
             return "forward.fill"
-        case .custom:
-            return "tag.fill"
         }
     }
 }

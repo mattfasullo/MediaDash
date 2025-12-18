@@ -322,11 +322,6 @@ struct SettingsView: View {
                         oauthService: oauthService
                     )
 
-                    // CodeMind Integration Section
-                    CodeMindIntegrationSection(
-                        settings: $settings,
-                        hasUnsavedChanges: $hasUnsavedChanges
-                    )
 
                     // Simian Integration Section
                     SimianIntegrationSection(
@@ -1162,6 +1157,7 @@ struct AsanaIntegrationSection: View {
     @State private var isForceSyncing = false
     @State private var forceSyncError: String?
     @State private var forceSyncSuccess = false
+    @StateObject private var cacheSyncService = CacheSyncServiceManager()
 
     // Connection health tracking
     enum ConnectionHealth {
@@ -1330,7 +1326,7 @@ struct AsanaIntegrationSection: View {
                 await MainActor.run {
                     connectionHealth = .expired
                     lastHealthCheck = Date()
-                    connectionError = "Token expired or invalid. Please click 'Reconnect' to re-authenticate."
+                    connectionError = "Token expired or invalid. Please click 'Connect' to re-authenticate."
                     print("❌ [Asana Health] Connection failed - token expired or invalid: \(error.localizedDescription)")
                 }
             }
@@ -1347,6 +1343,10 @@ struct AsanaIntegrationSection: View {
                         .font(.system(size: 16))
                     Text("Asana Integration")
                         .font(.system(size: 16, weight: .semibold))
+                    Spacer()
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.system(size: 16))
                 }
                 
                 Text("Fetch dockets and job names from Asana")
@@ -1412,13 +1412,13 @@ struct AsanaIntegrationSection: View {
 
                         // Show buttons based on connection health
                         if connectionHealth == .expired {
-                            // When expired, Reconnect is prominent (primary action)
-                            Button("Reconnect") {
+                            // When expired, Connect is prominent (primary action)
+                            Button("Connect") {
                                 reconnectAsana()
                             }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
-                            .help("Re-authenticate with Asana")
+                            .help("Connect to Asana")
 
                             Button("Disconnect") {
                                 disconnectAsana()
@@ -1427,14 +1427,7 @@ struct AsanaIntegrationSection: View {
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         } else if connectionHealth == .healthy {
-                            // When healthy, both buttons are secondary
-                            Button("Reconnect") {
-                                reconnectAsana()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .help("Re-authenticate with Asana")
-
+                            // When healthy, show Disconnect button
                             Button("Disconnect") {
                                 disconnectAsana()
                                 connectionHealth = .noToken
@@ -1453,7 +1446,7 @@ struct AsanaIntegrationSection: View {
                                 Text("Asana Connection Lost")
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundColor(.white)
-                                Text("Your authentication token has expired. Click 'Reconnect' to restore the connection.")
+                                Text("Your authentication token has expired. Click 'Connect' to restore the connection.")
                                     .font(.system(size: 11))
                                     .foregroundColor(.white.opacity(0.9))
                             }
@@ -1593,6 +1586,174 @@ struct AsanaIntegrationSection: View {
                             Divider()
                                 .padding(.vertical, 4)
                             
+                            // Automatic Cache Sync Service
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Automatic Cache Sync Service")
+                                    .font(.system(size: 13, weight: .medium))
+                                
+                                Text("Automatically update the shared cache every 30 minutes so MediaDash starts instantly")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                
+                                HStack(spacing: 12) {
+                                    // Status indicator
+                                    if cacheSyncService.isInstalling {
+                                        HStack(spacing: 6) {
+                                            ProgressView()
+                                                .scaleEffect(0.7)
+                                            Text("Installing...")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(.secondary)
+                                        }
+                                    } else if cacheSyncService.isRunning {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(.green)
+                                                .font(.system(size: 14))
+                                            Text("Running on this device")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(.green)
+                                        }
+                                    } else if cacheSyncService.isActiveElsewhere {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .foregroundColor(.orange)
+                                                .font(.system(size: 14))
+                                            Text("Active on another device")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(.orange)
+                                        }
+                                    } else if cacheSyncService.isInstalled {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "pause.circle.fill")
+                                                .foregroundColor(.orange)
+                                                .font(.system(size: 14))
+                                            Text("Installed (Stopped)")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(.orange)
+                                        }
+                                    } else {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(.gray)
+                                                .font(.system(size: 14))
+                                            Text("Not Installed")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    // Action buttons
+                                    if !cacheSyncService.isInstalled {
+                                        Button("Install & Start") {
+                                            Task {
+                                                // Check if active elsewhere first
+                                                cacheSyncService.checkIfActiveElsewhere(cachePath: settings.sharedCacheURL)
+                                                
+                                                if cacheSyncService.isActiveElsewhere {
+                                                    cacheSyncService.installationError = "Cache sync service is already active on another device. Only one instance should be running at a time."
+                                                    return
+                                                }
+                                                
+                                                // Find script
+                                                guard let scriptPath = cacheSyncService.findSyncScript() else {
+                                                    cacheSyncService.installationError = "Could not find sync_shared_cache.sh. Please ensure it's in the MediaDash project directory."
+                                                    return
+                                                }
+                                                
+                                                await cacheSyncService.installAndStart(scriptPath: scriptPath)
+                                                // Refresh menu bar status item
+                                                NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                            }
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.small)
+                                        .disabled(cacheSyncService.isInstalling || !isConnected || cacheSyncService.isActiveElsewhere)
+                                    } else if cacheSyncService.isRunning {
+                                        Button("Stop") {
+                                            cacheSyncService.stop()
+                                            // Refresh menu bar status item
+                                            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        
+                                        Button("Uninstall") {
+                                            cacheSyncService.uninstall()
+                                            // Refresh menu bar status item
+                                            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        .tint(.red)
+                                    } else {
+                                        Button("Start") {
+                                            cacheSyncService.start()
+                                            // Refresh menu bar status item
+                                            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.small)
+                                        
+                                        Button("Uninstall") {
+                                            cacheSyncService.uninstall()
+                                            // Refresh menu bar status item
+                                            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        .tint(.red)
+                                    }
+                                }
+                                
+                                // Status message
+                                if !cacheSyncService.statusMessage.isEmpty {
+                                    Text(cacheSyncService.statusMessage)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(cacheSyncService.isActiveElsewhere ? .orange : .secondary)
+                                }
+                                
+                                // Error message
+                                if let error = cacheSyncService.installationError {
+                                    Text(error)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.red)
+                                }
+                                
+                                // View logs button
+                                if cacheSyncService.isInstalled {
+                                    Button(action: {
+                                        // Open log file in Console.app or default text editor
+                                        let logPath = "/tmp/mediadash-cache-sync.log"
+                                        if FileManager.default.fileExists(atPath: logPath) {
+                                            NSWorkspace.shared.open(URL(fileURLWithPath: logPath))
+                                        } else {
+                                            // Show alert that log doesn't exist yet
+                                            let alert = NSAlert()
+                                            alert.messageText = "Log File Not Found"
+                                            alert.informativeText = "The log file doesn't exist yet. It will be created when the service runs."
+                                            alert.alertStyle = .informational
+                                            alert.addButton(withTitle: "OK")
+                                            alert.runModal()
+                                        }
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "doc.text")
+                                                .font(.system(size: 10))
+                                            Text("View Logs")
+                                                .font(.system(size: 11))
+                                        }
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .controlSize(.small)
+                                }
+                            }
+                            
+                            Divider()
+                                .padding(.vertical, 4)
+                            
                             // Force Full Sync
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Cache Maintenance")
@@ -1652,6 +1813,27 @@ struct AsanaIntegrationSection: View {
         .onAppear {
             // Check connection health when settings view appears
             checkConnectionHealth()
+            
+            // Check cache sync service status
+            cacheSyncService.checkStatus()
+            if let cachePath = settings.sharedCacheURL {
+                cacheSyncService.checkIfActiveElsewhere(cachePath: cachePath)
+            }
+            
+            // Refresh menu bar status item
+            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+        }
+        .onChange(of: settings.sharedCacheURL) { oldValue, newValue in
+            // Recheck if active elsewhere when cache path changes
+            cacheSyncService.checkIfActiveElsewhere(cachePath: newValue)
+        }
+        .onChange(of: cacheSyncService.isRunning) { oldValue, newValue in
+            // Refresh menu bar status item when service status changes
+            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+        }
+        .onChange(of: cacheSyncService.isInstalled) { oldValue, newValue in
+            // Refresh menu bar status item when installation status changes
+            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
         }
         .sheet(isPresented: $showManualCodeEntry) {
             VStack(spacing: 20) {
@@ -1753,6 +1935,8 @@ struct GmailIntegrationSection: View {
     @State private var isLoadingEmail = false
     @State private var hasAuthenticated = false
     @State private var showAdvancedSettings = false
+    @State private var showDisableWarning = false
+    @State private var pendingGmailEnabled: Bool?
     
     private func connectToGmail() {
         guard OAuthConfig.isGmailConfigured else {
@@ -1975,9 +2159,15 @@ struct GmailIntegrationSection: View {
                     Spacer()
                     Toggle("", isOn: Binding(
                         get: { settings.gmailEnabled },
-                        set: {
-                            settings.gmailEnabled = $0
+                        set: { newValue in
+                            if !newValue && settings.gmailEnabled {
+                                // User is trying to disable - show warning
+                                pendingGmailEnabled = newValue
+                                showDisableWarning = true
+                            } else {
+                                settings.gmailEnabled = newValue
                             hasUnsavedChanges = true
+                            }
                         }
                     ))
                     .labelsHidden()
@@ -2021,27 +2211,11 @@ struct GmailIntegrationSection: View {
                             
                             if hasAuthenticated && gmailService.isAuthenticated {
                                 Spacer()
-                                HStack(spacing: 8) {
-                                    if isTestingConnection {
-                                        ProgressView()
-                                            .scaleEffect(0.7)
-                                        Text("Testing...")
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.secondary)
-                                    } else {
-                                        Button("Test") {
-                                            testGmailConnection()
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .controlSize(.small)
-                                        
                                         Button("Disconnect") {
                                             disconnectGmail()
                                         }
                                         .buttonStyle(.bordered)
                                         .controlSize(.small)
-                                    }
-                                }
                             }
                         }
                         
@@ -2050,20 +2224,6 @@ struct GmailIntegrationSection: View {
                             Text(error)
                                 .font(.system(size: 11))
                                 .foregroundColor(.red)
-                                .textSelection(.enabled)
-                        }
-                        
-                        if let testError = testError {
-                            Text(testError)
-                                .font(.system(size: 11))
-                                .foregroundColor(.red)
-                                .textSelection(.enabled)
-                        }
-                        
-                        if let testResult = testResult {
-                            Text(testResult)
-                                .font(.system(size: 11))
-                                .foregroundColor(.green)
                                 .textSelection(.enabled)
                         }
                         
@@ -2545,597 +2705,27 @@ struct GmailIntegrationSection: View {
                 await loadConnectedEmail()
             }
         }
-    }
-}
-
-
-// MARK: - CodeMind Integration Section
-
-struct CodeMindIntegrationSection: View {
-    @Binding var settings: AppSettings
-    @Binding var hasUnsavedChanges: Bool
-    
-    @State private var apiKey: String = ""
-    @State private var provider: String = "gemini"
-    @State private var isTesting = false
-    @State private var testResult: String?
-    @State private var testError: String?
-    @State private var isInitialized = false
-    @State private var showAdvancedSettings = false
-    
-    private let keychainKey = "codemind_api_key"
-    private let isGraysonEmployee = SharedKeychainService.isCurrentUserGraysonEmployee()
-    private let hasSharedKeys = CodeMindConfig.hasSharedKeysConfigured()
-    
-    private func saveAPIKey() {
-        if apiKey.isEmpty {
-            // Clear from Keychain (provider-specific key)
-            let keychainKeyForProvider: String
-            switch provider {
-            case "grok":
-                keychainKeyForProvider = "codemind_grok_api_key"
-            default:
-                keychainKeyForProvider = "codemind_gemini_api_key"
+        .alert("Disable Gmail Integration?", isPresented: $showDisableWarning) {
+            Button("Cancel", role: .cancel) {
+                pendingGmailEnabled = nil
             }
-            KeychainService.delete(key: keychainKeyForProvider)
-            // Also clear legacy key if exists
-            KeychainService.delete(key: keychainKey)
-
-            settings.codeMindAPIKey = nil // Just a flag, not the actual key
-            settings.codeMindProvider = nil
-            UserDefaults.standard.removeObject(forKey: "codemind_provider")
-            isInitialized = false
-        } else {
-            // Store in Keychain using provider-specific key
-            let keychainKeyForProvider: String
-            switch provider {
-            case "grok":
-                keychainKeyForProvider = "codemind_grok_api_key"
-            case "groq":
-                keychainKeyForProvider = "codemind_groq_api_key"
-            default:
-                keychainKeyForProvider = "codemind_gemini_api_key"
-            }
-            if KeychainService.store(key: keychainKeyForProvider, value: apiKey) {
-                // Store flag and provider in settings (not the actual key)
-                settings.codeMindAPIKey = "***" // Flag that key exists, but not the actual key
-                settings.codeMindProvider = provider
-                // Also store provider preference in UserDefaults for quick access
-                UserDefaults.standard.set(provider, forKey: "codemind_provider")
-                isInitialized = true
-                print("CodeMind \(provider) API key saved to Keychain")
-            } else {
-                testError = "Failed to save API key to Keychain"
-            }
-        }
+            Button("Disable", role: .destructive) {
+                if let newValue = pendingGmailEnabled {
+                    settings.gmailEnabled = newValue
         hasUnsavedChanges = true
-    }
-    
-    private func testConnection() {
-        isTesting = true
-        testResult = nil
-        testError = nil
-        
-        Task {
-            do {
-                // Get the actual key that will be used (shared or personal)
-                let testKey: String?
-                if !apiKey.isEmpty {
-                    // Use personal key if provided
-                    testKey = apiKey
-                } else {
-                    // Use shared key or personal key from Keychain
-                    testKey = CodeMindConfig.getAPIKey(for: provider)
-                }
-                
-                guard let key = testKey else {
-                    let providerName = provider == "grok" ? "Grok" : "Gemini"
-                    await MainActor.run {
-                        testError = "No \(providerName) API key found. Please enter a personal key or ensure shared keys are configured."
-                        testResult = nil
-                        isTesting = false
-                    }
-                    return
-                }
-                
-                // Determine which key source is being used
-                let keySource: String
-                if !apiKey.isEmpty {
-                    keySource = "personal"
-                } else if isGraysonEmployee {
-                    let hasSharedKey: Bool
-                    switch provider {
-                    case "grok":
-                        hasSharedKey = SharedKeychainService.hasSharedKey(.codemindGrok)
-                    default:
-                        hasSharedKey = SharedKeychainService.hasSharedKey(.codemindGemini)
-                    }
-                    keySource = hasSharedKey ? "shared team key" : "personal key from Keychain"
-                } else {
-                    keySource = "personal key from Keychain"
-                }
-
-                // Initialize CodeMind
-                let classifier = CodeMindEmailClassifier()
-                try await classifier.initialize(apiKey: key, provider: provider)
-                
-                // Make a simple test query to verify the API actually works
-                let classificationResult = try await classifier.classifyNewDocketEmail(
-                    subject: "Test Email",
-                    body: "This is a test email to verify CodeMind is working correctly.",
-                    from: "test@example.com"
-                )
-                
-                await MainActor.run {
-                    self.testResult = "✅ Connection successful! CodeMind is working with your \(keySource).\n\nTest classification: \(classificationResult.classification.isNewDocket ? "Detected as new docket" : "Not a docket email")"
-                    self.testError = nil
-                    self.isTesting = false
-                    self.isInitialized = true
-                }
-            } catch {
-                // Log the error for debugging
-                CodeMindLogger.shared.log(.error, "Connection test failed", category: .general, metadata: [
-                    "error": error.localizedDescription,
-                    "errorType": String(describing: type(of: error)),
-                    "provider": provider,
-                    "fullError": "\(error)"
-                ])
-                
-                await MainActor.run {
-                    let errorMessage: String
-                    if let codeMindError = error as? CodeMindError {
-                        switch codeMindError {
-                        case .notConfigured(let msg):
-                            errorMessage = "Configuration error: \(msg)"
-                        case .notInitialized:
-                            errorMessage = "CodeMind not initialized. Please check your API key."
-                        default:
-                            errorMessage = "Connection failed: \(codeMindError.localizedDescription)"
-                        }
-                    } else {
-                        // Check for JSON decoding errors (common with invalid API keys)
-                        let errorDescription = error.localizedDescription
-                        let providerName = provider == "grok" ? "Grok" : "Gemini"
-                        if errorDescription.contains("couldn't be read") || 
-                           errorDescription.contains("isn't in the correct format") ||
-                           errorDescription.contains("DecodingError") ||
-                           errorDescription.contains("dataCorrupted") {
-                            errorMessage = "Invalid API response format. This usually means:\n• The \(providerName) API key is invalid or expired\n• The \(providerName) API service is temporarily unavailable\n\nPlease verify your \(providerName) API key is correct."
-                        } else {
-                            errorMessage = "Connection failed: \(errorDescription)"
-                        }
-                    }
-                    
-                    self.testError = errorMessage
-                    self.testResult = nil
-                    self.isTesting = false
-                    self.isInitialized = false
+                    pendingGmailEnabled = nil
                 }
             }
-        }
-    }
-    
-    var body: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 16) {
-                // Header
-                HStack {
-                    Image(systemName: "brain.head.profile")
-                        .foregroundColor(.blue)
-                        .font(.system(size: 16))
-                    Text("CodeMind")
-                        .font(.system(size: 16, weight: .semibold))
-                    Spacer()
-                }
-                
-                Text("Email classification for better docket and file delivery detection")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                
-                Divider()
-                
-                // Provider Selection
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Provider")
-                            .font(.system(size: 13, weight: .medium))
-                        
-                        Spacer()
-                        
-                        Button(action: testConnection) {
-                            if isTesting {
-                                HStack(spacing: 4) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                    Text("Testing...")
-                                        .font(.system(size: 11))
-                                }
-                            } else {
-                                Text("Test Connection")
-                                    .font(.system(size: 11))
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isTesting)
-                        .help("Test CodeMind connection and API key")
-                    }
-                    
-                    // Provider dropdown
-                    Picker("Provider", selection: $provider) {
-                        Text("Gemini").tag("gemini")
-                        Text("Grok (xAI)").tag("grok")
-                    }
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 200)
-                    .onChange(of: provider) { _, newProvider in
-                        settings.codeMindProvider = newProvider
-                        UserDefaults.standard.set(newProvider, forKey: "codemind_provider")
-                        // Clear API key field when switching providers
-                        apiKey = ""
-                        isInitialized = false
-                        hasUnsavedChanges = true
-                    }
-                    
-                    HStack(spacing: 6) {
-                        Image(systemName: provider == "grok" ? "sparkles" : "sparkles")
-                            .foregroundColor(.blue)
-                            .font(.system(size: 12))
-                        Text("Powered by \(provider == "grok" ? "Grok (xAI)" : "Gemini")")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                }
-                
-                // Show status for Grayson employees with shared keys
-                if isGraysonEmployee {
-                    if hasSharedKeys {
-                        HStack(spacing: 6) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            Text("Using shared team key automatically")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                    } else {
-                        // Check if shared key exists for selected provider
-                        let sharedKeyForProvider = provider == "grok" 
-                            ? SharedKeychainService.hasSharedKey(.codemindGrok)
-                            : SharedKeychainService.hasSharedKey(.codemindGemini)
-                        
-                        if !sharedKeyForProvider {
-                            HStack(spacing: 6) {
-                                Image(systemName: "info.circle")
-                                    .foregroundColor(.orange)
-                                Text("No shared \(provider == "grok" ? "Grok" : "Gemini") key configured. Set one up below or use a personal key.")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-                }
-                
-                // Advanced Settings (Personal API Key) - Only show if:
-                // 1. Not a Grayson employee (they use shared keys), OR
-                // 2. Grayson employee wants to override with personal key
-                VStack(alignment: .leading, spacing: 8) {
-                    Button(action: {
-                        showAdvancedSettings.toggle()
-                    }) {
-                        HStack {
-                            Text("Advanced Settings")
-                                .font(.system(size: 12, weight: .medium))
-                            Spacer()
-                            Image(systemName: showAdvancedSettings ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 10))
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.secondary)
-                    
-                    if showAdvancedSettings {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Personal API Key (Optional)")
-                                .font(.system(size: 12, weight: .medium))
-                            
-                            if isGraysonEmployee {
-                                Text("You're using shared team keys. Set a personal key here to override.")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            HStack(spacing: 8) {
-                                SecureField("Enter personal API key (stored securely in Keychain)", text: $apiKey)
-                                    .textFieldStyle(.roundedBorder)
-                                    .onChange(of: apiKey) { _, _ in
-                                        saveAPIKey()
-                                    }
-                                
-                                Button(action: testConnection) {
-                                    if isTesting {
-                                        ProgressView()
-                                            .scaleEffect(0.7)
-                                    } else {
-                                        Text("Test")
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(isTesting)
-                            }
-                            
-                            Text("Get your API key from:")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                            
-                            if provider == "grok" {
-                                Link("Get your Grok API key from xAI Console", destination: URL(string: "https://console.x.ai/")!)
-                                    .font(.system(size: 11))
-                            } else {
-                                Link("Get your Gemini API key from Google AI Studio", destination: URL(string: "https://aistudio.google.com/apikey")!)
-                                    .font(.system(size: 11))
-                            }
-                        }
-                        .padding(.leading, 12)
-                        .padding(.top, 4)
-                    }
-                }
-                
-                // Status
-                if let result = testResult {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                        Text(result)
-                            .font(.system(size: 12))
-                            .foregroundColor(.green)
-                    }
-                    .padding(.vertical, 4)
-                }
-                
-                if let error = testError {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text(error)
-                            .font(.system(size: 12))
-                            .foregroundColor(.orange)
-                    }
-                    .padding(.vertical, 4)
-                }
-                
-                if isInitialized {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.blue)
-                        Text("CodeMind is active and will enhance email classification")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                }
-                
-                // Info
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("What CodeMind does:")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                    
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("• Understands context better than pattern matching")
-                        Text("• Learns from your email patterns over time")
-                        Text("• Extracts docket numbers and job names more accurately")
-                        Text("• Identifies file delivery emails with better precision")
-                    }
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                }
-                .padding(.top, 4)
-                
-                Divider()
-                
-                // Activity Overlay Settings
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Image(systemName: "circle.hexagongrid.fill")
-                            .foregroundColor(.purple)
-                        Text("Activity Overlay")
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                    
-                    Text("Show a floating bubble that displays CodeMind activity in real-time")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                    
-                    Toggle("Enable Activity Bubble", isOn: Binding(
-                        get: { settings.codeMindOverlayEnabled },
-                        set: { newValue in
-                            settings.codeMindOverlayEnabled = newValue
-                            CodeMindActivityManager.shared.setEnabled(newValue)
-                            hasUnsavedChanges = true
-                        }
-                    ))
-                    .toggleStyle(.switch)
-                    
-                    if settings.codeMindOverlayEnabled {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Detail Level")
-                                .font(.system(size: 12, weight: .medium))
-                            
-                            Picker("Detail Level", selection: Binding(
-                                get: { settings.codeMindOverlayDetailLevel },
-                                set: { newValue in
-                                    settings.codeMindOverlayDetailLevel = newValue
-                                    if let level = ActivityDetailLevel(rawValue: newValue) {
-                                        CodeMindActivityManager.shared.setDetailLevel(level)
-                                    }
-                                    hasUnsavedChanges = true
-                                }
-                            )) {
-                                Text("Minimal - Subtle pulse indicator").tag("minimal")
-                                Text("Medium - Brief activity summaries").tag("medium")
-                                Text("Detailed - Full activity stream").tag("detailed")
-                            }
-                            .pickerStyle(.radioGroup)
-                            .labelsHidden()
-                        }
-                        .padding(.leading, 12)
-                        
-                        HStack(spacing: 6) {
-                            Image(systemName: "keyboard")
-                                .foregroundColor(.secondary)
-                            Text("Toggle with ⌘⇧O")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-                
-                Divider()
-                
-                // Review Threshold Settings
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text("Review Threshold")
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                    
-                    Text("Notifications with confidence below this threshold will go to 'For Review' for manual approval")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Threshold: \(Int(settings.codeMindReviewThreshold * 100))%")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.primary)
-                            
-                            Spacer()
-                            
-                            // Reset to default button
-                            Button("Reset to 97%") {
-                                settings.codeMindReviewThreshold = 0.97
-                                hasUnsavedChanges = true
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                        }
-                        
-                        Slider(
-                            value: Binding(
-                                get: { settings.codeMindReviewThreshold },
-                                set: { newValue in
-                                    settings.codeMindReviewThreshold = newValue
-                                    hasUnsavedChanges = true
-                                }
-                            ),
-                            in: 0.5...1.0,
-                            step: 0.01
-                        )
-                        
-                        HStack {
-                            Text("50%")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text("97% (Recommended)")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text("100%")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        // Confidence indicator
-                        HStack(spacing: 4) {
-                            let thresholdPercent = Int(settings.codeMindReviewThreshold * 100)
-                            let color: Color = thresholdPercent >= 95 ? .green : thresholdPercent >= 80 ? .orange : .red
-                            Circle()
-                                .fill(color)
-                                .frame(width: 8, height: 8)
-                            Text(thresholdPercent >= 95 ? "Strict - Most notifications will be reviewed" : 
-                                 thresholdPercent >= 80 ? "Moderate - Some notifications will be reviewed" : 
-                                 "Lenient - Few notifications will be reviewed")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.top, 4)
-                    }
-                    .padding(.leading, 12)
-                }
-                
-                // Shared Key Section (for Grayson Music Group employees only)
-                if SharedKeychainService.isCurrentUserGraysonEmployee() {
-                    Divider()
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Image(systemName: "building.2")
-                                .foregroundColor(.blue)
-                            Text("Shared Team Keys (Grayson Music Group)")
-                                .font(.system(size: 13, weight: .medium))
-                        }
-                        
-                        Text("Set shared keys that all Grayson Music Group employees can use automatically")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        
-                        SharedKeySetupView()
-                    }
-                }
-            }
-        }
-        .onAppear {
-            // Load provider preference first
-            if let storedProvider = settings.codeMindProvider {
-                provider = storedProvider
-            } else if let userDefaultsProvider = UserDefaults.standard.string(forKey: "codemind_provider") {
-                provider = userDefaultsProvider
-            } else {
-                // Use default provider from shared config
-                provider = CodeMindConfig.getDefaultProvider()
-            }
-            
-            // Load API key from Keychain (provider-specific or legacy)
-            let keychainKeyForProvider: String
-            switch provider {
-            case "grok":
-                keychainKeyForProvider = "codemind_grok_api_key"
-            default:
-                keychainKeyForProvider = "codemind_gemini_api_key"
-            }
-            if let storedKey = KeychainService.retrieve(key: keychainKeyForProvider) {
-                apiKey = storedKey
-                isInitialized = true
-            } else if let legacyKey = KeychainService.retrieve(key: keychainKey) {
-                // Check for legacy key
-                apiKey = legacyKey
-                isInitialized = true
-            } else if isGraysonEmployee && hasSharedKeys {
-                // For Grayson employees with shared keys, check if CodeMind is working
-                // by trying to get a key (which will use shared key)
-                if CodeMindConfig.getAPIKey(for: provider) != nil {
-                    isInitialized = true
-                }
-            }
+        } message: {
+            Text("Disabling Gmail integration will stop:\n\n• Automatic email scanning for new dockets\n• File delivery notifications\n• Email-based docket recognition\n\nYou will need to manually create dockets instead.")
         }
     }
 }
+
 
 // MARK: - Shared Key Setup View (Grayson Employees Only)
 
 struct SharedKeySetupView: View {
-    // CodeMind keys
-    @State private var sharedClaudeKey: String = ""
-    @State private var sharedOpenAIKey: String = ""
-    @State private var sharedGeminiKey: String = ""
-    @State private var sharedGrokKey: String = ""
-
     // Gmail keys
     @State private var sharedGmailAccessToken: String = ""
     @State private var sharedGmailRefreshToken: String = ""
@@ -3149,25 +2739,6 @@ struct SharedKeySetupView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // CodeMind Section
-            VStack(alignment: .leading, spacing: 8) {
-                Text("CodeMind")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.secondary)
-                
-                VStack(alignment: .leading, spacing: 6) {
-                    KeyField(label: "Gemini API Key", value: $sharedGeminiKey) {
-                        saveSharedKey(sharedGeminiKey, for: .codemindGemini, name: "Gemini")
-                    }
-
-                    KeyField(label: "Grok API Key", value: $sharedGrokKey) {
-                        saveSharedKey(sharedGrokKey, for: .codemindGrok, name: "Grok")
-                    }
-                }
-            }
-            
-            Divider()
-            
             // Gmail Section
             VStack(alignment: .leading, spacing: 8) {
                 Text("Gmail")
@@ -3232,8 +2803,7 @@ struct SharedKeySetupView: View {
     }
     
     private func hasAnySharedKeys() -> Bool {
-        return SharedKeychainService.hasSharedKey(.codemindGemini)
-            || SharedKeychainService.hasSharedKey(.gmailAccessToken)
+        return SharedKeychainService.hasSharedKey(.gmailAccessToken)
             || SharedKeychainService.hasSharedKey(.gmailRefreshToken)
             || SharedKeychainService.hasSharedKey(.asanaAccessToken)
     }
@@ -3251,7 +2821,6 @@ struct SharedKeySetupView: View {
             
             // Clear the field after successful save
             switch sharedKey {
-            case .codemindGemini: sharedGeminiKey = ""
             case .gmailAccessToken: sharedGmailAccessToken = ""
             case .gmailRefreshToken: sharedGmailRefreshToken = ""
             case .asanaAccessToken: sharedAsanaAccessToken = ""
@@ -3767,6 +3336,23 @@ struct GeneralOptionsSection: View {
                             Text("Open Prep Folder When Done")
                                 .font(.system(size: 13))
                             Text("Automatically opens the prep folder in Finder after prep completes")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    
+                    Toggle(isOn: Binding(
+                        get: { settings.openWorkPictureFolderWhenDone },
+                        set: {
+                            settings.openWorkPictureFolderWhenDone = $0
+                            hasUnsavedChanges = true
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Open Work Picture Folder When Done")
+                                .font(.system(size: 13))
+                            Text("Automatically opens the work picture folder in Finder after filing completes")
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)
                         }

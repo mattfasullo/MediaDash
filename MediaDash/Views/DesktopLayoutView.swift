@@ -324,16 +324,6 @@ struct DesktopIconRail: View {
                 showNotificationCenter.toggle()
             }
             
-            // CodeMind Chat
-            IconRailButton(
-                icon: "brain.head.profile",
-                label: "CodeMind",
-                badge: nil,
-                isActive: false
-            ) {
-                CodeMindChatWindowManager.shared.toggleChatWindow()
-            }
-            
             Spacer()
             
             Divider()

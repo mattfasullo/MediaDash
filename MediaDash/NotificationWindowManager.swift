@@ -643,11 +643,31 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         notificationWindow.ignoresMouseEvents = false
         notificationWindow.delegate = self
         
-        // Configure content view for proper rounded corners
+        // Configure content view for proper rounded corners with transparency
         if let contentView = notificationWindow.contentView {
             contentView.wantsLayer = true
             contentView.layer?.masksToBounds = true
             contentView.layer?.cornerRadius = 12
+            contentView.layer?.backgroundColor = NSColor.clear.cgColor // Ensure content view background is transparent
+            
+            // Create a mask to ensure only the rounded rectangle area is visible
+            let maskLayer = CAShapeLayer()
+            let maskPath = CGPath(roundedRect: contentView.bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
+            maskLayer.path = maskPath
+            contentView.layer?.mask = maskLayer
+            
+            // Update mask when view resizes
+            // Capture contentView weakly to avoid retain cycle and Sendable issues
+            Foundation.NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification,
+                object: contentView,
+                queue: OperationQueue.main
+            ) { [weak contentView] _ in
+                guard let contentView = contentView,
+                      let mask = contentView.layer?.mask as? CAShapeLayer else { return }
+                let updatedPath = CGPath(roundedRect: contentView.bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
+                mask.path = updatedPath
+            }
         }
         
         // Set movability based on lock state

@@ -214,16 +214,7 @@ class KeychainService {
             "asana_access_token",
             "asana_refresh_token",
             "asana_shared_access_token",
-            "asana_shared_refresh_token",
-
-            // CodeMind
-            "codemind_api_key",
-            "codemind_gemini_api_key",
-            "codemind_grok_api_key",
-            "codemind_shared_gemini_key",
-            "codemind_shared_grok_key",
-            "codemind_shared_claude_key",
-            "codemind_shared_openai_key"
+            "asana_shared_refresh_token"
         ]
 
         var migratedCount = 0

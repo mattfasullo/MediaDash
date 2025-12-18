@@ -496,8 +496,9 @@ struct AppSettings: Codable, Equatable {
     // Canadian Holidays (for manual override/additions)
     var customHolidays: [String] // ISO date strings (yyyy-MM-dd)
 
-    // Prep Workflow Settings
+    // Workflow Settings
     var openPrepFolderWhenDone: Bool
+    var openWorkPictureFolderWhenDone: Bool
 
     // CSV Column Names
     var csvDocketColumn: String
@@ -530,14 +531,6 @@ struct AppSettings: Codable, Equatable {
     var gmailQuery: String // Gmail search query (deprecated - now always scans all unread emails)
     var gmailPollInterval: TimeInterval // Polling interval in seconds (default: 300 = 5 minutes)
     var docketParsingPatterns: [String] // Regex patterns for extracting docket info
-    
-    // CodeMind Integration
-    var codeMindAPIKey: String? // Stored in Keychain, not in settings - API key for CodeMind email classification
-    var codeMindProvider: String? // "gemini" or "grok" - determines which provider to use
-    var codeMindOverlayEnabled: Bool // Show activity overlay on main window
-    var codeMindOverlayDetailLevel: String // "minimal", "medium", or "detailed"
-    var codeMindReviewThreshold: Double // Confidence threshold (0.0-1.0) - notifications below this go to "For Review" (default: 0.97)
-    var codeMindSkipPatterns: [String] // Subject/body patterns that should skip CodeMind (use regular parser instead) - saves API costs
     
     // Simian Integration (via Zapier webhook)
     var simianEnabled: Bool
@@ -575,7 +568,7 @@ struct AppSettings: Codable, Equatable {
             serverBasePath: "/Volumes/Grayson Assets/GM",
             sessionsBasePath: "/Volumes/Grayson Assets/SESSIONS",
             serverConnectionURL: "192.168.200.200",
-            docketSource: .csv,
+            docketSource: .asana,
             appTheme: .modern,
             windowMode: .compact, // Default to compact mode
             appearance: .system, // Default to system appearance
@@ -602,6 +595,7 @@ struct AppSettings: Codable, Equatable {
             skipHolidays: true,
             customHolidays: [],
             openPrepFolderWhenDone: true,
+            openWorkPictureFolderWhenDone: true,
             csvDocketColumn: "Docket",
             csvProjectTitleColumn: "Licensor/Project Title",
             csvClientColumn: "Client",
@@ -622,23 +616,10 @@ struct AppSettings: Codable, Equatable {
             asanaJobNameField: nil,
             sharedCacheURL: "/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache",
             useSharedCache: true,
-            gmailEnabled: false,
+            gmailEnabled: true,
             gmailQuery: "",
             gmailPollInterval: 300, // 5 minutes
             docketParsingPatterns: [],
-            codeMindAPIKey: nil, // Stored in Keychain
-            codeMindProvider: nil, // Defaults to Claude if API key is set
-            codeMindOverlayEnabled: false, // Activity overlay disabled by default
-            codeMindOverlayDetailLevel: "medium", // Default detail level
-            codeMindReviewThreshold: 0.97, // Default: notifications below 97% confidence go to review
-            codeMindSkipPatterns: [
-                // Patterns that match these will skip CodeMind and use regular parser (saves API costs)
-                // Format: case-insensitive regex patterns
-                #"(?i)^\d{5,}\s+.+$"#,  // Subject starts with docket number (e.g., "25489 Job Name")
-                #"(?i)^new\s+docket\s+\d{5,}"#,  // "New Docket 25489" format
-                #"(?i)^docket\s*#?\s*\d{5,}"#,  // "Docket #25489" format
-                #"(?i)\[\d{5,}\]"#,  // "[25489]" format in subject
-            ],
             simianEnabled: false,
             simianWebhookURL: nil,
             simianProjectTemplate: nil,

@@ -31,7 +31,9 @@ exec 2> >(tee -a "$LOG_FILE" >&2)
 set -e  # Exit on error
 
 # Configuration
-CACHE_PATH="/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache"
+CACHE_DIR="/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache"
+CACHE_FILENAME="mediadash_docket_cache.json"
+CACHE_PATH="${CACHE_DIR}/${CACHE_FILENAME}"
 ASANA_ACCESS_TOKEN=""  # Will be read from keychain or environment variable
 WORKSPACE_ID=""  # Optional: specify workspace ID
 PROJECT_ID=""    # Optional: specify project ID
@@ -57,15 +59,13 @@ warning() {
 
 # Check if server path is mounted/available
 check_server_path() {
-    local parent_dir=$(dirname "$CACHE_PATH")
-    
-    if [ ! -d "$parent_dir" ]; then
-        error "Server path not available: $parent_dir"
+    if [ ! -d "$CACHE_DIR" ]; then
+        error "Server path not available: $CACHE_DIR"
         error "Make sure the server is mounted before running this script"
         exit 1
     fi
     
-    log "Server path is available: $parent_dir"
+    log "Server path is available: $CACHE_DIR"
 }
 
 # Get Asana access token from macOS keychain
@@ -631,7 +631,7 @@ PYTHON_SCRIPT
     fi
     
     # Create directory if it doesn't exist
-    mkdir -p "$(dirname "$CACHE_PATH")"
+    mkdir -p "$CACHE_DIR"
     
     # Move to final location (atomic)
     mv "$temp_file" "$CACHE_PATH"
