@@ -113,6 +113,11 @@ struct ContentView: View {
             .environmentObject(layoutEditManager)
             .focusable()
             .focused($mainViewFocused)
+            .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("CreateTestDocketNotification"))) { _ in
+                // Backup listener in ContentView - create test notification directly
+                print("🔔 ContentView received CreateTestDocketNotification")
+                createTestDocketNotificationFromMenu()
+            }
             .onKeyPress { keyPress in
                 // Handle arrow keys for layout editing
                 if layoutEditManager.isEditMode, let selectedId = layoutEditManager.selectedViewId {
@@ -502,19 +507,32 @@ struct ContentView: View {
             return
         }
         
-        // Check if cache should be synced (stale or missing)
-        guard cacheManager.shouldSync(maxAgeMinutes: 60) else {
-            print("📦 [AutoSync] Cache is fresh, skipping sync")
-            return
+        // MediaDash should ONLY use shared cache - never sync from Asana API
+        // External service handles all syncing automatically
+        print("📦 [AutoSync] Checking for shared cache (MediaDash does not sync from Asana)...")
+        
+        // Only try to use shared cache if configured
+        if settings.useSharedCache, let sharedURL = settings.sharedCacheURL, !sharedURL.isEmpty {
+            // Try to load from shared cache (non-blocking)
+            Task {
+                do {
+                    try await cacheManager.syncWithAsana(
+                        workspaceID: settings.asanaWorkspaceID,
+                        projectID: settings.asanaProjectID,
+                        docketField: settings.asanaDocketField,
+                        jobNameField: settings.asanaJobNameField,
+                        sharedCacheURL: settings.sharedCacheURL,
+                        useSharedCache: settings.useSharedCache
+                    )
+                    print("✅ [AutoSync] Loaded from shared cache successfully")
+                } catch {
+                    // Silently fail - shared cache might not be ready yet
+                    print("⚠️ [AutoSync] Shared cache not available: \(error.localizedDescription)")
+                }
+            }
+        } else {
+            print("📦 [AutoSync] Shared cache not configured - external service will handle syncing")
         }
-        
-        print("🔄 [AutoSync] Starting automatic Asana sync on app launch...")
-        
-        // Sync in background (non-blocking)
-        performSync()
-        
-        // Set up hourly timer for automatic sync
-        setupHourlySyncTimer()
     }
     
     /// Perform the actual sync operation
@@ -540,44 +558,13 @@ struct ContentView: View {
     }
     
     /// Set up a task to sync every hour
+    /// NOTE: This is no longer used - external service handles all syncing
     private func setupHourlySyncTimer() {
-        // Cancel existing task if any
+        // MediaDash no longer performs hourly syncs - external service handles this
+        // Cancel any existing task
         hourlySyncTask?.cancel()
-        
-        // Create a task that runs every hour
-        hourlySyncTask = Task {
-            while !Task.isCancelled {
-                // Wait for 1 hour (3600 seconds)
-                try? await Task.sleep(nanoseconds: 3_600_000_000_000)
-                
-                // Check if task was cancelled during sleep
-                if Task.isCancelled { break }
-                
-                let settings = settingsManager.currentSettings
-                
-                // Only sync if Asana is the selected docket source
-                guard settings.docketSource == .asana else {
-                    continue
-                }
-                
-                // Check if we have an access token
-                guard SharedKeychainService.getAsanaAccessToken() != nil else {
-                    print("📦 [AutoSync] No Asana access token found, skipping hourly sync")
-                    continue
-                }
-                
-                // Check if cache should be synced (stale or missing)
-                guard cacheManager.shouldSync(maxAgeMinutes: 60) else {
-                    print("📦 [AutoSync] Cache is fresh, skipping hourly sync")
-                    continue
-                }
-                
-                print("🔄 [AutoSync] Starting hourly automatic Asana sync...")
-                performSync()
-            }
-        }
-        
-        print("⏰ [AutoSync] Hourly sync task started")
+        hourlySyncTask = nil
+        print("📦 [AutoSync] Hourly sync disabled - external service handles syncing")
     }
 
     
@@ -711,6 +698,91 @@ struct ContentView: View {
         case .settings:
             showSettingsSheet = true
         }
+    }
+    
+    // MARK: - Test Notification Creation
+    
+    /// Create a test docket notification from the menu
+    private func createTestDocketNotificationFromMenu() {
+        print("🔔 ContentView.createTestDocketNotificationFromMenu() called")
+        
+        // Count existing test notifications to continue numbering
+        let testNotifications = notificationCenter.notifications.filter { notification in
+            notification.type == .newDocket &&
+            notification.jobName?.hasPrefix("TEST ") == true
+        }
+        
+        var maxTestNumber = 0
+        for notification in testNotifications {
+            if let jobName = notification.jobName {
+                let testNumString = jobName.replacingOccurrences(of: "TEST ", with: "")
+                if let testNum = Int(testNumString) {
+                    maxTestNumber = max(maxTestNumber, testNum)
+                }
+            }
+        }
+        
+        let testNotificationCount = maxTestNumber + 1
+        
+        // Generate a random docket number that doesn't exist
+        // Valid docket numbers: exactly 5 digits, starting with current year (YY) or next year
+        var docketNumber: String
+        var attempts = 0
+        let maxAttempts = 100
+        
+        // Get valid year prefix (current year or next year)
+        let calendar = Calendar.current
+        let currentYear = calendar.component(.year, from: Date())
+        let currentYearLastTwo = currentYear % 100
+        let nextYearLastTwo = (currentYearLastTwo + 1) % 100
+        // Randomly choose current or next year
+        let yearPrefix = Int.random(in: 0...1) == 0 ? currentYearLastTwo : nextYearLastTwo
+        let yearPrefixString = String(format: "%02d", yearPrefix)
+        
+        func docketExists(docketNumber: String, jobName: String) -> Bool {
+            let docketName = "\(docketNumber)_\(jobName)"
+            if manager.dockets.contains(docketName) {
+                return true
+            }
+            return notificationCenter.notifications.contains { notification in
+                notification.docketNumber == docketNumber && notification.jobName == jobName
+            }
+        }
+        
+        repeat {
+            // Generate 3 random digits (000-999) and combine with year prefix to make 5 digits
+            let randomSuffix = Int.random(in: 0...999)
+            let suffixString = String(format: "%03d", randomSuffix)
+            docketNumber = "\(yearPrefixString)\(suffixString)"
+            attempts += 1
+        } while docketExists(docketNumber: docketNumber, jobName: "TEST \(testNotificationCount)") && attempts < maxAttempts
+        
+        if attempts >= maxAttempts {
+            // Fallback: use timestamp-based docket number with valid year prefix
+            let timestamp = Int(Date().timeIntervalSince1970) % 1000
+            let suffixString = String(format: "%03d", timestamp)
+            docketNumber = "\(yearPrefixString)\(suffixString)"
+        }
+        
+        let jobName = "TEST \(testNotificationCount)"
+        
+        print("   Generated docket: \(docketNumber), job: \(jobName)")
+        
+        let testNotification = Notification(
+            type: .newDocket,
+            title: "Test New Docket",
+            message: "Docket \(docketNumber): \(jobName)",
+            docketNumber: docketNumber,
+            jobName: jobName,
+            sourceEmail: "test@graysonmusicgroup.com",
+            emailSubject: "Test Docket Notification \(testNotificationCount)",
+            emailBody: "This is a test notification created for debugging purposes."
+        )
+        
+        print("   Created notification: \(testNotification.id)")
+        notificationCenter.add(testNotification)
+        print("   ✅ Notification added to notificationCenter")
+        print("   Total notifications now: \(notificationCenter.notifications.count)")
     }
 }
 
@@ -1270,8 +1342,10 @@ struct DocketSearchView: View {
             }
             .padding()
             .background(Color(nsColor: .windowBackgroundColor))
+            .frame(maxWidth: .infinity)
         }
-        .frame(minWidth: 400, idealWidth: 600, maxWidth: 600, minHeight: 300)
+        .frame(minWidth: 400, idealWidth: 600, maxWidth: 700, minHeight: 300, idealHeight: 500, maxHeight: 700)
+        .fixedSize(horizontal: false, vertical: false)
         .onAppear {
             // Scan dockets based on job type
             Task {
@@ -1663,9 +1737,11 @@ struct SearchView: View {
             }
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
+            .frame(maxWidth: .infinity)
 
             // MARK: Folder Selector
             folderSelectorView
+            .frame(maxWidth: .infinity)
 
             Divider()
             
@@ -1835,6 +1911,7 @@ struct SearchView: View {
                     }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped() // Ensure content doesn't overflow
             
             // MARK: Action Bar
             HStack {
@@ -1854,8 +1931,10 @@ struct SearchView: View {
             }
             .padding()
             .background(Color(nsColor: .windowBackgroundColor))
+            .frame(maxWidth: .infinity)
         }
-        .frame(width: 650, height: 600)
+        .frame(minWidth: 500, idealWidth: 650, maxWidth: 800, minHeight: 400, idealHeight: 600, maxHeight: 800)
+        .fixedSize(horizontal: false, vertical: false) // Allow resizing within constraints
         .onAppear {
             // Set initial focus when view appears
             isSearchFieldFocused = true
@@ -2208,7 +2287,8 @@ struct QuickDocketSearchView: View {
             resultsListSection
             infoBarSection
         }
-        .frame(minWidth: 400, idealWidth: 600, maxWidth: 600, minHeight: 300)
+        .frame(minWidth: 400, idealWidth: 600, maxWidth: 700, minHeight: 300, idealHeight: 500, maxHeight: 700)
+        .fixedSize(horizontal: false, vertical: false)
         .sheet(isPresented: $showSettingsSheet) {
             SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
                 .environmentObject(sessionManager)
@@ -2354,13 +2434,20 @@ struct QuickDocketSearchView: View {
     @ViewBuilder
     private var syncStatusSection: some View {
         if cacheManager.isSyncing {
-            HStack {
-                ProgressView()
-                    .scaleEffect(0.7)
-                Text("Syncing with Asana...")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    ProgressView(value: cacheManager.syncProgress > 0 ? cacheManager.syncProgress : nil)
+                        .scaleEffect(0.7)
+                    Text(cacheManager.syncPhase.isEmpty ? "External service syncing shared cache..." : cacheManager.syncPhase)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if cacheManager.syncProgress > 0 {
+                        Text("\(Int(cacheManager.syncProgress * 100))%")
+                            .font(.caption2)
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                }
                 if let lastSync = cacheManager.lastSyncDate {
                     Text("Last sync: \(lastSync, style: .relative)")
                         .font(.caption2)
@@ -2436,6 +2523,7 @@ struct QuickDocketSearchView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped() // Ensure content doesn't overflow
     }
     
     private var docketsListView: some View {

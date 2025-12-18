@@ -1004,10 +1004,11 @@ class EmailScanningService: ObservableObject {
                 print("📧 EmailScanningService: ⚠️ Cannot mark email as read - notification has no emailId")
             }
             
-            // Update notification status
-            await MainActor.run {
-                notificationCenter?.updateStatus(notification, to: .completed, emailScanningService: self)
-            }
+            // Don't update status to completed here - let the caller handle it
+            // This prevents the notification from disappearing before Simian creation completes
+            // await MainActor.run {
+            //     notificationCenter?.updateStatus(notification, to: .completed, emailScanningService: self)
+            // }
         }
     }
     

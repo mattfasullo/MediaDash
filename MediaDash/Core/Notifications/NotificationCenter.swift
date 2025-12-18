@@ -686,6 +686,14 @@ class NotificationCenter: ObservableObject {
         saveNotifications()
     }
     
+    func markAsInWorkPicture(_ notification: Notification) {
+        guard let index = notifications.firstIndex(where: { $0.id == notification.id }) else {
+            return
+        }
+        notifications[index].isInWorkPicture = true
+        saveNotifications()
+    }
+    
     /// Reset notification to original values by re-fetching and re-parsing the email
     func resetToDefaults(_ notification: Notification, emailScanningService: EmailScanningService?) async {
         guard let index = notifications.firstIndex(where: { $0.id == notification.id }),

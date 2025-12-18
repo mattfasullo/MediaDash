@@ -107,6 +107,15 @@ struct MediaDashApp: App {
                     }
                 }
             }
+            
+            // View Menu
+            CommandMenu("View") {
+                DebugFeaturesToggleButton()
+                
+                Divider()
+                
+                CreateTestDocketButton()
+            }
         }
     }
     
@@ -317,6 +326,164 @@ struct CheckForUpdatesView: View {
         }
         .keyboardShortcut("u", modifiers: [.command])
     }
+}
+
+// MARK: - Debug Features Toggle Button
+
+struct DebugFeaturesToggleButton: View {
+    @State private var isEnabled = false
+    
+    var body: some View {
+        Button(action: {
+            toggleDebugFeatures()
+            // Update state immediately after toggle
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                updateState()
+            }
+        }) {
+            Text(isEnabled ? "✓ Show Debug Features" : "Show Debug Features")
+        }
+        .keyboardShortcut("d", modifiers: [.command, .shift])
+        .onAppear {
+            updateState()
+        }
+        .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("DebugFeaturesToggled"))) { notification in
+            // Update state when notification is received
+            if let newValue = notification.userInfo?["showDebugFeatures"] as? Bool {
+                isEnabled = newValue
+            } else {
+                updateState()
+            }
+        }
+    }
+    
+    private func updateState() {
+        Task { @MainActor in
+            isEnabled = isDebugFeaturesEnabled()
+        }
+    }
+}
+
+// MARK: - Create Test Docket Button
+
+struct CreateTestDocketButton: View {
+    var body: some View {
+        Button("Create Test Docket Notification") {
+            createTestDocketNotification()
+        }
+        .keyboardShortcut("t", modifiers: [.command, .shift])
+        // Always enabled - if you're in the View menu, debug mode is available
+    }
+}
+
+// MARK: - Debug Features Helpers
+
+/// Toggle debug features on/off
+private func toggleDebugFeatures() {
+    Task { @MainActor in
+        let userDefaults = UserDefaults.standard
+        let currentProfileKey = "currentProfile"
+        let profilesKey = "savedProfiles"
+        
+        // Debug: Check what we have
+        let profileName = userDefaults.string(forKey: currentProfileKey) ?? "Default"
+        print("🔍 DebugFeatures: Profile name from UserDefaults: \(profileName)")
+        
+        guard let profilesData = userDefaults.data(forKey: profilesKey) else {
+            print("⚠️ DebugFeatures: No profiles data found in UserDefaults")
+            return
+        }
+        
+        print("🔍 DebugFeatures: Found profiles data, size: \(profilesData.count) bytes")
+        
+        guard var profiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData) else {
+            print("⚠️ DebugFeatures: Failed to decode profiles data")
+            if let jsonString = String(data: profilesData, encoding: .utf8) {
+                print("   Data preview: \(String(jsonString.prefix(200)))")
+            }
+            return
+        }
+        
+        print("🔍 DebugFeatures: Decoded profiles, keys: \(profiles.keys.joined(separator: ", "))")
+        
+        guard var currentProfile = profiles[profileName] else {
+            print("⚠️ DebugFeatures: Profile '\(profileName)' not found in profiles")
+            print("   Available profiles: \(profiles.keys.joined(separator: ", "))")
+            // Try to use "Default" as fallback
+            if let defaultProfile = profiles["Default"] {
+                print("   Using 'Default' profile as fallback")
+                var defaultProfile = defaultProfile
+                defaultProfile.showDebugFeatures.toggle()
+                profiles["Default"] = defaultProfile
+                
+                if let encoded = try? JSONEncoder().encode(profiles) {
+                    userDefaults.set(encoded, forKey: profilesKey)
+                    userDefaults.synchronize()
+                    
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    
+                    Foundation.NotificationCenter.default.post(
+                        name: Foundation.Notification.Name("DebugFeaturesToggled"),
+                        object: nil,
+                        userInfo: ["showDebugFeatures": defaultProfile.showDebugFeatures]
+                    )
+                }
+            }
+            return
+        }
+        
+        // Toggle the debug features setting
+        let newValue = !currentProfile.showDebugFeatures
+        currentProfile.showDebugFeatures = newValue
+        profiles[profileName] = currentProfile
+        
+        // Save back to UserDefaults
+        if let encoded = try? JSONEncoder().encode(profiles) {
+            userDefaults.set(encoded, forKey: profilesKey)
+            userDefaults.synchronize() // Force immediate write
+            print("✅ DebugFeatures: Toggled to \(newValue)")
+        } else {
+            print("⚠️ DebugFeatures: Failed to encode profiles")
+            return
+        }
+        
+        // Small delay to ensure UserDefaults is written
+        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+        
+        // Post notification to update UI - include the new value in userInfo
+        Foundation.NotificationCenter.default.post(
+            name: Foundation.Notification.Name("DebugFeaturesToggled"),
+            object: nil,
+            userInfo: ["showDebugFeatures": newValue]
+        )
+    }
+}
+
+/// Check if debug features are enabled
+private func isDebugFeaturesEnabled() -> Bool {
+    let userDefaults = UserDefaults.standard
+    let currentProfileKey = "currentProfile"
+    let profilesKey = "savedProfiles"
+    
+    guard let profileName = userDefaults.string(forKey: currentProfileKey),
+          let profilesData = userDefaults.data(forKey: profilesKey),
+          let profiles = try? JSONDecoder().decode([String: AppSettings].self, from: profilesData),
+          let currentProfile = profiles[profileName] else {
+        return false
+    }
+    
+    return currentProfile.showDebugFeatures
+}
+
+/// Create a test docket notification via notification system
+private func createTestDocketNotification() {
+    print("🔔 Creating test docket notification from menu...")
+    // Post a notification that DesktopLayoutView can listen to
+    Foundation.NotificationCenter.default.post(
+        name: Foundation.Notification.Name("CreateTestDocketNotification"),
+        object: nil
+    )
+    print("🔔 Notification posted")
 }
 
 // Helper view to configure window appearance and handle double-click to full screen

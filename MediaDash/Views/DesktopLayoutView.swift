@@ -97,6 +97,7 @@ struct DesktopLayoutView: View {
 struct DesktopToolbar: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var manager: MediaManager
+    @EnvironmentObject var notificationCenter: NotificationCenter
     @Environment(\.colorScheme) var colorScheme
     
     @Binding var showSearchSheet: Bool
@@ -111,6 +112,8 @@ struct DesktopToolbar: View {
     let dateFormatter: DateFormatter
     let attempt: (JobType) -> Void
     let cacheManager: AsanaCacheManager?
+    
+    @State private var testNotificationCount = 0
     
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
@@ -237,11 +240,149 @@ struct DesktopToolbar: View {
                 }
                 .buttonStyle(.plain)
                 .help("Settings (⌘,)")
+                
+                // View Menu (with debug options)
+                if settingsManager.currentSettings.showDebugFeatures {
+                    Divider()
+                        .frame(height: 20)
+                    
+                    Menu {
+                        Button("Create Test Docket Notification") {
+                            createTestDocketNotification()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("View")
+                                .font(.system(size: 12))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(4)
+                    }
+                    .buttonStyle(.plain)
+                    .help("View Menu")
+                }
             }
             .padding(.trailing, 16)
         }
         .frame(height: 52)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .onAppear {
+            // Count existing test notifications to continue numbering
+            updateTestNotificationCount()
+        }
+        .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("CreateTestDocketNotification"))) { _ in
+            // Handle test notification creation from menu bar
+            print("🔔 DesktopToolbar received CreateTestDocketNotification")
+            createTestDocketNotification()
+        }
+        .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("DebugFeaturesToggled"))) { notification in
+            // Refresh settings when debug features are toggled
+            Task { @MainActor in
+                // Small delay to ensure UserDefaults is fully written
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                settingsManager.reloadCurrentProfile()
+                print("🔄 DebugFeatures: Reloaded settings, showDebugFeatures = \(settingsManager.currentSettings.showDebugFeatures)")
+            }
+        }
+    }
+    
+    /// Create a test docket notification with a random docket number that doesn't exist
+    private func createTestDocketNotification() {
+        print("🔔 DesktopToolbar.createTestDocketNotification() called")
+        print("   notificationCenter: \(notificationCenter)")
+        print("   testNotificationCount: \(testNotificationCount)")
+        
+        // Generate a random docket number that doesn't exist
+        // Valid docket numbers: exactly 5 digits, starting with current year (YY) or next year
+        var docketNumber: String
+        var attempts = 0
+        let maxAttempts = 100
+        
+        // Get valid year prefix (current year or next year)
+        let calendar = Calendar.current
+        let currentYear = calendar.component(.year, from: Date())
+        let currentYearLastTwo = currentYear % 100
+        let nextYearLastTwo = (currentYearLastTwo + 1) % 100
+        // Randomly choose current or next year
+        let yearPrefix = Int.random(in: 0...1) == 0 ? currentYearLastTwo : nextYearLastTwo
+        let yearPrefixString = String(format: "%02d", yearPrefix)
+        
+        repeat {
+            // Generate 3 random digits (000-999) and combine with year prefix to make 5 digits
+            let randomSuffix = Int.random(in: 0...999)
+            let suffixString = String(format: "%03d", randomSuffix)
+            docketNumber = "\(yearPrefixString)\(suffixString)"
+            attempts += 1
+        } while docketExists(docketNumber: docketNumber, jobName: "TEST \(testNotificationCount + 1)") && attempts < maxAttempts
+        
+        if attempts >= maxAttempts {
+            // Fallback: use timestamp-based docket number with valid year prefix
+            let timestamp = Int(Date().timeIntervalSince1970) % 1000
+            let suffixString = String(format: "%03d", timestamp)
+            docketNumber = "\(yearPrefixString)\(suffixString)"
+        }
+        
+        // Increment test notification count
+        testNotificationCount += 1
+        let jobName = "TEST \(testNotificationCount)"
+        
+        print("   Generated docket: \(docketNumber), job: \(jobName)")
+        
+        // Create the test notification
+        let testNotification = Notification(
+            type: .newDocket,
+            title: "Test New Docket",
+            message: "Docket \(docketNumber): \(jobName)",
+            docketNumber: docketNumber,
+            jobName: jobName,
+            sourceEmail: "test@graysonmusicgroup.com",
+            emailSubject: "Test Docket Notification \(testNotificationCount)",
+            emailBody: "This is a test notification created for debugging purposes."
+        )
+        
+        print("   Created notification: \(testNotification.id)")
+        notificationCenter.add(testNotification)
+        print("   ✅ Notification added to notificationCenter")
+        print("   Total notifications now: \(notificationCenter.notifications.count)")
+    }
+    
+    /// Check if a docket already exists (in Work Picture or existing notifications)
+    private func docketExists(docketNumber: String, jobName: String) -> Bool {
+        // Check Work Picture
+        let docketName = "\(docketNumber)_\(jobName)"
+        if manager.dockets.contains(docketName) {
+            return true
+        }
+        
+        // Check existing notifications
+        return notificationCenter.notifications.contains { notification in
+            notification.docketNumber == docketNumber && notification.jobName == jobName
+        }
+    }
+    
+    /// Update test notification count based on existing test notifications
+    private func updateTestNotificationCount() {
+        let testNotifications = notificationCenter.notifications.filter { notification in
+            notification.type == .newDocket &&
+            notification.jobName?.hasPrefix("TEST ") == true
+        }
+        
+        // Extract the highest test number
+        var maxTestNumber = 0
+        for notification in testNotifications {
+            if let jobName = notification.jobName {
+                let testNumString = jobName.replacingOccurrences(of: "TEST ", with: "")
+                if let testNum = Int(testNumString) {
+                    maxTestNumber = max(maxTestNumber, testNum)
+                }
+            }
+        }
+        
+        testNotificationCount = maxTestNumber
     }
 }
 

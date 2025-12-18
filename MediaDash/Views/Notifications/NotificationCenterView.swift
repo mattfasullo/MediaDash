@@ -159,8 +159,8 @@ struct NotificationCenterView: View {
                 selectedTab = .newDockets
             }
         }
-        .onChange(of: settingsManager.currentSettings.simianWebhookURL) { _, _ in
-            // Refresh when Simian webhook URL changes
+        .onChange(of: settingsManager.currentSettings.simianAPIBaseURL) { _, _ in
+            // Refresh when Simian API configuration changes
         }
         .onAppear {
             handleViewAppear()
@@ -1284,17 +1284,178 @@ struct NotificationRowView: View {
     @State private var isSubmittingFeedback = false
     @State private var hasSubmittedFeedback = false // Track locally to force UI refresh
     
+    @State private var showSimianProjectDialog = false
+    @State private var pendingSimianNotificationId: UUID?
+    @State private var pendingSimianDocketNumber: String = ""
+    @State private var pendingSimianJobName: String = ""
+    @State private var pendingSimianSourceEmail: String?
+    
+    // Simian users for Project Manager dropdown
+    @State private var simianUsers: [SimianUser] = []
+    @State private var isLoadingSimianUsers = false
+    @State private var simianUsersLoadError: String?
+    
     // Get current notification from center (always up-to-date)
     private var notification: Notification? {
         notificationCenter.notifications.first(where: { $0.id == notificationId })
     }
     
-    // Update SimianService webhook URL when settings change
-    private func updateSimianServiceWebhook() {
-        if let webhookURL = settingsManager.currentSettings.simianWebhookURL {
-            simianService.setWebhookURL(webhookURL)
+    // Update SimianService API configuration when settings change
+    private func updateSimianServiceConfiguration() {
+        let settings = settingsManager.currentSettings
+        if let baseURL = settings.simianAPIBaseURL, !baseURL.isEmpty {
+            // setBaseURL will normalize http:// to https:// automatically
+            simianService.setBaseURL(baseURL)
+            // Credentials are stored in keychain and retrieved automatically by SimianService
+            if let username = SharedKeychainService.getSimianUsername(),
+               let password = SharedKeychainService.getSimianPassword() {
+                simianService.setCredentials(username: username, password: password)
+            }
         } else {
-            simianService.clearWebhookURL()
+            simianService.clearConfiguration()
+        }
+    }
+    
+    /// Create Simian project with user-provided parameters
+    /// Create both Simian project and Work Picture folder using the values from the dialog
+    private func createSimianProject(
+        notificationId: UUID,
+        docketNumber: String,
+        jobName: String,
+        projectManager: String?,
+        template: String?
+    ) async {
+        print("🔔 NotificationCenterView.createSimianProject() called")
+        print("   notificationId: \(notificationId)")
+        print("   docketNumber: \(docketNumber)")
+        print("   jobName: \(jobName)")
+        print("   projectManager: \(projectManager ?? "nil")")
+        print("   template: \(template ?? "nil")")
+        
+        // Get the latest notification state
+        guard var updatedNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) else {
+            print("⚠️ Could not find notification with id \(notificationId)")
+            await MainActor.run {
+                processingNotification = nil
+            }
+            return
+        }
+        
+        // Update notification with the docket number and job name from dialog
+        notificationCenter.updateDocketNumber(updatedNotification, to: docketNumber)
+        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+            updatedNotification = currentNotification
+        }
+        
+        let shouldCreateSimian = updatedNotification.shouldCreateSimianJob || 
+            (settingsManager.currentSettings.simianEnabled && simianService.isConfigured)
+        let shouldCreateWorkPicture = updatedNotification.shouldCreateWorkPicture
+        
+        var simianError: Error?
+        var workPictureError: Error?
+        
+        // Create Work Picture folder if requested
+        if shouldCreateWorkPicture {
+            do {
+                print("🔔 Creating Work Picture folder with docket: \(docketNumber), job: \(jobName)")
+                try await emailScanningService.createDocketFromNotification(updatedNotification)
+                print("✅ Work Picture folder created successfully")
+                
+                await MainActor.run {
+                    if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                        notificationCenter.updateDuplicateDetection(currentNotification, mediaManager: mediaManager, settingsManager: settingsManager)
+                        // Mark as in Work Picture
+                        notificationCenter.markAsInWorkPicture(currentNotification)
+                    }
+                }
+            } catch {
+                print("❌ Work Picture folder creation failed: \(error.localizedDescription)")
+                workPictureError = error
+            }
+        }
+        
+        // Create Simian project if requested
+        if shouldCreateSimian {
+            updateSimianServiceConfiguration()
+            
+            do {
+                print("🔔 Creating Simian project with docket: \(docketNumber), job: \(jobName)")
+                try await simianService.createJob(
+                    docketNumber: docketNumber,
+                    jobName: jobName,
+                    projectManager: projectManager,
+                    projectTemplate: template ?? settingsManager.currentSettings.simianProjectTemplate
+                )
+                print("✅ Simian project created successfully")
+                
+                await MainActor.run {
+                    if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                        notificationCenter.markAsInSimian(currentNotification)
+                    }
+                }
+            } catch {
+                print("❌ Simian project creation failed: \(error.localizedDescription)")
+                simianError = error
+            }
+        }
+        
+        // Handle results and cleanup
+        await MainActor.run {
+            processingNotification = nil
+            
+            // Show error notifications if any failed
+            if let wpError = workPictureError {
+                let errorNotification = Notification(
+                    type: .error,
+                    title: "Work Picture Creation Failed",
+                    message: wpError.localizedDescription
+                )
+                notificationCenter.add(errorNotification)
+            }
+            
+            if let simError = simianError {
+                let errorNotification = Notification(
+                    type: .error,
+                    title: "Simian Project Creation Failed",
+                    message: simError.localizedDescription
+                )
+                notificationCenter.add(errorNotification)
+            }
+            
+            // Mark email as read and track interaction
+            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                markEmailAsReadIfNeeded(currentNotification)
+                
+                if let emailId = currentNotification.emailId {
+                    var details: [String: String] = [:]
+                    if shouldCreateWorkPicture && workPictureError == nil {
+                        details["createdWorkPicture"] = "true"
+                    }
+                    if shouldCreateSimian && simianError == nil {
+                        details["createdSimianJob"] = "true"
+                    }
+                    details["docketNumber"] = docketNumber
+                    EmailFeedbackTracker.shared.recordInteraction(
+                        emailId: emailId,
+                        type: .approved,
+                        details: details.isEmpty ? nil : details
+                    )
+                }
+                
+                // Close dialog first, then remove notification after a small delay
+                // This ensures the dialog doesn't get dismissed prematurely
+                showSimianProjectDialog = false
+                
+                // Remove notification after both are created (or attempted)
+                // Use a delay to ensure dialog has time to close first
+                Task {
+                    try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 second delay
+                    if let finalNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                        await notificationCenter.remove(finalNotification, emailScanningService: emailScanningService)
+                        print("✅ Removed notification after project creation")
+                    }
+                }
+            }
         }
     }
     
@@ -1362,7 +1523,7 @@ struct NotificationRowView: View {
         }
         .help("Right-click for options")
         .onAppear {
-            updateSimianServiceWebhook()
+            updateSimianServiceConfiguration()
             // Always refresh hasSubmittedFeedback from persistent storage when view appears
             // This ensures we check the source of truth even after view recreation
             if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }),
@@ -1372,8 +1533,8 @@ struct NotificationRowView: View {
                 hasSubmittedFeedback = false
             }
         }
-        .onChange(of: settingsManager.currentSettings.simianWebhookURL) { _, _ in
-            updateSimianServiceWebhook()
+        .onChange(of: settingsManager.currentSettings.simianAPIBaseURL) { _, _ in
+            updateSimianServiceConfiguration()
         }
         .onChange(of: self.notification?.emailId) { _, newEmailId in
             // Refresh feedback state when emailId changes
@@ -1404,6 +1565,78 @@ struct NotificationRowView: View {
                     }
                 }
             )
+        }
+        .sheet(isPresented: $showSimianProjectDialog) {
+            if let notificationId = pendingSimianNotificationId,
+               let notification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                let isSimianEnabled = notification.shouldCreateSimianJob || 
+                    (settingsManager.currentSettings.simianEnabled && simianService.isConfigured)
+                
+                SimianProjectCreationDialog(
+                    isPresented: $showSimianProjectDialog,
+                    simianService: simianService,
+                    settingsManager: settingsManager,
+                    initialDocketNumber: pendingSimianDocketNumber,
+                    initialJobName: pendingSimianJobName,
+                    sourceEmail: pendingSimianSourceEmail,
+                    isSimianEnabled: isSimianEnabled,
+                    onConfirm: { docketNumber, jobName, projectManager, template in
+                        Task {
+                            await createSimianProject(
+                                notificationId: notificationId,
+                                docketNumber: docketNumber,
+                                jobName: jobName,
+                                projectManager: projectManager,
+                                template: template
+                            )
+                        }
+                    }
+                )
+            }
+        }
+        .onChange(of: showSimianProjectDialog) { oldValue, newValue in
+            // If dialog is dismissed (closed), clean up pending state
+            // BUT don't remove notification here - let createSimianProject handle that
+            // This prevents the notification from being removed prematurely
+            if oldValue == true && newValue == false {
+                // Wait a moment to check if this was a cancellation or successful completion
+                // The createSimianProject function will close the dialog after completion
+                Task {
+                    try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 second delay
+                    
+                    await MainActor.run {
+                        // Only clear pending state if notification was cancelled (not processed)
+                        // Check if notification still exists and hasn't been processed
+                        if let notificationId = pendingSimianNotificationId {
+                            // Check if notification was actually processed (marked as in Simian or Work Picture)
+                            let wasProcessed = notificationCenter.notifications.first(where: { $0.id == notificationId })?.isInSimian == true ||
+                                notificationCenter.notifications.first(where: { $0.id == notificationId })?.isInWorkPicture == true
+                            
+                            if !wasProcessed {
+                                // Dialog was cancelled before confirmation - remove notification
+                                if let notification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                                    print("🔔 Simian dialog was cancelled - removing notification")
+                                    Task {
+                                        await notificationCenter.remove(notification, emailScanningService: emailScanningService)
+                                        await MainActor.run {
+                                            pendingSimianNotificationId = nil
+                                            pendingSimianDocketNumber = ""
+                                            pendingSimianJobName = ""
+                                            processingNotification = nil
+                                        }
+                                    }
+                                    return
+                                }
+                            }
+                        }
+                        
+                        // Dialog was dismissed after processing - just clear pending state
+                        pendingSimianNotificationId = nil
+                        pendingSimianDocketNumber = ""
+                        pendingSimianJobName = ""
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showJobNameEditDialog) {
             if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
@@ -1621,10 +1854,10 @@ struct NotificationRowView: View {
             
             Toggle("Create Simian Job", isOn: simianJobBinding())
                 .font(.system(size: 11))
-                .disabled(isInSimian || isInWorkPicture)
-                .opacity((isInSimian || isInWorkPicture) ? 0.5 : 1.0)
+                .disabled(isInSimian)
+                .opacity(isInSimian ? 0.5 : 1.0)
             
-            if notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob == true && !isInSimian && !isInWorkPicture {
+            if notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob == true && !isInSimian {
                 projectManagerFieldView(notification: notification)
             }
             
@@ -1635,6 +1868,11 @@ struct NotificationRowView: View {
             // Update duplicate detection when view appears
             if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
                 notificationCenter.updateDuplicateDetection(currentNotification, mediaManager: mediaManager, settingsManager: settingsManager)
+            }
+            // Update Simian service configuration first, then pre-load users if Simian is enabled
+            updateSimianServiceConfiguration()
+            if simianUsers.isEmpty && !isLoadingSimianUsers && settingsManager.currentSettings.simianEnabled {
+                loadSimianUsers()
             }
         }
     }
@@ -1684,25 +1922,112 @@ struct NotificationRowView: View {
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
             
-            TextField("Project Manager", text: projectManagerBinding(notification: notification))
-                .textFieldStyle(.roundedBorder)
+            if isLoadingSimianUsers {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    Text("Loading users...")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let error = simianUsersLoadError {
+                Text("Error: \(error)")
+                    .font(.system(size: 9))
+                    .foregroundColor(.red)
+            } else {
+                Picker("Project Manager", selection: projectManagerUserBinding(notification: notification)) {
+                    Text("None (use email sender)").tag(nil as SimianUser?)
+                    ForEach(simianUsers) { user in
+                        Text(user.fullDisplayName)
+                            .tag(user as SimianUser?)
+                    }
+                }
+                .pickerStyle(.menu)
                 .font(.system(size: 11))
+            }
             
             Text("Defaults to email sender. Edit if needed.")
                 .font(.system(size: 9))
                 .foregroundColor(.secondary)
         }
+        .onAppear {
+            // Update configuration first, then load users
+            updateSimianServiceConfiguration()
+            // Always try to load users when view appears (if not already loading)
+            if !isLoadingSimianUsers && settingsManager.currentSettings.simianEnabled {
+                loadSimianUsers()
+            }
+        }
+        .onChange(of: settingsManager.currentSettings.simianAPIBaseURL) { _, _ in
+            // Update configuration and reload users when API configuration changes
+            updateSimianServiceConfiguration()
+            if !isLoadingSimianUsers && settingsManager.currentSettings.simianEnabled {
+                loadSimianUsers()
+            }
+        }
+        .onChange(of: settingsManager.currentSettings.simianEnabled) { _, enabled in
+            // Reload users when Simian is enabled/disabled
+            if enabled && !isLoadingSimianUsers {
+                updateSimianServiceConfiguration()
+                loadSimianUsers()
+            } else if !enabled {
+                simianUsers = []
+                simianUsersLoadError = nil
+            }
+        }
     }
     
-    private func projectManagerBinding(notification: Notification) -> Binding<String> {
+    private func projectManagerUserBinding(notification: Notification) -> Binding<SimianUser?> {
         Binding(
-            get: { notificationCenter.notifications.first(where: { $0.id == notificationId })?.projectManager ?? notification.sourceEmail ?? "" },
-            set: { newValue in
+            get: {
+                guard let projectManagerId = notificationCenter.notifications.first(where: { $0.id == notificationId })?.projectManager else {
+                    return nil
+                }
+                // Try to find matching user by ID or email
+                return simianUsers.first { user in
+                    user.id == projectManagerId || user.email == projectManagerId
+                }
+            },
+            set: { selectedUser in
                 if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                    notificationCenter.updateProjectManager(currentNotification, to: newValue.isEmpty ? nil : newValue)
+                    // Store the user ID when selected
+                    let userId = selectedUser?.id
+                    notificationCenter.updateProjectManager(currentNotification, to: userId)
                 }
             }
         )
+    }
+    
+    private func loadSimianUsers() {
+        // Update configuration first
+        updateSimianServiceConfiguration()
+        
+        guard simianService.isConfigured else {
+            simianUsersLoadError = "Simian API not configured. Please configure Simian in Settings."
+            isLoadingSimianUsers = false
+            return
+        }
+        
+        isLoadingSimianUsers = true
+        simianUsersLoadError = nil
+        
+        Task {
+            do {
+                let users = try await simianService.getUsers()
+                await MainActor.run {
+                    simianUsers = users
+                    isLoadingSimianUsers = false
+                    print("✅ Loaded \(users.count) Simian users")
+                }
+            } catch {
+                await MainActor.run {
+                    simianUsersLoadError = error.localizedDescription
+                    isLoadingSimianUsers = false
+                    print("⚠️ Failed to load Simian users: \(error.localizedDescription)")
+                }
+            }
+        }
     }
     
     @ViewBuilder
@@ -2427,9 +2752,11 @@ struct NotificationRowView: View {
             return
         }
         
-        // Check if docket already exists
-        if docketExists(docketNumber: docketNumber, jobName: jobName) {
-            // Show error notification
+        // Check if docket already exists in Work Picture (only if creating Work Picture)
+        // Allow creation in Simian even if it exists in Work Picture, and vice versa
+        let docketName = "\(docketNumber)_\(jobName)"
+        if mediaManager.dockets.contains(docketName) && currentNotification.shouldCreateWorkPicture {
+            // Show error notification only if trying to create Work Picture
             let errorNotification = Notification(
                 type: .error,
                 title: "Docket Already Exists",
@@ -2443,6 +2770,12 @@ struct NotificationRowView: View {
     }
     
     private func handleApproveWithDocket(_ providedDocketNumber: String?) {
+        Task {
+            await handleApproveWithDocketAsync(providedDocketNumber)
+        }
+    }
+    
+    private func handleApproveWithDocketAsync(_ providedDocketNumber: String?) async {
         // Get the latest notification state from center
         guard let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }),
               currentNotification.type == .newDocket,
@@ -2461,17 +2794,26 @@ struct NotificationRowView: View {
             finalDocketNumber = "\(yearSuffix)XXX" // e.g., "25XXX", "26XXX"
         }
         
-        // Check if docket already exists before creating
-        if docketExists(docketNumber: finalDocketNumber, jobName: jobName) {
-            processingNotification = nil
-            // Show error notification
-            let errorNotification = Notification(
-                type: .error,
-                title: "Docket Already Exists",
-                message: "Docket \(finalDocketNumber): \(jobName) already exists in Work Picture"
-            )
-            notificationCenter.add(errorNotification)
-            return
+        // Check if docket already exists in Work Picture before creating Work Picture folder
+        // Note: We only check Work Picture here - Simian creation is independent
+        let docketName = "\(finalDocketNumber)_\(jobName)"
+        if mediaManager.dockets.contains(docketName) {
+            // Only prevent if user wants to create Work Picture folder
+            // Check the notification's shouldCreateWorkPicture flag
+            if currentNotification.shouldCreateWorkPicture {
+                await MainActor.run {
+                    processingNotification = nil
+                    // Show error notification
+                    let errorNotification = Notification(
+                        type: .error,
+                        title: "Docket Already Exists",
+                        message: "Docket \(finalDocketNumber): \(jobName) already exists in Work Picture"
+                    )
+                    notificationCenter.add(errorNotification)
+                }
+                return
+            }
+            // If not creating Work Picture, allow Simian creation to proceed
         }
         
         // Update notification with docket number
@@ -2484,98 +2826,42 @@ struct NotificationRowView: View {
         
         processingNotification = notificationId
         
-        Task {
-            do {
-                // Create Work Picture folder if requested
-                if updatedNotification.shouldCreateWorkPicture {
-                    try await emailScanningService.createDocketFromNotification(updatedNotification)
-                    // Mark as in Work Picture when successfully created
-                    await MainActor.run {
-                        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                            notificationCenter.updateDuplicateDetection(currentNotification, mediaManager: mediaManager, settingsManager: settingsManager)
-                        }
-                    }
-                }
-                
-                // Create Simian job via Zapier webhook if enabled and requested
-                if updatedNotification.shouldCreateSimianJob {
-                    // Update webhook URL from settings before calling
-                    updateSimianServiceWebhook()
-                    
-                    do {
-                        // Get project manager from notification (fallback to sourceEmail)
-                        let projectManager = updatedNotification.projectManager ?? updatedNotification.sourceEmail
-                        
-                        try await simianService.createJob(
-                            docketNumber: finalDocketNumber,
-                            jobName: jobName,
-                            projectManager: projectManager,
-                            projectTemplate: settingsManager.currentSettings.simianProjectTemplate
-                        )
-                        // Mark as in Simian when successfully created
-                        await MainActor.run {
-                            if let updatedNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                                notificationCenter.markAsInSimian(updatedNotification)
-                            }
-                        }
-                        // DEBUG: Commented out for performance
-                        // print("✅ Simian job creation requested for \(finalDocketNumber): \(jobName)")
-                    } catch {
-                        // Log error but don't fail the whole approval process
-                        // DEBUG: Commented out for performance
-                        // print("⚠️ Failed to create Simian job: \(error.localizedDescription)")
-                        // Optionally show a warning notification
-                        await MainActor.run {
-                            let warningNotification = Notification(
-                                type: .info,
-                                title: "Simian Job Creation Failed",
-                                message: "Work Picture folder created, but Simian job creation failed: \(error.localizedDescription)"
-                            )
-                            notificationCenter.add(warningNotification)
-                        }
-                    }
-                }
-                
-                await MainActor.run {
-                    processingNotification = nil
-                    // Mark email as read when approving notification (creating work pic/simian)
-                    markEmailAsReadIfNeeded(updatedNotification)
-                    
-                    // Track approval interaction by email ID
-                    if let emailId = updatedNotification.emailId {
-                        var details: [String: String] = [:]
-                        if updatedNotification.shouldCreateWorkPicture {
-                            details["createdWorkPicture"] = "true"
-                        }
-                        if updatedNotification.shouldCreateSimianJob {
-                            details["createdSimianJob"] = "true"
-                        }
-                        if let docketNumber = updatedNotification.docketNumber {
-                            details["docketNumber"] = docketNumber
-                        }
-                        EmailFeedbackTracker.shared.recordInteraction(
-                            emailId: emailId,
-                            type: .approved,
-                            details: details.isEmpty ? nil : details
-                        )
-                    }
-                }
-                
-                // Remove notification after approval (email is already marked as read)
-                if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                    await notificationCenter.remove(currentNotification, emailScanningService: emailScanningService)
-                }
-            } catch {
-                await MainActor.run {
-                    processingNotification = nil
-                    // Show error notification
-                    let errorNotification = Notification(
-                        type: .error,
-                        title: "Failed to Create Docket",
-                        message: error.localizedDescription
-                    )
-                    notificationCenter.add(errorNotification)
-                }
+        // Check if we should show the dialog (if Simian is enabled OR if Work Picture is enabled)
+        // The dialog allows setting docket number and job name that apply to both systems
+        // IMPORTANT: Show dialog FIRST, do NOT create anything yet - wait for dialog confirmation
+        await MainActor.run {
+            updateSimianServiceConfiguration()
+        }
+        
+        let shouldCreateSimian = updatedNotification.shouldCreateSimianJob || 
+            (settingsManager.currentSettings.simianEnabled && simianService.isConfigured)
+        let shouldCreateWorkPicture = updatedNotification.shouldCreateWorkPicture
+        
+        print("🔔 handleApproveWithDocket: shouldCreateSimian = \(shouldCreateSimian), shouldCreateWorkPicture = \(shouldCreateWorkPicture)")
+        
+        // Show dialog FIRST if either Simian or Work Picture is being created
+        // This allows user to set docket number and job name that will be used for both
+        // DO NOT create Work Picture or Simian here - wait for dialog confirmation
+        if shouldCreateSimian || shouldCreateWorkPicture {
+            print("🔔 Showing project creation dialog FIRST (before creating anything)")
+            await MainActor.run {
+                showSimianProjectDialog = true
+                pendingSimianNotificationId = notificationId
+                pendingSimianDocketNumber = finalDocketNumber
+                pendingSimianJobName = jobName
+                pendingSimianSourceEmail = currentNotification.sourceEmail
+            }
+            // Don't remove notification here - it will be removed after both are created
+            // or if dialog is cancelled
+        } else {
+            // Neither is enabled - just remove notification
+            print("⚠️ Neither Simian nor Work Picture enabled - removing notification")
+            await MainActor.run {
+                processingNotification = nil
+                markEmailAsReadIfNeeded(updatedNotification)
+            }
+            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                await notificationCenter.remove(currentNotification, emailScanningService: emailScanningService)
             }
         }
     }

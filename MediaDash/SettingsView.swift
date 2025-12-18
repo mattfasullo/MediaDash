@@ -1333,152 +1333,176 @@ struct AsanaIntegrationSection: View {
         }
     }
 
-    var body: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 16) {
-                // Header
-                HStack {
-                    Image(systemName: "link")
-                        .foregroundColor(.blue)
-                        .font(.system(size: 16))
-                    Text("Asana Integration")
-                        .font(.system(size: 16, weight: .semibold))
-                    Spacer()
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.system(size: 16))
-                }
-                
-                Text("Fetch dockets and job names from Asana")
+    // MARK: - Computed Properties for Body Sections
+    
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "link")
+                    .foregroundColor(.blue)
+                    .font(.system(size: 16))
+                Text("Asana Integration")
+                    .font(.system(size: 16, weight: .semibold))
+                Spacer()
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.system(size: 16))
+            }
+            
+            Text("Fetch dockets and job names from Asana")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    private var connectionStatusSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            connectionStatusRow
+            expiredTokenWarning
+            connectionErrorMessage
+            configWarning
+        }
+    }
+    
+    private var connectionStatusRow: some View {
+        HStack(spacing: 12) {
+            if isConnecting {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("Connecting...")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
-                
-                VStack(alignment: .leading, spacing: 12) {
-                    // Connection Status and Actions
-                    HStack(spacing: 12) {
-                        if isConnecting {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Connecting...")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        } else {
-                            // Show connection health status
-                            switch connectionHealth {
-                            case .unknown:
-                                HStack(spacing: 6) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                    Text("Checking connection...")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.secondary)
-                                }
-                            case .checking:
-                                HStack(spacing: 6) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                    Text("Verifying token...")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.secondary)
-                                }
-                            case .healthy:
-                                HStack(spacing: 6) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                        .font(.system(size: 14))
-                                    Text("Connected")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.green)
-                                }
-                            case .expired:
-                                HStack(spacing: 6) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundColor(.red)
-                                        .font(.system(size: 14))
-                                    Text("Token Expired")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(.red)
-                                }
-                            case .noToken:
-                                Button("Connect to Asana") {
-                                    connectToAsana()
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(!OAuthConfig.isAsanaConfigured)
-                            }
-                        }
+            } else {
+                connectionHealthView
+            }
 
-                        Spacer()
+            Spacer()
 
-                        // Show buttons based on connection health
-                        if connectionHealth == .expired {
-                            // When expired, Connect is prominent (primary action)
-                            Button("Connect") {
-                                reconnectAsana()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .help("Connect to Asana")
+            connectionActionButtons
+        }
+    }
+    
+    @ViewBuilder
+    private var connectionHealthView: some View {
+        switch connectionHealth {
+        case .unknown:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Checking connection...")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Verifying token...")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+        case .healthy:
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.system(size: 14))
+                Text("Connected")
+                    .font(.system(size: 12))
+                    .foregroundColor(.green)
+            }
+        case .expired:
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                    .font(.system(size: 14))
+                Text("Token Expired")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.red)
+            }
+        case .noToken:
+            Button("Connect to Asana") {
+                connectToAsana()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!OAuthConfig.isAsanaConfigured)
+        }
+    }
+    
+    @ViewBuilder
+    private var connectionActionButtons: some View {
+        if connectionHealth == .expired {
+            Button("Connect") {
+                reconnectAsana()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .help("Connect to Asana")
 
-                            Button("Disconnect") {
-                                disconnectAsana()
-                                connectionHealth = .noToken
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        } else if connectionHealth == .healthy {
-                            // When healthy, show Disconnect button
-                            Button("Disconnect") {
-                                disconnectAsana()
-                                connectionHealth = .noToken
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    }
-
-                    // Expired token warning - prominent alert
-                    if connectionHealth == .expired {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.white)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Asana Connection Lost")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(.white)
-                                Text("Your authentication token has expired. Click 'Connect' to restore the connection.")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.white.opacity(0.9))
-                            }
-                            Spacer()
-                        }
-                        .padding(10)
-                        .background(Color.red)
-                        .cornerRadius(8)
-                    }
-
-                    // Other error messages
-                    if let error = connectionError, connectionHealth != .expired {
-                        Text(error)
-                            .font(.system(size: 11))
-                            .foregroundColor(.red)
-                            .textSelection(.enabled)
-                    }
-
-                    // Config Warning
-                    if !OAuthConfig.isAsanaConfigured && connectionHealth == .noToken {
-                        Text("OAuth credentials not configured")
-                            .font(.system(size: 11))
-                            .foregroundColor(.orange)
-                    }
-                    
-                    // Advanced Settings Disclosure
-                    Divider()
-                        .padding(.vertical, 8)
-                    
-                    ExpandableSettingsHeader(title: "Advanced Options", isExpanded: $showAdvancedSettings)
-                    
-                    if showAdvancedSettings {
+            Button("Disconnect") {
+                disconnectAsana()
+                connectionHealth = .noToken
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        } else if connectionHealth == .healthy {
+            Button("Disconnect") {
+                disconnectAsana()
+                connectionHealth = .noToken
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+    
+    @ViewBuilder
+    private var expiredTokenWarning: some View {
+        if connectionHealth == .expired {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.white)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Asana Connection Lost")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white)
+                    Text("Your authentication token has expired. Click 'Connect' to restore the connection.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                Spacer()
+            }
+            .padding(10)
+            .background(Color.red)
+            .cornerRadius(8)
+        }
+    }
+    
+    @ViewBuilder
+    private var connectionErrorMessage: some View {
+        if let error = connectionError, connectionHealth != .expired {
+            Text(error)
+                .font(.system(size: 11))
+                .foregroundColor(.red)
+                .textSelection(.enabled)
+        }
+    }
+    
+    @ViewBuilder
+    private var configWarning: some View {
+        if !OAuthConfig.isAsanaConfigured && connectionHealth == .noToken {
+            Text("OAuth credentials not configured")
+                .font(.system(size: 11))
+                .foregroundColor(.orange)
+        }
+    }
+    
+    private var advancedSettingsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider()
+                .padding(.vertical, 8)
+            
+            ExpandableSettingsHeader(title: "Advanced Options", isExpanded: $showAdvancedSettings)
+            
+            if showAdvancedSettings {
                         VStack(alignment: .leading, spacing: 12) {
                             // Workspace ID
                             VStack(alignment: .leading, spacing: 6) {
@@ -1663,9 +1687,13 @@ struct AsanaIntegrationSection: View {
                                                     return
                                                 }
                                                 
-                                                await cacheSyncService.installAndStart(scriptPath: scriptPath)
+                                                await cacheSyncService.installAndStart(
+                                                    scriptPath: scriptPath,
+                                                    workspaceID: settings.asanaWorkspaceID,
+                                                    projectID: settings.asanaProjectID
+                                                )
                                                 // Refresh menu bar status item
-                                                NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                                Foundation.NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
                                             }
                                         }
                                         .buttonStyle(.borderedProminent)
@@ -1675,7 +1703,7 @@ struct AsanaIntegrationSection: View {
                                         Button("Stop") {
                                             cacheSyncService.stop()
                                             // Refresh menu bar status item
-                                            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                            Foundation.NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
                                         }
                                         .buttonStyle(.bordered)
                                         .controlSize(.small)
@@ -1683,7 +1711,7 @@ struct AsanaIntegrationSection: View {
                                         Button("Uninstall") {
                                             cacheSyncService.uninstall()
                                             // Refresh menu bar status item
-                                            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                            Foundation.NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
                                         }
                                         .buttonStyle(.bordered)
                                         .controlSize(.small)
@@ -1692,7 +1720,7 @@ struct AsanaIntegrationSection: View {
                                         Button("Start") {
                                             cacheSyncService.start()
                                             // Refresh menu bar status item
-                                            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                            Foundation.NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
                                         }
                                         .buttonStyle(.borderedProminent)
                                         .controlSize(.small)
@@ -1700,7 +1728,7 @@ struct AsanaIntegrationSection: View {
                                         Button("Uninstall") {
                                             cacheSyncService.uninstall()
                                             // Refresh menu bar status item
-                                            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+                                            Foundation.NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
                                         }
                                         .buttonStyle(.bordered)
                                         .controlSize(.small)
@@ -1806,8 +1834,16 @@ struct AsanaIntegrationSection: View {
                         }
                         .padding(.leading, 16)
                         .padding(.top, 8)
-                    }
-                }
+            }
+        }
+    }
+    
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 16) {
+                headerSection
+                connectionStatusSection
+                advancedSettingsSection
             }
         }
         .onAppear {
@@ -1821,7 +1857,7 @@ struct AsanaIntegrationSection: View {
             }
             
             // Refresh menu bar status item
-            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+            Foundation.NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
         }
         .onChange(of: settings.sharedCacheURL) { oldValue, newValue in
             // Recheck if active elsewhere when cache path changes
@@ -1829,11 +1865,11 @@ struct AsanaIntegrationSection: View {
         }
         .onChange(of: cacheSyncService.isRunning) { oldValue, newValue in
             // Refresh menu bar status item when service status changes
-            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+            Foundation.NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
         }
         .onChange(of: cacheSyncService.isInstalled) { oldValue, newValue in
             // Refresh menu bar status item when installation status changes
-            NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
+            Foundation.NotificationCenter.default.post(name: NSNotification.Name("RefreshCacheSyncStatus"), object: nil)
         }
         .sheet(isPresented: $showManualCodeEntry) {
             VStack(spacing: 20) {
@@ -2869,15 +2905,32 @@ struct SimianIntegrationSection: View {
     @Binding var hasUnsavedChanges: Bool
     
     @StateObject private var simianService = SimianService()
-    @State private var webhookURL: String = ""
+    @State private var apiBaseURL: String = ""
+    @State private var username: String = ""
+    @State private var password: String = ""
     @State private var isTesting = false
     @State private var testResult: String?
     @State private var testError: String?
     @State private var showAdvancedSettings = false
+    @State private var isLoggedIn = false
+    @State private var showLoginFields = false
+    @State private var isEditingCredentials = false // Track if user is actively editing
     
-    private func testWebhook() {
+    // Template dropdown state
+    @State private var templates: [SimianTemplate] = []
+    @State private var isLoadingTemplates = false
+    @State private var templatesLoadError: String?
+    
+    // Computed property to check if user has credentials stored
+    private var hasStoredCredentials: Bool {
+        // URL is always hardcoded to Grayson's URL, so only check username and password
+        SharedKeychainService.getSimianUsername() != nil && 
+        SharedKeychainService.getSimianPassword() != nil
+    }
+    
+    private func testAPI() {
         guard simianService.isConfigured else {
-            testError = "Webhook URL not configured"
+            testError = "API base URL, username, and password required"
             testResult = nil
             return
         }
@@ -2896,15 +2949,23 @@ struct SimianIntegrationSection: View {
                 )
                 
                 await MainActor.run {
-                    testResult = "Webhook test successful! Check your Zapier Zap to confirm it received the test."
+                    testResult = "API test successful! Project created in Simian."
                     testError = nil
                     isTesting = false
                 }
             } catch {
                 await MainActor.run {
-                    testError = error.localizedDescription
+                    // Show more detailed error message
+                    let errorMessage: String
+                    if let simianError = error as? SimianError {
+                        errorMessage = simianError.localizedDescription
+                    } else {
+                        errorMessage = "Error: \(error.localizedDescription)"
+                    }
+                    testError = errorMessage
                     testResult = nil
                     isTesting = false
+                    print("⚠️ Test API failed: \(errorMessage)")
                 }
             }
         }
@@ -2937,24 +2998,44 @@ struct SimianIntegrationSection: View {
                 
                 if settings.simianEnabled {
                     VStack(alignment: .leading, spacing: 12) {
-                        // Status
-                        if simianService.isConfigured {
-                            HStack(spacing: 6) {
+                        // Authentication Status
+                        if isLoggedIn {
+                            HStack(spacing: 8) {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.green)
                                     .font(.system(size: 14))
-                                Text("Configured")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Logged in as: \(username)")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.primary)
+                                    if let baseURL = settings.simianAPIBaseURL {
+                                        Text(baseURL)
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Button("Log Out") {
+                                    logOut()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
+                            .padding(.vertical, 4)
                         } else {
-                            Text("Webhook URL required (configure in Advanced Settings)")
-                                .font(.system(size: 11))
-                                .foregroundColor(.orange)
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.circle.fill")
+                                    .foregroundColor(.orange)
+                                    .font(.system(size: 14))
+                                Text("Not logged in. Enter your Simian credentials below.")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.orange)
+                            }
+                            .padding(.vertical, 4)
                         }
                         
                         // Test Button
-                        if simianService.isConfigured {
+                        if isLoggedIn {
                             HStack(spacing: 12) {
                                 if isTesting {
                                     ProgressView()
@@ -2963,8 +3044,8 @@ struct SimianIntegrationSection: View {
                                         .font(.system(size: 12))
                                         .foregroundColor(.secondary)
                                 } else {
-                                    Button("Test") {
-                                        testWebhook()
+                                    Button("Test Connection") {
+                                        testAPI()
                                     }
                                     .buttonStyle(.bordered)
                                     .controlSize(.small)
@@ -2987,6 +3068,115 @@ struct SimianIntegrationSection: View {
                                 .textSelection(.enabled)
                         }
                         
+                        // Login Fields (shown when not logged in or when changing credentials)
+                        if !isLoggedIn || showLoginFields {
+                            Divider()
+                                .padding(.vertical, 8)
+                            
+                            VStack(alignment: .leading, spacing: 12) {
+                                if isLoggedIn && showLoginFields {
+                                    HStack {
+                                        Text("Change Credentials")
+                                            .font(.system(size: 13, weight: .medium))
+                                        Spacer()
+                                        Button("Cancel") {
+                                            showLoginFields = false
+                                            isEditingCredentials = false
+                                            // Restore stored values
+                                            loadStoredCredentials()
+                                            checkLoginStatus()
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                    }
+                                }
+                                
+                                // API Base URL is hardcoded to Grayson's URL - no field needed
+                                
+                                // Username
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Username")
+                                        .font(.system(size: 13))
+                                    
+                                    TextField("Enter Simian username", text: Binding(
+                                        get: { username },
+                                        set: {
+                                            username = $0
+                                            hasUnsavedChanges = true
+                                            isEditingCredentials = true
+                                            // Don't update login status while editing
+                                            updateAPIConfiguration(updateLoginStatus: false)
+                                        }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    .disabled(isLoggedIn && !showLoginFields)
+                                    .onChange(of: username) { _, newValue in
+                                        if newValue.isEmpty {
+                                            isEditingCredentials = true
+                                        }
+                                    }
+                                    
+                                    Text("Your Simian username (stored securely in Keychain)")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
+                                
+                                // Password
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Password")
+                                        .font(.system(size: 13))
+                                    
+                                    SecureField("Enter Simian password", text: Binding(
+                                        get: { password },
+                                        set: {
+                                            password = $0
+                                            hasUnsavedChanges = true
+                                            isEditingCredentials = true
+                                            // Don't update login status while editing
+                                            updateAPIConfiguration(updateLoginStatus: false)
+                                        }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    .disabled(isLoggedIn && !showLoginFields)
+                                    .onChange(of: password) { _, newValue in
+                                        if newValue.isEmpty {
+                                            isEditingCredentials = true
+                                        }
+                                    }
+                                    
+                                    Text("Your Simian password (stored securely in Keychain)")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
+                                
+                                if !isLoggedIn {
+                                    Button("Save Credentials") {
+                                        isEditingCredentials = false
+                                        saveCredentials()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                    .disabled(apiBaseURL.isEmpty || username.isEmpty || password.isEmpty)
+                                } else if showLoginFields {
+                                    Button("Update Credentials") {
+                                        isEditingCredentials = false
+                                        saveCredentials()
+                                        showLoginFields = false
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                    .disabled(apiBaseURL.isEmpty || username.isEmpty || password.isEmpty)
+                                }
+                            }
+                        } else if isLoggedIn {
+                            // Show "Change Credentials" button when logged in
+                            Button("Change Credentials") {
+                                showLoginFields = true
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        
                         // Advanced Settings Disclosure
                         Divider()
                             .padding(.vertical, 8)
@@ -2995,40 +3185,48 @@ struct SimianIntegrationSection: View {
                         
                         if showAdvancedSettings {
                             VStack(alignment: .leading, spacing: 12) {
-                                // Webhook URL
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Zapier Webhook URL")
-                                        .font(.system(size: 13))
-                                    
-                                    TextField("https://hooks.zapier.com/hooks/catch/...", text: Binding(
-                                        get: { settings.simianWebhookURL ?? "" },
-                                        set: {
-                                            settings.simianWebhookURL = $0.isEmpty ? nil : $0
-                                            hasUnsavedChanges = true
-                                        }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
-                                    
-                                    Text("Get this URL from your Zapier Zap: Webhook by Zapier (Catch Hook) → Simian (Create Project)")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                }
                                 
-                                // Project Template
+                                // Project Template Dropdown
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Project Template")
                                         .font(.system(size: 13))
                                     
-                                    TextField("Enter project template name or ID", text: Binding(
-                                        get: { settings.simianProjectTemplate ?? "" },
-                                        set: {
-                                            settings.simianProjectTemplate = $0.isEmpty ? nil : $0
-                                            hasUnsavedChanges = true
+                                    if isLoadingTemplates {
+                                        HStack {
+                                            ProgressView()
+                                                .scaleEffect(0.8)
+                                            Text("Loading templates...")
+                                                .font(.system(size: 11))
+                                                .foregroundColor(.secondary)
                                         }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
+                                    } else if let error = templatesLoadError {
+                                        Text("Error: \(error)")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.red)
+                                    } else {
+                                        Picker("Project Template", selection: Binding<SimianTemplate?>(
+                                            get: {
+                                                if let templateId = settings.simianProjectTemplate,
+                                                   let template = templates.first(where: { $0.id == templateId }) {
+                                                    return template
+                                                }
+                                                return nil
+                                            },
+                                            set: { (selectedTemplate: SimianTemplate?) in
+                                                settings.simianProjectTemplate = selectedTemplate?.id
+                                                hasUnsavedChanges = true
+                                            }
+                                        )) {
+                                            Text("None").tag(nil as SimianTemplate?)
+                                            ForEach(templates) { template in
+                                                Text(template.name)
+                                                    .tag(template as SimianTemplate?)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+                                    }
                                     
-                                    Text("The project template to use when creating Simian projects")
+                                    Text("Select an existing project to use as a template when creating new Simian projects")
                                         .font(.system(size: 11))
                                         .foregroundColor(.secondary)
                                 }
@@ -3041,19 +3239,198 @@ struct SimianIntegrationSection: View {
             }
         }
         .onAppear {
-            updateWebhookURL()
+            loadStoredCredentials()
+            // If we have stored credentials and UI fields match, we're not editing
+            let storedUsername = SharedKeychainService.getSimianUsername()
+            let hasStored = storedUsername != nil && SharedKeychainService.getSimianPassword() != nil
+            let uiMatchesStored = username == storedUsername && !apiBaseURL.isEmpty
+            isEditingCredentials = !hasStored || !uiMatchesStored || showLoginFields
+            checkLoginStatus()
+            updateAPIConfiguration()
+            
+            // Load templates if configured
+            if isLoggedIn {
+                loadTemplates()
+            }
         }
-        .onChange(of: settings.simianWebhookURL) { _, _ in
-            updateWebhookURL()
+        .onChange(of: settings.simianAPIBaseURL) { _, _ in
+            // Always ensure URL is set to Grayson's hardcoded URL
+            let graysonURL = "https://graysonmusic.gosimian.com/api/prjacc"
+            if settings.simianAPIBaseURL != graysonURL {
+                settings.simianAPIBaseURL = graysonURL
+            }
+            // Only update if not actively editing
+            if !isEditingCredentials {
+                updateAPIConfiguration()
+                checkLoginStatus()
+                if isLoggedIn {
+                    loadTemplates()
+                }
+            }
         }
     }
     
-    private func updateWebhookURL() {
-        webhookURL = settings.simianWebhookURL ?? ""
-        if !webhookURL.isEmpty {
-            simianService.setWebhookURL(webhookURL)
+    private func checkLoginStatus() {
+        // Only show logged in if:
+        // 1. Credentials are stored in keychain
+        // 2. User is NOT actively editing credentials
+        // 3. All three fields (URL, username, password) are complete in keychain
+        isLoggedIn = hasStoredCredentials && !isEditingCredentials
+    }
+    
+    private func loadStoredCredentials() {
+        // Always use Grayson's hardcoded URL
+        let graysonURL = "https://graysonmusic.gosimian.com/api/prjacc"
+        
+        // Migrate any old http:// URLs to https://
+        if let oldURL = settings.simianAPIBaseURL, oldURL.hasPrefix("http://") {
+            print("⚠️ SettingsView: Found old http:// URL in settings, migrating to https://")
+        }
+        
+        // Always set to Grayson's URL (overrides any stored value)
+        settings.simianAPIBaseURL = graysonURL
+        apiBaseURL = graysonURL
+        
+        // Also update UserDefaults to ensure consistency
+        UserDefaults.standard.set(graysonURL, forKey: "simian_api_base_url")
+        
+        if let storedUsername = SharedKeychainService.getSimianUsername() {
+            username = storedUsername
+        }
+        // Password is not loaded for security
+        password = ""
+    }
+    
+    private func saveCredentials() {
+        // Validate that all three fields are complete
+        guard !apiBaseURL.isEmpty, !username.isEmpty, !password.isEmpty else {
+            // Don't save incomplete credentials
+            return
+        }
+        
+        // Save to keychain
+        _ = KeychainService.store(key: "simian_username", value: username)
+        _ = SharedKeychainService.setSharedKey(username, for: .simianUsername)
+        _ = KeychainService.store(key: "simian_password", value: password)
+        _ = SharedKeychainService.setSharedKey(password, for: .simianPassword)
+        
+        // Update settings
+        // Always use Grayson's hardcoded URL
+        let graysonURL = "https://graysonmusic.gosimian.com/api/prjacc"
+        settings.simianAPIBaseURL = graysonURL
+        hasUnsavedChanges = true
+        
+        // Mark as no longer editing
+        isEditingCredentials = false
+        
+        // Update service configuration
+        updateAPIConfiguration()
+        
+        // Update login status (now that credentials are saved)
+        checkLoginStatus()
+        
+        // Load templates if now logged in
+        if isLoggedIn {
+            loadTemplates()
+        }
+    }
+    
+    private func logOut() {
+        // Clear keychain
+        KeychainService.delete(key: "simian_username")
+        KeychainService.delete(key: "simian_password")
+        _ = SharedKeychainService.setSharedKey("", for: .simianUsername)
+        _ = SharedKeychainService.setSharedKey("", for: .simianPassword)
+        
+        // Clear service configuration
+        simianService.clearConfiguration()
+        
+        // Clear local state
+        username = ""
+        password = ""
+        apiBaseURL = ""
+        // Keep Grayson URL even when logging out
+        // settings.simianAPIBaseURL = nil
+        templates = []
+        isLoggedIn = false
+        showLoginFields = false
+        hasUnsavedChanges = true
+    }
+    
+    private func loadTemplates() {
+        guard simianService.isConfigured else {
+            templates = []
+            return
+        }
+        
+        isLoadingTemplates = true
+        templatesLoadError = nil
+        
+        Task {
+            do {
+                let fetchedTemplates = try await simianService.getTemplates()
+                await MainActor.run {
+                    templates = fetchedTemplates
+                    isLoadingTemplates = false
+                }
+            } catch {
+                await MainActor.run {
+                    // Show more detailed error message
+                    let errorMessage: String
+                    if let simianError = error as? SimianError {
+                        errorMessage = simianError.localizedDescription
+                    } else {
+                        errorMessage = "Error: \(error.localizedDescription)"
+                    }
+                    templatesLoadError = errorMessage
+                    isLoadingTemplates = false
+                    print("⚠️ Failed to load templates: \(errorMessage)")
+                }
+            }
+        }
+    }
+    
+    private func updateAPIConfiguration(updateLoginStatus: Bool = true) {
+        // Always use Grayson's hardcoded URL
+        let graysonURL = "https://graysonmusic.gosimian.com/api/prjacc"
+        settings.simianAPIBaseURL = graysonURL
+        apiBaseURL = graysonURL
+        let finalBaseURL = graysonURL
+        
+        // Get credentials - prefer UI fields if filled, otherwise use stored credentials
+        let finalUsername: String
+        let finalPassword: String
+        
+        if !username.isEmpty && !password.isEmpty {
+            // User is entering new credentials
+            finalUsername = username
+            finalPassword = password
+        } else if let storedUsername = SharedKeychainService.getSimianUsername(),
+                  let storedPassword = SharedKeychainService.getSimianPassword() {
+            // Use stored credentials
+            finalUsername = storedUsername
+            finalPassword = storedPassword
+            // Update UI username if empty (but not password for security)
+            if username.isEmpty {
+                username = storedUsername
+            }
         } else {
-            simianService.clearWebhookURL()
+            // No credentials available
+            finalUsername = username
+            finalPassword = password
+        }
+        
+        // Update service configuration
+        if !finalBaseURL.isEmpty && !finalUsername.isEmpty && !finalPassword.isEmpty {
+            simianService.setBaseURL(finalBaseURL)
+            simianService.setCredentials(username: finalUsername, password: finalPassword)
+        } else {
+            simianService.clearConfiguration()
+        }
+        
+        // Only update login status if explicitly requested (not while user is typing)
+        if updateLoginStatus {
+            checkLoginStatus()
         }
     }
 }
@@ -3176,13 +3553,18 @@ struct CacheVisualizationView: View {
                     if cacheManager.isSyncing {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 6) {
-                                ProgressView()
+                                ProgressView(value: cacheManager.syncProgress > 0 ? cacheManager.syncProgress : nil)
                                     .scaleEffect(0.7)
-                                Text("Syncing with Asana...")
+                                Text(cacheManager.syncPhase.isEmpty ? "External service syncing shared cache..." : cacheManager.syncPhase)
                                     .font(.system(size: 11))
                                     .foregroundColor(.secondary)
+                                if cacheManager.syncProgress > 0 {
+                                    Text("\(Int(cacheManager.syncProgress * 100))%")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary.opacity(0.7))
+                                }
                             }
-                            Text("This may take several minutes depending on the number of projects and tasks.")
+                            Text("The external service is updating the shared cache. This may take several minutes.")
                                 .font(.system(size: 10))
                                 .foregroundColor(.secondary.opacity(0.8))
                                 .italic()
