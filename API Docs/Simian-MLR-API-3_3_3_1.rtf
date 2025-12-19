@@ -1,0 +1,848 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;\f1\fswiss\fcharset0 Helvetica-Bold;\f2\fswiss\fcharset0 Arial-BoldMT;
+\f3\fswiss\fcharset0 ArialMT;\f4\fswiss\fcharset0 Helvetica-Oblique;}
+{\colortbl;\red255\green255\blue255;\red108\green108\blue108;\red64\green64\blue65;\red124\green124\blue126;
+\red98\green99\blue101;\red68\green68\blue68;\red252\green15\blue26;\red60\green118\blue172;\red43\green105\blue145;
+\red49\green49\blue50;\red59\green136\blue189;\red0\green0\blue0;\red39\green39\blue39;\red26\green23\blue24;
+\red79\green80\blue82;\red105\green105\blue107;\red49\green49\blue49;\red102\green103\blue105;}
+{\*\expandedcolortbl;;\cssrgb\c49979\c49987\c49976;\cssrgb\c31910\c31925\c32349;\cssrgb\c55897\c56124\c56721;
+\cssrgb\c45986\c46408\c47177;\cssrgb\c33650\c33650\c33650;\cssrgb\c100000\c17303\c12698;\cssrgb\c29299\c54133\c73095;\cssrgb\c21105\c48943\c63636;
+\cssrgb\c25120\c25135\c25588;\cssrgb\c28520\c60787\c78972;\cssrgb\c0\c0\c0;\cssrgb\c20301\c20302\c20302;\cssrgb\c13576\c11917\c12426;
+\cssrgb\c38300\c38745\c39555;\cssrgb\c48731\c48756\c49506;\cssrgb\c24981\c24984\c24981;\cssrgb\c47555\c47972\c48733;}
+\margl1440\margr1440\vieww30040\viewh17760\viewkind0
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
+
+\f0\fs42 \cf2 MLR 
+\f1\b API 3.3.1\
+
+\f0\b0\fs16 \cf3 01-31-2019 v3.2\
+01-09-2020 v3.3\
+12-15-2023 v3.3.1\
+
+\fs24 \cf4 Reference for the Simian Application Programming Interface\
+
+\f1\b\fs36 \cf2 I. API Connection\
+
+\f2\fs23 \cf3 The API connection URL for your Simian installation is located at the follow-\
+ing:\
+
+\f3\b0 \cf5 Reels API: <companyname>.gosimian.com/api/simian\
+General API: <companyname>.gosimian.com/api/main\
+
+\f1\b\fs24 \cf6 API output is XML by default - adding \cf7 output_format=json \cf6 to command!\
+API calls should be made \cf7 HTTPS://\
+
+\fs26 \cf6 Sample Connection Code (PHP):\
+
+\f0\b0\fs20 (without user authentication - see Application Integration Section for User Authentication)\
+function getReel()\
+\{\
+$PostArray[\'91auth_token\'92] = \'931234567890\'94; // REQUIRED FOR CONNECTION\
+$PostArray[\'91reel_type\'92] = \'93web_reels\'94; // Section to query\
+$PostArray[\'91reel_id\'92] = \'931060\'94; // Unique reel ID\
+\cf8 $Response = callAPI(\'93https://<companyname>.gosimian.com/api/simian/get_reel\'94, $PostArray);\
+\cf6 header(\'93Content-Type: text/xml\'94);\
+print_r($Response);\
+\}\
+\{\
+function callAPI($URL, $PostArray)\
+$PostString = \'93\'94;\
+foreach($PostArray as $n=>$v) $PostString .= \'93&\{$n\}=\'94.urlencode($v);\
+$ch = curl_init($URL);\
+curl_setopt($ch, CURLOPT_POST, 1);\
+curl_setopt($ch, CURLOPT_POSTFIELDS, $PostString);\
+curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);\
+curl_setopt($ch, CURLOPT_HEADER, 0);\
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);\
+$Response = curl_exec($ch);\
+return $Response;\
+\}
+\f1\b\fs36 \cf2 II. API Commands\
+
+\f0\b0\fs24 \cf9 COMMAND: 
+\f1\b get_reel\
+
+\fs20 \cf10 Parameters (All Required):\
+\cf11 reel_type\cf10 : type of reel to return\
+
+\f4\i\b0 valid values: web_reels, company_reels, recently_sent\
+
+\f1\i0\b \cf11 reel_id\cf10 : 
+\f0\b0 id of the reel to return\
+
+\f1\b \cf11 reel_name\cf10 : 
+\f0\b0 name of the reel to return\
+
+\fs24 \cf9 COMMAND: 
+\f1\b get_reel_list\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 A list of reels in the specified section\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 reel_type\cf10 : 
+\f0\b0 type of reels to retrieve\
+
+\f4\i valid values: web_reels, company_reels, recently_sent\
+
+\f1\i0\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/simian/get_reel_list\
+
+\fs24 \cf9 COMMAND: 
+\f1\b get_reels\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 A list of reels in the specified section\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 reel_type\cf10 : 
+\f0\b0 type of reels to retrieve\
+
+\f4\i valid values: web_reels, company_reels, recently_sent\
+
+\f1\i0\b Optional Parameters\
+\cf11 start_record\cf10 : 
+\f0\b0 record ID to start with\
+
+\f1\b \cf11 limit\cf10 : 
+\f0\b0 number of rows to return
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/simian/get_reels\
+
+\fs24 \cf9 COMMAND: 
+\f1\b get_reel_only\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 Reel information - no media information is returned.\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 reel_type\cf10 : 
+\f0\b0 id of the reel to retrieve\
+
+\f1\b \cf11 reel_type\cf10 : 
+\f0\b0 type of reels to retrieve\
+
+\f4\i valid values: web_reels, company_reels, recently_sent\
+
+\f1\i0\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/simian/get_reel_only\
+
+\fs24 \cf9 COMMAND: 
+\f1\b get_media\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 A full record of the specified media ID\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b Optional Parameters\
+\cf11 start_record\cf10 : 
+\f0\b0 record ID to start with\
+
+\f1\b \cf11 limit\cf10 : 
+\f0\b0 number of rows to return\
+
+\f1\b \cf11 id\cf10 : 
+\f0\b0 specific media id, will return one record (other parameters are ignored)\
+
+\f1\b \cf11 keyword\cf10 :
+\f0\b0  string to search for, only one can be specified at a time and must be used in conjunction\
+with the field parameter. Cannot be used with tag field.\
+
+\f1\b \cf11 tags\cf10 :
+\f0\b0  tag or list of tags (comma delimited) to search for. Cannot be used with keyword field.\
+
+\f1\b \cf11 field\cf10 :
+\f0\b0  the field to search (must be used in conjunction with the keyword field). Accepted values in-\
+clude: credit, title, description\
+
+\f1\b Url String: 
+\f0\b0 \cf11 https://COMPANYNAME.gosimian.com/api/simian/get_media\
+
+\fs24 \cf9 COMMAND: 
+\f1\b get_media_categories\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 A list of media categories\
+
+\f1\b Required Parameters\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b Optional Parameters\
+\cf11 start_record\cf10 : 
+\f0\b0 record ID to start with\
+
+\f1\b \cf11 limit\cf10 : 
+\f0\b0 number of rows to return\
+
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/simian/get_media_categories\
+
+\fs24 \cf9 COMMAND: 
+\f1\b media_uploaded\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 \cf12 Media\cf10  uploaded by a given user\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 username\cf10 : 
+\f0\b0 valid simian username\
+
+\f1\b Optional Parameters\
+\cf11 search_query\cf10 : 
+\f0\b0 term to search for\
+
+\f1\b \cf11 search_columns\cf10 : 
+\f0\b0 columns to search\
+Value search columns values: title, description\
+
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/simian/media_uploaded\
+
+\fs24 \cf9 COMMAND: 
+\f1\b put_media_library\
+
+\f0\b0\fs20 \cf12 Return value\
+\cf10 Push a file to the Simian Media Library, returns ID of new media returned\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 media_file\cf10 : 
+\f0\b0 name of file to push\
+
+\f1\b Url String - Upload from Desktop:\
+
+\f0\b0 \cf11 https://COMPANYNAME.gosimian.com/api/simian_put_media_library\
+
+\f1\b \cf10 Url String - Upload from the Cloud or remote server:\
+
+\f0\b0 \cf11 https://COMPANYNAME.gosimian.com/api/simian_put_media_library/cloud\
+
+\fs24 \cf9 COMMAND: 
+\f1\b create_reel\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 Create a new reel in the Simian Reel Library, returns ID of the reel created
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 title\cf10 : 
+\f0\b0 name of the new reel to create\
+
+\f1\b \cf11 reel_type\cf10 : 
+\f0\b0 type of reels to create\
+
+\f4\i valid values: web_reels, company_reels\
+
+\f1\i0\b \cf11 media_ids\cf10 : 
+\f0\b0 delimited list || of media ids to add to the reel ex: 12||34||45\
+
+\f1\b Url String:\cf12  
+\f0\b0 \cf11 https://COMPANYNAME.gosimian.com/api/simian/create_reel\
+
+\fs24 \cf9 COMMAND: 
+\f1\b search\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 A list of search results from the specified section\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 section\cf10 : 
+\f0\b0 <section to search>\
+Valid section values: media, project, project_media\
+
+\f1\b Optional Parameters\
+\cf11 search_query\cf10 : 
+\f0\b0 term to search for\
+
+\f1\b \cf11 search_columns\cf10 : 
+\f0\b0 columns to search\
+Value search columns values: title, description\
+
+\f1\b Url String: 
+\f0\b0 \cf11 https://COMPANYNAME.gosimian.com/api/main/search\
+
+\fs24 \cf9 COMMAND: 
+\f1\b select_all\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 A list of records from the specified section\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 section\cf10 : 
+\f0\b0 <section to query>\
+Valid section values: media, project, project_media, reels\
+
+\f1\b Optional Parameters\
+\cf11 start_record\cf10 : 
+\f0\b0 id of the desired starting record\
+
+\f1\b \cf11 limit\cf10 : 
+\f0\b0 number of elements to return
+\f1\b Url String:\cf12  
+\f0\b0 \cf11 https://COMPANYNAME.gosimian.com/api/main/select_all\
+
+\fs24 \cf9 COMMAND: 
+\f1\b select_by_id\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 Return a specific record by ID number\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 section\cf10 : 
+\f0\b0 <section to search>\
+Valid section values: media, project, project_media\
+
+\f1\b \cf11 id\cf10 : 
+\f0\b0 id of the desired record\
+
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/main/select_by_id\
+
+\fs24 \cf9 COMMAND: 
+\f1\b insert\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 ID of the inserted record\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 section\cf10 : 
+\f0\b0 <section to search>\
+Valid section values: media, project, project_media\
+
+\f1\b \cf11 <fields>\cf10 : 
+\f0\b0 fields to insert, data map required\
+
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/main/insert\
+
+\fs24 \cf9 COMMAND: 
+\f1\b update\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 ID of the updated record\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 section\cf10 : 
+\f0\b0 <section to search>\
+Valid section values: media, project, project_media
+\f1\b \cf11 id\cf10 : 
+\f0\b0 id of the desired record\
+
+\f1\b \cf11 <fields>\cf10 : 
+\f0\b0 fields to update, data map required\
+
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/main/update\
+
+\fs24 \cf9 COMMAND: 
+\f1\b delete\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 ID of the deleted record\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 section\cf10 : 
+\f0\b0 <section to search>\
+Valid section values: media, project, project_media\
+
+\f1\b \cf11 id\cf10 : 
+\f0\b0 id of the desired record\
+
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/main/delete\
+
+\fs24 \cf9 COMMAND: 
+\f1\b get_users\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 List of system users\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/simian/get_users\
+
+\fs24 \cf9 COMMAND: 
+\f1\b get_permissions\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 List of system permissions\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/simian/get_permission_levels
+\fs24 \cf9 COMMAND: 
+\f1\b add_user\
+
+\fs20 \cf10 Return value\
+
+\f0\b0 List of system users\
+
+\f1\b Required Parameters\
+\cf11 auth_token\cf10 : 
+\f0\b0 unique api key\
+
+\f1\b \cf11 firstname\cf10 : 
+\f0\b0 first name of user\
+
+\f1\b \cf11 lastname\cf10 : 
+\f0\b0 last name of user\
+
+\f1\b \cf11 username\cf10 : 
+\f0\b0 unique username\
+
+\f1\b \cf11 email\cf10 : 
+\f0\b0 user email address\
+
+\f1\b \cf11 password\cf10 : 
+\f0\b0 user password, Password must be 7 or more characters, contain one uppercase letter,\
+one digit, no spaces.\
+
+\f1\b \cf11 level\cf10 : 
+\f0\b0 permission ID returned from 
+\f1\b get_permission_levels\
+Optional Parameters\
+\cf11 status\cf10 : 
+\f0\b0 Active or Inactive (default = active)\
+
+\f1\b \cf11 telephone\cf10 : 
+\f0\b0 user telephone number\
+
+\f1\b \cf11 job_title\cf10 : 
+\f0\b0 user job title\
+
+\f1\b \cf11 department\cf10 : 
+\f0\b0 user department\
+
+\f1\b Url String:
+\f0\b0 \cf12  \cf11 https://COMPANYNAME.gosimian.com/api/simian/add_user\
+
+\f1\b\fs36 \cf2 III. APPLICATION INTEGRATION WORKFLOW\
+
+\fs30 \cf6 1. Account
+\f0\b0\fs20 Request email groups (we won't need user_id once we can login to the app)\
+curl -d "auth_token=0123456789&output_format=json&user_id=17" \cf8 https://<companyname>.gosimian.-\
+com/api/simian/get_email_groups\
+\cf6 Request template defaults and option defaults\
+curl -d "auth_token=0123456789&output_format=json" \cf8 https://<companyname>.gosimian.com/api/simian/\
+get_reel_defaults\
+
+\fs26 \cf6 Login\
+
+\fs20 Returns auth token\
+logs user in and returns valid user object\
+fields:\
+username = user name\
+password = password\
+curl -d "username=user-entered-data&password=user-entered-data&output_format=json" \cf8 https://<com-\
+panyname>.gosimian.com/api/simian/get_user\
+
+\f1\b\fs30 \cf6 2. Reels\
+
+\f0\b0\fs20 Request a List of Reels\
+List based on Reel Type, which can be favorites, company_reels, recently_viewed or recently_sent. The\
+latter displays Live Sent reels:\
+curl -d "auth_token=0123456789&output_format=json&reel_type=recently_sent" \cf8 https://\
+<companyname>.gosimian.com/api/simian/get_reel_list\
+\cf6 use start_record and limit for pagination in get_reel_list.\
+Example with pagination and search term:\
+curl -d\
+"auth_token=0123456789&output_format=json&reel_type=recently_viewed&reel_name=cw&start_record\
+=1&limit=10" \cf8 https://<companyname>.gosimian.com/api/simian/get_reel_list\
+\cf6 Retrieve a Reel\
+curl -d "auth_token=0123456789&output_format=json&reel_id=87&reel_type=company_reels" \cf8 https://\
+<companyname>.gosimian.com/api/simian/get_reel\
+\cf6 Get a Reel Preview URL (Live/Draft Reels only)\
+Most basic:\
+curl -d "auth_token=0123456789&output_format=json&reel_id=840" \cf8 https://companyname.gosimian.com/\
+api/simian/preview_reel\
+
+\fs24 \cf6 Most complete:\
+
+\fs20 curl -d "auth_token=0123456789&output_format=json&reel_id=840&emt=122&rt=201&brand=1&allow_-\
+comments=true&allow_download=true&allow_forward=true&allow_podcast=true&expire_date=10/30/201\
+3&present_password=sherlock" \cf8 https://<companyname>.gosimian.com/api/simian/preview_reel
+\fs26 \cf6 Save a Reel/Package\
+
+\fs24 validation:\
+\'95 the reel must have a name\
+\'95 if a package, all reels must be named\
+\'95 all reels must include media, at least one spot per reel\
+\'95 reels cannot contain duplicate media, but the same media id can be added to\
+each reel in a package\
+The Reel Type can be favorites, company_reels or live:\
+
+\fs20 curl -d "auth_token=0123456789&output_format=json&reel_type=company_reels&name=CW API Com-\
+pany Reel&reel_names=A reel||B reel&media_ids=1:31||1:347||2:293&user_id=8" https://\cf8 <company-\
+name>.gosimian.com/api/simian/save_reel\
+
+\fs26 \cf6 Send a Reel\
+
+\fs24 required fields:\
+\'95 email_subject\
+\'95 email (send to addresses)\
+\'95 only required if no email_group_id is\
+\'95 at least one email or an email group\
+\'95 comma separated list if multiple\
+\'95 reply_email\
+
+\fs20 curl -d "auth_token=0123456789&output_format=json&reel_id=830&rt=201&emt=201&brand=1&re-\
+ply_address=\cf8 cathy@gosimian.com\cf6 &\cf8 email=cathy@voltamedia.com\cf6 ,\cf8 cathy.gosimian@gmail.com\cf6 ,\cf8 cathy@g\
+osimian.com\cf6 &email_subject=CW API test - Training&message=Email message from Training&allow_-\
+comments=true&allow_download=true&allow_forward=true&allow_podcast=true&user_id=8" \cf8 https://com-\
+panyname.gosimian.com/api/simian/send_reel\
+
+\fs24 \cf6 with all fields:\
+
+\fs20 curl -d\
+"\cf8 allow_comments=1&allow_download=1&allow_forward=1&allow_podcast=0&auth_token=sim887345r-\
+T90&brand=1&email=emaillavender@gmail.com\cf6 &email_cc=0&email_group_id=66&email_notification=0&\
+email_subject=Test&emt=122&output_format=json&reel_id=868&reply_address=christopherlavender@ya\
+hoo.com&rt=21&present_password=sherlock&expire_date=10/02/2013&message=message in\
+email" http:<companyname\cf8 >.gosimian.com/api/simian/send_reel\
+
+\fs26 \cf6 Reel Analytics\
+
+\fs24 List of email addresses that reel was sent to (includes CC: and Fwd: notation):\
+
+\fs20 curl -d "auth_token=0123456789&output_format=json&reel_id=873" \cf8 https://<companyname>.gosimian.-\
+com/api/simian/get_reel_emails\
+
+\fs24 \cf6 Optional parameter \'93type\'94 to request opened, unopened or forwards:\
+
+\fs20 curl -d "auth_token=0123456789&output_format=json&reel_id=873&type=opened" \cf8 https://<company-\
+name>.gosimian.com/api/simian/get_reel_emails
+\fs24 \cf6 Analytics for a reel/email combination:\
+
+\fs20 curl -d\
+"\cf8 auth_token=sim887345rT90&output_format=json&reel_id=873&email=cathy@gosimian.com\cf6 " \cf8 https://\
+<companyname>.gosimian.com/api/simian/get_analytics\
+
+\f1\b\fs30 \cf6 3. Media\
+
+\f0\b0\fs26 Get Media Categories:\
+
+\fs20 curl -d "auth_token=0123456789&output_format=json" \cf8 https://<companyname>.gosimian.com/api/simian/\
+get_media_categories\
+
+\fs26 \cf6 Get Credits for Category (Commercials ID=1):\
+
+\fs20 curl -d "auth_token=0123456789&media_type_id=1&output_format=json" \cf8 https://\
+<companyname>.gosimian.com/api/simian/get_credits\
+
+\fs26 \cf6 Get Credit Values for a Given Credit (Attribute ID=1 Director) (all categories)\
+
+\fs20 curl -d "auth_token=0123456789&attribute_id=1&output_format=json" \cf8 https://<companyname>.gosimi-\
+an.com/api/simian/get_credit_values\
+
+\fs26 \cf6 Get Credit Values for a Given Credit (Attribute ID=1 Director) (all categories)\
+
+\fs20 curl -d "auth_token=0123456789&media_type_id=1&attribute_id=1&output_format=json" \cf8 https://<compa-\
+nyname>.gosimian.com/api/simian/get_credit_values\
+
+\fs26 \cf6 Request Paginated Media with Params\
+
+\fs24 get media with media_type_id (categories, e.g. Commercials, Comedy) :\
+
+\fs20 curl -d "auth_token=0123456789&output_format=json&media_type_id=1"\cf8  https://\
+<companyname>.gosimian.com/api/simian/get_media\
+
+\fs24 \cf6 get all (active) media with pagination and sort order. If start_record is specified, then\
+limit must be as well :\
+
+\fs20 curl -d "auth_token=0123456789&output_format=json&limit=5&start_record=0&order_by=id&sort_direc-\
+tion=ASC" \cf8 https://<companyname>.gosimian.com/api/simian/get_media\
+
+\fs26 \cf6 Request Filtered Media with Params (Pagination is also possible)\
+
+\fs24 get media with category_id (media_type_id), credit_id (attribute_id), and credit_value(at-\
+tribute_value)\
+note: this is the call for filtered media. You can pass in any combination\
+\'95 media_type_id\
+\'95 credit_id & credit_value (with or without media_type_id)\
+\'95 keyword\
+
+\fs20 curl -d\
+"auth_token=0123456789&output_format=json&media_type_id=1&attribute_id=1&attribute_value=Clyde\
+&keyword=old spice" \cf8 https://<companyname>.gosimian.com/api/simian/get_media
+\f1\b\fs36 \cf2 IV. MISC EXAMPLES (cURL / PHP)\
+
+\fs26 \cf6 1. Example (results are not all reproduced) of a call to get_project_folders()\
+for project 194\
+
+\f4\i\b0\fs20 $PostArray['auth_token'] = " ";\
+$PostArray['project_id'] = "194";\
+$Response = $this->call(\'93
+\f0\i0 \cf8 https://<companyname>.gosimian.com/api/simian/get_project_folders
+\f4\i \cf6 ", $Post-\
+Array);\
+
+\f1\i0\b\fs26 Output:\
+
+\f0\b0\fs20 <root>\
+<project_category>\
+<id>1946</id>\
+<project_id>194</project_id>\
+<name>My Project</name>\
+<file_type></file_type>\
+<description><p>\
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla pretium rutrum velit eu consequat. Phasel-\
+lus eu dolor eget nibh adipiscing aliquet id et urna. Etiam in ipsum a lacus aliquam dapibus. Donec vulpu-\
+tate purus ut est venenatis sed placerat turpis pharetra. Fusce diam felis, porta eget interdum eu, ullam-\
+corper a lectus. Nam commodo, metus non laoreet fermentum, odio est fermentum metus, sit amet vene-\
+natis nulla neque a est. Maecenas sed odio nec est rutrum suscipit quis ac lacus. Donec vitae urna tortor.\
+Nullam faucibus urna id arcu commodo eget posuere nibh mattis. Curabitur lacinia malesuada ullamcorp-\
+er. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Suspendisse\
+arcu leo, venenatis et malesuada ut, egestas ac dui.</p>\
+</description>\
+<folder_image></folder_image>\
+<status>Active</status>\
+<parent></parent>\
+<sort_order>30</sort_order>\
+<folder_state>open</folder_state>\
+<locked></locked>\
+<restore_category></restore_category>\
+</project_category>\
+<project_category>\
+<id>1949</id>\
+<project_id>194</project_id>\
+<name>sf1</name>\
+<file_type></file_type>\
+<description></description>\
+<folder_image>7-Middleton-5W1.jpg</folder_image>\
+...\
+</root>
+\f1\b\fs26 2. Example and results of a call to get_permissions() for a user with\
+projects and projectadministrator access. Projectadministrator access\
+does nothing on its own, but when combined with projects access it gives\
+the user full access to all projects as if he were an administrator.\
+
+\f0\b0\fs20 // Get permissions\
+$PostArray['auth_token'] = " ";\
+$PostArray['output_format'] = "json";\
+$PostArray['user_id'] = " <fill in user id> ";\
+$Response = $this->call("\cf8 https://<companyname>.gosimian.com/api/simian/get_permissions\cf6 ", $PostAr-\
+ray);\
+\{"root":\{"api_permissions":\{"tables":[\{"table":"projects","access":"true"\},\{"table":"projectadministrator","ac-\
+cess":"true"\}]\}\}\}\
+
+\f1\b\fs26 3. Example and results of a call to get_permissions() for a user with both\
+media and projects access, and the list of projects to which he has permis-\
+sions\
+
+\f0\b0\fs20 <root>\
+<api_permissions>\
+<tables>\
+<table>media</table>\
+<access>true</access>\
+</tables>\
+<tables>\
+<table>projects</table>\
+<access>true</access>\
+</tables>\
+</api_permissions>\
+<api_permissions>\
+<project_access>\
+<project_id>130</project_id>\
+<name>Dailies Test</name>\
+</project_access>\
+<project_access>\
+<project_id>144</project_id>\
+<name>CW Tasks</name>\
+</project_access>\
+<project_access>\
+<project_id>178</project_id>\
+<name>Folder test</name>\
+</project_access><project_access>\
+<project_id>194</project_id>\
+<name>CW desktop test</name>\
+</project_access>\
+<project_access>\
+<project_id>199</project_id>\
+<name>CW more 2.1 tests</name>\
+</project_access>\
+<project_access>\
+<project_id>193</project_id>\
+<name>CW audio</name>\
+</project_access>\
+</api_permissions>\
+</root>\
+
+\f1\b\fs26 4. Example of data needed in a form to upload a file to the media library,\
+with media_type_id=1 ("commercial" category on Area51), descriptive tags,\
+and credit # 263 ("Job number" for this category)\
+
+\f0\b0\fs20 <input type='hidden' id='media_type_id' name='media_type_id' value="1">\
+<input type='hidden' id='credits_263' name='credits_263' value="2013-01">\
+<input type='hidden' name="tags[]" value="NewCfwTag">\
+<input type='hidden' name="tags[]" value="cfw">\
+<input type='file' name='media_file'>\
+
+\f1\b\fs26 5. Example of data needed in a form to upload a file to a project, with a\
+folder id (the folder is chosen by the user during the upload), descriptive\
+tags and a file description.\
+
+\f0\b0\fs20 <input type='hidden' id='folder_id' name='folder_id' value="2010"> <? /* folder "API Test" in project 194\
+*/ ?>\
+<input type='hidden' id='description' name='description' value="This is the file description">\
+<input type='hidden' name="tags[]" value="NewCfwTag">\
+<input type='hidden' name="tags[]" value="cfw">\
+<input type='file' name='media_file'>
+\f1\b\fs36 \cf2 V. IMPLEMENTATION RECOMMENDATIONS\
+
+\f0\b0\fs26 \cf13 When retrieving data from the Simian API - it is recommended that data is re-\
+trieved at set intervals and cached on the client side for use in websites and ap-\
+plications rather than retrieving data on-demand in real-time.\
+Create a caching system eliminates unnecessary traffic/bandwidth usage, re-\
+duces server load and increases performance of the client application.\
+
+\f1\b\fs36 \cf2 VI. POWERING A WEBSITE\
+
+\f0\b0\fs26 \cf13 Powering a website via Simian is a common application of the Simian API. In or-\
+der to do this the following steps are recommended.\
+1. Create a set of Reels within Simian and Save them in the WEB/API section\
+2. Use the following commands to retrieve a list of WEB/API reels\
+\cf11 get_reel_list, reel_type=web_reels\cf13  - this will get a list of all the reels in the\
+specified section\
+OR\
+\cf11 get_reels, reel_type=web_reels\cf13  - this will get a list of all the reels in the\
+specified section with detailed information of all media information (full\
+listing)\
+THEN\
+\cf11 get_reel, reel_type=web_reels, id=unique ID of desired reel OR\
+name=name of desired reel\cf13  - this will retrieve only the information for the\
+specified reel\
+3. The data will be returned in XML format unless the JSON output specifier is\
+set.4. 5. Data can then be parsed and displayed on a website. All paths to thumbnails\
+and media, as well as credit information are returned.\
+Select an appropriate player for videos - recommendations: Flowplayer, JW\
+Player, QT Plugin, HTML5 - note HTML5 players may require multiple for-\
+mats for different browsers.\
+
+\f1\b\fs36 \cf2 VII. AUTHENTICATION\
+
+\f0\b0\fs26 \cf14 Usage of the API requires that an authentication key be setup in your Simian in-\
+stall. Please contact simian support to setup your key and gain access to the API.\
+
+\f1\b\fs36 \cf2 VIII. PHONE SUPPORT\
+
+\f0\b0\fs26 \cf15 T: 310.736.1376\
+Hours of support are 9am-5pm PST Mon-Fri\
+
+\f1\b\fs36 \cf2 IX. ONLINE SUPPORT\
+
+\f0\b0\fs26 \cf15 support@gosimian.com\
+http://kb.gosimian.com
+\f1\b\fs36 \cf2 APPENDIX A - mRSS FEED\
+
+\f0\b0\fs28 \cf16 Reference for interfacing via the Simian mRSS Content Feed\
+
+\f1\b\fs32 \cf2 Feed Details\
+
+\fs26 \cf17 The RSS feed for your Simian installation is located at:\
+
+\f0\b0 \cf15 <companyname>.gosimian.com/api/simian/mrss/<reel id>\
+
+\f1\b\fs28 \cf17 Raw mRSS XML Example Output:\
+
+\f0\b0\fs22 \cf18 <?xml version="1.0" encoding="utf-8"?>\
+<rss version="2.0" xmlns:media="https://search.yahoo.com/mrss/" xmlns:av="https://\
+www.searchvideo.com/schemas/av/1.0">\
+<channel>\
+<title>Project Microsite Help Video</title> <link>/api/simian/mrss/1048</link>\
+<description>Project Microsite Help Video</description>\
+<item>\
+<title>Microsite</title> <link>/microsite-1.mov</link> <description></description>\
+<guid isPermaLink="true">/microsite-1.mov </guid>\
+<pubDate>Wed, 23 Feb 2011 00:00:00 -0800</pubDate> <media:description></media:descrip-\
+tion>\
+<media:content url=\'93/microsite-1.mov" type="video/ quicktime" medium="video" height="540"\
+width="960" />\
+<media:thumbnail url=\'93/assets/thumbs/1298531236.jpg" width="960" height="540" />\
+<media:title>Microsite</media:title>\
+<media:keywords>Training,</media:keywords>\
+<media:credit role=\'93director">Vincent Vega</media:credit>\
+<media:credit role="producer">Clyde</media:credit>\
+<media:credit role="client">Simian</media:credit>\
+<media:category>Training Videos</media:category>\
+</item>\
+</channel>\
+</rss>\
+
+\f1\b\fs32 \cf10 Accessing mRSS Feeds in Simian\
+
+\fs26 \cf15 1. Navigate to the Reel Library Under the Reels Top Navigation
+\f0\b0 \cf12 2. 
+\f1\b \cf15 Click on the WEB/API Reels Tab in the Reel Library\
+
+\f4\i\b0\fs22 Note: In order to create a Web/API Reel, you must first use the Reel Creator to create and save\
+a reel into the Web/API Reels section. This will then Enable the Reel to be access via the mRSS\
+content feed. Only Reels saved into the Web/API section can be accessed via the mRSS feed.\
+
+\f0\i0\fs26 \cf12 3. 
+\f1\b \cf15 Select the `Integration` Option from the Actions menu for the reel you\
+would like to access. This will bring up the Reel Integration window con-\
+taining the link to the feed for this reel.
+\fs32 \cf17 Developer Resources\
+
+\f0\b0\fs24 \cf2 https://rssphp.net/\
+https://us2.php.net/simplexml https://twigstechtips.blogspot.com/2011/01/php-parsing-\
+simplexml-nodes-with.html https://www.stemkoski.com/how-to-easily-parse-a-rss-feed-\
+with-php-4-or-php-5/ https://www.webresourcesdepot.com/php-rss-parsers/ https://app-\
+tools.com/phptools/xml/rss.php}

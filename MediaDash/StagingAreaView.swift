@@ -270,7 +270,7 @@ struct StagingAreaView: View {
                                     .scaleEffect(0.6)
                                     .frame(width: 12, height: 12)
                             }
-                            Text(cacheManager.syncPhase.isEmpty ? "Syncing with Asana" : cacheManager.syncPhase)
+                            Text(cacheManager.syncPhase.isEmpty ? "External service syncing shared cache" : cacheManager.syncPhase)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.blue)
                                 .lineLimit(1)

@@ -456,11 +456,24 @@ class SimianService: ObservableObject {
                         print("✅ SimianService: Successfully copied folder structure from template")
                     }
                     
+                    // Look up user ID from email if projectManager looks like an email address
+                    var projectManagerUserId: String? = projectManager
+                    if let pm = projectManager, !pm.isEmpty, pm.contains("@") {
+                        print("   projectManager looks like an email address, looking up user ID...")
+                        if let userId = try await getUserIdByEmail(email: pm) {
+                            projectManagerUserId = userId
+                            print("   ✅ Resolved email \(pm) to user ID: \(userId)")
+                        } else {
+                            print("   ⚠️ Could not resolve email \(pm) to user ID, will try passing email directly")
+                            // Keep the email - maybe the API accepts it
+                        }
+                    }
+                    
                     // Set project_number and project_manager, and copy template settings
                     try await setProjectInfo(
                         projectId: projectId,
                         projectNumber: docketNumber,
-                        projectManager: projectManager,
+                        projectManager: projectManagerUserId,
                         templateSettings: templateSettings
                     )
                     print("✅ SimianService: Successfully set project_number to \(docketNumber)")
@@ -837,6 +850,15 @@ class SimianService: ObservableObject {
         print("✅ Successfully copied folder structure from template")
     }
     
+    /// Essential users that must be included in the user list
+    /// These are producers who send new docket emails and need to be available as project managers
+    private let essentialUserEmails: Set<String> = [
+        "kelly@graysonmusicgroup.com",
+        "clare@graysonmusicgroup.com",
+        "sharon@graysonmusicgroup.com",
+        "nicholas@graysonmusicgroup.com"
+    ]
+    
     /// Fetch list of Simian users
     /// - Returns: Array of Simian users
     /// Per API docs: get_users - Get all system users that have project access
@@ -848,7 +870,11 @@ class SimianService: ObservableObject {
             "hypothesisId": "A",
             "location": "SimianService.swift:322",
             "message": "getUsers() called",
-            "data": ["baseURL": baseURL ?? "nil"],
+            "data": [
+                "baseURL": baseURL ?? "nil",
+                "hasAuthToken": authToken != nil,
+                "hasAuthKey": authKey != nil
+            ],
             "timestamp": Int(Date().timeIntervalSince1970 * 1000)
         ]
         if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
@@ -861,6 +887,30 @@ class SimianService: ObservableObject {
         // #endregion
         
         try await ensureAuthenticated()
+        
+        // #region agent log
+        let logDataAuthState: [String: Any] = [
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "G",
+            "location": "SimianService.swift:863",
+            "message": "Authentication state after ensureAuthenticated",
+            "data": [
+                "hasAuthToken": authToken != nil,
+                "hasAuthKey": authKey != nil,
+                "authTokenLength": authToken?.count ?? 0,
+                "authKeyLength": authKey?.count ?? 0
+            ],
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+        ]
+        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+            let logLine = (try? JSONSerialization.data(withJSONObject: logDataAuthState)) ?? Data()
+            logFile.seekToEndOfFile()
+            logFile.write(logLine)
+            logFile.write("\n".data(using: .utf8)!)
+            logFile.closeFile()
+        }
+        // #endregion
         
         guard let baseURLString = baseURL, !baseURLString.isEmpty,
               let base = URL(string: baseURLString),
@@ -942,9 +992,31 @@ class SimianService: ObservableObject {
         }
         
         // Parse response
-        if let responseString = String(data: data, encoding: .utf8) {
-            print("🔍 SimianService.getUsers() raw response: \(responseString)")
+        let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode"
+        print("🔍 SimianService.getUsers() raw response: \(responseString)")
+        
+        // #region agent log
+        let logDataResponse: [String: Any] = [
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "H",
+            "location": "SimianService.swift:945",
+            "message": "getUsers API response received",
+            "data": [
+                "statusCode": (response as? HTTPURLResponse)?.statusCode ?? -1,
+                "responseLength": data.count,
+                "responsePreview": String(responseString.prefix(500))
+            ],
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+        ]
+        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+            let logLine = (try? JSONSerialization.data(withJSONObject: logDataResponse)) ?? Data()
+            logFile.seekToEndOfFile()
+            logFile.write(logLine)
+            logFile.write("\n".data(using: .utf8)!)
+            logFile.closeFile()
         }
+        // #endregion
         
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             print("⚠️ SimianService.getUsers() failed to parse JSON")
@@ -1040,9 +1112,16 @@ class SimianService: ObservableObject {
         if let firstUser = userArray.first {
             print("🔍 SimianService.getUsers() first user structure: \(firstUser)")
             print("   Keys: \(firstUser.keys.joined(separator: ", "))")
+        } else if userArray.isEmpty {
+            print("⚠️ SimianService.getUsers() payload is empty array")
+            print("   This could mean:")
+            print("   1. No users have 'project access' permissions in Simian")
+            print("   2. The authenticated user doesn't have permission to view other users")
+            print("   3. Users exist but need to be granted project access")
+            print("   Note: get_users only returns users with 'project access' permissions")
         }
         
-        let users = userArray.compactMap { userDict -> SimianUser? in
+        var users = userArray.compactMap { userDict -> SimianUser? in
             // Handle id as either String or Number
             let idString: String?
             if let id = userDict["id"] as? String {
@@ -1051,6 +1130,11 @@ class SimianService: ObservableObject {
                 idString = String(id)
             } else if let id = userDict["id"] as? NSNumber {
                 idString = id.stringValue
+            } else if let userID = userDict["userID"] as? String {
+                // Try userID as alternative (seen in API example)
+                idString = userID
+            } else if let userID = userDict["userID"] as? Int {
+                idString = String(userID)
             } else {
                 print("⚠️ SimianService.getUsers() user missing or invalid 'id' field: \(userDict["id"] ?? "nil")")
                 idString = nil
@@ -1088,6 +1172,129 @@ class SimianService: ObservableObject {
         }
         
         print("✅ SimianService.getUsers() successfully parsed \(users.count) users")
+        
+        // If get_users returned empty, try fallback: get_project_users from a template project
+        if users.isEmpty && userArray.isEmpty {
+            print("⚠️ WARNING: get_users returned empty array, trying fallback with get_project_users")
+            print("   Attempting to get users from template projects as workaround...")
+            
+            // Try to get users from template projects
+            do {
+                let templates = try await getTemplates()
+                print("   Found \(templates.count) template projects, trying to get users from them...")
+                
+                // Try all templates to aggregate users from multiple projects
+                // This ensures we get all users, not just from one project
+                var existingEmails = Set(users.map { $0.email.lowercased() })
+                var projectsChecked = 0
+                let maxProjectsToCheck = min(templates.count, 20) // Check up to 20 projects to get comprehensive user list
+                
+                for template in templates.prefix(maxProjectsToCheck) {
+                    do {
+                        let projectUsers = try await getProjectUsers(projectId: template.id)
+                        projectsChecked += 1
+                        
+                        if !projectUsers.isEmpty {
+                            print("   ✅ Found \(projectUsers.count) users from template project '\(template.name)' (ID: \(template.id))")
+                            
+                            // Merge with existing users (avoid duplicates by email)
+                            var newUsersCount = 0
+                            for projectUser in projectUsers {
+                                if !existingEmails.contains(projectUser.email.lowercased()) {
+                                    users.append(projectUser)
+                                    existingEmails.insert(projectUser.email.lowercased())
+                                    newUsersCount += 1
+                                }
+                            }
+                            
+                            if newUsersCount > 0 {
+                                print("   Added \(newUsersCount) new users (total: \(users.count))")
+                            } else {
+                                print("   All users already in list (total: \(users.count))")
+                            }
+                        } else {
+                            print("   ⚠️ Template project '\(template.name)' has no users")
+                        }
+                    } catch {
+                        print("   ⚠️ Failed to get users from template '\(template.name)': \(error.localizedDescription)")
+                        continue
+                    }
+                }
+                
+                print("   Checked \(projectsChecked) template projects, found \(users.count) total unique users")
+                
+                // Check if essential users are present
+                let foundEmails = Set(users.map { $0.email.lowercased() })
+                let missingEssentialEmails = essentialUserEmails.filter { !foundEmails.contains($0.lowercased()) }
+                
+                if !missingEssentialEmails.isEmpty {
+                    print("   ⚠️ Missing essential users: \(missingEssentialEmails.joined(separator: ", "))")
+                    print("   Searching through more projects to find essential users...")
+                    
+                    // Try to find essential users in remaining projects
+                    let remainingProjects = Array(templates.dropFirst(maxProjectsToCheck))
+                    var additionalProjectsChecked = 0
+                    let maxAdditionalProjects = min(remainingProjects.count, 30) // Check up to 30 more projects
+                    
+                    for template in remainingProjects.prefix(maxAdditionalProjects) {
+                        do {
+                            let projectUsers = try await getProjectUsers(projectId: template.id)
+                            additionalProjectsChecked += 1
+                            
+                            for projectUser in projectUsers {
+                                let userEmail = projectUser.email.lowercased()
+                                if missingEssentialEmails.contains(userEmail) && !existingEmails.contains(userEmail) {
+                                    users.append(projectUser)
+                                    existingEmails.insert(userEmail)
+                                    print("   ✅ Found essential user: \(projectUser.email) from project '\(template.name)'")
+                                } else if !existingEmails.contains(userEmail) {
+                                    // Also add other users we find
+                                    users.append(projectUser)
+                                    existingEmails.insert(userEmail)
+                                }
+                            }
+                            
+                            // If we found all essential users, we can stop early
+                            let stillMissing = essentialUserEmails.filter { !existingEmails.contains($0.lowercased()) }
+                            if stillMissing.isEmpty {
+                                print("   ✅ Found all essential users! Stopping search.")
+                                break
+                            }
+                        } catch {
+                            continue
+                        }
+                    }
+                    
+                    print("   Checked \(additionalProjectsChecked) additional projects for essential users")
+                    
+                    // Check again after additional search
+                    let finalFoundEmails = Set(users.map { $0.email.lowercased() })
+                    let stillMissing = essentialUserEmails.filter { !finalFoundEmails.contains($0.lowercased()) }
+                    if !stillMissing.isEmpty {
+                        print("   ⚠️ WARNING: Still missing essential users after extended search: \(stillMissing.joined(separator: ", "))")
+                        print("   These users may not exist in Simian or may not be assigned to any projects.")
+                    } else {
+                        print("   ✅ All essential users found!")
+                    }
+                } else {
+                    print("   ✅ All essential users are present in the list")
+                }
+            } catch {
+                print("   ⚠️ Failed to get templates for fallback: \(error.localizedDescription)")
+            }
+            
+            if users.isEmpty {
+                print("⚠️ WARNING: Both get_users and get_project_users fallback returned empty")
+                print("   The API endpoint is working, but no users are being returned.")
+                print("   This typically means:")
+                print("   1. No users have been granted 'project access' permissions in Simian")
+                print("   2. The authenticated user doesn't have admin permissions to view all users")
+                print("   3. Template projects don't have any users assigned")
+                print("   Solution: Check Simian admin settings to ensure users have project access")
+            } else {
+                print("✅ Successfully retrieved \(users.count) users using fallback method")
+            }
+        }
         
         // If get_users returns empty, it might mean:
         // 1. No users have been granted project access
@@ -1132,6 +1339,151 @@ class SimianService: ObservableObject {
         // #endregion
         
         return users
+    }
+    
+    /// Get users for a specific project (workaround when get_users returns empty)
+    /// - Parameter projectId: The project ID
+    /// - Returns: Array of Simian users
+    private func getProjectUsers(projectId: String) async throws -> [SimianUser] {
+        try await ensureAuthenticated()
+        
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        
+        let endpointURL = base.appendingPathComponent("get_project_users").appendingPathComponent(projectId)
+        
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let params = [
+            "auth_token": authToken,
+            "auth_key": authKey
+        ]
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SimianError.apiError("Invalid response from API")
+        }
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
+            throw SimianError.apiError("Failed to fetch project users: \(errorMessage)")
+        }
+        
+        // Parse response (similar structure to get_users)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let root = json["root"] as? [String: Any],
+              let payload = root["payload"] else {
+            return []
+        }
+        
+        var userArray: [[String: Any]] = []
+        if let payloadArray = payload as? [[String: Any]] {
+            userArray = payloadArray
+        } else if let payloadDict = payload as? [String: Any],
+                  let users = payloadDict["users"] as? [[String: Any]] {
+            userArray = users
+        } else if let payloadDict = payload as? [String: Any],
+                  let users = payloadDict["data"] as? [[String: Any]] {
+            userArray = users
+        }
+        
+        let users = userArray.compactMap { userDict -> SimianUser? in
+            // Handle id as either String or Number
+            let idString: String?
+            if let id = userDict["id"] as? String {
+                idString = id
+            } else if let id = userDict["id"] as? Int {
+                idString = String(id)
+            } else if let id = userDict["id"] as? NSNumber {
+                idString = id.stringValue
+            } else if let userID = userDict["userID"] as? String {
+                idString = userID
+            } else if let userID = userDict["userID"] as? Int {
+                idString = String(userID)
+            } else {
+                idString = nil
+            }
+            
+            // Try different case variations for field names
+            let firstName = (userDict["firstname"] as? String) ??
+                           (userDict["firstName"] as? String) ??
+                           (userDict["first_name"] as? String) ?? ""
+            let lastName = (userDict["lastname"] as? String) ??
+                          (userDict["lastName"] as? String) ??
+                          (userDict["last_name"] as? String) ?? ""
+            let email = (userDict["email"] as? String) ?? ""
+            
+            guard let id = idString, !id.isEmpty,
+                  !firstName.isEmpty,
+                  !lastName.isEmpty,
+                  !email.isEmpty else {
+                return nil
+            }
+            
+            return SimianUser(
+                id: id,
+                firstName: firstName,
+                lastName: lastName,
+                email: email,
+                username: (userDict["username"] as? String) ?? (userDict["userName"] as? String)
+            )
+        }
+        
+        return users
+    }
+    
+    /// Look up a user ID from an email address by searching template projects
+    /// - Parameter email: The email address to look up
+    /// - Returns: The user ID if found, or nil if not found
+    private func getUserIdByEmail(email: String) async throws -> String? {
+        print("🔍 SimianService.getUserIdByEmail() looking up email: \(email)")
+        
+        // First try get_users (fastest if it works)
+        do {
+            let users = try await getUsers()
+            if let user = users.first(where: { $0.email.lowercased() == email.lowercased() }) {
+                print("✅ Found user ID \(user.id) for email \(email) via get_users")
+                return user.id
+            }
+        } catch {
+            print("⚠️ get_users failed, trying template projects: \(error.localizedDescription)")
+        }
+        
+        // Fallback: search template projects
+        do {
+            let templates = try await getTemplates()
+            print("   Searching \(templates.count) template projects for email: \(email)")
+            
+            // Check up to 10 template projects (should be enough to find common users)
+            for template in templates.prefix(10) {
+                do {
+                    let projectUsers = try await getProjectUsers(projectId: template.id)
+                    if let user = projectUsers.first(where: { $0.email.lowercased() == email.lowercased() }) {
+                        print("✅ Found user ID \(user.id) for email \(email) in template project '\(template.name)'")
+                        return user.id
+                    }
+                } catch {
+                    // Continue to next template if this one fails
+                    continue
+                }
+            }
+            
+            print("⚠️ Could not find user ID for email: \(email)")
+            return nil
+        } catch {
+            print("⚠️ Failed to search template projects for email: \(error.localizedDescription)")
+            return nil
+        }
     }
     
     /// Fetch list of Simian projects to use as templates

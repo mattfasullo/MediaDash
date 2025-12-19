@@ -14,13 +14,10 @@ struct SimianProjectCreationDialog: View {
     
     @State private var docketNumber: String
     @State private var jobName: String
-    @State private var selectedProjectManager: SimianUser?
+    @State private var selectedProjectManagerEmail: String? // Store email instead of SimianUser
     @State private var selectedTemplate: SimianTemplate?
-    @State private var users: [SimianUser] = []
     @State private var templates: [SimianTemplate] = []
-    @State private var isLoadingUsers = false
     @State private var isLoadingTemplates = false
-    @State private var loadError: String?
     @State private var templatesLoadError: String?
     
     @FocusState private var focusedField: Field?
@@ -88,40 +85,23 @@ struct SimianProjectCreationDialog: View {
                         Text("Project Manager")
                             .font(.system(size: 13, weight: .medium))
                         
-                        if isLoadingUsers {
-                            HStack {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                                Text("Loading users...")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 8)
-                        } else if let error = loadError {
-                            Text("Error loading users: \(error)")
+                        if settingsManager.currentSettings.simianProjectManagers.isEmpty {
+                            Text("No project managers configured. Add them in Settings > Simian Integration.")
                                 .font(.system(size: 11))
-                                .foregroundColor(.red)
-                        } else if users.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Picker("Project Manager", selection: $selectedProjectManager) {
-                                    Text("None (will use email sender)").tag(nil as SimianUser?)
-                                }
-                                .pickerStyle(.menu)
-                                Text("No users with project access found. Project will be created without a project manager.")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                                    .padding(.top, 2)
-                            }
+                                .foregroundColor(.secondary)
                         } else {
-                            Picker("Project Manager", selection: $selectedProjectManager) {
-                                Text("None (will use email sender)").tag(nil as SimianUser?)
-                                ForEach(users) { user in
-                                    Text(user.fullDisplayName)
-                                        .tag(user as SimianUser?)
+                            Picker("Project Manager", selection: $selectedProjectManagerEmail) {
+                                Text("None (will use email sender)").tag(nil as String?)
+                                ForEach(settingsManager.currentSettings.simianProjectManagers.filter { !$0.isEmpty }, id: \.self) { email in
+                                    Text(email)
+                                        .tag(email as String?)
                                 }
                             }
                             .pickerStyle(.menu)
+                            Text("Simian will match the email to an existing user when creating the project.")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                                .padding(.top, 2)
                         }
                     }
                     
@@ -159,13 +139,6 @@ struct SimianProjectCreationDialog: View {
             }
             .frame(width: 400)
             
-            if let error = loadError {
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundColor(.red)
-                    .multilineTextAlignment(.center)
-            }
-            
             HStack(spacing: 12) {
                 Button("Cancel") {
                     print("🔔 SimianProjectCreationDialog: User cancelled")
@@ -186,49 +159,26 @@ struct SimianProjectCreationDialog: View {
         .onAppear {
             // Only load Simian-specific data if Simian is enabled
             if isSimianEnabled {
-                loadUsers()
                 loadTemplates()
+                
+                // Try to auto-match sourceEmail to a project manager from settings
+                if let sourceEmail = sourceEmail, !sourceEmail.isEmpty {
+                    let emailAddress = extractEmailAddress(from: sourceEmail)
+                    print("🔍 SimianProjectCreationDialog: Attempting to match email sender: \(emailAddress)")
+                    
+                    // Find matching email in settings list (case-insensitive)
+                    if let matchingEmail = settingsManager.currentSettings.simianProjectManagers.first(where: { $0.lowercased() == emailAddress.lowercased() }) {
+                        selectedProjectManagerEmail = matchingEmail
+                        print("✅ SimianProjectCreationDialog: Auto-selected project manager: \(matchingEmail)")
+                    } else {
+                        print("⚠️ SimianProjectCreationDialog: Email sender '\(emailAddress)' not in project managers list")
+                    }
+                }
             }
             if docketNumber.isEmpty {
                 focusedField = .docketNumber
             } else if jobName.isEmpty {
                 focusedField = .jobName
-            }
-        }
-    }
-    
-    private func loadUsers() {
-        isLoadingUsers = true
-        loadError = nil
-        
-        Task {
-            do {
-                let fetchedUsers = try await simianService.getUsers()
-                await MainActor.run {
-                    users = fetchedUsers
-                    
-                    // Try to auto-match sourceEmail to a Simian user
-                    if let sourceEmail = sourceEmail, !sourceEmail.isEmpty {
-                        let emailAddress = extractEmailAddress(from: sourceEmail)
-                        print("🔍 SimianProjectCreationDialog: Attempting to match email sender: \(emailAddress)")
-                        
-                        // Find matching user by email (case-insensitive)
-                        if let matchingUser = fetchedUsers.first(where: { $0.email.lowercased() == emailAddress.lowercased() }) {
-                            selectedProjectManager = matchingUser
-                            print("✅ SimianProjectCreationDialog: Auto-selected project manager: \(matchingUser.displayName) (\(matchingUser.email))")
-                        } else {
-                            print("⚠️ SimianProjectCreationDialog: No Simian user found matching email: \(emailAddress)")
-                            print("   Available users: \(fetchedUsers.map { $0.email }.joined(separator: ", "))")
-                        }
-                    }
-                    
-                    isLoadingUsers = false
-                }
-            } catch {
-                await MainActor.run {
-                    loadError = error.localizedDescription
-                    isLoadingUsers = false
-                }
             }
         }
     }
@@ -285,13 +235,15 @@ struct SimianProjectCreationDialog: View {
         print("🔔 SimianProjectCreationDialog.confirm() called")
         print("   docketNumber: \(docketNumber)")
         print("   jobName: \(jobName)")
-        print("   selectedProjectManager: \(selectedProjectManager?.fullDisplayName ?? "nil")")
+        print("   selectedProjectManagerEmail: \(selectedProjectManagerEmail ?? "nil")")
         print("   selectedTemplate: \(selectedTemplate?.name ?? "nil")")
         
         let templateId = selectedTemplate?.id
-        let managerId = selectedProjectManager?.id
-        print("   Calling onConfirm with managerId: \(managerId ?? "nil"), templateId: \(templateId ?? "nil")")
-        onConfirm(docketNumber, jobName, managerId, templateId)
+        // Pass email address - Simian will match it to a user
+        // The onConfirm callback signature expects String? for manager, which can be email or user ID
+        let managerEmail = selectedProjectManagerEmail
+        print("   Calling onConfirm with managerEmail: \(managerEmail ?? "nil"), templateId: \(templateId ?? "nil")")
+        onConfirm(docketNumber, jobName, managerEmail, templateId)
         isPresented = false
     }
 }

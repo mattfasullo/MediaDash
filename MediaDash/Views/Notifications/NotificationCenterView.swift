@@ -115,15 +115,7 @@ struct NotificationCenterView: View {
     }
     
     var body: some View {
-        // Ensure selectedTab is valid (not a disabled tab) - reset to newDockets if disabled tab is selected
-        if selectedTab == .fileDeliveries && !Self.enableFileDeliveryFeature {
-            selectedTab = .newDockets
-        }
-        if selectedTab == .requests && !Self.enableRequestFeature {
-            selectedTab = .newDockets
-        }
-        
-        return mainContent
+        mainContent
     }
     
     private var mainContent: some View {
@@ -908,12 +900,22 @@ struct NotificationCenterView: View {
     }
     
     private func handleViewAppear() {
-        // Clean up old archived notifications
-        notificationCenter.cleanupOldArchivedNotifications()
-        // Clean up old completed requests (older than 24 hours)
-        notificationCenter.cleanupOldCompletedRequests()
-        // Sync completion status from shared cache
-        Task {
+        // Ensure selectedTab is valid (not a disabled tab) - reset to newDockets if disabled tab is selected
+        // Do this synchronously as it's just local state
+        if selectedTab == .fileDeliveries && !Self.enableFileDeliveryFeature {
+            selectedTab = .newDockets
+        }
+        if selectedTab == .requests && !Self.enableRequestFeature {
+            selectedTab = .newDockets
+        }
+        
+        // Move cleanup operations to async Task to avoid modifying @Published properties during view update
+        Task { @MainActor in
+            // Clean up old archived notifications
+            notificationCenter.cleanupOldArchivedNotifications()
+            // Clean up old completed requests (older than 24 hours)
+            notificationCenter.cleanupOldCompletedRequests()
+            // Sync completion status from shared cache
             await notificationCenter.syncCompletionStatus()
         }
         
@@ -1289,11 +1291,6 @@ struct NotificationRowView: View {
     @State private var pendingSimianDocketNumber: String = ""
     @State private var pendingSimianJobName: String = ""
     @State private var pendingSimianSourceEmail: String?
-    
-    // Simian users for Project Manager dropdown
-    @State private var simianUsers: [SimianUser] = []
-    @State private var isLoadingSimianUsers = false
-    @State private var simianUsersLoadError: String?
     
     // Get current notification from center (always up-to-date)
     private var notification: Notification? {
@@ -1871,9 +1868,6 @@ struct NotificationRowView: View {
             }
             // Update Simian service configuration first, then pre-load users if Simian is enabled
             updateSimianServiceConfiguration()
-            if simianUsers.isEmpty && !isLoadingSimianUsers && settingsManager.currentSettings.simianEnabled {
-                loadSimianUsers()
-            }
         }
     }
     
@@ -1922,25 +1916,16 @@ struct NotificationRowView: View {
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
             
-            if isLoadingSimianUsers {
-                HStack {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                    Text("Loading users...")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else if let error = simianUsersLoadError {
-                Text("Error: \(error)")
+            if settingsManager.currentSettings.simianProjectManagers.isEmpty {
+                Text("No project managers configured. Add them in Settings > Simian Integration.")
                     .font(.system(size: 9))
-                    .foregroundColor(.red)
+                    .foregroundColor(.secondary)
             } else {
-                Picker("Project Manager", selection: projectManagerUserBinding(notification: notification)) {
-                    Text("None (use email sender)").tag(nil as SimianUser?)
-                    ForEach(simianUsers) { user in
-                        Text(user.fullDisplayName)
-                            .tag(user as SimianUser?)
+                Picker("Project Manager", selection: projectManagerEmailBinding(notification: notification)) {
+                    Text("None (use email sender)").tag(nil as String?)
+                    ForEach(settingsManager.currentSettings.simianProjectManagers.filter { !$0.isEmpty }, id: \.self) { email in
+                        Text(email)
+                            .tag(email as String?)
                     }
                 }
                 .pickerStyle(.menu)
@@ -1951,84 +1936,22 @@ struct NotificationRowView: View {
                 .font(.system(size: 9))
                 .foregroundColor(.secondary)
         }
-        .onAppear {
-            // Update configuration first, then load users
-            updateSimianServiceConfiguration()
-            // Always try to load users when view appears (if not already loading)
-            if !isLoadingSimianUsers && settingsManager.currentSettings.simianEnabled {
-                loadSimianUsers()
-            }
-        }
-        .onChange(of: settingsManager.currentSettings.simianAPIBaseURL) { _, _ in
-            // Update configuration and reload users when API configuration changes
-            updateSimianServiceConfiguration()
-            if !isLoadingSimianUsers && settingsManager.currentSettings.simianEnabled {
-                loadSimianUsers()
-            }
-        }
-        .onChange(of: settingsManager.currentSettings.simianEnabled) { _, enabled in
-            // Reload users when Simian is enabled/disabled
-            if enabled && !isLoadingSimianUsers {
-                updateSimianServiceConfiguration()
-                loadSimianUsers()
-            } else if !enabled {
-                simianUsers = []
-                simianUsersLoadError = nil
-            }
-        }
     }
     
-    private func projectManagerUserBinding(notification: Notification) -> Binding<SimianUser?> {
+    private func projectManagerEmailBinding(notification: Notification) -> Binding<String?> {
         Binding(
             get: {
-                guard let projectManagerId = notificationCenter.notifications.first(where: { $0.id == notificationId })?.projectManager else {
-                    return nil
-                }
-                // Try to find matching user by ID or email
-                return simianUsers.first { user in
-                    user.id == projectManagerId || user.email == projectManagerId
-                }
+                notificationCenter.notifications.first(where: { $0.id == notificationId })?.projectManager
             },
-            set: { selectedUser in
+            set: { selectedEmail in
                 if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                    // Store the user ID when selected
-                    let userId = selectedUser?.id
-                    notificationCenter.updateProjectManager(currentNotification, to: userId)
+                    // Store the email address when selected (Simian will match it to a user)
+                    notificationCenter.updateProjectManager(currentNotification, to: selectedEmail)
                 }
             }
         )
     }
     
-    private func loadSimianUsers() {
-        // Update configuration first
-        updateSimianServiceConfiguration()
-        
-        guard simianService.isConfigured else {
-            simianUsersLoadError = "Simian API not configured. Please configure Simian in Settings."
-            isLoadingSimianUsers = false
-            return
-        }
-        
-        isLoadingSimianUsers = true
-        simianUsersLoadError = nil
-        
-        Task {
-            do {
-                let users = try await simianService.getUsers()
-                await MainActor.run {
-                    simianUsers = users
-                    isLoadingSimianUsers = false
-                    print("✅ Loaded \(users.count) Simian users")
-                }
-            } catch {
-                await MainActor.run {
-                    simianUsersLoadError = error.localizedDescription
-                    isLoadingSimianUsers = false
-                    print("⚠️ Failed to load Simian users: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
     
     @ViewBuilder
     private func approveArchiveButtons(notification: Notification) -> some View {

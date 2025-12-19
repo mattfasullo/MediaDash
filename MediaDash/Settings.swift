@@ -532,10 +532,13 @@ struct AppSettings: Codable, Equatable {
     var gmailPollInterval: TimeInterval // Polling interval in seconds (default: 300 = 5 minutes)
     var docketParsingPatterns: [String] // Regex patterns for extracting docket info
     
-    // Simian Integration (via Zapier webhook)
+    // Simian Integration (via API)
     var simianEnabled: Bool
-    var simianWebhookURL: String? // Zapier webhook URL for creating Simian projects (get from Zapier Zap settings)
+    var simianAPIBaseURL: String? // Simian API base URL (e.g., "https://graysonmusic.gosimian.com/api/prjacc")
+    var simianUsername: String? // Simian username (stored in keychain, not here)
+    var simianPassword: String? // Simian password (stored in keychain, not here)
     var simianProjectTemplate: String? // Project template name/ID for Simian projects (always the same for all jobs)
+    var simianProjectManagers: [String] // List of project manager email addresses (managed in MediaDash settings)
     
     // Notification Window Settings
     var notificationWindowLocked: Bool // Whether notification window follows main window
@@ -621,8 +624,14 @@ struct AppSettings: Codable, Equatable {
             gmailPollInterval: 300, // 5 minutes
             docketParsingPatterns: [],
             simianEnabled: false,
-            simianWebhookURL: nil,
+            simianAPIBaseURL: "https://graysonmusic.gosimian.com/api/prjacc",
             simianProjectTemplate: nil,
+            simianProjectManagers: [
+                "kelly@graysonmusicgroup.com",
+                "clare@graysonmusicgroup.com",
+                "sharon@graysonmusicgroup.com",
+                "nicholas@graysonmusicgroup.com"
+            ],
             notificationWindowLocked: true, // Default to locked (follows main window)
             defaultBrowser: .chrome, // Default to Chrome
             showDebugFeatures: false, // Debug features hidden by default

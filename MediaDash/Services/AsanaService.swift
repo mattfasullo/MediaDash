@@ -1038,6 +1038,7 @@ enum AsanaError: LocalizedError {
     case invalidURL
     case invalidResponse
     case apiError(String)
+    case cacheUnavailable(String)
     
     var errorDescription: String? {
         switch self {
@@ -1049,6 +1050,8 @@ enum AsanaError: LocalizedError {
             return "Invalid response from Asana API"
         case .apiError(let message):
             return "Asana API error: \(message)"
+        case .cacheUnavailable(let message):
+            return message
         }
     }
 }

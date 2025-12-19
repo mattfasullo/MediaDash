@@ -1,0 +1,1245 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica-Bold;\f1\fswiss\fcharset0 Helvetica;\f2\fswiss\fcharset0 Arial-BoldMT;
+\f3\fswiss\fcharset0 ArialMT;\f4\fmodern\fcharset0 Courier;\f5\fmodern\fcharset0 Courier-Bold;
+}
+{\colortbl;\red255\green255\blue255;\red64\green64\blue65;\red124\green124\blue126;\red98\green99\blue101;
+\red84\green163\blue215;\red0\green0\blue0;\red252\green16\blue27;\red154\green154\blue154;}
+{\*\expandedcolortbl;;\cssrgb\c31910\c31925\c32349;\cssrgb\c55897\c56124\c56721;\cssrgb\c45986\c46408\c47177;
+\cssrgb\c39134\c70002\c87400;\cssrgb\c0\c0\c0;\cssrgb\c100000\c17519\c13069;\cssrgb\c66775\c66775\c66775;}
+\margl1440\margr1440\vieww30040\viewh17760\viewkind0
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
+
+\f0\b\fs28 \cf2 PROJECTS API 3.0\
+
+\f1\b0\fs20 01-24-2020 3.06\
+06-16-2022 v3.07\
+09-20-2023 v3.08\
+
+\f0\b\fs24 \cf3 PROJECTS API\
+
+\f1\b0 Reference for interfacing via JSON with the Simian Web Applications:\
+
+\f0\b\fs32 \cf2 Overview:\
+
+\f1\b0\fs24 Project commands are only supported by version 3.0 of the API. The initial connection\
+to API will report a version - if no version is present and/or is not specified as version 3,\
+the main URL for connection needs to be appending with /v3/ for all subsequent re-\
+quests.\
+
+\f0\b\fs32 API Connection / Authentication\
+
+\f2\fs23 The API connect for your Simian installation is located at the following URLs:\
+
+\f3\b0 \cf4 Reels API: <companyname>.gosimian.com/api/simian\
+Projects API: <companyname>.gosimian.com/api/prjacc\
+General API: <companyname>.gosimian.com/api/main\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f2\b\fs23 \cf2 Connections are made via a HTTP(S) POST request. All examples in this guide\
+are provided in cURL (Appendix A).\
+Authentication Steps:\
+1. Setup\
+prjacc
+\f3\b0  - get a session key for connection\
+
+\f2\b 2. User Authentication\
+prjacc
+\f3\b0  - using the session key in step 1 authenticate with username and\
+password\
+
+\f2\b 3. Get User Info\
+
+\f3\b0 Upon successful login a private key is returned as well as permission level of user.\
+All subsequent commands must include the private token and session key. Permis-\
+sion levels returned include project_access (true/false) if false users cannot use the\
+app, if true they can - and add_projects (true/false) if true users can add new\
+projects if false they can only access projects they have permissions to. (See cURL\
+samples Appendix A for examples)\
+
+\f2\b NOTES:\
+
+\f3\b0 The get_project_list returns the list of projects current user has access to. If the user\
+has limited access it will return the access level they have to that project as well in\
+the access_areas field.\
+The majority of the API commands include the project ID in the request URL and\
+other parameters are expected to be in post variables. (See cURL samples Ap-\
+pendix A for examples).\
+
+\f2\b COMMAND MODIFIERS:\
+
+\f3\b0 Some API commands have modifiers to limit the number of items returned at one\
+time.\
+limit:\
+
+\f0\b\fs32 PROJECT API : Commands\
+
+\fs20 \cf6 COMMAND DESCRIPTION PARAMETERS\
+
+\fs24 \cf2 get_activity 
+\f1\b0\fs20 \cf6 Get project activity log Project ID (request URL)\
+
+\f0\b\fs24 \cf2 get_analytics 
+\f1\b0\fs20 \cf6 Get project analytics records Project ID (request URL)\
+
+\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f0\b\fs20 \cf6 COMMAND DESCRIPTION PARAMETERS\
+
+\fs24 \cf2 get_analytics_detail 
+\f1\b0\fs20 \cf6 Get analytics detail for a spe-\
+cific presentation\
+Project ID (request URL)\
+analytics_id\
+
+\f0\b\fs24 \cf2 get_analytic-\
+s_record\
+
+\f1\b0\fs20 \cf6 Get project analytics details\
+for viewer (email / user id)\
+Project ID (request URL)\
+analytics_id\
+viewer_id\
+
+\f0\b\fs24 \cf2 get_permissions 
+\f1\b0\fs20 \cf6 Get Permission Levels avail-\
+able for adding users\
+None\
+
+\f0\b\fs24 \cf2 get_project_list 
+\f1\b0\fs20 \cf6 Get list of projects current\
+user has access to & access\
+level\
+None\
+
+\f0\b\fs24 \cf2 get_project_info 
+\f1\b0\fs20 \cf6 Get information for specified\
+project\
+Project ID (request URL)\
+
+\f0\b\fs24 \cf2 get_folders 
+\f1\b0\fs20 \cf6 Get list of folders given a par-\
+ent folder, a blank parent re-\
+turns the root level folders\
+Project ID\
+folder_id (optional)\
+
+\f0\b\fs24 \cf2 get_files 
+\f1\b0\fs20 \cf6 Get a list of files given a par-\
+ent folder, a blank parent re-\
+turns the root level files\
+Project ID (request URL)\
+folder_id (optional)\
+
+\f0\b\fs24 \cf2 get_file_info 
+\f1\b0\fs20 \cf6 Get detail information of a\
+specific file\
+Project ID (request URL)\
+file_id\
+
+\f0\b\fs24 \cf2 get_file_stats 
+\f1\b0\fs20 \cf6 Get stats for a file, called with\
+just a file_id will return all\
+view records, adding a email\
+will return the details for that\
+viewer\
+Project ID (request URL)\
+file_id\
+email (optional)\
+
+\f0\b\fs24 \cf2 create_folder 
+\f1\b0\fs20 \cf6 Create a new folder Project ID (request URL)\
+folder_id (optional)\
+
+\f0\b\fs24 \cf2 rename_folder 
+\f1\b0\fs20 \cf6 Rename a folder given a\
+folder ID\
+Project ID (request URL)\
+folder_id\
+
+\f0\b\fs24 \cf2 delete_folder 
+\f1\b0\fs20 \cf6 Delete a folder given a folder\
+ID\
+Project ID (request URL)\
+folder_id\
+
+\f0\b\fs24 \cf2 lock_folder 
+\f1\b0\fs20 \cf6 Lock a folder given a folder ID Project ID (request URL)\
+folder_id\
+
+\f0\b\fs24 \cf2 unlock_folder 
+\f1\b0\fs20 \cf6 Unlock a folder given a folder\
+iD\
+Project ID (request URL)\
+folder_id\
+
+\f0\b\fs24 \cf2 update_file_sort 
+\f1\b0\fs20 \cf6 Update file sort order Project ID (request URL)\
+files = array of file ids in desired order\
+(common separated ID list)\
+
+\f0\b\fs24 \cf2 update_folder_sort 
+\f1\b0\fs20 \cf6 Update folder sort order Project ID (request URL)\
+folders = array of folder ids in desired order\
+(common separated ID list)\
+
+\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f0\b\fs20 \cf6 COMMAND DESCRIPTION PARAMETERS\
+
+\fs24 \cf2 send_presentation,\
+prevew_presenta-\
+tion\
+
+\f1\b0\fs20 \cf6 Send a folder or file, file_id\
+OR folder_id is required\
+Project ID (request URL)\
+present_title\
+present_email_template (id)\
+present_branding (id)\
+present_type (gallery / list)\
+present_opt_emailcc (true/false)\
+present_opt_notify (true/false)\
+present_opt_comments (true/false)\
+present_opt_show_cmt (true/false)\
+present_opt_annotate (true/false)\
+present_opt_download (true/false)\
+present_opt_showemails (true/false)\
+present_opt_approval (true/false)\
+present_opt_forward (true/false)\
+\cf7 present_file (file id)\
+present_folder (folder id)\
+\cf6 present_password\
+present_expire\
+\cf7 present_email_subject\
+\cf6 present_email_reply\
+present_email_group\
+\cf7 present_email_addrs\
+\cf6 present_email_msg\
+
+\f0\b\fs24 \cf2 get_short_link 
+\f1\b0\fs20 \cf6 Get a short link to a folder or\
+file, file_id OR folder_id is\
+required\
+Project ID (request URL)\
+branding (id from get_branding)\
+present_opt_notify (true/false)\
+present_opt_comments (true/false)\
+present_opt_show_cmt (true/false)\
+present_opt_download (true/false)\
+present_opt_forward (true/false)\
+present_opt_approval (true/false)\
+present_password\
+present_expire\
+folder_id\
+file_id\
+
+\f0\b\fs24 \cf2 get_tags 
+\f1\b0\fs20 \cf6 Get tags for a specific file Project ID (request URL)\
+file_id\
+
+\f0\b\fs24 \cf2 set_tags 
+\f1\b0\fs20 \cf6 Set tags for a specific file Project ID (request URL)\
+file_id\
+
+\f0\b\fs24 \cf2 add_comment 
+\f1\b0\fs20 \cf6 Add comment to a file Project ID (request URL)\
+file_id\
+
+\f0\b\fs24 \cf2 get_comments 
+\f1\b0\fs20 \cf6 Get all comments for a file Project ID (request URL)\
+file_id\
+
+\f0\b\fs24 \cf2 delete_comment 
+\f1\b0\fs20 \cf6 Delete a comment for a file Project ID (request URL)\
+comment_id\
+
+\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f0\b\fs20 \cf6 COMMAND 
+\fs24 \cf2 delete_file get_approvals set_approval move_file create_project delete_project 
+\fs20 \cf6 DESCRIPTION PARAMETERS\
+
+\f1\b0 Delete a file Project ID (request URL)\
+file_id\
+Get all approvals for a file Project ID (request URL)\
+file_id\
+Set an approval for a file Project ID (request URL)\
+file_id\
+value (1=approve, 0=reject, blank=pend-\
+ing)\
+Move a file to a new folder Project ID (request URL)\
+file_id\
+folder_id\
+Create a new project project_name\
+Delete an entire project - use\
+carefully\
+Project ID (request URL)\
+
+\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f0\b\fs20 \cf6 COMMAND 
+\fs24 \cf2 set_project_info get_users get_project_users add_user 
+\fs20 \cf6 DESCRIPTION PARAMETERS\
+
+\f1\b0 Set project information Project ID (request URL)\
+project_name\
+project_number\
+status\
+project_status\
+description (text)\
+client\
+producer\
+director\
+project_manager (user_id)\
+start_date\
+upload_date (this is the create date for the\
+project)\
+upload_user (user_id of the user that cre-\
+ated the project)\
+project_quota - format XX GB or XX MB\
+// Settings - values: set to "on" for active or\
+(blank or 0) for inactive, so if it's on set to\
+"on" if it's off just blank it or set to "0"\
+notify_member - Send notification when\
+team member added\
+notify_files - Receive notification when\
+files downloaded:\
+notify_upload - Receive notification when\
+files uploaded:\
+notify_approval - Receive notification on\
+approval\
+notify_comment - Receive notification on\
+comment\
+notify_forward - Receive notification on\
+forward\
+notify_plaintext - set notifications to plain-\
+text\
+project_delete_spot - set the number of\
+weeks to delete files (0 = never)\
+Get all system users that\
+have project access\
+No parameters required\
+Get current users of a project Project ID (request URL)\
+Add a new user Project ID (request URL)\
+firstname\
+lastname\
+email\
+username\
+password\
+user_level (returned from get permissions)\
+
+\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f0\b\fs20 \cf6 COMMAND DESCRIPTION PARAMETERS\
+
+\fs24 \cf2 set_user_permis-\
+sion\
+
+\f1\b0\fs20 \cf6 Set user permission for a\
+project\
+Project ID (request URL)\
+user_id\
+permission_level (administrator, project-\
+manager, filemanager, client)\
+
+\f0\b\fs24 \cf2 search_project 
+\f1\b0\fs20 \cf6 Search a project, if no project\
+ID is specified currently ac-\
+cessible project names / de-\
+scriptions searched, if a\
+project ID is specified\
+Project ID (request URL optional)\
+
+\f0\b\fs24 \cf2 upload_file 
+\f1\b0\fs20 \cf6 Upload a file to projects via\
+POST\
+Project ID (request URL)\
+folder_id\
+tags\
+description\
+
+\f0\b\fs32 \cf2 APPENDIX A : cURL Examples\
+
+\f2\fs16 \cf8 ________________________________________________________________________________________________________\
+
+\f4\b0\fs20 \cf6 FULL API TEST & COMMANDS / SAMPLE OUTPUT\
+
+\f5\b\fs24 //*-*-*-*-* AUTHENTICATION STEP 1 - SETUP CONNECTION\
+
+\f1\b0 \cf5 SIMIAN API - DOCUMENTATION
+\f5\b\fs20 \cf6 COMMAND
+\f4\b0 :\
+prjacc'\
+curl -c sess.txt -c sess.txt 'https://<companyname>.gosimian.com/api/prjacc/\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\
+\{"status":"success","auth_key":"486c0bf7197d26a9a20a3a4318b9fb2a","apiver":"3\
+","payload":""\}\}\
+
+\f5\b\fs24 //*-*-*-*-* AUTHENTICATION STEP 2 - USER LOGIN\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -c sess.txt -b sess.txt -d\
+'auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&username=XXXX&password=XXXXXXX\'92\
+'https://<companyname>.gosimian.com/api/prjacc/prjacc'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","apiver":"3","payload":\
+\{"user_id":"14","email":"xxx@gosimian.com","token":"1234567890","project_ac-\
+cess":"1","add_projects":[]\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET PROJECT LIST\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_project_list'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"id":"3","projec-\
+t_name":"3.0 Test Project"\},\{"id":"31","project_name":"A Common Thread - Web-\
+site"\},\{"id":"32","project_name":"Audi Digital Asset Repository"\},\
+\{"id":"25","project_name":"Crew Cuts - Website"\},\
+\{"id":"21","project_name":"Digital Spotlite"\},\{"id":"10","project_name":"MB\
+Test Updload"\},\{"id":"23","project_name":"Moxie - Website"\},\{"id":"24","pro-\
+ject_name":"Parallax - Microsite"\},\{"id":"33","project_name":"Rock in Lego"\},\
+\{"id":"12","project_name":"Simian 3.0 Teaser Video"\},\{"id":"13","project_-\
+name":"Simian Evolution"\},\{"id":"28","project_name":"Simian Go!"\},\
+\{"id":"11","project_name":"Simian Marketing"\},\
+\{"id":"29","project_name":"Simian NOW"\},\{"id":"27","project_name":"Simian\
+Projects App"\},\{"id":"26","project_name":"Simian Sample Project"\},\
+\{"id":"9","project_name":"Simian Task Manager"\},\
+\{"id":"20","project_name":"Simian Tutorial Series FINAL DRAFTS"\},\
+\{"id":"30","project_name":"Simian Website Redesign"\},\{"id":"14","project_-\
+name":"South America Location Database"\},\{"id":"34","project_name":"Streaming\
+Test"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET PROJECT INFO\
+
+\fs20 COMMAND
+\f4\b0 :\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f4\fs20 \cf6 curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_project_info/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"id":"3","projec-\
+t_name":"3.0 Test Project","project_number":"123","status":"Active","projec-\
+t_status":"In Production","description":"testing testing testing all day long\
+testing testing testing while I sing this song!","project_image":"simian-sta-\
+tusQuo.jpg","tags":[],"agency":"Volta","agency_address":"25212 Calle\
+Sombre","agency_phone":"555.555.555","agency_producer":"Clyde\
+Beastwood","agency_writer":"Johnny Applesauce","agency_art_director":"Johnny\
+Football","creative_director":"Messy\
+Marvin","client":"Simian","producer":"Johnny","director":"George","graphic":\
+[],"agency_logo":[],"client_logo":\
+[],"project_manager":"14","sales_rep":"Matilda","editorial":"Joe Blow\
+Post","editor":"Joe","editorial_phone":"3333.3333.333","master_received":"Yes\
+","format":"VHS","start_date":"08\\/25\\/2014","target_complete_date":"08\\/31\\/\
+2014","complete_date":"09\\/30\\/2014","shoot_date":"09\\/01\\/2014","notifica-\
+tions":[],"upload_date":"2014-09-23 4:43 pm","upload_user":[],"present_e-\
+mail_template":"22","present_template":"13","present_branding":"0","present_-\
+type":"0","present_opt_emailcc":"0","present_opt_notify":"true","present_op-\
+t_comments":"true","present_opt_download":"true","present_opt_forward":"0","p\
+resent_opt_show_cmt":"true","present_opt_approval":"true","present_op-\
+t_search":"true","present_categories":[],"present_email_subject":"Sent via\
+Short Link","present_email_reply":"support@gosimian.com","present_email_-\
+group":[],"present_email_addrs":"support@gosimian.com MS Test","present_e-\
+mail_msg":[],"present_info_page":[],"present_overview_page":[],"present_pass-\
+word":[],"user_id":"13","project_type":[],"color1":[],"color2":[],"color3":\
+[],"color4":\
+[],"notify_member":"on","notify_files":"0","notify_upload":"0","notify_ap-\
+proval":"on","notify_comment":"on","notify_forward":"0","notify_plaintext":"0\
+","notify_all":[],"last_access":"2014-11-24 4:35 pm","last_view":\
+[],"last_user":"13","views":"81","dailies_opt_active":[],"dailies_ttl":\
+[],"notify_dailies":[],"dailies_int_distrib":[],"dailies_ext_distrib":[],"no-\
+tify_dailies_group":[],"project_quota":[],"project_spot_delete":[]\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* SET PROJECT INFO\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&project_-\
+name=V3 Test Project' 'https://<companyname>.gosimian.com/api/prjacc/set_pro-\
+ject_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&project_num-\
+ber=1.0' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&status=Inac-\
+tive' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f4\fs20 \cf6 curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&project_sta-\
+tus=Awarded' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/\
+3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&description=\
+Internal Test Project' 'https://<companyname>.gosimian.com/api/prjacc/\
+set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&client=Simi-\
+an' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&producer=Sup\
+port User' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+\'91auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&director=Coo\
+l Director' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/\
+3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&project_man-\
+ager=1' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&start_date=2\
+015-01-20' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&upload_date=\
+2015-01-20' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/\
+3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&upload_user=\
+1' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&project_quo-\
+ta=50MB' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&notify_mem-\
+ber=on' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&notify_-\
+files=on' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f4\fs20 \cf6 curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&notify_u-\
+pload=on' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&notify_ap-\
+proval=on' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&notify_com-\
+ment=on' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&notify_for-\
+ward=on' 'https://<companyname>.gosimian.com/api/prjacc/set_project_info/3'\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&notify_-\
+plaintext=on' 'https://<companyname>.gosimian.com/api/prjacc/set_project_in-\
+fo/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+t_id":"3"\}\}\}\
+\{"root":\{"status":"success","message":"Project Info Set","payload":\{"projec-\
+
+\f5\b\fs24 //*-*-*-*-* GET FOLDERS\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_folders/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":\
+[\{"id":"28","catID":"28","project_id":"3","name":"Front End Annotate","fold-\
+er_image":[],"parent":\
+[],"sort_order":"10","locked":"0","sub_folders":"0","sub_files":"2"\},\
+\{"id":"67","catID":"67","project_id":"3","name":"Test Files","folder_image":\
+[],"parent":[],"sort_order":"20","locked":\
+[],"sub_folders":"0","sub_files":"13"\},\
+\{"id":"49","catID":"49","project_id":"3","name":"Move\
+Folder","folder_image":"Screen-Shot-2014-09-05-at-4.25_.12-PM_.png","parent":\
+[],"sort_order":"30","locked":"0","sub_folders":"0","sub_files":"15"\},\
+\{"id":"29","catID":"29","project_id":"3","name":"You Fail Me and I hate\
+you","folder_image":"Screen-Shot-2014-08-26-at-5.25_.08-PM_.png","parent":\
+[],"sort_order":"40","locked":"1","sub_folders":"0","sub_files":"8"\},\
+\{"id":"90","catID":"90","project_id":"3","name":"Edits 09-23-14","folder_im-\
+age":[],"parent":[],"sort_order":"50","locked":[],"sub_folders":"0","sub_-\
+files":"0"\},\{"id":"14","catID":"14","project_id":"3","name":"Big Upload Fold-\
+er","folder_image":"Screen-Shot-2014-09-05-at-4.25_.19-PM_.png","parent":\
+[],"sort_order":"60","locked":"0","sub_folders":"0","sub_files":"61"\},\
+\{"id":"18","catID":"18","project_id":"3","name":"Import Project\
+Folder","folder_image":"Screen-Shot-2014-08-26-at-5.23_.23-PM_.png","parent":\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f4\fs20 \cf6 [],"sort_order":"70","locked":"1","sub_folders":"0","sub_files":"5"\},\
+\{"id":"51","catID":"51","project_id":"3","name":"Thumb Capture Test","fold-\
+er_image":[],"parent":[],"sort_order":"80","locked":\
+[],"sub_folders":"0","sub_files":"5"\},\
+\{"id":"66","catID":"66","project_id":"3","name":"Flash Files","folder_image":\
+[],"parent":\
+[],"sort_order":"90","locked":"0","sub_folders":"0","sub_files":"6"\},\
+\{"id":"70","catID":"70","project_id":"3","name":"PSDs \\/ AI \\/ Blah","fold-\
+er_image":[],"parent":\
+[],"sort_order":"100","locked":"1","sub_folders":"0","sub_files":"18"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET FILES\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&folder_id=28\
+' 'https://<companyname>.gosimian.com/api/prjacc/get_files/3'\
+
+\f5\b OUPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"id":"841","ti-\
+tle":"Anthrax DYK Final HD","file_type":"video","thumbnail":"https:\\/\\/<com-\
+panyname>.gosimian.com\\/assets\\/projects\\/3\\/thumbs\\/\
+th_3804video_1412636608.jpg","media_file":"https:\\/\\/<companyname>.gosimian.-\
+com\\/assets\\/projects\\/3\\/videos\\/3804video_1412636608.mp4","media_file_mo-\
+bile":"https:\\/\\/<companyname>.gosimian.com\\/assets\\/projects\\/3\\/videos\\/\
+m_3804video_1412636608.mp4","sort_order":"10"\},\{"id":"851","title":"Dare to\
+be Brasilian","file_type":"video","thumbnail":"https:\\/\\/\
+<companyname>.gosimian.com\\/assets\\/projects\\/3\\/thumbs\\/\
+th_1412728864_315.jpg","media_file":"https:\\/\\/<companyname>.gosimian.com\\/\
+assets\\/projects\\/3\\/videos\\/1412728864_315.mp4","media_file_mobile":"https:\
+\\/\\/<companyname>.gosimian.com\\/assets\\/projects\\/3\\/videos\\/\
+m_1412728864_315.mp4","sort_order":"20"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET FILE INFO\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841'\
+'https://<companyname>.gosimian.com/api/prjacc/get_file_info/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"id":"841","pro-\
+ject_id":"3","category_id":"28","subcategory_id":[],"file_type":"video","me-\
+dia_file":"https:\\/\\/<companyname>.gosimian.com\\/assets\\/projects\\/3\\/\
+videos\\/3804video_1412636608.mp4","media_file_mobile":"https:\\/\\/<company-\
+name>.gosimian.com\\/assets\\/projects\\/3\\/videos\\/\
+m_3804video_1412636608.mp4","media_height":"432","media_width":"768","media_-\
+size":"46.5 MB","stream_file":\
+[],"playtime_string":"4:49","bitrate":"1346363.4554927","fileformat":"mp4","a\
+udio_dataformat":"mp4","video_dataformat":"quicktime","video_codec":\
+[],"video_resolution_x":"768","video_resolution_y":"432","video_frame_rate":"\
+23.976","warning":"Unknown QuickTime atom type: \\"too\\" (a9 74 6f 6f) at off-\
+set 176711","thumbnail":"https:\\/\\/<companyname>.gosimian.com\\/assets\\/\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f4\fs20 \cf6 projects\\/3\\/thumbs\\/th_3804video_1412636608.jpg","title":"Anthrax DYK Final\
+HD","description":[],"tags":"simian, casting, jason, holy,\
+coyote, ,thrash,metal,big 4,","presentation":[],"upload_user":"13","upload_-\
+date":"2014-10-06 4:03 pm","delete_date":[],"select_agency":[],"select_direc-\
+tor":[],"select_final":[],"restore_category":[],"restore_subcategory":\
+[],"status":"Active","sort_order":"10"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* RENAME FILE\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841&\
+name=ANTHRAX TDYK' 'https://<companyname>.gosimian.com/api/prjacc/rename_-\
+file/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"File Renamed","payload":\
+\{"file_id":"841"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* MOVE FILE\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=1282\
+&folder_id=28' 'https://<companyname>.gosimian.com/api/prjacc/move_file/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"File Moved","payload":\
+\{"file_id":"1282"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* DELETE FILE\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=1282\
+' 'https://<companyname>.gosimian.com/api/prjacc/delete_file/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"File Deleted","payload":\
+\{"file_id":"1282"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* FILE SORT\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&folder_id=28\
+&files=101,90,92' 'https://<companyname>.gosimian.com/api/prjacc/update_-\
+file_sort/3'\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f5\b\fs20 \cf6 OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Files Sorted","payload":[]\}\
+
+\f5\b\fs24 //*-*-*-*-* CREATE ROOT FOLDER\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&name=PROJECT\
+NOTES' 'https://<companyname>.gosimian.com/api/prjacc/create_folder/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Folder Created","payload":\
+\{"folder_id":"253"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* CREATE SUB FOLDER\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&name=DEAD-\
+LINES&folder_id=253' 'https://<companyname>.gosimian.com/api/prjacc/create_-\
+folder/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Folder Created","payload":\
+\{"folder_id":"254"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* RENAME FOLDER\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&name=New\
+DEADLINES&folder_id=254' 'https://<companyname>.gosimian.com/api/prjacc/re-\
+name_folder/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Folder Renamed","payload":\
+\{"folder_id":"254"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* LOCK FOLDER\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&folder_id=25\
+4' 'https://<companyname>.gosimian.com/api/prjacc/lock_folder/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Folder Locked","payload":\
+\{"folder_id":"254"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* UNLOCK FOLDER\
+
+\fs20 COMMAND
+\f4\b0 :\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f4\fs20 \cf6 curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&folder_id=25\
+4' 'https://<companyname>.gosimian.com/api/prjacc/unlock_folder/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Folder Unlocked","payload":\{"fold-\
+er_id":"254"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* DELETE FOLDER\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&folder_id=25\
+4' 'https://<companyname>.gosimian.com/api/prjacc/delete_folder/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Folder Deleted","payload":\
+\{"folder":"254"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* FOLDER SORT\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&folder_id=28\
+&folders=32,33,34' 'https://<companyname>.gosimian.com/api/prjacc/update_-\
+folder_sort/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Folders Sorted","payload":\
+\{"name":"folder_id","value":"28"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET FILE COMMENTS\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841'\
+'https://<companyname>.gosimian.com/api/prjacc/get_comments/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"id":"118","pro-\
+ject_id":"3","ext_id":[],"media_id":"841","user_id":"13","comment":"Get rid\
+of some of the shitty songs like anti social","create_date":"2014-10-06 4:16\
+pm","email":"support@gosimian.com","timestamp":"11.789","comment_source":\
+[],"annotation":"annotated_cmt_3_841_1412637410.jpg","dailies_id":[]\},\
+\{"id":"117","project_id":"3","ext_id":\
+[],"media_id":"841","user_id":"13","comment":"Annotated Comment","create_-\
+date":"2014-10-06 4:15\
+pm","email":"support@gosimian.com","timestamp":"12.800","comment_source":\
+[],"annotation":"annotated_cmt_3_841_1412637310.jpg","dailies_id":[]\},\
+\{"id":"116","project_id":"3","ext_id":\
+[],"media_id":"841","user_id":"13","comment":"Annotated Comment","create_-\
+date":"2014-10-06 4:12\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f4\fs20 \cf6 pm","email":"support@gosimian.com","timestamp":"14.400","comment_source":\
+[],"annotation":"annotated_cmt_3_841_1412637171.jpg","dailies_id":[]\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* ADD FILE COMMENT\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841&\
+comment=APITEST_COMMENT' 'https://<companyname>.gosimian.com/api/prjacc/add_-\
+comment/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Comment Added","payload":\
+\{"comment_id":"162"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* DELETE FILE COMMENT\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841&\
+comment_id=162' 'https://<companyname>.gosimian.com/api/prjacc/delete_com-\
+ment/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+t_id":"162"\}\}\}\
+\{"root":\{"status":"success","message":"Comment Deleted","payload":\{"commen-\
+
+\f5\b\fs24 //*-*-*-*-* GET FILE APPROVALS\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841'\
+'https://<companyname>.gosimian.com/api/prjacc/get_approvals/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"id":"916","ac-\
+tion_date":"2014-10-06 4:11 pm","project_id":"3","approval_id":\
+[],"media_id":"841","approval_type":"Project","approval_status":[],"ap-\
+proved_by":"support@gosimian.com","user_id":[],"dailies_id":[]\},\
+\{"id":"917","action_date":"2014-10-06 4:20\
+pm","project_id":"3","approval_id":\
+[],"media_id":"841","approval_type":"Project","approval_status":[],"ap-\
+proved_by":[],"user_id":[],"dailies_id":[]\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* SET FILE APPROVAL\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841&\
+value=1' 'https://<companyname>.gosimian.com/api/prjacc/set_approval/3'\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f5\b\fs20 \cf6 OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Approval Set","payload":\
+\{"approval_id":"1528"\}\}\}\
+
+\fs24 //*-*-*-*-* GET ALL FILE STATS\
+
+\fs20 COMMAND:\
+
+\f5\b curl
+\f4\b0  -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841'\
+'https://<companyname>.gosimian.com/api/prjacc/get_file_stats/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":\
+[\{"email":"support@gosimian.com","ip_address":"68.231.193.48","last_view_-\
+date":"2014-10-06 4:12 pm"\}]\}\
+
+\f5\b\fs24 //*-*-*-*-* GET FILE STATS FOR VIEWER\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841&\
+email=support@gosimian.com' 'https://<companyname>.gosimian.com/api/prjacc/\
+get_file_stats/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"user_id":\
+[],"email":"support@gosimian.com","ip_address":"68.231.193.48","par-\
+tial_views":"1","full_views":"0","media_downloads":"0","last_view_date":"2014\
+-10-06 4:12 pm"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET PROJECT ACTIVITY\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_activity/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"username":"sup-\
+port","email":"support@gosimian.com","id":"1522","action_date":"2015-01-22\
+7:13 am","project_id":"3","action":"Folder: New DEADLINES\
+DELETED","user_id":"14","file_id":[],"folder_id":"254"\},\{"username......\
+
+\f5\b\fs24 //*-*-*-*-* GET ANALYTICS\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_analytics/3'\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f5\b\fs20 \cf6 OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"username":"sup-\
+port","email":"support@gosimian.com","id":"188","project_id":"3","user_id":"1\
+3","present_title":"0","present_email_template":"22","present_template":"1","\
+present_type":"gallery","present_opt_emailcc":"0","present_opt_notify":"true"\
+,"present_opt_comments":"true","present_opt_download":"true","present_opt_-\
+forward":"true","present_email_subject":[],"present_email_reply":[],"presen-\
+t_email_group":[],"present_email_addrs":[],"present_email_msg":[],"present_-\
+password":[],"present_sent":"1","present_date":"2014-11-24 4:33 pm","presen-\
+t_expire":[],"present_opt_members":"0","present_opt_showemails":"0","presen-\
+t_opt_approval":"true","present_file":"294","present_folder":[],"present_op-\
+t_show_cmt":"0","present_opt_annotate":"true"\},\
+\{"username":"batton","email":"support@gosimian.com","id":"178","project_id":"\
+3","user_id":"13","present_title":"0","present_email_template":"22","presen-\
+t_template":"1","present_type":"gallery","present_opt_emailcc":"0","presen-\
+t_opt_notify":"true","present_opt_comments":"true","present_opt_download":"tr\
+ue","present_opt_forward":"true","present_email_subject":[],"present_e-\
+mail_reply":[],"present_email_group":[],"present_email_addrs":[],"present_e-\
+mail_msg":[],"present_password":\
+[],"present_sent":"1","present_date":"2014-11-19 2:35 pm","present_expire":\
+[],"present_opt_members":"0","present_opt_showemails":"0","present_opt_ap-\
+proval":"true","present_file":"797","present_folder":[],"present_op-\
+t_show_cmt":"0","present_opt_annotate":"true"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET ANALYTIC DETAILS\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&analytic-\
+s_id=103' 'https://<companyname>.gosimian.com/api/prjacc/get_analytics_de-\
+tail/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":\
+[\{"id":"1193","record_id":"103","record_type":"approval","email_address":"sup\
+port@gosimian.com","send_time":"1412445442","api_response":"Sent Via Send\
+Grid: \{\\"message\\":\\"success\\"\}"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET ANALYTIC RECORD\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&analytic-\
+s_id=103&viewer_id=1193' 'https://<companyname>.gosimian.com/api/prjacc/get_-\
+analytics_record/3'\
+
+\f5\b OUTPUT
+\f4\b0  (IF RECORDS):\
+\{"root":\{"status":"success","message":"success","payload":[\{"id":"1060","pro-\
+ject_id":"3","media_id":"796","ext_id":"103","user_id":\
+[],"email":"support@gosimian.com","create_date":"2014-10-04 10:58\
+am","last_view":"2014-10-04 11:03\
+am","ip_address":"68.231.193.48","starts":"1","views":"0","downloads":"0","pe\
+rcent_viewed":"4","stats_source":"Approval","dailies_id":\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f4\fs20 \cf6 [],"session_id":"d64f8b10780bc47125ab842bc836d21a","partial_views":"1","ful-\
+l_views":"0","title":"Iron Maiden - lego","thumbnail":"https:\\/\\/<company-\
+name>.gosimian.com\\/assets\\/thumbs\\/th_3299video_1411753481.jpg"\}]\}\
+
+\f5\b\fs24 //*-*-*-*-* GET EMAIL GROUPS\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_email_groups'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":\
+[\{"id":"49","group_name":"Agency Producers","group_type":"Public","descrip-\
+tion":[]\},\{"id":"45","group_name":"Simian\
+Contacts","group_type":"Public","description":[]\},\
+\{"id":"56","group_name":"Tutorial Test Group","group_type":"Public","descrip-\
+tion":[]\},\{"id":"46","group_name":"Volta Contacts","group_type":"Public","de-\
+scription":"bunch of random contacts I&39;m importing"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET EMAIL TEMPLATES\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_email_templates'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":\
+[\{"id":"23","title":"Simian Black"\},\{"id":"22","title":"Simian White"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET BRANDS\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_branding'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":[\{"id":"1","brand-\
+ing_name":"Simian"\},\{"id":"2","branding_name":"Volta"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET PREVIEW LINK\
+
+\fs20 GET FILE COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&present_-\
+file=841' 'https://<companyname>.gosimian.com/api/prjacc/preview_presenta-\
+tion/3'\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f5\b\fs20 \cf6 OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Preview Created","payload":\{"pre-\
+view_link":"https:\\/\\/<companyname>.gosimian.com\\/\\/sp\\/a\\/uft9UnysoZEtFBFp-\
+QsDbwA\\/preview"\}\}\}\
+
+\f5\b GET FOLDER COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&present_-\
+folder=28' 'https://<companyname>.gosimian.com/api/prjacc/preview_presenta-\
+tion/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Preview Created","payload":\{"pre-\
+view_link":"https:\\/\\/<companyname>.gosimian.com\\/\\/sp\\/a\\/sy0pEeHYtVdW3fq-\
+BXZkbIQ\\/preview"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* SEND PRESENTATION\
+
+\fs20 SEND FOLDER COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&present_-\
+folder=28&present_title=Folder\
+Test&present_email_addrs=support@gosimian.com&present_email_subject=TEST&pre-\
+sent_email_msg=Test!' 'https://<companyname>.gosimian.com/api/prjacc/send_p-\
+resentation/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+er":"28"\}\}\}\
+\{"root":\{"status":"success","message":"Folder Sent","payload":\{"present_fold-\
+
+\f5\b SEND FILE COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&present_-\
+file=841&present_email_addrs=support@gosimian.com&present_email_subject=FILE\
+TEST' 'https://<companyname>.gosimian.com/api/prjacc/send_presentation/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"File Sent","payload":\
+\{"present_file":"841"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET SHORT LINK\
+
+\fs20 GET FOLDER COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&folder_id=28\
+' 'https://<companyname>.gosimian.com/api/prjacc/get_short_link/3'\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f5\b\fs20 \cf6 OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Short Link","payload":\
+\{"short_link":"https:\\/\\/reel.io\\/6mq"\}\}\}\
+
+\f5\b GET FILE COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&file_id=841'\
+'https://<companyname>.gosimian.com/api/prjacc/get_short_link/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Short Link","payload":\
+\{"short_link":"https:\\/\\/reel.io\\/6mr"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* UPLOAD FILE\
+
+\fs20 UPLOAD TO ROOT COMMAND
+\f4\b0 :\
+curl -b sess.txt -F 'auth_token=1234567890' -F\
+'auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' -F 'Filedata=@uptest1.jpg'\
+'https://<companyname>.gosimian.com/api/prjacc/upload_file/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"File Uploaded","payload":\
+\{"file_id":"1282"\}\}\}\
+
+\f5\b UPLOAD TO A FOLDER COMMAND
+\f4\b0 :\
+curl -b sess.txt -F 'auth_token=1234567890' -F\
+'auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' -F 'folder_id=28' -F\
+'Filedata=@uptest1.jpg' 'https://<companyname>.gosimian.com/api/prjacc/up-\
+load_file/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"File Uploaded","payload":\
+\{"file_id":"1283"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET SYSTEM PERMISSIONS\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_permissions'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"success","payload":\
+[\{"id":"8","level":"Projects Only","description":\
+[],"table_permissions":"projects||","status":[]\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* GET SYSTEM USERS (non-admins)\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a' 'https://\
+<companyname>.gosimian.com/api/prjacc/get_users'\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f5\b\fs20 \cf6 OUTPUT
+\f4\b0 :\
+\{\'93root":\{"status":"success","message":"success","payload":[\{"id":"22","first-\
+name":"Support","lastname":"User","email":"support@gosimian.com","crm_email":\
+[],"crm_notify":[],"telephone":[],"username":"batton9369","level":"8","pro-\
+file_image":[],"oauth_token":[],"oauth_secret":[],"twitter_id":[],"twit-\
+ter_user":[],"status":"Active","dashboard_quickstart":[],"userID":"22"\}]\}\}\
+
+\f5\b\fs24 //*-*-*-*-* SET USER PROJECT PERMISSIONS\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+'auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&user_id=22&p\
+ermission_level=administrator' 'https://<companyname>.gosimian.com/api/pr-\
+jacc/set_user_permission/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"User Permission Set","payload":\
+\{"user_id":"22"\}\}\}\
+
+\f5\b\fs24 //*-*-*-*-* ADD USER\
+
+\fs20 COMMAND
+\f4\b0 :\
+curl -b sess.txt -d\
+\'91auth_token=1234567890&auth_key=486c0bf7197d26a9a20a3a4318b9fb2a&user_id=22&p\
+ermission_level=8&user_level=client&firstname=Support&lastname=User&email=sup\
+port@gosimian.com.com&username=jsol&password=default\'92 'https://\
+<companyname>.gosimian.com/api/prjacc/add_user/3'\
+
+\f5\b OUTPUT
+\f4\b0 :\
+\{"root":\{"status":"success","message":"Project User Added","payload":\
+\{"user_id":"30"\}\}\}\
+
+\f0\b\fs32 \cf2 APPENDIX B : Permission Reference\
+
+\f2\fs16 \cf8 ________________________________________________________________________________________________________\
+
+\f1\b0\fs24 \cf5 SIMIAN API - DOCUMENTATION
+\f0\b\fs20 \cf6 PERMISSION LEVEL DESCRIPTION FEATURE ACCESS\
+
+\fs24 \cf2 admin 
+\f1\b0\fs20 \cf6 System Administrator Full Access\
+
+\f0\b\fs24 \cf2 project_administrator\
+(administrator)\
+
+\f1\b0\fs20 \cf6 Full access to projects Edit project settings, users, per-\
+missions, folders, files, send pre-\
+sentations\
+
+\f0\b\fs24 \cf2 project_manager (pro-\
+jectmanager)\
+
+\f1\b0\fs20 \cf6 Limited access Upload, Download, Edit files &\
+folders, send presentations\
+
+\f0\b\fs24 \cf2 project_contributor 
+\f1\b0\fs20 \cf6 Limited access Download, Manage files & fold-\
+ers - no send\
+
+\f0\b\fs32 \cf2 Phone Support\
+
+\f3\b0\fs23 \cf4 T: 310.736.1376\
+Hours of support are 9am-5pm PST Mon-Fri\
+
+\f0\b\fs32 \cf2 Online Support\
+
+\f3\b0\fs23 \cf4 support@gosimian.com\
+
+\f1\fs24 \cf5 SIMIAN API - DOCUMENTATION}

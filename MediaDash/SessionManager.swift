@@ -377,6 +377,89 @@ class SessionManager: ObservableObject {
             .sorted { $0.lastAccessedAt > $1.lastAccessedAt } // Most recently used first
     }
     
+    /// Check if server is connected (shared storage is available)
+    func isServerConnected() -> Bool {
+        let defaultSettings = AppSettings.default
+        guard let sharedCacheURL = defaultSettings.sharedCacheURL, !sharedCacheURL.isEmpty else {
+            return false
+        }
+        return FileManager.default.fileExists(atPath: sharedCacheURL)
+    }
+    
+    /// Get list of usernames from server (users who have settings files on shared storage)
+    func getServerUsers() async -> [String] {
+        let defaultSettings = AppSettings.default
+        guard let sharedCacheURL = defaultSettings.sharedCacheURL, !sharedCacheURL.isEmpty else {
+            return []
+        }
+        
+        let cacheBaseURL = URL(fileURLWithPath: sharedCacheURL)
+        let settingsDirURL = cacheBaseURL.appendingPathComponent("MediaDash_Settings")
+        
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: settingsDirURL.path) else {
+            return []
+        }
+        
+        do {
+            let files = try fileManager.contentsOfDirectory(at: settingsDirURL, includingPropertiesForKeys: nil)
+            let usernames = files
+                .filter { $0.pathExtension == "json" }
+                .map { $0.deletingPathExtension().lastPathComponent }
+                .sorted()
+            return usernames
+        } catch {
+            print("SessionManager: Failed to list server users: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
+    /// Delete a profile (both local and from server if possible)
+    /// Can also delete a server-only user by username (even if no local profile exists)
+    func deleteProfile(_ profile: WorkspaceProfile) async -> Bool {
+        // Remove from local storage if it exists
+        var profiles = loadAllProfiles()
+        profiles.removeValue(forKey: profile.id)
+        
+        if let encoded = try? JSONEncoder().encode(profiles) {
+            UserDefaults.standard.set(encoded, forKey: profilesKey)
+        }
+        
+        // Try to delete from server if it's a synced profile
+        if !profile.isLocal, let username = profile.username {
+            await deleteServerUser(username: username)
+        }
+        
+        // If we deleted the current profile, log out
+        if case .loggedIn(let currentProfile) = authenticationState, currentProfile.id == profile.id {
+            logout()
+        }
+        
+        return true
+    }
+    
+    /// Delete a user from the server by username (even if no local profile exists)
+    func deleteServerUser(username: String) async {
+        let defaultSettings = AppSettings.default
+        guard let sharedCacheURL = defaultSettings.sharedCacheURL, !sharedCacheURL.isEmpty else {
+            return
+        }
+        
+        let cacheBaseURL = URL(fileURLWithPath: sharedCacheURL)
+        let settingsDirURL = cacheBaseURL.appendingPathComponent("MediaDash_Settings")
+        let settingsFile = settingsDirURL.appendingPathComponent("\(username).json")
+        
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: settingsFile.path) {
+            do {
+                try fileManager.removeItem(at: settingsFile)
+                print("SessionManager: Deleted user from server: \(username)")
+            } catch {
+                print("SessionManager: Failed to delete user from server: \(error.localizedDescription)")
+            }
+        }
+    }
+    
     // MARK: - Shared Storage Settings Sync
     
     /// Load settings from shared storage for a user

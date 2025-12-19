@@ -27,12 +27,18 @@ struct SharedKeychainService {
         case asanaAccessToken
         case asanaRefreshToken
 
+        // Simian
+        case simianUsername
+        case simianPassword
+
         var keychainKey: String {
             switch self {
             case .gmailAccessToken: return "gmail_shared_access_token"
             case .gmailRefreshToken: return "gmail_shared_refresh_token"
             case .asanaAccessToken: return "asana_shared_access_token"
             case .asanaRefreshToken: return "asana_shared_refresh_token"
+            case .simianUsername: return "simian_shared_username"
+            case .simianPassword: return "simian_shared_password"
             }
         }
     }
@@ -155,6 +161,16 @@ struct SharedKeychainService {
     /// Get Asana refresh token (shared or personal)
     static func getAsanaRefreshToken() -> String? {
         return getKey(shared: .asanaRefreshToken, personalKey: "asana_refresh_token")
+    }
+    
+    /// Get Simian username (shared or personal)
+    static func getSimianUsername() -> String? {
+        return getKey(shared: .simianUsername, personalKey: "simian_username")
+    }
+    
+    /// Get Simian password (shared or personal)
+    static func getSimianPassword() -> String? {
+        return getKey(shared: .simianPassword, personalKey: "simian_password")
     }
     
 }

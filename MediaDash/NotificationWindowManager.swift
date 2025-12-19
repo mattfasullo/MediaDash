@@ -717,7 +717,6 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         // Set initial state (small, at button location, invisible)
         notificationWindow.setFrame(startFrame, display: false)
         notificationWindow.alphaValue = 0.0
-        notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
         
         // Set initial locked position if locked
         if self.isLocked {
@@ -727,38 +726,37 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         isAnimating = true
         isVisible = true
         
-        // Reduced delay for faster response (from 0.05s to 0.01s)
+        // Make window visible immediately (no delay) for instant feedback
+        notificationWindow.orderFront(nil)
+        notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
+        
+        // Cancel any existing animation
+        currentAnimationContext?.allowsImplicitAnimation = false
+        
+        // Genie animation: expand from button while moving to target position
+        // Start animation immediately without delay for instant response
         let manager = self
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-            // Ensure window is behind main window before animation
+        NSAnimationContext.runAnimationGroup({ context in
+            manager.currentAnimationContext = context
+            context.duration = 0.25 // Slightly faster animation for snappier feel
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            // Keep window behind during animation
             notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
-            
-            // Cancel any existing animation
-            manager.currentAnimationContext?.allowsImplicitAnimation = false
-            
-            // Genie animation: expand from button while moving to target position
-            NSAnimationContext.runAnimationGroup({ context in
-                manager.currentAnimationContext = context
-                context.duration = 0.3 // Genie expansion duration
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                // Keep window behind during animation
-                notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
-                // Animate both position and size (genie effect)
-                notificationWindow.animator().setFrame(targetFrame, display: true)
-                notificationWindow.animator().alphaValue = 1.0
-            }) {
-                // Keep window behind main window after animation
-                notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
-        
-        // Ensure the view can become first responder
-        DispatchQueue.main.async {
-            notificationWindow.makeFirstResponder(notificationWindowController.view)
-        }
-        
-                Task { @MainActor in
-                    manager.isAnimating = false
-                    manager.currentAnimationContext = nil
-                }
+            // Animate both position and size (genie effect)
+            notificationWindow.animator().setFrame(targetFrame, display: true)
+            notificationWindow.animator().alphaValue = 1.0
+        }) {
+            // Keep window behind main window after animation
+            notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
+    
+            // Ensure the view can become first responder
+            DispatchQueue.main.async {
+                notificationWindow.makeFirstResponder(notificationWindowController.view)
+            }
+    
+            Task { @MainActor in
+                manager.isAnimating = false
+                manager.currentAnimationContext = nil
             }
         }
     }

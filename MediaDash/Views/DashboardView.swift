@@ -1322,7 +1322,7 @@ struct DashboardStagingArea: View {
                                 .scaleEffect(0.6)
                                 .frame(width: 12, height: 12)
                         }
-                        Text(cache.syncPhase.isEmpty ? "Syncing with Asana" : cache.syncPhase)
+                        Text(cache.syncPhase.isEmpty ? "External service syncing shared cache" : cache.syncPhase)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.blue)
                             .lineLimit(1)

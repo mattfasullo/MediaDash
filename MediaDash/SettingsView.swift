@@ -3186,6 +3186,55 @@ struct SimianIntegrationSection: View {
                         if showAdvancedSettings {
                             VStack(alignment: .leading, spacing: 12) {
                                 
+                                // Project Managers List
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Project Managers")
+                                        .font(.system(size: 13))
+                                    
+                                    Text("Email addresses of project managers. Simian will match these to existing users when creating projects.")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                    
+                                    ForEach(settings.simianProjectManagers.indices, id: \.self) { index in
+                                        HStack {
+                                            TextField("Email address", text: Binding(
+                                                get: { settings.simianProjectManagers[index] },
+                                                set: { newValue in
+                                                    settings.simianProjectManagers[index] = newValue
+                                                    hasUnsavedChanges = true
+                                                }
+                                            ))
+                                            .textFieldStyle(.roundedBorder)
+                                            .disableAutocorrection(true)
+                                            
+                                            Button(action: {
+                                                settings.simianProjectManagers.remove(at: index)
+                                                hasUnsavedChanges = true
+                                            }) {
+                                                Image(systemName: "minus.circle.fill")
+                                                    .foregroundColor(.red)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                    
+                                    Button(action: {
+                                        settings.simianProjectManagers.append("")
+                                        hasUnsavedChanges = true
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "plus.circle")
+                                            Text("Add Project Manager")
+                                        }
+                                        .font(.system(size: 12))
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                                
+                                Divider()
+                                    .padding(.vertical, 4)
+                                
                                 // Project Template Dropdown
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Project Template")

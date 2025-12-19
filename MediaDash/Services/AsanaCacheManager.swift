@@ -1,10 +1,10 @@
 import Foundation
 import Combine
 
-/// Manages local caching of Asana docket information for fast, offline search
+/// Manages shared cache access for Asana docket information
+/// MediaDash relies solely on the shared cache - no local cache is maintained
 @MainActor
 class AsanaCacheManager: ObservableObject {
-    private let cacheURL: URL
     private let asanaService: AsanaService
     @Published var lastSyncDate: Date?
     @Published var isSyncing = false
@@ -16,9 +16,8 @@ class AsanaCacheManager: ObservableObject {
     // Track the last reported progress to ensure monotonic increase
     private var lastReportedProgress: Double = 0
     
-    // Cache file name - stores Asana docket data for fast offline search
+    // Cache file name - used for reading from shared cache location
     private let cacheFileName = "mediadash_docket_cache.json"
-    private let legacyCacheFileName = "mediadash_docket_search_cache.json" // Old filename for migration
     
     // Store current settings for cache access
     private var sharedCacheURL: String?
@@ -47,12 +46,17 @@ class AsanaCacheManager: ObservableObject {
     private var lastSharedCacheError: String?
     private var lastEmptyFileCheck: Date?
     
+    // Track shared cache file modification time to detect external service updates
+    private var lastCacheModificationTime: Date?
+    // Note: Using nonisolated(unsafe) to allow cleanup from deinit.
+    // This is safe because timers are only invalidated (not created) from nonisolated context.
+    nonisolated(unsafe) private var cacheFileMonitorTimer: Timer?
+    private var externalSyncStartTime: Date?
+    
     /// Cache status indicator with server connection information
     enum CacheStatus {
         case serverConnectedUsingShared      // Server connected and using shared cache
-        case serverConnectedUsingLocal       // Server connected but using local cache (shared cache unavailable)
         case serverConnectedNoCache          // Server connected but no cache available
-        case serverDisconnectedUsingLocal    // Server not connected, using local cache
         case serverDisconnectedNoCache       // Server not connected and no cache available
         case unknown                         // Status not yet determined
     }
@@ -62,61 +66,19 @@ class AsanaCacheManager: ObservableObject {
     @Published var cacheDataIssues: [String] = []
     
     init() {
-        // Store cache in Application Support directory
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let appFolder = appSupport.appendingPathComponent("MediaDash", isDirectory: true)
-        
-        // Create directory if it doesn't exist
-        try? FileManager.default.createDirectory(at: appFolder, withIntermediateDirectories: true)
-        
-        self.cacheURL = appFolder.appendingPathComponent(cacheFileName)
         self.asanaService = AsanaService()
-        
-        // Migrate old cache file if it exists
-        migrateOldCacheFileIfNeeded()
-        
-        // Load last sync date from cache
-        loadLastSyncDate()
         
         // Initial cache status will be set when settings are loaded via updateCacheSettings
     }
     
-    /// Migrate cache file from old name to new name if old file exists
-    private func migrateOldCacheFileIfNeeded() {
-        let fm = FileManager.default
-        let directory = cacheURL.deletingLastPathComponent()
-        
-        // List of legacy filenames to check (in order of preference)
-        let legacyFilenames = [legacyCacheFileName, "asana_dockets_cache.json"]
-        
-        // Check each legacy filename
-        for oldCacheFileName in legacyFilenames {
-            let oldCacheURL = directory.appendingPathComponent(oldCacheFileName)
-            
-            // Check if old cache file exists and new one doesn't
-            if fm.fileExists(atPath: oldCacheURL.path) && !fm.fileExists(atPath: cacheURL.path) {
-                do {
-                    // Try to read and validate old cache file
-                    let data = try Data(contentsOf: oldCacheURL)
-                    if let _ = try? JSONDecoder().decode(CachedDockets.self, from: data) {
-                        // Valid cache file, migrate it
-                        try fm.moveItem(at: oldCacheURL, to: cacheURL)
-                        print("✅ [Cache] Migrated cache file from '\(oldCacheFileName)' to '\(cacheFileName)'")
-                        return // Successfully migrated, no need to check other legacy names
-                    } else {
-                        // Invalid cache file, remove old one
-                        try? fm.removeItem(at: oldCacheURL)
-                        print("⚠️ [Cache] Old cache file '\(oldCacheFileName)' was invalid, removed it")
-                    }
-                } catch {
-                    print("⚠️ [Cache] Failed to migrate old cache file '\(oldCacheFileName)': \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-    
     /// Update cache settings (call when settings change or on init)
     func updateCacheSettings(sharedCacheURL: String?, useSharedCache: Bool, serverBasePath: String? = nil, serverConnectionURL: String? = nil) {
+        // Stop existing monitoring if settings changed
+        let settingsChanged = self.sharedCacheURL != sharedCacheURL || self.useSharedCache != useSharedCache
+        if settingsChanged {
+            stopCacheFileMonitoring()
+        }
+        
         self.sharedCacheURL = sharedCacheURL
         self.useSharedCache = useSharedCache
         
@@ -124,24 +86,12 @@ class AsanaCacheManager: ObservableObject {
         self.serverBasePath = serverBasePath
         self.serverConnectionURL = serverConnectionURL
         
-        // Reload lastSyncDate from cache (check shared first if enabled, then local)
-        // This ensures shouldSync() works correctly on app startup
+        // Reload lastSyncDate from shared cache
         reloadLastSyncDate()
         
         // Defer cache status check to avoid modifying during view updates
         Task { @MainActor in
             updateCacheStatus()
-        }
-        
-        // If shared cache is enabled but doesn't exist, seed it from local cache
-        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
-            Task {
-                await seedSharedCacheIfNeeded(from: sharedURL)
-                // Update status after seeding attempt
-                await MainActor.run {
-                    updateCacheStatus()
-                }
-            }
         }
         
         // Also re-check status after a short delay to catch cases where the file becomes available
@@ -154,6 +104,9 @@ class AsanaCacheManager: ObservableObject {
         
         // Start periodic status checking (every 5 seconds) for live updates
         startPeriodicStatusCheck()
+        
+        // Start monitoring shared cache file for external service updates
+        startCacheFileMonitoring()
     }
     
     /// Update sync settings (for manual sync only - automatic sync is handled by external service)
@@ -163,8 +116,7 @@ class AsanaCacheManager: ObservableObject {
         self.syncDocketField = docketField
         self.syncJobNameField = jobNameField
         
-        // Reload lastSyncDate to ensure shouldSync() works correctly
-        // This is important because updateSyncSettings might be called before updateCacheSettings
+        // Reload lastSyncDate from shared cache
         reloadLastSyncDate()
         
         // Don't start automatic periodic sync - external service handles automatic updates
@@ -192,6 +144,149 @@ class AsanaCacheManager: ObservableObject {
         }
     }
     
+    /// Start monitoring shared cache file for external service updates
+    private func startCacheFileMonitoring() {
+        // Stop existing monitor if any
+        cacheFileMonitorTimer?.invalidate()
+        
+        // Only monitor if shared cache is enabled
+        guard useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty else {
+            return
+        }
+        
+        // Check file modification time every 2 seconds to detect active syncing
+        cacheFileMonitorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.checkCacheFileActivity()
+            }
+        }
+        
+        // Add timer to run loop
+        if let timer = cacheFileMonitorTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+        
+        // Initial check
+        checkCacheFileActivity()
+    }
+    
+    /// Stop monitoring shared cache file
+    private func stopCacheFileMonitoring() {
+        cacheFileMonitorTimer?.invalidate()
+        cacheFileMonitorTimer = nil
+        lastCacheModificationTime = nil
+        externalSyncStartTime = nil
+        
+        // Clear sync state if we were showing external sync
+        if isSyncing && syncPhase.contains("External service") {
+            isSyncing = false
+            syncProgress = 0
+            syncPhase = ""
+        }
+    }
+    
+    /// Check if shared cache file is being actively updated by external service
+    private func checkCacheFileActivity() {
+        guard useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty else {
+            stopCacheFileMonitoring()
+            return
+        }
+        
+        let fileURL = getFileURL(from: sharedURL)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            // File doesn't exist - not syncing
+            if isSyncing && syncPhase.contains("External service") {
+                isSyncing = false
+                syncProgress = 0
+                syncPhase = ""
+            }
+            lastCacheModificationTime = nil
+            externalSyncStartTime = nil
+            return
+        }
+        
+        // Get current modification time
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let modificationDate = attributes[.modificationDate] as? Date else {
+            return
+        }
+        
+        // Check if file was recently modified (within last 5 seconds)
+        let timeSinceModification = Date().timeIntervalSince(modificationDate)
+        let isRecentlyModified = timeSinceModification < 5.0
+        
+        // Check if modification time changed (file is being actively written)
+        let modificationChanged = lastCacheModificationTime != nil && 
+                                  lastCacheModificationTime! != modificationDate
+        
+        if modificationChanged || (isRecentlyModified && lastCacheModificationTime == nil) {
+            // File is being actively updated - external service is syncing
+            if !isSyncing {
+                // Sync just started
+                isSyncing = true
+                syncProgress = 0.1 // Start with 10% to show activity
+                syncPhase = "External service syncing with Asana..."
+                externalSyncStartTime = Date()
+                print("🔄 [Cache] Detected external service sync start")
+            } else {
+                // Sync is ongoing - update progress based on elapsed time
+                // Estimate progress: assume sync takes 2-5 minutes, show progress accordingly
+                if let startTime = externalSyncStartTime {
+                    let elapsed = Date().timeIntervalSince(startTime)
+                    let estimatedDuration: TimeInterval = 180.0 // 3 minutes average
+                    let progress = min(0.1 + (elapsed / estimatedDuration) * 0.8, 0.95) // Cap at 95% until complete
+                    syncProgress = progress
+                    
+                    // Update phase message based on elapsed time
+                    if elapsed < 30 {
+                        syncPhase = "External service syncing with Asana... (fetching projects)"
+                    } else if elapsed < 90 {
+                        syncPhase = "External service syncing with Asana... (fetching tasks)"
+                    } else {
+                        syncPhase = "External service syncing with Asana... (updating cache)"
+                    }
+                }
+            }
+            
+            lastCacheModificationTime = modificationDate
+        } else if isSyncing && syncPhase.contains("External service") {
+            // File hasn't been modified recently - check if sync completed
+            if let startTime = externalSyncStartTime {
+                let elapsed = Date().timeIntervalSince(startTime)
+                // If file hasn't changed in 10 seconds and we've been syncing for at least 30 seconds, assume complete
+                if timeSinceModification > 10.0 && elapsed > 30.0 {
+                    // Sync appears complete
+                    isSyncing = false
+                    syncProgress = 1.0
+                    syncPhase = "External service sync complete"
+                    
+                    // Update lastSyncDate from the cache
+                    reloadLastSyncDate()
+                    
+                    // Clear sync state after a brief moment
+                    Task {
+                        try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+                        await MainActor.run {
+                            if !self.isSyncing {
+                                self.syncProgress = 0
+                                self.syncPhase = ""
+                            }
+                        }
+                    }
+                    
+                    externalSyncStartTime = nil
+                    print("🟢 [Cache] External service sync complete")
+                } else {
+                    // Still might be syncing, just slow updates
+                    // Keep showing progress but don't update modification time
+                }
+            }
+        } else {
+            // Not syncing and file is stable
+            lastCacheModificationTime = modificationDate
+        }
+    }
+    
     /// Stop periodic status checking
     nonisolated private func stopPeriodicStatusCheck() {
         // Timer invalidation can be done from any thread
@@ -208,6 +303,7 @@ class AsanaCacheManager: ObservableObject {
         // because invalidation prevents the timer from firing again
         statusCheckTimer?.invalidate()
         syncTimer?.invalidate()
+        cacheFileMonitorTimer?.invalidate()
     }
 
     /// Call this to cleanly shut down the cache manager before releasing it
@@ -220,6 +316,8 @@ class AsanaCacheManager: ObservableObject {
 
         syncTimer?.invalidate()
         syncTimer = nil
+        
+        stopCacheFileMonitoring()
     }
     
     /// Start periodic background sync to detect changes automatically
@@ -259,48 +357,26 @@ class AsanaCacheManager: ObservableObject {
     }
     
     /// Perform background incremental sync to detect changes
+    /// NOTE: MediaDash no longer performs background syncs - external service handles this
     private func performBackgroundSync() async {
-        // Don't sync if already syncing
-        guard !isSyncing else {
-            print("🔄 [Background Sync] Skipping - sync already in progress")
-            return
-        }
+        // MediaDash should NEVER sync from Asana API
+        // Only read from shared cache if available - external service handles all syncing
+        print("🔄 [Background Sync] MediaDash does not perform background syncs - external service handles this")
         
-        // Don't sync if no sync settings configured
-        guard syncWorkspaceID != nil || syncProjectID != nil else {
-            print("🔄 [Background Sync] Skipping - no sync settings configured")
-            return
-        }
-        
-        // Don't sync if not authenticated
-        guard SharedKeychainService.getAsanaAccessToken() != nil else {
-            print("🔄 [Background Sync] Skipping - not authenticated")
-            return
-        }
-        
-        // Use the same shouldSync logic to respect cache freshness (60 minutes default)
-        // This prevents unnecessary syncs on every app launch
-        guard shouldSync(maxAgeMinutes: 60) else {
-            print("🔄 [Background Sync] Skipping - cache is fresh, no sync needed")
-            return
-        }
-        
-        print("🔄 [Background Sync] Starting incremental sync to detect changes...")
-        
-        do {
-            // Perform incremental sync (will use modified_since internally)
-            try await syncWithAsana(
-                workspaceID: syncWorkspaceID,
-                projectID: syncProjectID,
-                docketField: syncDocketField,
-                jobNameField: syncJobNameField,
-                sharedCacheURL: sharedCacheURL,
-                useSharedCache: useSharedCache
-            )
-            print("🟢 [Background Sync] Completed successfully")
-        } catch {
-            print("⚠️ [Background Sync] Failed: \(error.localizedDescription)")
-            // Don't update syncError for background syncs - only log it
+        // Check if shared cache is available and update lastSyncDate
+        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+            let fileURL = getFileURL(from: sharedURL)
+            if let data = try? Data(contentsOf: fileURL),
+               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data),
+               !cached.dockets.isEmpty {
+                // Update lastSyncDate from shared cache
+                self.lastSyncDate = cached.lastSync
+                print("🟢 [Background Sync] Updated lastSyncDate from shared cache")
+            } else {
+                print("⚠️ [Background Sync] Shared cache not available - waiting for external service")
+            }
+        } else {
+            print("⚠️ [Background Sync] Shared cache not configured - external service handles syncing")
         }
     }
     
@@ -542,35 +618,17 @@ class AsanaCacheManager: ObservableObject {
             }
         }
         
-        // Check local cache (try migration first if new cache doesn't exist)
-        var localCacheAvailable = false
-        if !fm.fileExists(atPath: cacheURL.path) {
-            migrateOldCacheFileIfNeeded()
-        }
-        if fm.fileExists(atPath: cacheURL.path) {
-            if let data = try? Data(contentsOf: cacheURL),
-               let _ = try? JSONDecoder().decode(CachedDockets.self, from: data) {
-                localCacheAvailable = true
-            }
-        }
-        
-        // Determine status based on server connection and cache availability
-        // Defer Published property updates to avoid SwiftUI warnings
+        // Determine status based on server connection and shared cache availability
+        // MediaDash only uses shared cache - no local cache
         let newStatus: CacheStatus
         if serverConnected {
             if sharedCacheAvailable {
                 newStatus = .serverConnectedUsingShared
-            } else if localCacheAvailable {
-                newStatus = .serverConnectedUsingLocal
             } else {
                 newStatus = .serverConnectedNoCache
             }
         } else {
-            if localCacheAvailable {
-                newStatus = .serverDisconnectedUsingLocal
-            } else {
-                newStatus = .serverDisconnectedNoCache
-            }
+            newStatus = .serverDisconnectedNoCache
         }
         
         // Only log when status actually changes to reduce log spam
@@ -579,12 +637,8 @@ class AsanaCacheManager: ObservableObject {
             switch newStatus {
             case .serverConnectedUsingShared:
                 print("🟢 [Cache Status] Server connected, using shared cache")
-            case .serverConnectedUsingLocal:
-                print("🟠 [Cache Status] Server connected, using local cache (shared unavailable)")
             case .serverConnectedNoCache:
                 print("⚪ [Cache Status] Server connected, no cache available")
-            case .serverDisconnectedUsingLocal:
-                print("🟠 [Cache Status] Server disconnected, using local cache")
             case .serverDisconnectedNoCache:
                 print("⚪ [Cache Status] Server disconnected, no cache available")
             case .unknown:
@@ -603,29 +657,6 @@ class AsanaCacheManager: ObservableObject {
         updateCacheStatus()
     }
     
-    /// Seed shared cache from local cache if shared cache doesn't exist
-    private func seedSharedCacheIfNeeded(from sharedCacheURL: String) async {
-        let sharedFileURL = getFileURL(from: sharedCacheURL)
-        
-        // Check if shared cache exists
-        let sharedExists = FileManager.default.fileExists(atPath: sharedFileURL.path)
-        
-        if !sharedExists {
-            // Try to copy from local cache
-            if let localData = try? Data(contentsOf: cacheURL),
-               let cached = try? JSONDecoder().decode(CachedDockets.self, from: localData),
-               !cached.dockets.isEmpty {
-                print("🌱 [Cache] Shared cache doesn't exist, seeding from local cache...")
-                do {
-                    // Preserve the local cache's timestamp when seeding
-                    try await saveToSharedCache(dockets: cached.dockets, url: sharedCacheURL, lastSync: cached.lastSync)
-                    print("🟢 [Cache] Seeded shared cache with \(cached.dockets.count) dockets from local cache (preserved timestamp: \(cached.lastSync))")
-                } catch {
-                    print("⚠️ [Cache] Failed to seed shared cache: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
     
     /// Get file URL from string path/URL
     nonisolated func getFileURL(from urlString: String) -> URL {
@@ -646,29 +677,13 @@ class AsanaCacheManager: ObservableObject {
             var isDirectory: ObjCBool = false
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
                 if isDirectory.boolValue {
-                    // It's a directory, append filename (check for legacy first)
-                    let newFileURL = url.appendingPathComponent(cacheFileName)
-                    let legacyFileURL = url.appendingPathComponent(legacyCacheFileName)
-                    
-                    // If legacy file exists and new one doesn't, migrate it
-                    if FileManager.default.fileExists(atPath: legacyFileURL.path) && !FileManager.default.fileExists(atPath: newFileURL.path) {
-                        try? FileManager.default.moveItem(at: legacyFileURL, to: newFileURL)
-                        print("✅ [Cache] Migrated shared cache from '\(legacyCacheFileName)' to '\(cacheFileName)'")
-                    }
-                    
-                    // Path is a directory, appending filename (no need to log every time)
-                    return newFileURL
+                    // It's a directory, append filename
+                    return url.appendingPathComponent(cacheFileName)
                 } else {
                     // It's a file - check if it's the right type
                     if url.pathExtension == "json" && url.lastPathComponent == cacheFileName {
                         // It's the correct JSON file, use it as-is (no need to log every time)
                         return url
-                    } else if url.pathExtension == "json" && url.lastPathComponent == legacyCacheFileName {
-                        // It's the legacy file - migrate it
-                        let newURL = url.deletingLastPathComponent().appendingPathComponent(cacheFileName)
-                        try? FileManager.default.moveItem(at: url, to: newURL)
-                        print("✅ [Cache] Migrated shared cache from '\(legacyCacheFileName)' to '\(cacheFileName)'")
-                        return newURL
                     } else {
                         // It's a file but not the right one - use parent directory instead
                         print("⚠️ [Cache] Path is a file (not the cache file), using parent directory: \(url.deletingLastPathComponent().path)")
@@ -692,113 +707,57 @@ class AsanaCacheManager: ObservableObject {
         }
     }
     
-    /// Load cached dockets - Uses most recent cache (compares timestamps)
+    /// Load cached dockets from shared cache only
+    /// MediaDash relies solely on the shared cache - no local cache is maintained
     func loadCachedDockets() -> [DocketInfo] {
-        var sharedCache: CachedDockets?
-        var localCache: CachedDockets?
-        var sharedValidation: CacheValidationResult?
-        var localValidation: CacheValidationResult?
-        
-        // Try to load shared cache if enabled
-        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
-            do {
-                let fileURL = getFileURL(from: sharedURL)
-                let data = try Data(contentsOf: fileURL)
-                let cached = try JSONDecoder().decode(CachedDockets.self, from: data)
-                
-                // Validate integrity
-                let validation = cached.validateIntegrity()
-                sharedValidation = validation
-                
-                if validation.isCorrupted {
-                    print("⚠️ [Cache] Shared cache CORRUPTED: \(validation.description)")
-                    // Don't use corrupted cache
-                } else {
-                    sharedCache = cached
-                    if case .missingIntegrity = validation {
-                        print("🔍 [Cache] Loaded shared cache (legacy format, last sync: \(cached.lastSync))")
-                    } else {
-                        print("🔍 [Cache] Loaded shared cache (verified, last sync: \(cached.lastSync))")
-                    }
-                }
-            } catch {
-                let fileURL = getFileURL(from: sharedURL)
-                if !FileManager.default.fileExists(atPath: fileURL.path) {
-                    print("⚠️ [Cache] Shared cache file not found at: \(fileURL.path)")
-                } else {
-                    print("⚠️ [Cache] Shared cache not available: \(error.localizedDescription)")
-                }
-            }
+        // Only load from shared cache if enabled
+        guard useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty else {
+            print("⚠️ [Cache] Shared cache not configured")
+            updateCacheStatus()
+            return []
         }
         
-        // Try to load local cache
-        if let data = try? Data(contentsOf: cacheURL),
-           let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
+        do {
+            let fileURL = getFileURL(from: sharedURL)
+            let data = try Data(contentsOf: fileURL)
+            let cached = try JSONDecoder().decode(CachedDockets.self, from: data)
             
             // Validate integrity
             let validation = cached.validateIntegrity()
-            localValidation = validation
+            
+            // Update published validation result
+            DispatchQueue.main.async { [weak self] in
+                self?.cacheValidationResult = validation
+            }
             
             if validation.isCorrupted {
-                print("⚠️ [Cache] Local cache CORRUPTED: \(validation.description)")
-                // Don't use corrupted cache
-            } else {
-                localCache = cached
-                if case .missingIntegrity = validation {
-                    print("🔍 [Cache] Loaded local cache (legacy format, last sync: \(cached.lastSync))")
-                } else {
-                    print("🔍 [Cache] Loaded local cache (verified, last sync: \(cached.lastSync))")
-                }
-            }
-        }
-        
-        // Update published validation result
-        DispatchQueue.main.async { [weak self] in
-            self?.cacheValidationResult = sharedValidation ?? localValidation
-        }
-        
-        // PRIORITY: Shared cache is the source of truth when available
-        // We never overwrite shared cache during reads - only during actual Asana syncs
-        if let shared = sharedCache {
-            // Shared cache is available - use it as the authoritative source
-            if let local = localCache {
-                if shared.lastSync > local.lastSync {
-                    print("🟢 [Cache] Using SHARED cache (more recent: \(shared.lastSync) vs local: \(local.lastSync))")
-                } else if shared.lastSync == local.lastSync {
-                    print("🟢 [Cache] Using SHARED cache (timestamps match: \(shared.lastSync))")
-                } else {
-                    // Local is "newer" but this might be due to previous timestamp bug
-                    // Still prefer shared cache as source of truth, but log the discrepancy
-                    print("⚠️ [Cache] Using SHARED cache as source of truth (local timestamp \(local.lastSync) > shared \(shared.lastSync) - possible previous sync issue)")
-                }
-            } else {
-                print("🟢 [Cache] Using SHARED cache (no local cache)")
+                print("⚠️ [Cache] Shared cache CORRUPTED: \(validation.description)")
+                updateCacheStatus()
+                return []
             }
             
-            // Update local cache from shared cache, PRESERVING the original timestamp
-            // This ensures timestamps stay in sync and prevents the local cache
-            // from appearing "newer" than shared
-            Task {
-                await updateLocalCacheFromShared(dockets: shared.dockets, lastSync: shared.lastSync)
+            // Update lastSyncDate from shared cache
+            lastSyncDate = cached.lastSync
+            
+            if case .missingIntegrity = validation {
+                print("🔍 [Cache] Loaded shared cache (legacy format, last sync: \(cached.lastSync))")
+            } else {
+                print("🔍 [Cache] Loaded shared cache (verified, last sync: \(cached.lastSync))")
             }
             
-            // Update status after determining which cache to use
+            // Update status
             updateCacheStatus()
             
-            return shared.dockets
-        } else if let local = localCache {
-            // Only local cache available
-            print("🟢 [Cache] Using LOCAL cache (shared cache unavailable)")
+            return cached.dockets
+        } catch {
+            let fileURL = getFileURL(from: sharedURL)
+            if !FileManager.default.fileExists(atPath: fileURL.path) {
+                print("⚠️ [Cache] Shared cache file not found at: \(fileURL.path)")
+            } else {
+                print("⚠️ [Cache] Shared cache not available: \(error.localizedDescription)")
+            }
             
-            // Update status after determining which cache to use
-            updateCacheStatus()
-            
-            return local.dockets
-        } else {
-            // No cache available
-            print("🔵 [Cache] No cache found or cache is invalid")
-            
-            // Update status after determining which cache to use
+            // Update status
             updateCacheStatus()
             
             return []
@@ -868,99 +827,32 @@ class AsanaCacheManager: ObservableObject {
         return (cached.dockets, cached)
     }
     
-    /// Update local cache from shared cache data, preserving the original timestamp
-    private func updateLocalCacheFromShared(dockets: [DocketInfo], lastSync: Date) async {
-        saveCachedDocketsWithTimestamp(dockets, lastSync: lastSync)
-    }
-    
-    /// Save dockets to cache with a specific timestamp (for syncing from shared cache)
-    private func saveCachedDocketsWithTimestamp(_ dockets: [DocketInfo], lastSync: Date) {
-        let cached = CachedDockets(dockets: dockets, lastSync: lastSync)
-        
-        do {
-            let data = try JSONEncoder().encode(cached)
-            try data.write(to: cacheURL)
-            lastSyncDate = cached.lastSync
-            print("🟢 [Cache] Saved \(dockets.count) dockets to LOCAL cache (timestamp: \(lastSync))")
-        } catch {
-            print("🔴 [Cache] Error saving local cache: \(error.localizedDescription)")
-            syncError = "Failed to save cache: \(error.localizedDescription)"
-        }
-    }
-    
-    /// Save dockets to cache (local only) - uses current timestamp for fresh syncs
-    private func saveCachedDockets(_ dockets: [DocketInfo]) {
-        let cached = CachedDockets(dockets: dockets, lastSync: Date())
-        
-        do {
-            let data = try JSONEncoder().encode(cached)
-            try data.write(to: cacheURL)
-            lastSyncDate = cached.lastSync
-            print("🟢 [Cache] Saved \(dockets.count) dockets to LOCAL cache (fresh sync)")
-        } catch {
-            print("🔴 [Cache] Error saving local cache: \(error.localizedDescription)")
-            syncError = "Failed to save cache: \(error.localizedDescription)"
-        }
-    }
-    
-    /// Load last sync date from cache (check shared first, then local)
-    private func loadLastSyncDate() {
-        // Try shared cache first if available (will be set after updateCacheSettings is called)
-        // For now, just check local - will be updated when settings are loaded
-        guard let data = try? Data(contentsOf: cacheURL),
-              let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) else {
+    /// Reload last sync date from shared cache
+    private func reloadLastSyncDate() {
+        // Only load from shared cache if enabled
+        guard useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty else {
+            lastSyncDate = nil
             return
         }
-        lastSyncDate = cached.lastSync
-    }
-    
-    /// Reload last sync date from cache (checks shared cache first if enabled, then local)
-    private func reloadLastSyncDate() {
-        // Try shared cache first if enabled
-        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
-            let fileURL = getFileURL(from: sharedURL)
-            if let data = try? Data(contentsOf: fileURL),
-               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
-                lastSyncDate = cached.lastSync
-                print("🔄 [Cache] Reloaded lastSyncDate from shared cache: \(cached.lastSync)")
-                return
-            }
-            // Shared cache not available, fall through to local
-        }
         
-        // Fall back to local cache
-        if let data = try? Data(contentsOf: cacheURL),
+        let fileURL = getFileURL(from: sharedURL)
+        if let data = try? Data(contentsOf: fileURL),
            let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
             lastSyncDate = cached.lastSync
-            print("🔄 [Cache] Reloaded lastSyncDate from local cache: \(cached.lastSync)")
+            print("🔄 [Cache] Reloaded lastSyncDate from shared cache: \(cached.lastSync)")
         } else {
             // No cache found
             lastSyncDate = nil
-            print("🔄 [Cache] No cache found, lastSyncDate is nil")
+            print("🔄 [Cache] No shared cache found, lastSyncDate is nil")
         }
     }
     
     /// Check if cache should be synced (stale or missing)
-    /// Note: This now only checks local cache timestamp - shared cache is no longer used as a sync-skip signal
-    /// because that was preventing new dockets from being fetched
+    /// NOTE: MediaDash does not sync from Asana - external service handles this
+    /// This method is kept for compatibility but always returns false
     func shouldSync(maxAgeMinutes: Int = 60) -> Bool {
-        // Only check local cache - the shared cache timestamp was causing sync skips
-        // that prevented new dockets from ever being fetched
-        guard let lastSync = lastSyncDate else {
-            print("🔵 [Cache] No cache exists, should sync")
-            return true
-        }
-
-        let age = Date().timeIntervalSince(lastSync)
-        let shouldSync = age > Double(maxAgeMinutes * 60)
-
-        if shouldSync {
-            print("🔵 [Cache] Cache is stale (\(Int(age / 60)) minutes old), should sync")
-        } else {
-            print("🟢 [Cache] Cache is fresh (\(Int(age / 60)) minutes old), no sync needed")
-        }
-
-        return shouldSync
+        // MediaDash does not perform syncing - external service handles it
+        return false
     }
     
     /// Fetch from shared cache if available, otherwise sync with Asana API
@@ -980,173 +872,37 @@ class AsanaCacheManager: ObservableObject {
             syncPhase = ""
         }
         
-        // Check if shared cache is fresh and use it instead of syncing
-        // External service automatically updates the shared cache, so MediaDash should use it when available
+        // Check if shared cache is available and use it
+        // External service automatically updates the shared cache, so MediaDash should ONLY use it
+        // MediaDash should NEVER sync from Asana API - that's handled by the external service
         if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
             let fileURL = getFileURL(from: sharedURL)
             if let data = try? Data(contentsOf: fileURL),
-               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data),
-               let lastSync = cached.lastSync {
-                let age = Date().timeIntervalSince(lastSync)
-                let maxAge: TimeInterval = 60 * 60 // 1 hour - consider cache fresh if updated within last hour
+               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
+                let lastSync = cached.lastSync // lastSync is non-optional Date
                 
-                if age < maxAge && !cached.dockets.isEmpty {
-                    // Shared cache is fresh - use it instead of syncing
-                    print("🟢 [Cache] Using fresh shared cache (updated \(Int(age / 60)) minutes ago)")
+                // Use shared cache regardless of age - external service keeps it updated
+                if !cached.dockets.isEmpty {
+                    print("🟢 [Cache] Using shared cache (updated \(Int(Date().timeIntervalSince(lastSync) / 60)) minutes ago)")
                     
-                    // Save to local cache for consistency (preserve original sync timestamp)
-                    let cacheData = CachedDockets(dockets: cached.dockets, lastSync: lastSync)
-                    if let encoded = try? JSONEncoder().encode(cacheData) {
-                        try? encoded.write(to: cacheURL, options: .atomic)
-                    }
-                    
-                    // Update lastSyncDate property and save dockets
+                    // Update lastSyncDate from shared cache
                     self.lastSyncDate = lastSync
-                    saveCachedDockets(cached.dockets)
                     
                     return // Exit early - no sync needed!
                 } else {
-                    print("🔄 [Cache] Shared cache is stale (\(Int(age / 60)) minutes old) - will sync from Asana...")
+                    print("⚠️ [Cache] Shared cache exists but is empty - waiting for external service to populate it")
+                    throw AsanaError.cacheUnavailable("Shared cache is empty. External service will populate it.")
                 }
             } else {
-                print("🔄 [Cache] Shared cache not found or invalid - will sync from Asana...")
+                print("⚠️ [Cache] Shared cache not found or invalid - waiting for external service to create it")
+                throw AsanaError.cacheUnavailable("Shared cache not available. External service will create it.")
             }
         }
 
-        // Local sync with Asana API (only if shared cache is stale/missing)
-        print("🔵 [Cache] Starting local sync with Asana...")
-        
-        // Check if token exists
-        guard let token = SharedKeychainService.getAsanaAccessToken() else {
-            throw AsanaError.notAuthenticated
-        }
-        
-        asanaService.setAccessToken(token)
-        
-        // Load existing cache to get lastSync timestamp and existing dockets
-        let existingDockets = loadCachedDockets()
-        let existingCache: CachedDockets?
-
-        // Try to get the actual CachedDockets object to access lastSync
-        // Use a different name to avoid shadowing the class property `lastSyncDate`
-        var existingLastSync: Date? = nil
-        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
-            do {
-                let fileURL = getFileURL(from: sharedURL)
-                let data = try Data(contentsOf: fileURL)
-                existingCache = try JSONDecoder().decode(CachedDockets.self, from: data)
-                existingLastSync = existingCache?.lastSync
-            } catch {
-                existingCache = nil
-            }
-        }
-
-        if existingLastSync == nil {
-            // Try local cache
-            if let data = try? Data(contentsOf: cacheURL),
-               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
-                existingLastSync = cached.lastSync
-            }
-        }
-        
-        // Determine if we should do incremental sync
-        // Do a full sync if:
-        // 1. No existing cache
-        // 2. Cache is older than 7 days (to catch any missed dockets)
-        // 3. Cache is empty
-        let shouldDoFullSync: Bool
-        if let lastSync = existingLastSync, !existingDockets.isEmpty {
-            let daysSinceSync = Date().timeIntervalSince(lastSync) / (24 * 60 * 60)
-            shouldDoFullSync = daysSinceSync > 7 // Force full sync if cache is older than 7 days
-            if shouldDoFullSync {
-                print("🔄 [Cache] Cache is \(Int(daysSinceSync)) days old - performing FULL sync to catch any missed dockets")
-            }
-        } else {
-            shouldDoFullSync = true
-            print("🔄 [Cache] Performing FULL sync (no existing cache or cache is empty)")
-        }
-
-        let isIncremental = !shouldDoFullSync
-        let modifiedSince = isIncremental ? existingLastSync : nil
-
-        if isIncremental {
-            print("🔄 [Cache] Performing INCREMENTAL sync (modified since \(existingLastSync!))")
-        }
-        
-        // Fetch dockets from Asana (incremental if we have a lastSync date)
-        // Reset progress tracking
-        lastReportedProgress = 0
-        
-        let fetchedDockets = try await asanaService.fetchDockets(
-            workspaceID: workspaceID,
-            projectID: projectID,
-            docketField: docketField,
-            jobNameField: jobNameField,
-            modifiedSince: modifiedSince,
-            progressCallback: { [weak self] progress, phase in
-                Task { @MainActor [weak self] in
-                    guard let self = self else { return }
-                    // Ensure progress only increases (monotonic) to prevent jumping
-                    let clampedProgress = max(progress, self.lastReportedProgress)
-                    self.syncProgress = min(clampedProgress, 1.0) // Cap at 1.0
-                    self.syncPhase = phase
-                    self.lastReportedProgress = self.syncProgress
-                }
-            }
-        )
-        
-        print("🟢 [Cache] Fetched \(fetchedDockets.count) dockets from Asana")
-        
-        // Merge fetched dockets with existing cache
-        var mergedDockets: [DocketInfo]
-        if isIncremental {
-            // Create a dictionary keyed by fullName for efficient lookup
-            var docketMap: [String: DocketInfo] = [:]
-            
-            // Add all existing dockets to the map
-            for docket in existingDockets {
-                docketMap[docket.fullName] = docket
-            }
-            
-            // Update or add fetched dockets
-            for fetchedDocket in fetchedDockets {
-                docketMap[fetchedDocket.fullName] = fetchedDocket
-            }
-            
-            // Convert back to array
-            mergedDockets = Array(docketMap.values)
-            
-            let updatedCount = fetchedDockets.count
-            let totalCount = mergedDockets.count
-            print("🔄 [Cache] Merged \(updatedCount) new/updated dockets with existing cache (total: \(totalCount))")
-        } else {
-            // Full sync - use fetched dockets as-is
-            mergedDockets = fetchedDockets
-            print("🔄 [Cache] Full sync complete (\(mergedDockets.count) dockets)")
-        }
-        
-        // Save to SHARED cache FIRST (primary)
-        // We just fetched fresh data from Asana, so ALWAYS save it
-        // The previous logic that compared timestamps was buggy and caused the cache to get stuck
-        let syncTimestamp = Date()
-        if let sharedCacheURL = sharedCacheURL, !sharedCacheURL.isEmpty {
-            do {
-                try await saveToSharedCache(dockets: mergedDockets, url: sharedCacheURL, lastSync: syncTimestamp)
-                print("🟢 [Cache] Saved \(mergedDockets.count) dockets to SHARED cache (timestamp: \(syncTimestamp))")
-            } catch {
-                print("⚠️ [Cache] Failed to save to shared cache: \(error.localizedDescription)")
-                // Continue anyway - still save to local
-            }
-        }
-        
-        // Then save to local cache (fallback) with the SAME timestamp as shared cache
-        // This ensures both caches stay in sync and prevents timestamp comparison issues
-        saveCachedDocketsWithTimestamp(mergedDockets, lastSync: syncTimestamp)
-
-        // Update cache status after sync
-        updateCacheStatus()
-
-        print("🟢 [Cache] Sync complete! (timestamp: \(syncTimestamp))")
+        // If shared cache is not configured, MediaDash should not sync from Asana
+        // The external service handles all syncing
+        print("⚠️ [Cache] Shared cache not configured - MediaDash does not sync from Asana API")
+        throw AsanaError.cacheUnavailable("Shared cache not configured. Use external service for syncing.")
     }
     
     /// Save dockets to shared cache file (public for manual seeding)
@@ -1372,129 +1128,32 @@ class AsanaCacheManager: ObservableObject {
         return sorted
     }
     
-    /// Force a complete sync from Asana, bypassing shared cache and clearing local cache
-    /// This operation may take several minutes for large projects
+    /// Force a complete sync from Asana
+    /// NOTE: MediaDash does not sync from Asana - external service handles this
     func forceFullSync(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?) async throws {
-        print("⚠️ [Cache] FORCE FULL SYNC initiated - this may take several minutes...")
-        
-        // Clear local cache to force a complete refresh
-        clearCache()
-        
-        // Reset sync state
-        lastSyncDate = nil
-        
-        // Perform sync WITHOUT using shared cache - go directly to Asana API
-        isSyncing = true
-        syncError = nil
-        syncProgress = 0
-        syncPhase = "Starting force sync..."
-        
-        defer {
-            isSyncing = false
-            syncProgress = 0
-            syncPhase = ""
-        }
-        
-        // Check if token exists
-        guard let token = SharedKeychainService.getAsanaAccessToken() else {
-            throw AsanaError.notAuthenticated
-        }
-        
-        // Also get refresh token if available
-        let refreshToken = SharedKeychainService.getAsanaRefreshToken()
-        asanaService.setAccessToken(token, refreshToken: refreshToken)
-        
-        print("🔄 [Cache] Force FULL sync - fetching ALL dockets from Asana API directly...")
-        
-        // Reset progress tracking
-        lastReportedProgress = 0
-        
-        // Fetch ALL dockets from Asana (no modifiedSince = full fetch)
-        let fetchedDockets = try await asanaService.fetchDockets(
-            workspaceID: workspaceID,
-            projectID: projectID,
-            docketField: docketField,
-            jobNameField: jobNameField,
-            modifiedSince: nil,  // Force full fetch
-            progressCallback: { [weak self] progress, phase in
-                Task { @MainActor [weak self] in
-                    guard let self = self else { return }
-                    // Ensure progress only increases (monotonic) to prevent jumping
-                    let clampedProgress = max(progress, self.lastReportedProgress)
-                    self.syncProgress = min(clampedProgress, 1.0) // Cap at 1.0
-                    self.syncPhase = phase
-                    self.lastReportedProgress = self.syncProgress
-                }
-            }
-        )
-        
-        print("🟢 [Cache] Force sync fetched \(fetchedDockets.count) dockets from Asana")
-        
-        // Save to local cache
-        saveCachedDockets(fetchedDockets)
-        
-        // Update cache status
-        updateCacheStatus()
-        
-        // Optionally seed shared cache if enabled
-        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
-            print("🔄 [Cache] Updating shared cache after force sync...")
-            try? await saveToSharedCache(dockets: fetchedDockets, url: sharedURL)
-        }
-        
-        print("✅ [Cache] Force full sync complete! Fetched \(fetchedDockets.count) dockets.")
+        print("⚠️ [Cache] MediaDash does not perform force syncs - external service handles all syncing")
+        throw AsanaError.cacheUnavailable("MediaDash does not sync from Asana API. Use external service for syncing.")
     }
     
-    /// Clear the cache
+    /// Clear the cache state
+    /// NOTE: MediaDash only uses shared cache, so this just clears the lastSyncDate
     func clearCache() {
-        try? FileManager.default.removeItem(at: cacheURL)
         lastSyncDate = nil
         cacheValidationResult = nil
         cacheDataIssues = []
-        print("🟢 [Cache] Cache cleared")
+        print("🟢 [Cache] Cache state cleared (MediaDash only uses shared cache)")
     }
     
     /// Validate cache integrity and return detailed results
-    /// This checks both the local and shared cache
+    /// MediaDash only validates the shared cache
     func validateCache() -> (local: CacheValidationResult?, shared: CacheValidationResult?, localIssues: [String], sharedIssues: [String]) {
-        var localResult: CacheValidationResult?
         var sharedResult: CacheValidationResult?
-        var localIssues: [String] = []
         var sharedIssues: [String] = []
-        
-        // Validate local cache
-        let fm = FileManager.default
-        if fm.fileExists(atPath: cacheURL.path) {
-            // Check if empty
-            var isEmpty = false
-            if let attributes = try? fm.attributesOfItem(atPath: cacheURL.path),
-               let size = attributes[.size] as? Int64 {
-                isEmpty = size == 0
-            }
-            
-            if isEmpty {
-                localResult = .corrupted(reason: "File is empty (0 bytes)")
-                print("🔍 [Cache Validation] Local cache: corrupted (empty file)")
-            } else if let data = try? Data(contentsOf: cacheURL),
-                      let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
-                let (result, issues) = cached.validate()
-                localResult = result
-                localIssues = issues
-                print("🔍 [Cache Validation] Local cache: \(result.description)")
-                if !issues.isEmpty {
-                    print("🔍 [Cache Validation] Local cache data issues: \(issues.count)")
-                }
-            } else {
-                localResult = .corrupted(reason: "Invalid JSON or unreadable")
-                print("🔍 [Cache Validation] Local cache: corrupted (invalid JSON)")
-            }
-        } else {
-            print("🔍 [Cache Validation] Local cache: not found")
-        }
         
         // Validate shared cache if enabled
         if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
             let fileURL = getFileURL(from: sharedURL)
+            let fm = FileManager.default
             if fm.fileExists(atPath: fileURL.path) {
                 // Check if empty
                 var isEmpty = false
@@ -1525,27 +1184,21 @@ class AsanaCacheManager: ObservableObject {
         }
         
         // Update published properties for UI
-        // Prefer shared cache result if available, otherwise local
         DispatchQueue.main.async { [weak self] in
-            self?.cacheValidationResult = sharedResult ?? localResult
-            self?.cacheDataIssues = sharedResult != nil ? sharedIssues : localIssues
+            self?.cacheValidationResult = sharedResult
+            self?.cacheDataIssues = sharedIssues
         }
         
-        return (localResult, sharedResult, localIssues, sharedIssues)
+        return (nil, sharedResult, [], sharedIssues)
     }
     
     /// Check if the cache is corrupted (convenience method)
     func isCacheCorrupted() -> Bool {
-        let (localResult, sharedResult, _, _) = validateCache()
+        let (_, sharedResult, _, _) = validateCache()
         
-        // If using shared cache and it's available, check it
-        if useSharedCache, let shared = sharedResult {
+        // Check shared cache if available
+        if let shared = sharedResult {
             return shared.isCorrupted
-        }
-        
-        // Otherwise check local
-        if let local = localResult {
-            return local.isCorrupted
         }
         
         // No cache found
@@ -1554,7 +1207,7 @@ class AsanaCacheManager: ObservableObject {
     
     /// Get human-readable cache health status
     func getCacheHealthStatus() -> String {
-        let (localResult, sharedResult, localIssues, sharedIssues) = validateCache()
+        let (_, sharedResult, _, sharedIssues) = validateCache()
         
         var status: [String] = []
         
@@ -1565,15 +1218,8 @@ class AsanaCacheManager: ObservableObject {
             }
         } else if useSharedCache {
             status.append("Shared Cache: Not available")
-        }
-        
-        if let local = localResult {
-            status.append("Local Cache: \(local.description)")
-            if !localIssues.isEmpty {
-                status.append("  - \(localIssues.count) data issues found")
-            }
         } else {
-            status.append("Local Cache: Not available")
+            status.append("Shared Cache: Not configured")
         }
         
         return status.joined(separator: "\n")
@@ -1640,9 +1286,14 @@ class AsanaCacheManager: ObservableObject {
         return false
     }
     
-    /// Get cache file size
+    /// Get cache file size from shared cache
     func getCacheSize() -> String? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: cacheURL.path),
+        guard useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty else {
+            return nil
+        }
+        
+        let fileURL = getFileURL(from: sharedURL)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
               let size = attributes[.size] as? Int64 else {
             return nil
         }

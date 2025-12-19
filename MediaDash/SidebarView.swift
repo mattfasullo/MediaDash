@@ -232,9 +232,9 @@ struct ServerStatusIndicator: View {
     
     private var isServerConnected: Bool {
         switch cacheManager.cacheStatus {
-        case .serverConnectedUsingShared, .serverConnectedUsingLocal, .serverConnectedNoCache:
+        case .serverConnectedUsingShared, .serverConnectedNoCache:
             return true
-        case .serverDisconnectedUsingLocal, .serverDisconnectedNoCache, .unknown:
+        case .serverDisconnectedNoCache, .unknown:
             return false
         }
     }
@@ -328,9 +328,9 @@ struct ServerStatusPopover: View {
     
     private var isServerConnected: Bool {
         switch cacheManager.cacheStatus {
-        case .serverConnectedUsingShared, .serverConnectedUsingLocal, .serverConnectedNoCache:
+        case .serverConnectedUsingShared, .serverConnectedNoCache:
             return true
-        case .serverDisconnectedUsingLocal, .serverDisconnectedNoCache, .unknown:
+        case .serverDisconnectedNoCache, .unknown:
             return false
         }
     }
@@ -348,12 +348,8 @@ struct ServerStatusPopover: View {
         switch cacheManager.cacheStatus {
         case .serverConnectedUsingShared:
             return "Using shared cache"
-        case .serverConnectedUsingLocal:
-            return "Using local cache"
         case .serverConnectedNoCache:
             return "No cache available"
-        case .serverDisconnectedUsingLocal:
-            return "Using local cache (server disconnected)"
         case .serverDisconnectedNoCache:
             return "Server disconnected, no cache"
         case .unknown:
@@ -777,12 +773,8 @@ struct CacheStatusIndicator: View {
         switch cacheManager.cacheStatus {
         case .serverConnectedUsingShared:
             return (true, true)
-        case .serverConnectedUsingLocal:
-            return (true, false)
         case .serverConnectedNoCache:
             return (false, false)
-        case .serverDisconnectedUsingLocal:
-            return (true, false)
         case .serverDisconnectedNoCache:
             return (false, false)
         case .unknown:
@@ -897,12 +889,8 @@ struct CacheStatusPopover: View {
         switch cacheManager.cacheStatus {
         case .serverConnectedUsingShared:
             return (true, true)
-        case .serverConnectedUsingLocal:
-            return (true, false)
         case .serverConnectedNoCache:
             return (false, false)
-        case .serverDisconnectedUsingLocal:
-            return (true, false)
         case .serverDisconnectedNoCache:
             return (false, false)
         case .unknown:
@@ -914,12 +902,8 @@ struct CacheStatusPopover: View {
         switch cacheManager.cacheStatus {
         case .serverConnectedUsingShared:
             return "Using shared cache"
-        case .serverConnectedUsingLocal:
-            return "Using local cache"
         case .serverConnectedNoCache:
             return "No cache available"
-        case .serverDisconnectedUsingLocal:
-            return "Using local cache (server disconnected)"
         case .serverDisconnectedNoCache:
             return "Server disconnected, no cache"
         case .unknown:
@@ -1048,7 +1032,7 @@ struct CacheStatusPopover: View {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 10))
                         }
-                        Text(cacheManager.cacheStatus == .serverConnectedUsingLocal ? "Create Shared Cache" : "Refresh")
+                        Text("Refresh")
                             .font(.system(size: 11))
                     }
                     .frame(maxWidth: .infinity)
@@ -1100,8 +1084,8 @@ struct CacheStatusPopover: View {
                     // First refresh status
                     cacheManager.refreshCacheStatus()
                     
-            // If server is connected but using local cache, try to create/switch to shared cache
-            if cacheManager.cacheStatus == .serverConnectedUsingLocal {
+            // Note: Only shared cache is supported now
+            if false {
                         // Try to seed shared cache from local cache
                         // DEBUG: Commented out for performance
                         // print("🔄 [Cache] Attempting to seed shared cache from local cache...")
