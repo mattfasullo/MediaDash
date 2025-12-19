@@ -103,6 +103,17 @@ else
     echo -e "${RED}❌ WARNING: media_validator.py not found in project root!${NC}"
 fi
 
+# Copy sync_shared_cache.sh into app bundle Resources
+echo -e "${BLUE}📝 Copying sync_shared_cache.sh into app bundle...${NC}"
+if [ -f "sync_shared_cache.sh" ]; then
+    mkdir -p "$RELEASE_DIR/$APP_NAME.app/Contents/Resources"
+    cp "sync_shared_cache.sh" "$RELEASE_DIR/$APP_NAME.app/Contents/Resources/"
+    chmod +x "$RELEASE_DIR/$APP_NAME.app/Contents/Resources/sync_shared_cache.sh"
+    echo -e "${GREEN}✓ sync_shared_cache.sh copied to bundle${NC}"
+else
+    echo -e "${RED}❌ WARNING: sync_shared_cache.sh not found in project root!${NC}"
+fi
+
 # Re-sign with available certificate (REQUIRED after copying files to maintain code signature seal)
 echo -e "${BLUE}🔐 Re-signing app after adding media_validator.py...${NC}"
 # Try Developer ID first, fall back to ad-hoc signing

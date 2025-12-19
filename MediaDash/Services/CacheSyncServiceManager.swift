@@ -344,8 +344,11 @@ class CacheSyncServiceManager: ObservableObject {
         // 3. Development: current working directory (when run from Xcode)
         possiblePaths.append("\(currentDir)/sync_shared_cache.sh")
         
-        // 4. Development: Check if we can find it relative to bundle
+        // 4. Check app bundle Resources (for installed app)
         if bundlePath.hasSuffix(".app") {
+            let resourcesPath = "\(bundlePath)/Contents/Resources/sync_shared_cache.sh"
+            possiblePaths.append(resourcesPath)
+            
             let appDir = (bundlePath as NSString).deletingLastPathComponent
             possiblePaths.append("\(appDir)/sync_shared_cache.sh")
             
