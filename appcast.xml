@@ -5,6 +5,26 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.9.4</title>
+            <description><![CDATA[
+                <p>Cache Sync Fix
+
+- Bundle sync_shared_cache.sh with app for automatic availability
+- Fixes setup error on devices without project directory
+- Script now included in app bundle Resources folder</p>
+            ]]></description>
+            <pubDate>Fri, 19 Dec 2025 15:03:10 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.4/MediaDash.zip"
+                sparkle:version="94"
+                sparkle:shortVersionString="0.9.4"
+                sparkle:edSignature="/HJ2Ft0ibBjwdbtRwvzbHiL7SWVy1k/bzkLsNTr5ZWTeINGeRD0kWZh/mpe0h7y7fUhvERmgsMnVg9I7M24gCA=="
+                length="6100589"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.9.3</title>
             <description><![CDATA[
                 <p>Simian Integration Improvements
