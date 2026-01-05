@@ -70,6 +70,49 @@ struct AppConfig: Sendable {
         
         return (wp, prep)
     }
+    
+    /// Get the work picture path for a specific year
+    nonisolated func getWorkPicPath(for year: Int) -> URL {
+        let serverRoot = URL(fileURLWithPath: settings.serverBasePath)
+            .appendingPathComponent("\(settings.yearPrefix)\(year)")
+        return serverRoot.appendingPathComponent("\(year)_\(settings.workPictureFolderName)")
+    }
+    
+    /// Find which year a docket folder exists in (searches across all years)
+    nonisolated func findDocketYear(docket: String) -> Int? {
+        let fm = FileManager.default
+        let serverBase = URL(fileURLWithPath: settings.serverBasePath)
+        
+        // Check if server base exists
+        guard fm.fileExists(atPath: serverBase.path) else {
+            return nil
+        }
+        
+        // Get all year folders
+        guard let yearFolders = try? fm.contentsOfDirectory(at: serverBase, includingPropertiesForKeys: nil) else {
+            return nil
+        }
+        
+        // Search through each year folder
+        for yearFolder in yearFolders where yearFolder.lastPathComponent.hasPrefix(settings.yearPrefix) {
+            // Extract year from folder name (e.g., "GM_2025" -> 2025)
+            let yearString = yearFolder.lastPathComponent.replacingOccurrences(of: settings.yearPrefix, with: "")
+            guard let year = Int(yearString) else {
+                continue
+            }
+            
+            // Check if docket exists in this year's work picture folder
+            let workPicPath = yearFolder.appendingPathComponent("\(year)_\(settings.workPictureFolderName)")
+            let docketPath = workPicPath.appendingPathComponent(docket)
+            
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: docketPath.path, isDirectory: &isDir) && isDir.boolValue {
+                return year
+            }
+        }
+        
+        return nil
+    }
 
     nonisolated var sessionsBasePath: String {
         settings.sessionsBasePath
@@ -1099,8 +1142,19 @@ class MediaManager: ObservableObject {
                     return
                 }
                 
+                // Find which year the docket folder exists in (searches across all years)
+                let docketYear = currentConfig.findDocketYear(docket: docket)
+                let workPicPath: URL
+                if let year = docketYear {
+                    // Use the year where the docket was found
+                    workPicPath = currentConfig.getWorkPicPath(for: year)
+                } else {
+                    // Fall back to current year if not found
+                    workPicPath = paths.workPic
+                }
+                
                 // Verify docket folder exists before creating date subfolders
-                let base = paths.workPic.appendingPathComponent(docket)
+                let base = workPicPath.appendingPathComponent(docket)
                 guard fm.fileExists(atPath: base.path) else {
                     await MainActor.run {
                         self.errorMessage = "Docket folder does not exist:\n\(base.path)\n\nPlease create the docket folder first or check that the docket name is correct."

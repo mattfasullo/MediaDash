@@ -34,7 +34,19 @@ struct FileJobUseCase {
         // Work Picture operation
         if type == .workPicture || type == .both {
             let dateStr = formatDate(wpDate)
-            let base = paths.workPic.appendingPathComponent(docket)
+            
+            // Find which year the docket folder exists in (searches across all years)
+            let docketYear = config.findDocketYear(docket: docket)
+            let workPicPath: URL
+            if let year = docketYear {
+                // Use the year where the docket was found
+                workPicPath = config.getWorkPicPath(for: year)
+            } else {
+                // Fall back to current year if not found
+                workPicPath = paths.workPic
+            }
+            
+            let base = workPicPath.appendingPathComponent(docket)
             
             // Verify base path exists
             guard fm.fileExists(atPath: base.path) else {
