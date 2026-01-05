@@ -10,6 +10,49 @@ struct AppConfig: Sendable {
     nonisolated init(settings: AppSettings) {
         self.settings = settings
     }
+    
+    /// Ensure the year folder structure exists, creating it if needed
+    nonisolated func ensureYearFolderStructure() throws {
+        let year = Calendar.current.component(.year, from: Date())
+        let serverBase = URL(fileURLWithPath: settings.serverBasePath)
+        let yearFolder = serverBase.appendingPathComponent("\(settings.yearPrefix)\(year)")
+        
+        let fm = FileManager.default
+        
+        // Check if server base exists
+        guard fm.fileExists(atPath: serverBase.path) else {
+            throw AppError.fileSystem(.directoryNotFound(serverBase.path))
+        }
+        
+        // Create year folder if it doesn't exist
+        if !fm.fileExists(atPath: yearFolder.path) {
+            try fm.createDirectory(at: yearFolder, withIntermediateDirectories: true, attributes: nil)
+        }
+        
+        // Define all required subfolders for the year
+        let subfolders = [
+            "\(year)_DATA BACKUPS",
+            "\(year)_MUSIC DEMOS",
+            "\(year)_MUSIC LAYUPS",
+            "\(year)_\(settings.prepFolderName)",  // SESSION PREP
+            "\(year)_SFX INTERNAL",
+            "\(year)_WORK PICTURE"  // This might be different from workPictureFolderName, but we'll create both
+        ]
+        
+        // Create all subfolders
+        for subfolder in subfolders {
+            let subfolderPath = yearFolder.appendingPathComponent(subfolder)
+            if !fm.fileExists(atPath: subfolderPath.path) {
+                try fm.createDirectory(at: subfolderPath, withIntermediateDirectories: true, attributes: nil)
+            }
+        }
+        
+        // Also ensure the work picture folder exists (in case the folder name differs)
+        let workPicPath = yearFolder.appendingPathComponent("\(year)_\(settings.workPictureFolderName)")
+        if !fm.fileExists(atPath: workPicPath.path) {
+            try fm.createDirectory(at: workPicPath, withIntermediateDirectories: true, attributes: nil)
+        }
+    }
 
     nonisolated func getPaths() -> (workPic: URL, prep: URL) {
         let year = Calendar.current.component(.year, from: Date())
@@ -17,6 +60,14 @@ struct AppConfig: Sendable {
             .appendingPathComponent("\(settings.yearPrefix)\(year)")
         let wp = serverRoot.appendingPathComponent("\(year)_\(settings.workPictureFolderName)")
         let prep = serverRoot.appendingPathComponent("\(year)_\(settings.prepFolderName)")
+        
+        // Ensure year folder structure exists (create if needed)
+        do {
+            try ensureYearFolderStructure()
+        } catch {
+            // Log error but don't fail - let the caller handle missing folders
+        }
+        
         return (wp, prep)
     }
 
@@ -207,32 +258,66 @@ enum MediaLogic {
     }
 
     nonisolated static func scanDockets(config: AppConfig, jobType: JobType = .workPicture) -> [String] {
-        let paths = config.getPaths()
-        // For Both mode, show Work Picture folders (we'll check for prep folders later)
-        let base = (jobType == .prep) ? paths.prep : paths.workPic
         var results: [String] = []
-        
-        // Check if base path exists before trying to scan
         let fm = FileManager.default
-        guard fm.fileExists(atPath: base.path) else {
-            print("Error scanning dockets: Path does not exist: \(base.path)")
-            print("  Server base path: \(config.settings.serverBasePath)")
-            print("  Year prefix: \(config.settings.yearPrefix)")
-            print("  Work Picture folder name: \(config.settings.workPictureFolderName)")
+        let serverBase = URL(fileURLWithPath: config.settings.serverBasePath)
+        let yearPrefix = config.settings.yearPrefix
+        
+        // Check if server base exists
+        guard fm.fileExists(atPath: serverBase.path) else {
+            print("Error scanning dockets: Server base path does not exist: \(serverBase.path)")
             return results
         }
         
-        do {
-            let items = try FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: [.contentModificationDateKey])
-            let sorted = items.sorted {
-                let d1 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
-                let d2 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
-                return d1 > d2
+        // Scan across all year folders (like buildIndex does for workPicture)
+        if jobType == .workPicture {
+            let workPictureFolderName = config.settings.workPictureFolderName
+            
+            // Get all year folders
+            guard let yearFolders = try? fm.contentsOfDirectory(at: serverBase, includingPropertiesForKeys: nil) else {
+                return results
             }
-            for item in sorted {
-                if item.hasDirectoryPath && !item.lastPathComponent.hasPrefix(".") {
-                    // For prep mode, extract just the docket number from folder name
-                    if jobType == .prep {
+            
+            // Scan each year folder
+            for yearFolder in yearFolders where yearFolder.lastPathComponent.hasPrefix(yearPrefix) {
+                let yearString = yearFolder.lastPathComponent.replacingOccurrences(of: yearPrefix, with: "")
+                let workPicPath = yearFolder.appendingPathComponent("\(yearString)_\(workPictureFolderName)")
+                
+                // Check if this year's work picture folder exists
+                guard fm.fileExists(atPath: workPicPath.path) else {
+                    continue
+                }
+                
+                // Scan dockets in this year's folder
+                do {
+                    let items = try fm.contentsOfDirectory(at: workPicPath, includingPropertiesForKeys: [.contentModificationDateKey])
+                    for item in items {
+                        if item.hasDirectoryPath && !item.lastPathComponent.hasPrefix(".") {
+                            let docketName = item.lastPathComponent
+                            // Only add if not already in results (avoid duplicates across years)
+                            if !results.contains(docketName) {
+                                results.append(docketName)
+                            }
+                        }
+                    }
+                } catch {
+                    // Continue to next year if this one fails
+                    continue
+                }
+            }
+        } else {
+            // For prep mode, scan current year only (prep folders are year-specific)
+            let paths = config.getPaths()
+            let base = paths.prep
+            
+            guard fm.fileExists(atPath: base.path) else {
+                return results
+            }
+            
+            do {
+                let items = try fm.contentsOfDirectory(at: base, includingPropertiesForKeys: [.contentModificationDateKey])
+                for item in items {
+                    if item.hasDirectoryPath && !item.lastPathComponent.hasPrefix(".") {
                         // Prep folders are named like "12345_PREP_Dec4.24"
                         // Extract just "12345" part
                         let folderName = item.lastPathComponent
@@ -242,19 +327,13 @@ enum MediaLogic {
                                 results.append(docketStr)
                             }
                         }
-                    } else {
-                        // For work picture, just use the folder name (which is the docket number)
-                        results.append(item.lastPathComponent)
                     }
                 }
+            } catch {
+                print("Error scanning prep dockets: \(error.localizedDescription)")
             }
-        } catch {
-            print("Error scanning dockets: \(error.localizedDescription)")
-            print("  Attempted path: \(base.path)")
-            print("  Server base path: \(config.settings.serverBasePath)")
-            print("  Year prefix: \(config.settings.yearPrefix)")
-            print("  Work Picture folder name: \(config.settings.workPictureFolderName)")
         }
+        
         return results
     }
     
@@ -703,7 +782,53 @@ class MediaManager: ObservableObject {
         // Check if the server path exists before scanning
         let paths = currentConfig.getPaths()
         let fm = FileManager.default
-        if !fm.fileExists(atPath: paths.workPic.path) {
+        
+        // Try to ensure year folder structure exists (create if needed)
+        var foldersCreated = false
+        do {
+            let yearFolderExistedBefore = {
+                let year = Calendar.current.component(.year, from: Date())
+                let serverRoot = URL(fileURLWithPath: currentConfig.settings.serverBasePath)
+                    .appendingPathComponent("\(currentConfig.settings.yearPrefix)\(year)")
+                return FileManager.default.fileExists(atPath: serverRoot.path)
+            }()
+            
+            try currentConfig.ensureYearFolderStructure()
+            
+            // If folder didn't exist before but does now, we created it - invalidate search cache
+            let yearFolderExistsAfter = {
+                let year = Calendar.current.component(.year, from: Date())
+                let serverRoot = URL(fileURLWithPath: currentConfig.settings.serverBasePath)
+                    .appendingPathComponent("\(currentConfig.settings.yearPrefix)\(year)")
+                return FileManager.default.fileExists(atPath: serverRoot.path)
+            }()
+            
+            if !yearFolderExistedBefore && yearFolderExistsAfter {
+                foldersCreated = true
+            }
+        } catch {
+            // If we can't create the folder structure, continue to check
+        }
+        
+        // If we created folders, invalidate the workPicture search cache so it rebuilds
+        if foldersCreated {
+            folderCaches[.workPicture] = nil
+            // Trigger rebuild of workPicture index
+            buildSessionIndex(folder: .workPicture)
+        }
+        
+        // Also check if cache is stale (empty but folders now exist) - rebuild if needed
+        let workPicExists = fm.fileExists(atPath: paths.workPic.path)
+        if workPicExists {
+            let cachedWorkPic = folderCaches[.workPicture] ?? []
+            // If cache is empty but folder exists, it's stale - rebuild
+            if cachedWorkPic.isEmpty && !indexingFolders.contains(.workPicture) {
+                folderCaches[.workPicture] = nil
+                buildSessionIndex(folder: .workPicture)
+            }
+        }
+        
+        if !workPicExists {
             Task { @MainActor in
                 self.isScanningDockets = false
                 self.dockets = []
@@ -715,6 +840,7 @@ class MediaManager: ObservableObject {
         
         Task.detached {
             let dockets = MediaLogic.scanDockets(config: currentConfig)
+            
             await MainActor.run {
                 self.dockets = dockets
                 self.isScanningDockets = false
@@ -727,7 +853,9 @@ class MediaManager: ObservableObject {
     
     func buildSessionIndex(folder: SearchFolder = .sessions) {
         // Skip if this folder is already being indexed or is already cached
-        guard !indexingFolders.contains(folder) && folderCaches[folder] == nil else { return }
+        guard !indexingFolders.contains(folder) && folderCaches[folder] == nil else {
+            return
+        }
 
         indexingFolders.insert(folder)
         isIndexing = !indexingFolders.isEmpty
@@ -735,6 +863,7 @@ class MediaManager: ObservableObject {
         let currentConfig = self.config
         Task.detached(priority: .userInitiated) {
             let index = MediaLogic.buildIndex(config: currentConfig, folder: folder)
+            
             await MainActor.run {
                 self.folderCaches[folder] = index
                 // Also update legacy cache if it's sessions folder
