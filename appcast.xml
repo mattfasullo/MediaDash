@@ -5,6 +5,24 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.9.6</title>
+            <description><![CDATA[
+                <h2>What's New in 0.9.6</h2><ul>
+                <li>Fixed: Docket selection now uses correct year path (fixes 2025 dockets being accessed in 2026)</li>
+                </ul>
+            ]]></description>
+            <pubDate>Mon, 05 Jan 2026 15:35:00 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.6/MediaDash.zip"
+                sparkle:version="96"
+                sparkle:shortVersionString="0.9.6"
+                sparkle:edSignature="rBntzPvjVI/p1O+znu/c7VfPWVlhupYQbjCiY6iJW6raujR90VjOlFpWlIqSFfuKGeDmp5ge5a4/4dGsI4oxAw=="
+                length="6090845"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.9.5</title>
             <description><![CDATA[
                 <h2>What's New in 0.9.5</h2><ul>
