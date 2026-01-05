@@ -5,6 +5,27 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.9.5</title>
+            <description><![CDATA[
+                <h2>What's New in 0.9.5</h2><ul>
+                <li>Fixed: Auto-create year folder hierarchy (GM_YYYY) on first day of year</li>
+                <li>Fixed: Docket search now works across all years, not just current year</li>
+                <li>Fixed: Search cache properly invalidates when folders are created</li>
+                <li>Removed: 2026_SFX SESSIONS BACK UPS from preset folder hierarchy</li>
+                </ul>
+            ]]></description>
+            <pubDate>Mon, 05 Jan 2026 15:24:52 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.5/MediaDash.zip"
+                sparkle:version="95"
+                sparkle:shortVersionString="0.9.5"
+                sparkle:edSignature="A8r4pfV0L750Zo0qsy/ZraAs7N84RkgBvexP1q8/eXScibOf6AENbOSPorKW0P7z1zxvdEd1wF+B1Y/hHKG+Dw=="
+                length="6087446"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.9.4</title>
             <description><![CDATA[
                 <p>Cache Sync Fix
