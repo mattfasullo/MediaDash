@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.9.7</title>
+            <description><![CDATA[
+                <h2>What's New in 0.9.7</h2><ul><li>Improve Asana cache refresh and live updates</li><li>Add cache popover indicators for cache file update time and docket count</li><li>Fix SwiftUI publish warnings during startup</li></ul>
+            ]]></description>
+            <pubDate>Wed, 14 Jan 2026 21:32:48 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.7/MediaDash.zip"
+                sparkle:version="97"
+                sparkle:shortVersionString="0.9.7"
+                sparkle:edSignature="Flwg2jwoFasvTWWWym+PGLJXG0191GY7+MI/uW7vXdNOT2iMAYEezJSo73M2u4shydn1auTgezZfe6C+3QauBA=="
+                length="6112962"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.9.6</title>
             <description><![CDATA[
                 <h2>What's New in 0.9.6</h2><ul>
