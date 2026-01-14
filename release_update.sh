@@ -140,6 +140,32 @@ else
     echo -e "${RED}❌ WARNING: media_validator.py not found in project root!${NC}"
 fi
 
+# Copy sync_shared_cache.sh into app bundle Resources
+echo ""
+echo -e "${BLUE}📝 Step 3.6: Copying sync_shared_cache.sh into app bundle...${NC}"
+if [ -f "sync_shared_cache.sh" ]; then
+    mkdir -p "$RELEASE_DIR/$APP_NAME.app/Contents/Resources"
+    cp "sync_shared_cache.sh" "$RELEASE_DIR/$APP_NAME.app/Contents/Resources/"
+    chmod +x "$RELEASE_DIR/$APP_NAME.app/Contents/Resources/sync_shared_cache.sh"
+    echo -e "${GREEN}✅ sync_shared_cache.sh copied to bundle${NC}"
+    
+    # Re-sign the app after adding files (required to maintain code signature seal)
+    echo -e "${BLUE}🔐 Re-signing app after adding sync_shared_cache.sh...${NC}"
+    # Try Developer ID first, fall back to ad-hoc signing
+    codesign --force --deep --sign "Developer ID Application: Matt Fasullo (9XPBY59H89)" "$RELEASE_DIR/$APP_NAME.app" 2>/dev/null || \
+    codesign --force --deep --sign - "$RELEASE_DIR/$APP_NAME.app" 2>&1
+    
+    # Verify signature
+    if codesign -vv --deep --strict "$RELEASE_DIR/$APP_NAME.app" 2>&1 | grep -q "valid on disk"; then
+        echo -e "${GREEN}✅ App re-signed and verified${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Warning: Signature verification had issues, but continuing...${NC}"
+        codesign -vv --deep --strict "$RELEASE_DIR/$APP_NAME.app" 2>&1 | head -3
+    fi
+else
+    echo -e "${RED}❌ WARNING: sync_shared_cache.sh not found in project root!${NC}"
+fi
+
 # Step 4: Create ZIP
 echo ""
 echo -e "${BLUE}📦 Step 4: Creating ZIP Archive${NC}"
