@@ -26,7 +26,7 @@ struct NotificationBadgeView: View {
             }
         }
         .buttonStyle(.plain)
-        .help("Notifications (\(notificationCenter.unreadCount))")
+        .help("New Dockets (\(notificationCenter.unreadCount))")
     }
 }
 

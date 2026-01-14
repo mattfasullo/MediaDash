@@ -779,6 +779,7 @@ class SettingsManager: ObservableObject {
             let profileKeys = Array(profiles.keys).sorted()
             // Defer state update to avoid SwiftUI warning - use Task to ensure it happens after view update
             Task { @MainActor in
+                await Task.yield()
                 self.availableProfiles = profileKeys
             }
         }

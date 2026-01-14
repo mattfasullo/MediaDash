@@ -103,6 +103,11 @@ class StagingWindowManager: ObservableObject {
         // Make it appear as a separate window but follow main window
         stagingWindow.styleMask = [.borderless, .fullSizeContentView]
         
+        // Add faint border to staging window
+        stagingWindow.contentView?.wantsLayer = true
+        stagingWindow.contentView?.layer?.borderWidth = 0.5
+        stagingWindow.contentView?.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
+        
         // Position next to main window
         updateStagingWindowPosition()
         

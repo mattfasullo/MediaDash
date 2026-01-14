@@ -113,7 +113,10 @@ class SessionManager: ObservableObject {
     }
 
     init() {
-        loadLastSession()
+        Task { @MainActor in
+            await Task.yield()
+            loadLastSession()
+        }
     }
 
     // Load the last active session from UserDefaults
@@ -137,10 +140,14 @@ class SessionManager: ObservableObject {
         // This ensures settings sync when app starts if they were updated on another machine
         if !profile.isLocal, let username = profile.username {
             Task {
-                syncStatus = .syncing
+                await Task.yield()
+                await MainActor.run {
+                    syncStatus = .syncing
+                }
                 let localModified = profile.lastAccessedAt
                 
                 if let (sharedSettings, sharedModified) = await loadSettingsFromSharedStorage(username: username) {
+                    await Task.yield()
                     await MainActor.run {
                         // Check for conflicts: if both exist and are different
                         let settingsAreDifferent = profile.settings != sharedSettings
@@ -177,6 +184,7 @@ class SessionManager: ObservableObject {
                                 syncStatus = .conflict(conflict)
                                 Task {
                                     let saved = await saveSettingsToSharedStorage(profile: profile)
+                                    await Task.yield()
                                     await MainActor.run {
                                         if saved {
                                             syncStatus = .synced
@@ -208,6 +216,7 @@ class SessionManager: ObservableObject {
                         lastSyncError = nil
                     }
                 } else {
+                    await Task.yield()
                     await MainActor.run {
                         // Check if shared storage is configured but unavailable
                         if let sharedCacheURL = profile.settings.sharedCacheURL, !sharedCacheURL.isEmpty {

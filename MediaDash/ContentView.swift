@@ -203,9 +203,6 @@ struct ContentView: View {
                         return
                     }
                     
-                    // Always show as separate window (locked or unlocked)
-                    // Load lock state from settings
-                    let isLocked = settingsManager.currentSettings.notificationWindowLocked
                     let content = AnyView(
                         NotificationCenterView(
                             notificationCenter: notificationCenter,
@@ -216,28 +213,25 @@ struct ContentView: View {
                             showSettings: $showSettingsSheet
                         )
                     )
-                    NotificationWindowManager.shared.showNotificationWindow(content: content, isLocked: isLocked)
+                    NotificationWindowManager.shared.showNotificationWindow(content: content, isLocked: false)
                 } else {
                     // Hide window
                     NotificationWindowManager.shared.hideNotificationWindow()
-                }
-            }
-            .onChange(of: settingsManager.currentSettings.notificationWindowLocked) { oldValue, newValue in
-                // When lock state changes, update the existing window
-                if showNotificationCenter && NotificationWindowManager.shared.isVisible {
-                    NotificationWindowManager.shared.setLocked(newValue)
                 }
             }
             .background(
                 Button(action: {
                     // Don't allow opening notification centre in dashboard mode
                     if settingsManager.currentSettings.windowMode != .dashboard {
-                        showNotificationCenter.toggle()
+                        if !showNotificationCenter {
+                            showNotificationCenter = true
+                        }
                     }
                 }) {
                     EmptyView()
                 }
                 .keyboardShortcut("`", modifiers: .command)
+                .disabled(showNotificationCenter)
                 .hidden()
             )
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("OpenSettings"))) { _ in
@@ -1131,6 +1125,7 @@ struct DocketSearchView: View {
     @State private var showNewDocketSheet = false
     @State private var showAsanaSearchSheet = false
     @State private var allDockets: [String] = []
+    @State private var jobNameByDocket: [String: String] = [:]
     @State private var showExistingPrepAlert = false
     @State private var existingPrepFolders: [String] = []
     @State private var prefillDocketNumber: String? = nil
@@ -1265,7 +1260,7 @@ struct DocketSearchView: View {
                                         HStack {
                                             Image(systemName: "folder.fill")
                                                 .foregroundColor(.blue)
-                                            Text(docket)
+                                            Text(displayDocketName(docket))
                                                 .font(.system(size: 14))
                                             Spacer()
                                         }
@@ -1350,12 +1345,14 @@ struct DocketSearchView: View {
             // Scan dockets based on job type
             Task {
                 let currentConfig = manager.config
+                let scanType: JobType = jobType == .both ? .workPicture : jobType
                 let dockets = await Task.detached {
-                    MediaLogic.scanDockets(config: currentConfig, jobType: jobType)
+                    MediaLogic.scanDockets(config: currentConfig, jobType: scanType)
                 }.value
                 await MainActor.run {
                     allDockets = dockets
                     filteredDockets = dockets
+                    jobNameByDocket = Dictionary(uniqueKeysWithValues: dockets.map { ($0, manager.getJobName(for: $0)) })
                     // Auto-select first docket
                     if let first = dockets.first {
                         selectedPath = first
@@ -1498,7 +1495,17 @@ struct DocketSearchView: View {
         if searchText.isEmpty {
             filteredDockets = allDockets
         } else {
-            filteredDockets = allDockets.filter { $0.localizedCaseInsensitiveContains(searchText) }
+            let query = searchText.lowercased()
+            filteredDockets = allDockets.filter { docket in
+                if docket.lowercased().contains(query) {
+                    return true
+                }
+                if jobType == .prep {
+                    let jobName = jobNameForDocket(docket).lowercased()
+                    return jobName.contains(query)
+                }
+                return false
+            }
         }
 
         // Auto-select first result
@@ -1570,6 +1577,24 @@ struct DocketSearchView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             onConfirm()
         }
+    }
+
+    private func jobNameForDocket(_ docket: String) -> String {
+        if let cached = jobNameByDocket[docket] {
+            return cached
+        }
+        let resolved = manager.getJobName(for: docket)
+        jobNameByDocket[docket] = resolved
+        return resolved
+    }
+
+    private func displayDocketName(_ docket: String) -> String {
+        guard jobType == .prep else { return docket }
+        let jobName = jobNameForDocket(docket)
+        if jobName != docket {
+            return "\(docket) - \(jobName)"
+        }
+        return docket
     }
 
     private func moveSelection(_ direction: Int) {
@@ -2304,6 +2329,19 @@ struct QuickDocketSearchView: View {
         }
         .onAppear {
             handleOnAppear()
+        }
+        .onReceive(cacheManager.$cachedDockets) { dockets in
+            let settings = settingsManager.currentSettings
+            guard settings.docketSource == .asana else { return }
+            guard !dockets.isEmpty else { return }
+            
+            allDockets = dockets
+            if !searchText.isEmpty {
+                searchAsana(query: searchText)
+            } else {
+                filteredDockets = dockets
+                applySorting()
+            }
         }
         .onDisappear {
             // Cancel any pending search
@@ -3689,9 +3727,11 @@ struct SheetsModifier: ViewModifier {
                     manager: manager,
                     settingsManager: settingsManager
                 )
+                .sheetBorder()
             }
             .sheet(isPresented: $showSearchSheet) {
                 SearchView(manager: manager, settingsManager: settingsManager, isPresented: $showSearchSheet, initialText: initialSearchText)
+                    .sheetBorder()
             }
             .sheet(isPresented: $showDocketSelectionSheet) {
                 DocketSearchView(
@@ -3713,23 +3753,29 @@ struct SheetsModifier: ViewModifier {
                     },
                     cacheManager: cacheManager
                 )
+                .sheetBorder()
             }
             .sheet(isPresented: $showQuickSearchSheet) {
                 QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager, cacheManager: cacheManager)
+                    .sheetBorder()
             }
             .sheet(isPresented: $showSettingsSheet) {
                 SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
+                    .sheetBorder()
             }
             .sheet(isPresented: $manager.showPrepSummary) {
                 PrepSummaryView(summary: manager.prepSummary, isPresented: $manager.showPrepSummary)
+                    .sheetBorder()
             }
             .sheet(isPresented: $showVideoConverterSheet) {
                 VideoConverterView(manager: manager)
+                    .sheetBorder()
             }
             .sheet(isPresented: $manager.showOMFAAFValidator) {
                 if let fileURL = manager.omfAafFileToValidate,
                    let validator = manager.omfAafValidator {
                     OMFAAFValidatorView(validator: validator, fileURL: fileURL)
+                        .sheetBorder()
                 }
             }
     }
@@ -3863,7 +3909,7 @@ struct NotificationTabButton: View {
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                 
-                Text("Notifications")
+                Text("New Dockets")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.primary)
                 
@@ -3888,7 +3934,7 @@ struct NotificationTabButton: View {
             )
         }
         .buttonStyle(.plain)
-        .help("Notifications (\(notificationCenter.unreadCount))")
+        .help("New Dockets (\(notificationCenter.unreadCount))")
         .onHover { hovering in
             isHovered = hovering
         }

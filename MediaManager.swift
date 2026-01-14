@@ -10,7 +10,7 @@ struct AppConfig: Sendable {
     nonisolated init(settings: AppSettings) {
         self.settings = settings
     }
-    
+
     /// Ensure the year folder structure exists, creating it if needed
     nonisolated func ensureYearFolderStructure() throws {
         let year = Calendar.current.component(.year, from: Date())
@@ -360,7 +360,7 @@ enum MediaLogic {
             do {
                 let items = try fm.contentsOfDirectory(at: base, includingPropertiesForKeys: [.contentModificationDateKey])
                 for item in items {
-                    if item.hasDirectoryPath && !item.lastPathComponent.hasPrefix(".") {
+                if item.hasDirectoryPath && !item.lastPathComponent.hasPrefix(".") {
                         // Prep folders are named like "12345_PREP_Dec4.24"
                         // Extract just "12345" part
                         let folderName = item.lastPathComponent
@@ -369,10 +369,10 @@ enum MediaLogic {
                             if !results.contains(docketStr) {
                                 results.append(docketStr)
                             }
-                        }
                     }
                 }
-            } catch {
+            }
+        } catch {
                 print("Error scanning prep dockets: \(error.localizedDescription)")
             }
         }

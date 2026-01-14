@@ -9,6 +9,7 @@ struct SimianProjectCreationDialog: View {
     let initialDocketNumber: String
     let initialJobName: String
     let sourceEmail: String? // Email sender to auto-match as project manager
+    let initialProjectManager: String? // Pre-selected project manager from notification
     let isSimianEnabled: Bool // Whether Simian project will be created
     let onConfirm: (String, String, String?, String?) -> Void
     
@@ -34,6 +35,7 @@ struct SimianProjectCreationDialog: View {
         initialDocketNumber: String,
         initialJobName: String,
         sourceEmail: String? = nil,
+        initialProjectManager: String? = nil,
         isSimianEnabled: Bool = true,
         onConfirm: @escaping (String, String, String?, String?) -> Void
     ) {
@@ -43,12 +45,15 @@ struct SimianProjectCreationDialog: View {
         self.initialDocketNumber = initialDocketNumber
         self.initialJobName = initialJobName
         self.sourceEmail = sourceEmail
+        self.initialProjectManager = initialProjectManager
         self.isSimianEnabled = isSimianEnabled
         self.onConfirm = onConfirm
         
         // Initialize state with initial values
         _docketNumber = State(initialValue: initialDocketNumber)
         _jobName = State(initialValue: initialJobName)
+        // Initialize project manager with the pre-selected value if provided
+        _selectedProjectManagerEmail = State(initialValue: initialProjectManager)
     }
     
     var body: some View {
@@ -161,8 +166,9 @@ struct SimianProjectCreationDialog: View {
             if isSimianEnabled {
                 loadTemplates()
                 
-                // Try to auto-match sourceEmail to a project manager from settings
-                if let sourceEmail = sourceEmail, !sourceEmail.isEmpty {
+                // If project manager is already set from notification, use it
+                // Otherwise, try to auto-match sourceEmail to a project manager from settings
+                if selectedProjectManagerEmail == nil, let sourceEmail = sourceEmail, !sourceEmail.isEmpty {
                     let emailAddress = extractEmailAddress(from: sourceEmail)
                     print("🔍 SimianProjectCreationDialog: Attempting to match email sender: \(emailAddress)")
                     
@@ -173,6 +179,8 @@ struct SimianProjectCreationDialog: View {
                     } else {
                         print("⚠️ SimianProjectCreationDialog: Email sender '\(emailAddress)' not in project managers list")
                     }
+                } else if let initialPM = initialProjectManager {
+                    print("✅ SimianProjectCreationDialog: Using pre-selected project manager: \(initialPM)")
                 }
             }
             if docketNumber.isEmpty {

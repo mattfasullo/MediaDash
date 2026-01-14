@@ -146,17 +146,6 @@ class EmailScanningService: ObservableObject {
     }
     
     /// Check if an email is a reply or forward
-    private func isReplyOrForward(_ message: GmailMessage) -> Bool {
-        guard let subject = message.subject else { return false }
-        let trimmedSubject = subject.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Check if subject starts with "Re:" or "Fwd:" (case-insensitive)
-        let lowercased = trimmedSubject.lowercased()
-        return lowercased.hasPrefix("re:") || 
-               lowercased.hasPrefix("fwd:") || 
-               lowercased.hasPrefix("fw:")
-    }
-    
     /// Perform a manual scan now
     func scanNow(forceRescan: Bool = false) async {
         print("🔍 EmailScanningService.scanNow() called")
@@ -193,8 +182,7 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Always scan ALL unread emails
-            // The classifier will determine relevance - no pre-filtering needed
+            // Scan all unread emails to find new docket emails
             let query = "is:unread"
             
             print("EmailScanningService: 🔍 Starting scan...")
@@ -263,13 +251,11 @@ class EmailScanningService: ObservableObject {
                 for (index, message) in unreadMessages.enumerated() {
                     let subject = message.subject ?? "(no subject)"
                     let from = message.from ?? "(no sender)"
-                    let isReply = isReplyOrForward(message)
                     let isProcessed = processedEmailIds.contains(message.id)
                     let isThreadProcessed = processedThreadIds.contains(message.threadId)
                     var status = ""
                     if isProcessed { status += " [already processed]" }
                     if isThreadProcessed { status += " [thread already processed]" }
-                    if isReply { status += " [reply/forward - will still be processed]" }
                     print("    \(index + 1). \"\(subject)\" | From: \(from)\(status)")
                     
                     // Log if this might be a request (for debugging)
@@ -281,13 +267,9 @@ class EmailScanningService: ObservableObject {
                 }
             }
             
-            // Process ALL unread emails, including replies/forwards
-            // Parser will determine if they contain new docket information
-            // This ensures we don't miss important emails that happen to be in reply/forward format
+            // Process ALL unread emails - parser will determine if they contain new docket information
             let initialEmails = unreadMessages
-            
-            let replyForwardCount = unreadMessages.filter { isReplyOrForward($0) }.count
-            print("  📬 Processing all \(initialEmails.count) emails (including \(replyForwardCount) replies/forwards - parser will determine relevance)")
+            print("  📬 Processing all \(initialEmails.count) unread emails - parser will determine relevance")
             
             // Filter out already processed emails AND threads (unless force rescan)
             // This prevents duplicate notifications from the same email thread
@@ -441,14 +423,38 @@ class EmailScanningService: ObservableObject {
             print("  Snippet: \(message.snippet ?? "(none)")")
         }
         
+        // Determine the original sender: check if there's already a notification for this thread
+        // If so, use the sourceEmail from that notification (the original sender)
+        var originalSenderEmail = message.from
+        if !message.threadId.isEmpty, let notificationCenter = notificationCenter {
+            let threadId = message.threadId
+            // Check if there's an existing notification for this thread
+            if let existingNotification = notificationCenter.notifications.first(where: { $0.threadId == threadId && $0.type == .newDocket }) {
+                originalSenderEmail = existingNotification.sourceEmail
+                print("  📧 Using original sender from existing notification: \(originalSenderEmail ?? "nil")")
+            } else {
+                // No existing notification - try to get the original sender from the thread
+                // Fetch the thread to get the first message (original sender)
+                do {
+                    let thread = try await gmailService.getThread(threadId: threadId)
+                    if let messages = thread.messages, let firstMessage = messages.first {
+                        originalSenderEmail = firstMessage.from
+                        print("  📧 Using original sender from thread's first message: \(originalSenderEmail ?? "nil")")
+                    }
+                } catch {
+                    print("  ⚠️ Could not fetch thread to get original sender, using current message sender: \(error.localizedDescription)")
+                }
+            }
+        }
+        
         // Parse email using rule-based parser
         var parsedDocket: ParsedDocket? = nil
         
-        // Try to parse the email
+        // Try to parse the email with the original sender
         parsedDocket = parser.parseEmail(
             subject: message.subject,
             body: body,
-            from: message.from
+            from: originalSenderEmail
         )
         
         // Check for multiple docket numbers in the parsed result
@@ -467,7 +473,8 @@ class EmailScanningService: ObservableObject {
                             jobName: parsed.jobName,
                             message: message,
                             subject: subject,
-                            body: body
+                            body: body,
+                            originalSenderEmail: originalSenderEmail
                         )
                     }
                 }
@@ -475,12 +482,12 @@ class EmailScanningService: ObservableObject {
             }
         }
         
-        // If we don't have a parsed docket yet, try parsing again
+        // If we don't have a parsed docket yet, try parsing again with original sender
         if parsedDocket == nil {
             parsedDocket = parser.parseEmail(
                 subject: message.subject,
                 body: body,
-                from: message.from
+                from: originalSenderEmail
             )
         }
         
@@ -880,44 +887,6 @@ class EmailScanningService: ObservableObject {
         return (retryAfter: retryAfter, message: message)
     }
     
-    /// Learn from a re-classification (legacy - no longer used)
-    func learnFromReclassification(
-        notification: Notification,
-        oldType: NotificationType,
-        newType: NotificationType,
-        emailSubject: String?,
-        emailBody: String?,
-        emailFrom: String?
-    ) async {
-        // Track re-classification interaction by email ID
-        if let emailId = notification.emailId {
-            let details: [String: String] = [
-                "fromType": oldType.rawValue,
-                "toType": newType.rawValue,
-                "fromDisplayName": oldType.displayName,
-                "toDisplayName": newType.displayName
-            ]
-            EmailFeedbackTracker.shared.recordInteraction(
-                emailId: emailId,
-                type: .reclassified,
-                details: details
-            )
-            print("EmailFeedbackTracker: Recorded re-classification for email \(emailId)")
-        }
-        
-        // Log the re-classification
-        print("📚 EmailScanningService: Re-classified notification from \(oldType.displayName) to \(newType.displayName)")
-    }
-    
-    /// Create a rule to filter out junk emails based on the email characteristics (legacy - no longer used)
-    private func createJunkFilterRule(
-        emailSubject: String?,
-        emailBody: String?,
-        emailFrom: String?
-    ) async {
-        // Legacy method - no longer creates rules
-        print("EmailScanningService: Junk filter rule creation disabled")
-    }
     
     /// Re-parse an email by emailId and return the parsed values
     func reparseEmail(emailId: String) async -> (docketNumber: String?, jobName: String?, subject: String?, body: String?)? {
@@ -1140,10 +1109,9 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Always scan ALL unread emails
-            // The classifier will determine relevance - no pre-filtering needed
+            // Scan all unread emails to find new docket emails
             let query = "is:unread"
-            print("EmailScanningService: Scanning all unread emails for classification")
+            print("EmailScanningService: Scanning all unread emails for new docket notifications")
             
             // Fetch all unread emails
             let messageRefs = try await gmailService.fetchEmails(
@@ -1169,11 +1137,10 @@ class EmailScanningService: ObservableObject {
             }
             print("EmailScanningService: \(unreadMessages.count) emails are actually unread (out of \(messages.count) total)")
             
-            // Filter out replies and forwards (only process initial emails)
-            let initialEmails = unreadMessages.filter { message in
-                !isReplyOrForward(message)
-            }
-            print("EmailScanningService: \(initialEmails.count) are initial emails (filtered out \(unreadMessages.count - initialEmails.count) replies/forwards)")
+            // Don't filter out replies/forwards - let the parser determine if they contain new docket info
+            // Forwards often contain new docket information in the body
+            let initialEmails = unreadMessages
+            print("EmailScanningService: Processing \(initialEmails.count) unread emails (including replies/forwards - parser will determine relevance)")
             
             // Get existing notification email IDs to avoid duplicates (unless force rescan)
             let existingEmailIds = await MainActor.run {
@@ -1185,7 +1152,6 @@ class EmailScanningService: ObservableObject {
             var createdCount = 0
             var skippedCount = 0
             var failedCount = 0
-            var mediaEmailCount = 0
             var interactedCount = 0
             
             for message in initialEmails {
@@ -1195,7 +1161,7 @@ class EmailScanningService: ObservableObject {
                     continue
                 }
                 
-                // Skip if email has been interacted with (downvoted, grabbed, reclassified, approved, etc.)
+                // Skip if email has been interacted with (downvoted, grabbed, approved, etc.)
                 // This prevents showing notifications for emails we've already handled
                 let hasInteracted = await MainActor.run {
                     EmailFeedbackTracker.shared.hasAnyInteraction(emailId: message.id)
@@ -1208,17 +1174,17 @@ class EmailScanningService: ObservableObject {
                 
                 // If force rescan, remove existing notification first
                 if forceRescan && existingEmailIds.contains(message.id) {
-                    await MainActor.run {
-                        if let existingNotification = notificationCenter.notifications.first(where: { $0.emailId == message.id }) {
-                            notificationCenter.remove(existingNotification, emailScanningService: self)
-                        }
+                    let existingNotification = await MainActor.run {
+                        return notificationCenter.notifications.first(where: { $0.emailId == message.id })
+                    }
+                    if let existingNotification = existingNotification {
+                        // Call remove explicitly to avoid ambiguity
+                        await notificationCenter.remove(_: existingNotification, emailScanningService: self)
                     }
                 }
                 
-                // IMPORTANT: Try to process as new docket email FIRST
-                // This ensures emails with docket numbers are classified correctly,
-                // even if they're also sent to the media email address
-                print("EmailScanningService: Email \(message.id) - attempting to process as new docket email first...")
+                // Process email as new docket email
+                print("EmailScanningService: Email \(message.id) - attempting to process as new docket email...")
                 let isNewDocket = await processEmailAndCreateNotification(message)
                 
                 if isNewDocket {
@@ -1227,30 +1193,13 @@ class EmailScanningService: ObservableObject {
                     print("EmailScanningService: ✅ Created new docket notification for email \(message.id)")
                     // Don't mark as processed - we want to keep showing it until it's read/approved
                 } else {
-                    // Not a new docket email - check if it's a media email (file delivery)
-                    let isMediaEmail = checkIfMediaEmail(message, mediaEmail: settings.companyMediaEmail)
-                    
-                    print("EmailScanningService: Email \(message.id) - not a new docket, isMediaEmail: \(isMediaEmail)")
-                    
-                    if isMediaEmail {
-                        // Process as media email (file delivery)
-                        print("EmailScanningService: Attempting to process as media email...")
-                        if await processMediaEmailAndCreateNotification(message) {
-                            mediaEmailCount += 1
-                            print("EmailScanningService: ✅ Created media file notification for email \(message.id)")
-                        } else {
-                            failedCount += 1
-                            print("EmailScanningService: ❌ Failed to create media file notification for email \(message.id)")
-                        }
-                    } else {
-                        // Not a new docket and not a media email - skip it
-                        failedCount += 1
-                        print("EmailScanningService: Email \(message.id) - not a new docket and not a media email, skipping")
-                    }
+                    // Not a new docket email - skip it (we only process new docket emails now)
+                    failedCount += 1
+                    print("EmailScanningService: Email \(message.id) - not a new docket, skipping (media files and requests are no longer processed)")
                 }
             }
             
-            print("EmailScanningService: Summary - Created: \(createdCount), Media Files: \(mediaEmailCount), Skipped: \(skippedCount), Failed: \(failedCount), Interacted: \(interactedCount)")
+            print("EmailScanningService: Summary - Created: \(createdCount), Skipped: \(skippedCount), Failed: \(failedCount), Interacted: \(interactedCount)")
             
             // After scanning emails, check for grabbed replies immediately
             // (in addition to the periodic check)
@@ -1332,7 +1281,8 @@ class EmailScanningService: ObservableObject {
         jobName: String,
         message: GmailMessage,
         subject: String,
-        body: String
+        body: String,
+        originalSenderEmail: String? = nil
     ) {
         guard let notificationCenter = notificationCenter else {
             print("EmailScanningService: ERROR - notificationCenter is nil when trying to add notification")
@@ -1368,6 +1318,9 @@ class EmailScanningService: ObservableObject {
             return
         }
 
+        // Use original sender email if provided, otherwise fall back to current message sender
+        let sourceEmail = originalSenderEmail ?? message.from ?? ""
+
         let messageText = "Docket \(docketNumber): \(jobName)"
         let emailSubjectToStore = subject.isEmpty ? nil : subject
         let emailBodyToStore = body.isEmpty ? nil : body
@@ -1379,7 +1332,7 @@ class EmailScanningService: ObservableObject {
             docketNumber: docketNumber,
             jobName: jobName,
             emailId: message.id,
-            sourceEmail: message.from ?? "",
+            sourceEmail: sourceEmail,
             emailSubject: emailSubjectToStore,
             emailBody: emailBodyToStore,
             threadId: message.threadId  // Track thread to prevent duplicates

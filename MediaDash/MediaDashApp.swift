@@ -159,6 +159,14 @@ enum WindowConfiguration {
         window.toolbar = nil
         window.contentView?.wantsLayer = true
         window.backgroundColor = NSColor.windowBackgroundColor
+        
+        // Restore standard window shadow
+        window.hasShadow = true
+
+        // Remove custom border outline
+        window.contentView?.layer?.borderWidth = 0
+        window.contentView?.layer?.borderColor = nil
+        window.contentView?.layer?.cornerRadius = 0
 
         // Keep window buttons visible
         window.standardWindowButton(.closeButton)?.isHidden = false

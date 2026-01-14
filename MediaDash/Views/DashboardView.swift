@@ -376,7 +376,7 @@ struct DashboardTopBar: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .help(rightPanelCollapsed ? "Show Notifications" : "Hide Notifications")
+                .help(rightPanelCollapsed ? "Show New Dockets" : "Hide New Dockets")
                 
                 // Settings
                 Button(action: { showSettingsSheet = true }) {
@@ -1646,7 +1646,7 @@ struct DashboardNotificationsPanel: View {
                     .font(.system(size: 14))
                     .foregroundColor(.accentColor)
                 
-                Text("Notifications")
+                Text("New Dockets")
                     .font(.system(size: 13, weight: .semibold))
                 
                 Spacer()

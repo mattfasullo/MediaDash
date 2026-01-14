@@ -927,6 +927,22 @@ struct CacheStatusPopover: View {
         return appFolder.appendingPathComponent("mediadash_docket_cache.json").path
     }
     
+    private var cacheFileModificationDate: Date? {
+        guard settingsManager.currentSettings.useSharedCache,
+              let urlString = settingsManager.currentSettings.sharedCacheURL,
+              !urlString.isEmpty else {
+            return nil
+        }
+        
+        let fileURL = cacheManager.getFileURL(from: urlString)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let modificationDate = attributes[.modificationDate] as? Date else {
+            return nil
+        }
+        
+        return modificationDate
+    }
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             // Header
@@ -1011,6 +1027,30 @@ struct CacheStatusPopover: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
                     Text(lastSync, style: .relative)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            // Cache File Updated
+            if let modificationDate = cacheFileModificationDate {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Cache File Updated")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                    Text(modificationDate, style: .relative)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            // Docket Count
+            if settingsManager.currentSettings.useSharedCache {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Dockets Cached")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                    Text("\(cacheManager.cachedDockets.count)")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }

@@ -12,6 +12,7 @@ class AsanaCacheManager: ObservableObject {
     @Published var cacheStatus: CacheStatus = .unknown
     @Published var syncProgress: Double = 0  // 0.0 to 1.0
     @Published var syncPhase: String = ""    // Human-readable phase description
+    @Published var cachedDockets: [DocketInfo] = []
     
     // Track the last reported progress to ensure monotonic increase
     private var lastReportedProgress: Double = 0
@@ -107,6 +108,12 @@ class AsanaCacheManager: ObservableObject {
         
         // Start monitoring shared cache file for external service updates
         startCacheFileMonitoring()
+
+        // Preload cache data so views can render immediately
+        Task { @MainActor in
+            await Task.yield()
+            refreshCachedDocketsFromDisk()
+        }
     }
     
     /// Update sync settings (for manual sync only - automatic sync is handled by external service)
@@ -249,6 +256,7 @@ class AsanaCacheManager: ObservableObject {
             }
             
             lastCacheModificationTime = modificationDate
+            refreshCachedDocketsFromDisk()
         } else if isSyncing && syncPhase.contains("External service") {
             // File hasn't been modified recently - check if sync completed
             if let startTime = externalSyncStartTime {
@@ -262,6 +270,7 @@ class AsanaCacheManager: ObservableObject {
                     
                     // Update lastSyncDate from the cache
                     reloadLastSyncDate()
+                    refreshCachedDocketsFromDisk()
                     
                     // Clear sync state after a brief moment
                     Task {
@@ -646,8 +655,9 @@ class AsanaCacheManager: ObservableObject {
             }
         }
         
-        // Update Published property using DispatchQueue to ensure we're outside view update cycle
-        DispatchQueue.main.async {
+        // Defer to next run loop to avoid publishing during view updates
+        Task { @MainActor in
+            await Task.yield()
             self.cacheStatus = newStatus
         }
     }
@@ -655,6 +665,7 @@ class AsanaCacheManager: ObservableObject {
     /// Public method to refresh cache status (useful for debugging or manual refresh)
     func refreshCacheStatus() {
         updateCacheStatus()
+        refreshCachedDocketsFromDisk()
     }
     
     
@@ -717,51 +728,11 @@ class AsanaCacheManager: ObservableObject {
             return []
         }
         
-        do {
-            let fileURL = getFileURL(from: sharedURL)
-            let data = try Data(contentsOf: fileURL)
-            let cached = try JSONDecoder().decode(CachedDockets.self, from: data)
-            
-            // Validate integrity
-            let validation = cached.validateIntegrity()
-            
-            // Update published validation result
-            DispatchQueue.main.async { [weak self] in
-                self?.cacheValidationResult = validation
-            }
-            
-            if validation.isCorrupted {
-                print("⚠️ [Cache] Shared cache CORRUPTED: \(validation.description)")
-                updateCacheStatus()
-                return []
-            }
-            
-            // Update lastSyncDate from shared cache
-            lastSyncDate = cached.lastSync
-            
-            if case .missingIntegrity = validation {
-                print("🔍 [Cache] Loaded shared cache (legacy format, last sync: \(cached.lastSync))")
-            } else {
-                print("🔍 [Cache] Loaded shared cache (verified, last sync: \(cached.lastSync))")
-            }
-            
-            // Update status
-            updateCacheStatus()
-            
-            return cached.dockets
-        } catch {
-            let fileURL = getFileURL(from: sharedURL)
-            if !FileManager.default.fileExists(atPath: fileURL.path) {
-                print("⚠️ [Cache] Shared cache file not found at: \(fileURL.path)")
-            } else {
-                print("⚠️ [Cache] Shared cache not available: \(error.localizedDescription)")
-            }
-            
-            // Update status
-            updateCacheStatus()
-            
-            return []
+        if cachedDockets.isEmpty {
+            refreshCachedDocketsFromDisk()
         }
+        
+        return cachedDockets
     }
     
     /// Load from shared cache synchronously (returns both dockets and cache metadata)
@@ -887,6 +858,7 @@ class AsanaCacheManager: ObservableObject {
                     
                     // Update lastSyncDate from shared cache
                     self.lastSyncDate = lastSync
+                    self.cachedDockets = cached.dockets
                     
                     return // Exit early - no sync needed!
                 } else {
@@ -903,6 +875,35 @@ class AsanaCacheManager: ObservableObject {
         // The external service handles all syncing
         print("⚠️ [Cache] Shared cache not configured - MediaDash does not sync from Asana API")
         throw AsanaError.cacheUnavailable("Shared cache not configured. Use external service for syncing.")
+    }
+    
+    private func refreshCachedDocketsFromDisk() {
+        guard useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty else {
+            return
+        }
+        
+        do {
+            let fileURL = getFileURL(from: sharedURL)
+            let data = try Data(contentsOf: fileURL)
+            let cached = try JSONDecoder().decode(CachedDockets.self, from: data)
+            
+            let validation = cached.validateIntegrity()
+            cacheValidationResult = validation
+            
+            if validation.isCorrupted {
+                print("⚠️ [Cache] Shared cache CORRUPTED: \(validation.description)")
+                updateCacheStatus()
+                return
+            }
+            
+            if lastSyncDate != cached.lastSync || cachedDockets.count != cached.dockets.count {
+                cachedDockets = cached.dockets
+            }
+            lastSyncDate = cached.lastSync
+            updateCacheStatus()
+        } catch {
+            updateCacheStatus()
+        }
     }
     
     /// Save dockets to shared cache file (public for manual seeding)

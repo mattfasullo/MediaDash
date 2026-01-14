@@ -20,16 +20,17 @@ class NotificationCenter: ObservableObject {
     private var notificationByThreadId: [String: Set<Int>] = [:] // threadId -> set of array indices
 
     init() {
-        loadNotifications()
-        rebuildIndices() // Build lookup indices
-        migrateOldNotifications() // Migrate old notifications to have original values
-        removeDuplicates() // Clean up any existing duplicates
-        cleanupOldArchivedNotifications()
-        cleanupOldCompletedRequests()
-        updateUnreadCount()
-        
-        // Sync completion status from shared cache
-        Task {
+        Task { @MainActor in
+            await Task.yield()
+            loadNotifications()
+            rebuildIndices() // Build lookup indices
+            migrateOldNotifications() // Migrate old notifications to have original values
+            removeDuplicates() // Clean up any existing duplicates
+            cleanupOldArchivedNotifications()
+            cleanupOldCompletedRequests()
+            updateUnreadCount()
+            
+            // Sync completion status from shared cache
             await syncCompletionStatus()
         }
     }
@@ -297,18 +298,16 @@ class NotificationCenter: ObservableObject {
         saveNotifications()
     }
     
-    /// Remove a notification
-    func remove(_ notification: Notification, emailScanningService: EmailScanningService? = nil) {
-        // Mark email as read before removing (if notification was acted upon)
+    /// Remove a notification and mark email as read
+    func remove(_ notification: Notification, emailScanningService: EmailScanningService? = nil) async {
+        // Mark email as read before removing (await to ensure it completes)
         if let emailId = notification.emailId, let emailService = emailScanningService {
-            Task {
-                do {
-                    try await emailService.gmailService.markAsRead(messageId: emailId)
-                    print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read before removing notification")
-                } catch {
-                    print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
-                    print("📋 [NotificationCenter] Error details: \(error)")
-                }
+            do {
+                try await emailService.gmailService.markAsRead(messageId: emailId)
+                print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read before removing notification")
+            } catch {
+                print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+                print("📋 [NotificationCenter] Error details: \(error)")
             }
         } else {
             if notification.emailId == nil {
@@ -320,6 +319,7 @@ class NotificationCenter: ObservableObject {
         }
         
         notifications.removeAll { $0.id == notification.id }
+        rebuildIndices() // Rebuild indices after removal
         updateUnreadCount()
         saveNotifications()
     }
@@ -348,6 +348,7 @@ class NotificationCenter: ObservableObject {
         
         // Remove notification instead of archiving
         notifications.removeAll { $0.id == notification.id }
+        rebuildIndices() // Rebuild indices after removal
         updateUnreadCount()
         saveNotifications()
         print("📋 [NotificationCenter] Removed notification (archived)")
@@ -446,6 +447,7 @@ class NotificationCenter: ObservableObject {
     
     /// Sync completion status from shared cache
     func syncCompletionStatus() async {
+        await Task.yield()
         await NotificationSyncManager.shared.syncWithSharedCache()
         
         // Apply synced completion status to local notifications
@@ -531,11 +533,11 @@ class NotificationCenter: ObservableObject {
         }
     }
     
-    /// Change a notification to a different type
+    /// Mark a notification as junk or skipped (removes it and marks email as read)
     /// - Parameters:
-    ///   - notification: The notification to change
-    ///   - newType: The new notification type
-    ///   - autoArchive: Whether to automatically archive junk/skipped notifications
+    ///   - notification: The notification to mark
+    ///   - newType: Must be .junk or .skipped
+    ///   - autoArchive: Unused (kept for compatibility)
     ///   - emailScanningService: Optional service for email operations
     func reclassify(
         _ notification: Notification,
@@ -543,85 +545,44 @@ class NotificationCenter: ObservableObject {
         autoArchive: Bool = true,
         emailScanningService: EmailScanningService? = nil
     ) async {
+        // Only support junk and skipped (both remove the notification)
+        guard newType == .junk || newType == .skipped else {
+            print("📋 [NotificationCenter] ⚠️ reclassify only supports .junk or .skipped, got \(newType.displayName)")
+            return
+        }
+        
         guard let index = notifications.firstIndex(where: { $0.id == notification.id }) else {
             return
         }
         
-        let oldType = notifications[index].type
-        
-        // If changing from file delivery to new docket, the notification should "move" sections
-        // Reset status if it was archived so it appears in the new section
-        if oldType == .mediaFiles && newType == .newDocket {
-            if notifications[index].status == .dismissed {
-                notifications[index].status = .pending
-                notifications[index].archivedAt = nil
-            }
-        }
-        // Similarly, if changing from new docket to file delivery, reset if archived
-        else if oldType == .newDocket && newType == .mediaFiles {
-            if notifications[index].status == .dismissed {
-                notifications[index].status = .pending
-                notifications[index].archivedAt = nil
-            }
-        }
-        
-        notifications[index].type = newType
-        
-        // Update title to reflect new type
-        switch newType {
-        case .newDocket:
-            notifications[index].title = "New Docket"
-        case .mediaFiles:
-            notifications[index].title = "File Delivery"
-        case .request:
-            notifications[index].title = "Media Team Request"
-        case .junk:
-            notifications[index].title = "Junk"
-        case .skipped:
-            notifications[index].title = "Skipped"
-        case .info:
-            notifications[index].title = "Info"
-        case .error:
-            notifications[index].title = "Error"
-        }
-        
-        print("📋 [NotificationCenter] Changed notification type from \(oldType.displayName) to \(newType.displayName)")
-        
-        // If changing to something other than "New Docket", "File Delivery", or "Request", remove notification and mark email as read
         let emailId = notifications[index].emailId
-        if newType != .newDocket && newType != .mediaFiles && newType != .request {
-            // Mark email as read before removing
-            if let emailId = emailId, let emailService = emailScanningService {
+        
+        // Mark email as read before removing
+        if let emailId = emailId, let emailService = emailScanningService {
             Task {
                 do {
                     try await emailService.gmailService.markAsRead(messageId: emailId)
-                        print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read after changing type to \(newType.displayName)")
+                    print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read after marking as \(newType.displayName)")
                 } catch {
-                        print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
-                        print("📋 [NotificationCenter] Error details: \(error)")
+                    print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+                    print("📋 [NotificationCenter] Error details: \(error)")
                 }
             }
-            } else {
-                if emailId == nil {
-                    print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - notification has no emailId")
-                }
-                if emailScanningService == nil {
-                    print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - emailScanningService is nil")
-                }
+        } else {
+            if emailId == nil {
+                print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - notification has no emailId")
             }
-            
-            // Remove notification instead of archiving
-            notifications.removeAll { $0.id == notification.id }
-            updateUnreadCount()
-            saveNotifications()
-            print("📋 [NotificationCenter] Removed notification after changing type to \(newType.displayName)")
-            return // Exit early since notification is removed
+            if emailScanningService == nil {
+                print("📋 [NotificationCenter] ⚠️ Cannot mark email as read - emailScanningService is nil")
+            }
         }
         
-        // Type change complete
-        
+        // Remove notification
+        notifications.removeAll { $0.id == notification.id }
+        rebuildIndices()
         updateUnreadCount()
         saveNotifications()
+        print("📋 [NotificationCenter] Removed notification after marking as \(newType.displayName)")
     }
     
     /// Skip a notification (removes from active list)
@@ -632,27 +593,6 @@ class NotificationCenter: ObservableObject {
     /// Mark a notification as junk (ads, promos, spam)
     func markAsJunk(_ notification: Notification, emailScanningService: EmailScanningService? = nil) async {
         await reclassify(notification, to: .junk, autoArchive: true, emailScanningService: emailScanningService)
-    }
-    
-    /// Remove a notification and mark the email as read
-    func remove(_ notification: Notification, emailScanningService: EmailScanningService? = nil) async {
-        // Mark email as read before removing
-        if let emailId = notification.emailId, let emailService = emailScanningService {
-            Task {
-                do {
-                    try await emailService.gmailService.markAsRead(messageId: emailId)
-                    print("📋 [NotificationCenter] ✅ Successfully marked email \(emailId) as read after removing notification")
-                } catch {
-                    print("📋 [NotificationCenter] ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
-                }
-            }
-        }
-        
-        // Remove notification
-        notifications.removeAll { $0.id == notification.id }
-        updateUnreadCount()
-        saveNotifications()
-        print("📋 [NotificationCenter] Removed notification")
     }
     
     /// Update duplicate detection flags for a notification
@@ -769,14 +709,30 @@ class NotificationCenter: ObservableObject {
             .sorted { ($0.archivedAt ?? Date.distantPast) > ($1.archivedAt ?? Date.distantPast) }
     }
     
-    /// Get active notifications (not archived)
+    /// Get active notifications (not archived, only newDocket type - mediaFiles and requests excluded)
     var activeNotifications: [Notification] {
-        notifications.filter { $0.status != .dismissed || $0.archivedAt == nil }
+        let active = notifications.filter { 
+            ($0.status != .dismissed || $0.archivedAt == nil) && $0.type == .newDocket
+        }
+        
+        // Debug: Log if there's a mismatch between unreadCount and active notifications
+        let pendingActive = active.filter { $0.status == .pending }
+        if unreadCount > 0 && pendingActive.isEmpty && !notifications.filter({ $0.status == .pending }).isEmpty {
+            print("📋 [NotificationCenter] ⚠️ DEBUG: unreadCount=\(unreadCount) but no pending active notifications")
+            let allPending = notifications.filter { $0.status == .pending }
+            print("📋 [NotificationCenter]   Total pending: \(allPending.count)")
+            for (index, notif) in allPending.enumerated() {
+                print("📋 [NotificationCenter]   Pending[\(index)]: id=\(notif.id), type=\(notif.type), status=\(notif.status), archivedAt=\(notif.archivedAt?.description ?? "nil"), dismissed=\(notif.status == .dismissed)")
+            }
+        }
+        
+        return active
     }
     
     /// Clear all dismissed notifications
     func clearDismissed() {
         notifications.removeAll { $0.status == .dismissed }
+        rebuildIndices() // Rebuild indices after removal
         updateUnreadCount()
         saveNotifications()
     }
@@ -784,6 +740,7 @@ class NotificationCenter: ObservableObject {
     /// Clear all notifications
     func clearAll() {
         notifications.removeAll()
+        rebuildIndices() // Rebuild indices after removal
         updateUnreadCount()
         saveNotifications()
     }
@@ -848,9 +805,32 @@ class NotificationCenter: ObservableObject {
         }
     }
     
-    /// Update unread count
+    /// Update unread count (only counts newDocket notifications - mediaFiles and requests are excluded)
     private func updateUnreadCount() {
-        unreadCount = notifications.filter { $0.status == .pending }.count
+        // Only count newDocket notifications - we no longer process mediaFiles or requests
+        let pendingCount = notifications.filter { 
+            $0.status == .pending && $0.type == .newDocket 
+        }.count
+        if unreadCount != pendingCount {
+            print("📋 [NotificationCenter] Updating unread count: \(unreadCount) -> \(pendingCount) (total notifications: \(notifications.count), newDocket only)")
+        }
+        
+        // Debug: Check for notifications in bad state (pending but archived)
+        let badStateNotifications = notifications.filter { $0.status == .pending && $0.archivedAt != nil }
+        if !badStateNotifications.isEmpty {
+            print("📋 [NotificationCenter] ⚠️ WARNING: Found \(badStateNotifications.count) notification(s) in bad state (pending but archived)")
+            for notif in badStateNotifications {
+                print("📋 [NotificationCenter]   - ID: \(notif.id), type: \(notif.type), archivedAt: \(notif.archivedAt?.description ?? "nil")")
+                // Fix: Clear archivedAt for pending notifications
+                if let index = notifications.firstIndex(where: { $0.id == notif.id }) {
+                    notifications[index].archivedAt = nil
+                    print("📋 [NotificationCenter]   ✅ Fixed: Cleared archivedAt for notification \(notif.id)")
+                }
+            }
+            saveNotifications()
+        }
+        
+        unreadCount = pendingCount
     }
     
     /// Save notifications to UserDefaults

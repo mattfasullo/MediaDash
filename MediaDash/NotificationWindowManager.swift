@@ -187,7 +187,7 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         let newMainWindow = allWindows.first { window in
             window != notificationWindow &&
             window.isVisible &&
-            window.title != "Notifications" &&
+            window.title != "New Dockets" &&
             window.frame.width >= 300
         } ?? allWindows.first { window in
             window != notificationWindow && window.isVisible
@@ -560,7 +560,7 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     func showNotificationWindow(content: AnyView, isLocked: Bool? = nil) {
         // Check if any notification window already exists (in case of duplicates)
         let existingNotificationWindows = NSApplication.shared.windows.filter { window in
-            window.title == "Notifications" || window.isKind(of: NotificationWindow.self)
+            window.title == "New Dockets" || window.isKind(of: NotificationWindow.self)
         }
         
         // Close any duplicate notification windows
@@ -570,13 +570,24 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             }
         }
         
+        // Set lock state if provided, otherwise use current state
+        if let locked = isLocked {
+            self.isLocked = locked
+        }
+        
         // If window already exists and is visible, just update content and return
         if let existingWindow = notificationWindow, existingWindow.isVisible, isVisible, !isAnimating {
-            // Update content if needed
-            if let existingController = existingWindow.contentViewController as? NSHostingController<AnyView> {
-                existingController.rootView = content
+            // If we're in standalone mode but the window isn't resizable, rebuild it.
+            if !self.isLocked && !existingWindow.styleMask.contains(.resizable) {
+                existingWindow.close()
+                notificationWindow = nil
+            } else {
+                // Update content if needed
+                if let existingController = existingWindow.contentViewController as? NSHostingController<AnyView> {
+                    existingController.rootView = content
+                }
+                return
             }
-            return
         }
         
         // If animating (hiding), interrupt by immediately setting to show state
@@ -607,16 +618,66 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         
         // Allow showing even if currently animating (to interrupt hide animation)
         
-        // Set lock state if provided, otherwise use current state
-        if let locked = isLocked {
-            self.isLocked = locked
-        }
-        
         // Cancel any existing monitoring before setting up new one
         cancellables.removeAll()
         
         findMainWindow()
         guard let mainWindow = mainWindow else { return }
+        
+        // Standalone window mode (not locked to main window)
+        if !self.isLocked {
+            if let existingWindow = notificationWindow {
+                // If the existing window isn't resizable (e.g., legacy borderless window), rebuild it.
+                if !existingWindow.styleMask.contains(.resizable) {
+                    existingWindow.close()
+                    notificationWindow = nil
+                } else {
+                    if let existingController = existingWindow.contentViewController as? NSHostingController<AnyView> {
+                        existingController.rootView = content
+                    }
+                    if !existingWindow.isVisible {
+                        existingWindow.makeKeyAndOrderFront(nil)
+                    }
+                    existingWindow.level = .normal
+                    isVisible = true
+                    return
+                }
+            }
+            
+            let notificationWindowController = NSHostingController(rootView: content)
+            notificationWindow = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 420, height: 560),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            
+            guard let notificationWindow = notificationWindow else { return }
+            
+            notificationWindow.contentViewController = notificationWindowController
+            notificationWindow.title = "New Dockets"
+            notificationWindow.titleVisibility = .visible
+            notificationWindow.titlebarAppearsTransparent = false
+            notificationWindow.backgroundColor = .windowBackgroundColor
+            notificationWindow.isOpaque = true
+            notificationWindow.hasShadow = true
+            notificationWindow.level = .normal
+            notificationWindow.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+            notificationWindow.isReleasedWhenClosed = false
+            notificationWindow.minSize = NSSize(width: 400, height: 500)
+            notificationWindow.isMovableByWindowBackground = false
+            notificationWindow.delegate = self
+            
+            // Position near main window (left side)
+            let mainFrame = mainWindow.frame
+            let targetX = mainFrame.minX - 420 - 12
+            let targetY = mainFrame.midY - 280
+            notificationWindow.setFrameOrigin(NSPoint(x: targetX, y: targetY))
+            
+            notificationWindow.makeKeyAndOrderFront(nil)
+            isVisible = true
+            return
+        }
         
         // Create notification window
         let notificationWindowController = NSHostingController(rootView: content)
@@ -631,6 +692,11 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         
         notificationWindow.contentViewController = notificationWindowController
         notificationWindow.titlebarAppearsTransparent = true
+        
+        // Add faint border to notification window
+        notificationWindow.contentView?.wantsLayer = true
+        notificationWindow.contentView?.layer?.borderWidth = 0.5
+        notificationWindow.contentView?.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
         notificationWindow.titleVisibility = .hidden
         notificationWindow.backgroundColor = .clear // Transparent background for rounded corners
         notificationWindow.isOpaque = false // Allow transparency for rounded corners
@@ -638,10 +704,14 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         notificationWindow.level = .normal
         notificationWindow.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         notificationWindow.isReleasedWhenClosed = false
-        notificationWindow.title = "Notifications"
+        notificationWindow.title = "New Dockets"
         notificationWindow.acceptsMouseMovedEvents = true
         notificationWindow.ignoresMouseEvents = false
         notificationWindow.delegate = self
+        
+        // Configure window to work seamlessly with main window
+        // As a child window, it can receive events but won't steal focus unnecessarily
+        // The window will only become key when user interacts with text fields
         
         // Configure content view for proper rounded corners with transparency
         if let contentView = notificationWindow.contentView {
@@ -715,7 +785,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         )
         
         // Set initial state (small, at button location, invisible)
-        notificationWindow.setFrame(startFrame, display: false)
+        // Use display: true to ensure the frame is actually set before showing
+        notificationWindow.setFrame(startFrame, display: true)
         notificationWindow.alphaValue = 0.0
         
         // Set initial locked position if locked
@@ -726,37 +797,38 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         isAnimating = true
         isVisible = true
         
-        // Make window visible immediately (no delay) for instant feedback
+        // Make window visible at starting position (small and invisible)
         notificationWindow.orderFront(nil)
         notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
         
         // Cancel any existing animation
         currentAnimationContext?.allowsImplicitAnimation = false
         
-        // Genie animation: expand from button while moving to target position
-        // Start animation immediately without delay for instant response
+        // Start animation immediately on next run loop to ensure window is ready
+        // but without noticeable delay - this prevents pop-in while maintaining responsiveness
         let manager = self
-        NSAnimationContext.runAnimationGroup({ context in
-            manager.currentAnimationContext = context
-            context.duration = 0.25 // Slightly faster animation for snappier feel
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            // Keep window behind during animation
-            notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
-            // Animate both position and size (genie effect)
-            notificationWindow.animator().setFrame(targetFrame, display: true)
-            notificationWindow.animator().alphaValue = 1.0
-        }) {
-            // Keep window behind main window after animation
-            notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
-    
-            // Ensure the view can become first responder
-            DispatchQueue.main.async {
-                notificationWindow.makeFirstResponder(notificationWindowController.view)
-            }
-    
-            Task { @MainActor in
-                manager.isAnimating = false
-                manager.currentAnimationContext = nil
+        DispatchQueue.main.async {
+            NSAnimationContext.runAnimationGroup({ context in
+                manager.currentAnimationContext = context
+                context.duration = 0.35 // Smooth animation duration
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                // Keep window behind during animation
+                notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
+                // Animate both position and size (genie effect) with smooth slide-in
+                notificationWindow.animator().setFrame(targetFrame, display: true)
+                notificationWindow.animator().alphaValue = 1.0
+            }) {
+                // Keep window behind main window after animation
+                notificationWindow.order(.below, relativeTo: mainWindow.windowNumber)
+        
+                // Don't make the window key or set first responder automatically
+                // This allows interaction without stealing focus from main window
+                // The window will only become key when user clicks on a text field
+        
+                Task { @MainActor in
+                    manager.isAnimating = false
+                    manager.currentAnimationContext = nil
+                }
             }
         }
     }
@@ -764,6 +836,14 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     func hideNotificationWindow() {
         // Ensure we're not already hiding
         guard isVisible else { return }
+        
+        // Standalone window mode - just close immediately
+        if !isLocked {
+            notificationWindow?.close()
+            notificationWindow = nil
+            isVisible = false
+            return
+        }
         
         // Stop position monitoring
         stopContinuousPositionMonitoring()

@@ -44,6 +44,11 @@ class NotificationPopupWindowManager {
         popupWindow.isOpaque = false
         popupWindow.hasShadow = true
         popupWindow.level = .floating // Above all windows
+        
+        // Add faint border to popup window
+        popupWindow.contentView?.wantsLayer = true
+        popupWindow.contentView?.layer?.borderWidth = 0.5
+        popupWindow.contentView?.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
         popupWindow.collectionBehavior = [.moveToActiveSpace, .canJoinAllSpaces]
         popupWindow.isReleasedWhenClosed = false
         popupWindow.title = "Notification Popup"

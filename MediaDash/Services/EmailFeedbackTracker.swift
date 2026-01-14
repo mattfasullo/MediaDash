@@ -25,7 +25,6 @@ struct EmailFeedback: Codable, Equatable {
 enum InteractionType: String, Codable {
     case feedbackThumbsUp = "feedback_thumbs_up"
     case feedbackThumbsDown = "feedback_thumbs_down"
-    case reclassified = "reclassified"
     case approved = "approved"
     case grabbed = "grabbed"
 }

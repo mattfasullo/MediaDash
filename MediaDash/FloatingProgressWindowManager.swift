@@ -313,6 +313,11 @@ class FloatingProgressWindowManager {
         window.isOpaque = false
         window.hasShadow = true
         window.level = .floating
+        
+        // Add faint border to progress window
+        window.contentView?.wantsLayer = true
+        window.contentView?.layer?.borderWidth = 0.5
+        window.contentView?.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isReleasedWhenClosed = false
         window.title = "Progress"

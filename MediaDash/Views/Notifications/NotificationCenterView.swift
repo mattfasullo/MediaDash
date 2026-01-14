@@ -34,27 +34,21 @@ struct NotificationCenterView: View {
     @Binding var showSettings: Bool
     
     @State private var processingNotification: UUID?
+    @State private var processingStatusById: [UUID: String] = [:]
     @State private var isScanningEmails = false
     @State private var lastScanStatus: String?
     @State private var debugInfo: String?
     @State private var showDebugInfo = false
     @State private var isArchivedExpanded = false
     @State private var isFileDeliveriesExpanded = true // Default to expanded (keeping for archived section)
-    @State private var selectedTab: NotificationTab = .newDockets // Tab selection - will be reset if disabled tab is selected
-    @State private var isForReviewExpanded = true // Default to expanded for visibility
     @State private var cacheInfo: String?
     @State private var showCacheInfo = false
     @State private var isLoadingCache = false // Keep for fallback if file write fails
     
-    enum NotificationTab {
-        case newDockets
-        case fileDeliveries
-        case requests
-    }
-    
     // Computed properties for filtered notifications (cached to avoid repeated filtering)
     private var allActiveNotifications: [Notification] {
-        notificationCenter.activeNotifications.filter { notification in
+        let active = notificationCenter.activeNotifications
+        let filtered = active.filter { notification in
             // If notification is completed, check if docket exists
             if notification.status == .completed,
                notification.type == .newDocket,
@@ -66,8 +60,9 @@ struct NotificationCenterView: View {
                 let exists = mediaManager.dockets.contains(docketName)
                 if exists {
                     // Remove the notification asynchronously to avoid blocking view updates
+                    // Mark email as read and remove notification
                     Task { @MainActor in
-                        notificationCenter.remove(notification, emailScanningService: emailScanningService)
+                        await notificationCenter.remove(notification, emailScanningService: emailScanningService)
                     }
                 }
                 return !exists
@@ -75,6 +70,16 @@ struct NotificationCenterView: View {
             // Show all other notifications (including media files)
             return true
         }
+        
+        // Debug logging when there's a mismatch
+        if notificationCenter.unreadCount > 0 && filtered.isEmpty && !active.isEmpty {
+            print("📋 [NotificationCenterView] DEBUG: unreadCount=\(notificationCenter.unreadCount), activeNotifications.count=\(active.count), but allActiveNotifications is empty")
+            for (index, notif) in active.enumerated() {
+                print("📋 [NotificationCenterView] DEBUG: Active[\(index)]: id=\(notif.id), type=\(notif.type), status=\(notif.status), archivedAt=\(notif.archivedAt?.description ?? "nil")")
+            }
+        }
+        
+        return filtered
     }
     
     private var mediaFileNotifications: [Notification] {
@@ -85,19 +90,29 @@ struct NotificationCenterView: View {
         allActiveNotifications.filter { $0.type != .mediaFiles }
     }
     
-    // All active notifications (no longer separated by confidence)
+    // All active notifications
     private var regularNotifications: [Notification] {
         return allActiveNotifications
     }
     
-    // Empty array - no longer using "For Review" section
-    private var notificationsForReview: [Notification] {
-        return []
-    }
-    
-    // Regular new docket notifications (excluding media files, requests, and low confidence)
+    // Regular new docket notifications (only type we process now)
     private var regularNewDocketNotifications: [Notification] {
-        regularNotifications.filter { $0.type == .newDocket }
+        let filtered = regularNotifications.filter { $0.type == .newDocket }
+        // Debug logging to understand why notifications might not appear
+        if notificationCenter.unreadCount > 0 && filtered.isEmpty {
+            let allPending = notificationCenter.notifications.filter { $0.status == .pending }
+            let allActive = notificationCenter.activeNotifications
+            let allRegular = regularNotifications
+            print("📋 [NotificationCenterView] DEBUG: unreadCount=\(notificationCenter.unreadCount), but regularNewDocketNotifications is empty")
+            print("📋 [NotificationCenterView] DEBUG: Total notifications: \(notificationCenter.notifications.count)")
+            print("📋 [NotificationCenterView] DEBUG: Pending notifications: \(allPending.count)")
+            print("📋 [NotificationCenterView] DEBUG: Active notifications: \(allActive.count)")
+            print("📋 [NotificationCenterView] DEBUG: Regular notifications: \(allRegular.count)")
+            for (index, notif) in allPending.enumerated() {
+                print("📋 [NotificationCenterView] DEBUG: Pending[\(index)]: id=\(notif.id), type=\(notif.type), status=\(notif.status), archivedAt=\(notif.archivedAt?.description ?? "nil"), docketNumber=\(notif.docketNumber ?? "nil")")
+            }
+        }
+        return filtered
     }
     
     // Regular file delivery notifications
@@ -128,7 +143,7 @@ struct NotificationCenterView: View {
             
             mainNotificationContent
         }
-        .frame(width: 400, height: 500)
+        .frame(minWidth: 400, minHeight: 500)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(nsColor: .windowBackgroundColor))
@@ -139,18 +154,7 @@ struct NotificationCenterView: View {
                 .fill(Color.clear)
         )
         .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
-        .onChange(of: activeNotifications.count) { oldCount, newCount in
-            if selectedTab == .newDockets && newCount == 0 && !mediaFileNotifications.isEmpty && Self.enableFileDeliveryFeature {
-                selectedTab = .fileDeliveries
-            } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && newCount > 0 {
-                selectedTab = .newDockets
-            }
-        }
-        .onChange(of: mediaFileNotifications.count) { oldCount, newCount in
-            if selectedTab == .fileDeliveries && newCount == 0 && !activeNotifications.isEmpty {
-                selectedTab = .newDockets
-            }
-        }
+        // Removed tab switching logic - only newDockets tab is available
         .onChange(of: settingsManager.currentSettings.simianAPIBaseURL) { _, _ in
             // Refresh when Simian API configuration changes
         }
@@ -161,13 +165,13 @@ struct NotificationCenterView: View {
     
     private var headerSection: some View {
         HStack {
-            Text("Notifications")
+            Text("New Dockets")
                 .font(.system(size: 16, weight: .semibold))
             
             Spacer()
             
             if notificationCenter.unreadCount > 0 {
-                Text("\(notificationCenter.unreadCount) new")
+                Text("\(notificationCenter.unreadCount)")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
@@ -177,21 +181,6 @@ struct NotificationCenterView: View {
                 grabbedIndicatorService: notificationCenter.grabbedIndicatorService
             )
                 .environmentObject(emailScanningService)
-            
-            Button(action: {
-                let manager = NotificationWindowManager.shared
-                manager.setLocked(!manager.isLocked)
-                var updatedSettings = settingsManager.currentSettings
-                updatedSettings.notificationWindowLocked = manager.isLocked
-                settingsManager.currentSettings = updatedSettings
-                settingsManager.saveCurrentProfile()
-            }) {
-                Image(systemName: NotificationWindowManager.shared.isLocked ? "lock.fill" : "lock.open.fill")
-                    .foregroundColor(.secondary)
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.plain)
-            .help(NotificationWindowManager.shared.isLocked ? "Unlock window (detach from main window)" : "Lock window (follow main window)")
             
             Button(action: {
                 NotificationWindowManager.shared.hideNotificationWindow()
@@ -206,14 +195,6 @@ struct NotificationCenterView: View {
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            let manager = NotificationWindowManager.shared
-            manager.setLocked(!manager.isLocked)
-            var updatedSettings = settingsManager.currentSettings
-            updatedSettings.notificationWindowLocked = manager.isLocked
-            settingsManager.currentSettings = updatedSettings
-            settingsManager.saveCurrentProfile()
-        }
     }
     
     private var gmailStatusBanner: some View {
@@ -302,9 +283,9 @@ struct NotificationCenterView: View {
             
             if gmailEnabled && !isGmailConnected {
                 gmailNotConnectedEmptyState
-            } else if !gmailEnabled && notificationsForReview.isEmpty && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
+            } else if !gmailEnabled && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
                 gmailDisabledEmptyState
-            } else if notificationsForReview.isEmpty && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
+            } else if mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
                 noNotificationsEmptyState
             } else {
                 notificationListContent
@@ -384,9 +365,11 @@ struct NotificationCenterView: View {
                 Image(systemName: "bell.slash")
                     .font(.system(size: 40))
                     .foregroundColor(.secondary)
+                
                 Text("No notifications")
                     .font(.system(size: 14))
                     .foregroundColor(.secondary)
+                
                 if let status = lastScanStatus {
                     Text(status)
                         .font(.system(size: 11))
@@ -401,172 +384,10 @@ struct NotificationCenterView: View {
     
     private var notificationListContent: some View {
         VStack(spacing: 0) {
-            // Tabs for notification types
-            if !mediaFileNotifications.isEmpty || !activeNotifications.isEmpty || !notificationsForReview.isEmpty {
-                HStack(spacing: 0) {
-                            // New Dockets tab
-                            Button(action: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    selectedTab = .newDockets
-                                }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "doc.text.fill")
-                                        .font(.system(size: 11))
-                                    Text("New Dockets")
-                                        .font(.system(size: 12, weight: .medium))
-                                    if !regularNewDocketNotifications.isEmpty {
-                                        Text("(\(regularNewDocketNotifications.count))")
-                                            .font(.system(size: 11))
-                                            .opacity(0.7)
-                                    }
-                                }
-                                .foregroundColor(selectedTab == .newDockets ? .blue : .secondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(
-                                    selectedTab == .newDockets
-                                        ? Color.blue.opacity(0.1)
-                                        : Color.clear
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            
-                            // FEATURE FLAG: File delivery tab is hidden when disabled
-                            if Self.enableFileDeliveryFeature {
-                                Divider()
-                                    .frame(height: 20)
-                                
-                                // File Deliveries tab
-                                Button(action: {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        selectedTab = .fileDeliveries
-                                    }
-                                }) {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "link.circle.fill")
-                                            .font(.system(size: 11))
-                                        Text("File Deliveries")
-                                            .font(.system(size: 12, weight: .medium))
-                                        if !regularFileDeliveryNotifications.isEmpty {
-                                            Text("(\(regularFileDeliveryNotifications.count))")
-                                                .font(.system(size: 11))
-                                                .opacity(0.7)
-                                        }
-                                    }
-                                    .foregroundColor(selectedTab == .fileDeliveries ? .green : .secondary)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
-                                    .background(
-                                        selectedTab == .fileDeliveries
-                                            ? Color.green.opacity(0.1)
-                                            : Color.clear
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            
-                            // FEATURE FLAG: Request tab is hidden when disabled
-                            if Self.enableRequestFeature {
-                                Divider()
-                                    .frame(height: 20)
-                                
-                                // Requests tab
-                                Button(action: {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        selectedTab = .requests
-                                    }
-                                }) {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "hand.raised.fill")
-                                            .font(.system(size: 11))
-                                        Text("Requests")
-                                            .font(.system(size: 12, weight: .medium))
-                                        if !regularRequestNotifications.isEmpty {
-                                            Text("(\(regularRequestNotifications.count))")
-                                                .font(.system(size: 11))
-                                                .opacity(0.7)
-                                        }
-                                    }
-                                    .foregroundColor(selectedTab == .requests ? .orange : .secondary)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
-                                    .background(
-                                        selectedTab == .requests
-                                            ? Color.orange.opacity(0.1)
-                                            : Color.clear
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                }
-                .background(Color(nsColor: .separatorColor).opacity(0.3))
-                .overlay(
-                    Rectangle()
-                        .frame(height: 1)
-                        .foregroundColor(Color(nsColor: .separatorColor)),
-                    alignment: .bottom
-                )
-                
-                Divider()
-            }
-            
-            // Content for selected tab
+            // Content - no tabs needed since we only show new dockets
             ScrollView {
                 VStack(spacing: 0) {
-                    // "For Review" section (low confidence notifications)
-                    if !notificationsForReview.isEmpty {
-                        Button(action: {
-                            withAnimation {
-                                isForReviewExpanded.toggle()
-                            }
-                        }) {
-                            HStack {
-                                Image(systemName: isForReviewExpanded ? "chevron.down" : "chevron.right")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.orange)
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.orange)
-                                Text("For Review")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(.orange)
-                                Text("(\(notificationsForReview.count))")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.orange.opacity(0.7))
-                                Spacer()
-                            }
-                            .padding(.horizontal)
-                            .padding(.vertical, 10)
-                            .background(Color.orange.opacity(0.1))
-                        }
-                        .buttonStyle(.plain)
-                        
-                        if isForReviewExpanded {
-                            ForEach(notificationsForReview) { notification in
-                                NotificationRowView(
-                                        notificationId: notification.id,
-                                        notificationCenter: notificationCenter,
-                                        emailScanningService: emailScanningService,
-                                        mediaManager: mediaManager,
-                                        settingsManager: settingsManager,
-                                        processingNotification: $processingNotification,
-                                        debugInfo: $debugInfo,
-                                        showDebugInfo: $showDebugInfo
-                                )
-                                .padding(.horizontal)
-                                .padding(.vertical, 8)
-                                .background(Color.orange.opacity(0.05))
-                                
-                                Divider()
-                            }
-                        }
-                        
-                        Divider()
-                            .padding(.vertical, 4)
-                    }
-                    
-                    if selectedTab == .newDockets && !regularNewDocketNotifications.isEmpty {
+                    if !regularNewDocketNotifications.isEmpty {
                         ForEach(regularNewDocketNotifications) { notification in
                             NotificationRowView(
                                 notificationId: notification.id,
@@ -575,6 +396,7 @@ struct NotificationCenterView: View {
                                 mediaManager: mediaManager,
                                 settingsManager: settingsManager,
                                 processingNotification: $processingNotification,
+                                processingStatusById: $processingStatusById,
                                 debugInfo: $debugInfo,
                                 showDebugInfo: $showDebugInfo
                             )
@@ -583,69 +405,18 @@ struct NotificationCenterView: View {
                             
                             Divider()
                         }
-                    } else if Self.enableFileDeliveryFeature && selectedTab == .fileDeliveries && !regularFileDeliveryNotifications.isEmpty {
-                        ForEach(regularFileDeliveryNotifications) { notification in
-                            NotificationRowView(
-                                notificationId: notification.id,
-                                notificationCenter: notificationCenter,
-                                emailScanningService: emailScanningService,
-                                mediaManager: mediaManager,
-                                settingsManager: settingsManager,
-                                processingNotification: $processingNotification,
-                                debugInfo: $debugInfo,
-                                showDebugInfo: $showDebugInfo
-                            )
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
-                            
-                            Divider()
+                    } else {
+                        // Empty state - no new docket notifications
+                        VStack(spacing: 12) {
+                            Image(systemName: "doc.text")
+                                .font(.system(size: 40))
+                                .foregroundColor(.secondary)
+                            Text("No new docket notifications")
+                                .font(.system(size: 14))
+                                .foregroundColor(.secondary)
                         }
-                    } else if Self.enableRequestFeature && selectedTab == .requests && !regularRequestNotifications.isEmpty {
-                        ForEach(regularRequestNotifications) { notification in
-                            NotificationRowView(
-                                notificationId: notification.id,
-                                notificationCenter: notificationCenter,
-                                emailScanningService: emailScanningService,
-                                mediaManager: mediaManager,
-                                settingsManager: settingsManager,
-                                processingNotification: $processingNotification,
-                                debugInfo: $debugInfo,
-                                showDebugInfo: $showDebugInfo
-                            )
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
-                            
-                            Divider()
-                        }
-                    } else if notificationsForReview.isEmpty {
-                        // Empty state for selected tab (only show if no review items)
-                        // FEATURE FLAG: Only show empty state for enabled tabs
-                        if (selectedTab == .newDockets) ||
-                           (Self.enableFileDeliveryFeature && selectedTab == .fileDeliveries) ||
-                           (Self.enableRequestFeature && selectedTab == .requests) {
-                            VStack(spacing: 12) {
-                                Image(systemName: {
-                                    switch selectedTab {
-                                    case .newDockets: return "doc.text"
-                                    case .fileDeliveries: return "link.circle"
-                                    case .requests: return "hand.raised"
-                                    }
-                                }())
-                                    .font(.system(size: 40))
-                                    .foregroundColor(.secondary)
-                                Text({
-                                    switch selectedTab {
-                                    case .newDockets: return "No new docket notifications"
-                                    case .fileDeliveries: return "No file delivery notifications"
-                                    case .requests: return "No request notifications"
-                                    }
-                                }())
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.secondary)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 40)
-                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
                     }
                 }
                 
@@ -681,6 +452,7 @@ struct NotificationCenterView: View {
                                 mediaManager: mediaManager,
                                 settingsManager: settingsManager,
                                 processingNotification: $processingNotification,
+                                processingStatusById: $processingStatusById,
                                 debugInfo: $debugInfo,
                                 showDebugInfo: $showDebugInfo
                             )
@@ -900,14 +672,7 @@ struct NotificationCenterView: View {
     }
     
     private func handleViewAppear() {
-        // Ensure selectedTab is valid (not a disabled tab) - reset to newDockets if disabled tab is selected
-        // Do this synchronously as it's just local state
-        if selectedTab == .fileDeliveries && !Self.enableFileDeliveryFeature {
-            selectedTab = .newDockets
-        }
-        if selectedTab == .requests && !Self.enableRequestFeature {
-            selectedTab = .newDockets
-        }
+        // No tabs needed - only showing new dockets
         
         // Move cleanup operations to async Task to avoid modifying @Published properties during view update
         Task { @MainActor in
@@ -919,12 +684,7 @@ struct NotificationCenterView: View {
             await notificationCenter.syncCompletionStatus()
         }
         
-        // Auto-select tab if current selection is empty
-        if selectedTab == .newDockets && activeNotifications.isEmpty && !mediaFileNotifications.isEmpty {
-            selectedTab = .fileDeliveries
-        } else if selectedTab == .fileDeliveries && mediaFileNotifications.isEmpty && !activeNotifications.isEmpty {
-            selectedTab = .newDockets
-        }
+        // Only newDockets tab is available now
         
         // Only auto-scan if last scan was more than 30 seconds ago (debounce to avoid slowdown)
         let timeSinceLastScan = emailScanningService.lastScanTime.map { Date().timeIntervalSince($0) } ?? Double.infinity
@@ -1000,7 +760,7 @@ struct NotificationCenterView: View {
             return
         }
         
-        // Always scan all unread emails - classifier determines relevance
+        // Scan all unread emails to find new docket emails
         let query = "is:unread"
         
         debugMessages.append("🔍 Query Configuration:")
@@ -1262,6 +1022,7 @@ struct NotificationRowView: View {
     @ObservedObject var mediaManager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
     @Binding var processingNotification: UUID?
+    @Binding var processingStatusById: [UUID: String]
     @Binding var debugInfo: String?
     @Binding var showDebugInfo: Bool
     
@@ -1338,7 +1099,12 @@ struct NotificationRowView: View {
             return
         }
         
-        // Update notification with the docket number and job name from dialog
+        // Update notification with the job name and docket number from dialog
+        notificationCenter.updateJobName(updatedNotification, to: jobName)
+        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+            updatedNotification = currentNotification
+        }
+        
         notificationCenter.updateDocketNumber(updatedNotification, to: docketNumber)
         if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
             updatedNotification = currentNotification
@@ -1354,6 +1120,7 @@ struct NotificationRowView: View {
         // Create Work Picture folder if requested
         if shouldCreateWorkPicture {
             do {
+                updateProcessingStatus(notificationId, "Creating Work Picture folder...")
                 print("🔔 Creating Work Picture folder with docket: \(docketNumber), job: \(jobName)")
                 try await emailScanningService.createDocketFromNotification(updatedNotification)
                 print("✅ Work Picture folder created successfully")
@@ -1376,6 +1143,7 @@ struct NotificationRowView: View {
             updateSimianServiceConfiguration()
             
             do {
+                updateProcessingStatus(notificationId, "Creating Simian project...")
                 print("🔔 Creating Simian project with docket: \(docketNumber), job: \(jobName)")
                 try await simianService.createJob(
                     docketNumber: docketNumber,
@@ -1399,9 +1167,12 @@ struct NotificationRowView: View {
         // Handle results and cleanup
         await MainActor.run {
             processingNotification = nil
-            
-            // Show error notifications if any failed
-            if let wpError = workPictureError {
+            processingStatusById[notificationId] = nil
+        }
+        
+        // Show error notifications if any failed
+        if let wpError = workPictureError {
+            await MainActor.run {
                 let errorNotification = Notification(
                     type: .error,
                     title: "Work Picture Creation Failed",
@@ -1409,8 +1180,10 @@ struct NotificationRowView: View {
                 )
                 notificationCenter.add(errorNotification)
             }
-            
-            if let simError = simianError {
+        }
+        
+        if let simError = simianError {
+            await MainActor.run {
                 let errorNotification = Notification(
                     type: .error,
                     title: "Simian Project Creation Failed",
@@ -1418,10 +1191,14 @@ struct NotificationRowView: View {
                 )
                 notificationCenter.add(errorNotification)
             }
+        }
+        
+        // Mark email as read and track interaction
+        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+            // Mark email as read BEFORE removing notification (await to ensure it completes)
+            await markEmailAsReadIfNeeded(currentNotification)
             
-            // Mark email as read and track interaction
-            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                markEmailAsReadIfNeeded(currentNotification)
+            await MainActor.run {
                 
                 if let emailId = currentNotification.emailId {
                     var details: [String: String] = [:]
@@ -1459,6 +1236,9 @@ struct NotificationRowView: View {
     var body: some View {
         // Guard to ensure notification exists
         guard let notification = notification else {
+            // Log when notification is missing but count shows it exists
+            print("📋 NotificationRowView: ⚠️ Notification \(notificationId) not found in list but count shows notifications exist")
+            print("📋 NotificationRowView: Total notifications: \(notificationCenter.notifications.count), Unread count: \(notificationCenter.unreadCount)")
             return AnyView(EmptyView())
         }
         
@@ -1541,7 +1321,20 @@ struct NotificationRowView: View {
                 hasSubmittedFeedback = false
             }
         }
-        .sheet(isPresented: $showDocketInputDialog) {
+        .sheet(isPresented: $showDocketInputDialog, onDismiss: {
+            // When dialog is dismissed (cancelled), reset the approval flag
+            // This ensures the notification remains visible and isn't removed
+            print("📋 NotificationRowView: Dialog dismissed (cancelled) - preserving notification \(notificationId)")
+            isDocketInputForApproval = false
+            inputDocketNumber = ""
+            
+            // Ensure notification still exists and is visible
+            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                print("📋 NotificationRowView: ✅ Notification \(notificationId) still exists after cancel (status: \(currentNotification.status))")
+            } else {
+                print("📋 NotificationRowView: ❌ WARNING - Notification \(notificationId) was removed after cancel!")
+            }
+        }) {
             DocketNumberInputDialog(
                 isPresented: $showDocketInputDialog,
                 docketNumber: $inputDocketNumber,
@@ -1562,12 +1355,17 @@ struct NotificationRowView: View {
                     }
                 }
             )
+            .sheetBorder()
         }
         .sheet(isPresented: $showSimianProjectDialog) {
             if let notificationId = pendingSimianNotificationId,
                let notification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
                 let isSimianEnabled = notification.shouldCreateSimianJob || 
                     (settingsManager.currentSettings.simianEnabled && simianService.isConfigured)
+                
+                // Use the selected project manager from the notification if set,
+                // otherwise fall back to sourceEmail for auto-matching
+                let initialProjectManager = notification.projectManager ?? pendingSimianSourceEmail
                 
                 SimianProjectCreationDialog(
                     isPresented: $showSimianProjectDialog,
@@ -1576,6 +1374,7 @@ struct NotificationRowView: View {
                     initialDocketNumber: pendingSimianDocketNumber,
                     initialJobName: pendingSimianJobName,
                     sourceEmail: pendingSimianSourceEmail,
+                    initialProjectManager: initialProjectManager,
                     isSimianEnabled: isSimianEnabled,
                     onConfirm: { docketNumber, jobName, projectManager, template in
                         Task {
@@ -1589,6 +1388,7 @@ struct NotificationRowView: View {
                         }
                     }
                 )
+                .sheetBorder()
             }
         }
         .onChange(of: showSimianProjectDialog) { oldValue, newValue in
@@ -1610,20 +1410,14 @@ struct NotificationRowView: View {
                                 notificationCenter.notifications.first(where: { $0.id == notificationId })?.isInWorkPicture == true
                             
                             if !wasProcessed {
-                                // Dialog was cancelled before confirmation - remove notification
-                                if let notification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                                    print("🔔 Simian dialog was cancelled - removing notification")
-                                    Task {
-                                        await notificationCenter.remove(notification, emailScanningService: emailScanningService)
-                                        await MainActor.run {
-                                            pendingSimianNotificationId = nil
-                                            pendingSimianDocketNumber = ""
-                                            pendingSimianJobName = ""
-                                            processingNotification = nil
-                                        }
-                                    }
-                                    return
-                                }
+                                // Dialog was cancelled - DON'T remove notification, just clear pending state
+                                // The notification should remain visible so the user can try again
+                                print("🔔 Simian dialog was cancelled - preserving notification so user can try again")
+                                pendingSimianNotificationId = nil
+                                pendingSimianDocketNumber = ""
+                                pendingSimianJobName = ""
+                                processingNotification = nil
+                                return
                             }
                         }
                         
@@ -1652,6 +1446,7 @@ struct NotificationRowView: View {
                         CompanyNameCache.shared.addCompanyName(newJobName, source: "user")
                     }
                 )
+                .sheetBorder()
             }
         }
         .alert("Did you grab it?", isPresented: $showGrabbedConfirmation) {
@@ -1670,20 +1465,18 @@ struct NotificationRowView: View {
     }
     
     /// Mark email as read if notification has an emailId
-    private func markEmailAsReadIfNeeded(_ notification: Notification) {
+    private func markEmailAsReadIfNeeded(_ notification: Notification) async {
         guard let emailId = notification.emailId else {
             print("📧 NotificationCenterView: ⚠️ Cannot mark email as read - notification has no emailId")
             return
         }
         
-        Task {
-            do {
-                try await emailScanningService.gmailService.markAsRead(messageId: emailId)
-                print("📧 NotificationCenterView: ✅ Successfully marked email \(emailId) as read")
-            } catch {
-                print("📧 NotificationCenterView: ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
-                print("📧 NotificationCenterView: Error details: \(error)")
-            }
+        do {
+            try await emailScanningService.gmailService.markAsRead(messageId: emailId)
+            print("📧 NotificationCenterView: ✅ Successfully marked email \(emailId) as read")
+        } catch {
+            print("📧 NotificationCenterView: ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+            print("📧 NotificationCenterView: Error details: \(error)")
         }
     }
     
@@ -1729,9 +1522,11 @@ struct NotificationRowView: View {
             
             if !wasCorrect {
                 // Thumbs down: Remove the notification and mark email as read
-                markEmailAsReadIfNeeded(updatedNotification)
-                notificationCenter.remove(updatedNotification, emailScanningService: emailScanningService)
-                print("📋 NotificationCenterView: Removed notification after downvote")
+                Task {
+                    await markEmailAsReadIfNeeded(updatedNotification)
+                    await notificationCenter.remove(updatedNotification, emailScanningService: emailScanningService)
+                    print("📋 NotificationCenterView: Removed notification after downvote")
+                }
             }
             
             hasSubmittedFeedback = true // Update local state to trigger UI refresh
@@ -1854,6 +1649,17 @@ struct NotificationRowView: View {
                 .disabled(isInSimian)
                 .opacity(isInSimian ? 0.5 : 1.0)
             
+            if processingNotification == notificationId {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                    Text(processingStatusById[notificationId] ?? "Processing approval...")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+            
             if notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob == true && !isInSimian {
                 projectManagerFieldView(notification: notification)
             }
@@ -1865,6 +1671,18 @@ struct NotificationRowView: View {
             // Update duplicate detection when view appears
             if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
                 notificationCenter.updateDuplicateDetection(currentNotification, mediaManager: mediaManager, settingsManager: settingsManager)
+                
+                // Auto-match project manager from sourceEmail if not already set
+                if currentNotification.projectManager == nil || currentNotification.projectManager == currentNotification.sourceEmail {
+                    if let sourceEmail = currentNotification.sourceEmail {
+                        let emailAddress = extractEmailAddress(from: sourceEmail)
+                        // Try to match to a project manager from settings
+                        if let matchingEmail = settingsManager.currentSettings.simianProjectManagers.first(where: { $0.lowercased() == emailAddress.lowercased() }) {
+                            // Auto-set the project manager if it matches
+                            notificationCenter.updateProjectManager(currentNotification, to: matchingEmail)
+                        }
+                    }
+                }
             }
             // Update Simian service configuration first, then pre-load users if Simian is enabled
             updateSimianServiceConfiguration()
@@ -1950,6 +1768,28 @@ struct NotificationRowView: View {
                 }
             }
         )
+    }
+    
+    /// Extract email address from sourceEmail string (handles "Name <email@example.com>" format)
+    private func extractEmailAddress(from sourceEmail: String) -> String {
+        // Check if it's in format "Name <email@example.com>"
+        if let regex = try? NSRegularExpression(pattern: #"<([^>]+)>"#, options: []),
+           let match = regex.firstMatch(in: sourceEmail, range: NSRange(sourceEmail.startIndex..., in: sourceEmail)),
+           match.numberOfRanges >= 2 {
+            let emailRange = Range(match.range(at: 1), in: sourceEmail)!
+            return String(sourceEmail[emailRange]).trimmingCharacters(in: .whitespaces)
+        }
+        
+        // If no angle brackets, check if it's just an email
+        if let regex = try? NSRegularExpression(pattern: #"([^\s<>]+@[^\s<>]+)"#, options: []),
+           let match = regex.firstMatch(in: sourceEmail, range: NSRange(sourceEmail.startIndex..., in: sourceEmail)),
+           match.numberOfRanges >= 2 {
+            let emailRange = Range(match.range(at: 1), in: sourceEmail)!
+            return String(sourceEmail[emailRange]).trimmingCharacters(in: .whitespaces)
+        }
+        
+        // Fallback: return as-is (might already be just an email)
+        return sourceEmail.trimmingCharacters(in: .whitespaces)
     }
     
     
@@ -2541,25 +2381,28 @@ struct NotificationRowView: View {
                 // print("NotificationCenterView: ✅ Successfully sent 'Grabbed' reply\(imageURL != nil ? " with image" : "")")
                 
                 // Mark notification as grabbed (remove it)
-                await MainActor.run {
-                    if let notification = notification {
-                        // Mark email as read when grabbing file delivery
-                        markEmailAsReadIfNeeded(notification)
-                        
-                        // Track grab interaction by email ID
+                if let notification = notification {
+                    // Mark email as read when grabbing file delivery
+                    await markEmailAsReadIfNeeded(notification)
+                    
+                    // Track grab interaction by email ID
+                    await MainActor.run {
                         if let emailId = notification.emailId {
                             EmailFeedbackTracker.shared.recordInteraction(
                                 emailId: emailId,
                                 type: .grabbed
                             )
                         }
-                        
-                        // Remove notification instead of archiving
-                        notificationCenter.remove(notification, emailScanningService: emailScanningService)
-                        print("📋 NotificationCenterView: Removed notification after grabbing file delivery")
                     }
-                    pendingEmailIdForReply = nil
-                    isSendingReply = false
+                    
+                    // Remove notification instead of archiving
+                    await notificationCenter.remove(notification, emailScanningService: emailScanningService)
+                    print("📋 NotificationCenterView: Removed notification after grabbing file delivery")
+                    
+                    await MainActor.run {
+                        pendingEmailIdForReply = nil
+                        isSendingReply = false
+                    }
                 }
             } catch {
                 // DEBUG: Commented out for performance
@@ -2675,10 +2518,10 @@ struct NotificationRowView: View {
             return
         }
         
-        // Check if docket already exists in Work Picture (only if creating Work Picture)
+        // Check if docket already exists in current year's Work Picture (only if creating Work Picture)
         // Allow creation in Simian even if it exists in Work Picture, and vice versa
         let docketName = "\(docketNumber)_\(jobName)"
-        if mediaManager.dockets.contains(docketName) && currentNotification.shouldCreateWorkPicture {
+        if currentNotification.shouldCreateWorkPicture && docketExistsInCurrentWorkPicture(docketName) {
             // Show error notification only if trying to create Work Picture
             let errorNotification = Notification(
                 type: .error,
@@ -2717,15 +2560,16 @@ struct NotificationRowView: View {
             finalDocketNumber = "\(yearSuffix)XXX" // e.g., "25XXX", "26XXX"
         }
         
-        // Check if docket already exists in Work Picture before creating Work Picture folder
+        // Check if docket already exists in current year's Work Picture before creating Work Picture folder
         // Note: We only check Work Picture here - Simian creation is independent
         let docketName = "\(finalDocketNumber)_\(jobName)"
-        if mediaManager.dockets.contains(docketName) {
+        if docketExistsInCurrentWorkPicture(docketName) {
             // Only prevent if user wants to create Work Picture folder
             // Check the notification's shouldCreateWorkPicture flag
             if currentNotification.shouldCreateWorkPicture {
                 await MainActor.run {
                     processingNotification = nil
+                    processingStatusById[notificationId] = nil
                     // Show error notification
                     let errorNotification = Notification(
                         type: .error,
@@ -2748,6 +2592,7 @@ struct NotificationRowView: View {
         }
         
         processingNotification = notificationId
+        updateProcessingStatus(notificationId, "Preparing approval...")
         
         // Check if we should show the dialog (if Simian is enabled OR if Work Picture is enabled)
         // The dialog allows setting docket number and job name that apply to both systems
@@ -2781,8 +2626,9 @@ struct NotificationRowView: View {
             print("⚠️ Neither Simian nor Work Picture enabled - removing notification")
             await MainActor.run {
                 processingNotification = nil
-                markEmailAsReadIfNeeded(updatedNotification)
+                processingStatusById[notificationId] = nil
             }
+            await markEmailAsReadIfNeeded(updatedNotification)
             if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
                 await notificationCenter.remove(currentNotification, emailScanningService: emailScanningService)
             }
@@ -2837,6 +2683,17 @@ struct NotificationRowView: View {
     private func docketExists(docketNumber: String, jobName: String) -> Bool {
         let info = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
         return info.existsAnywhere
+    }
+
+    @MainActor
+    private func updateProcessingStatus(_ notificationId: UUID, _ status: String) {
+        processingStatusById[notificationId] = status
+    }
+
+    private func docketExistsInCurrentWorkPicture(_ docketName: String) -> Bool {
+        let config = AppConfig(settings: settingsManager.currentSettings)
+        let workPicPath = config.getPaths().workPic.appendingPathComponent(docketName)
+        return FileManager.default.fileExists(atPath: workPicPath.path)
     }
     
     /// Comprehensive check of where a docket exists across all known databases

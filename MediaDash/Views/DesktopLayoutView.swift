@@ -455,10 +455,10 @@ struct DesktopIconRail: View {
     
     var body: some View {
         VStack(spacing: 8) {
-            // Notifications
+            // New Dockets
             IconRailButton(
                 icon: "bell.fill",
-                label: "Notifications",
+                label: "New Dockets",
                 badge: notificationCenter.unreadCount > 0 ? notificationCenter.unreadCount : nil,
                 isActive: showNotificationCenter
             ) {

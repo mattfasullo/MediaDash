@@ -9,7 +9,7 @@ import SwiftUI
     case request = "request" // Requests for the media team
     case error = "error"
     case info = "info"
-    case junk = "junk" // Ads, promos, spam mistakenly classified
+    case junk = "junk" // Ads, promos, spam - removes notification
     case skipped = "skipped" // User chose to skip/ignore this notification
     
     /// Display name for the notification type
@@ -51,9 +51,10 @@ import SwiftUI
         }
     }
     
-    /// Types available for manual reclassification
+    /// Types available for marking as junk or skipped (removes notification)
     static var reclassifiableTypes: [NotificationType] {
-        [.newDocket, .mediaFiles, .request, .junk, .skipped]
+        [.junk, .skipped]
+        // Note: Only junk and skipped are supported - these remove the notification
     }
 }
 
@@ -68,7 +69,7 @@ enum NotificationStatus: String, Codable {
 /// Notification model
 struct Notification: Identifiable, Codable, Equatable {
     let id: UUID
-    var type: NotificationType // Mutable to allow reclassification
+    var type: NotificationType // Mutable to allow marking as junk/skipped
     var title: String
     var message: String
     let timestamp: Date
