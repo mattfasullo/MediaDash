@@ -19,8 +19,6 @@ struct SimianArchiverView: View {
     @State private var fromDate: Date = Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date()
     @State private var toDate: Date = Date()
     @State private var loadTask: Task<Void, Never>?
-    @State private var projectSizes: [String: Int64] = [:]
-    @State private var sizeLoadingIds: Set<String> = []
     
     private var filteredProjects: [SimianProject] {
         let normalizedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -219,9 +217,6 @@ struct SimianArchiverView: View {
                     }
                     .padding(.vertical, 4)
                     .tag(project.id)
-                    .task {
-                        await loadProjectSizeIfNeeded(projectId: project.id)
-                    }
                 }
             }
             .listStyle(.inset)
@@ -318,11 +313,14 @@ struct SimianArchiverView: View {
     }
 
     private func sizeLabel(for project: SimianProject) -> String {
-        if let size = projectSizes[project.id] {
-            return "Size: \(formatBytes(size))"
+        guard let info = projectInfos[project.id] else {
+            return "Size: --"
         }
-        if sizeLoadingIds.contains(project.id) {
-            return "Size: calculating..."
+        if let bytes = info.projectSizeBytes {
+            return "Size: \(formatBytes(bytes))"
+        }
+        if let raw = info.projectSize, !raw.isEmpty {
+            return "Size: \(raw)"
         }
         return "Size: --"
     }
@@ -433,77 +431,6 @@ struct SimianArchiverView: View {
         selectedProjectIds = selectedProjectIds.intersection(filteredIds)
     }
 
-    private func loadProjectSizeIfNeeded(projectId: String) async {
-        let shouldLoad = await MainActor.run { () -> Bool in
-            guard projectSizes[projectId] == nil,
-                  !sizeLoadingIds.contains(projectId),
-                  simianService.isConfigured else {
-                return false
-            }
-            sizeLoadingIds.insert(projectId)
-            return true
-        }
-        
-        guard shouldLoad else { return }
-        defer {
-            Task { @MainActor in
-                sizeLoadingIds.remove(projectId)
-            }
-        }
-        
-        do {
-            let size = try await computeProjectSize(projectId: projectId)
-            await MainActor.run {
-                projectSizes[projectId] = size
-            }
-        } catch {
-            await MainActor.run {
-                projectSizes[projectId] = 0
-            }
-        }
-    }
-    
-    private func computeProjectSize(projectId: String) async throws -> Int64 {
-        var total: Int64 = 0
-        
-        let rootFiles = try await simianService.getProjectFiles(projectId: projectId, folderId: nil)
-        total += try await sumFileSizes(projectId: projectId, files: rootFiles)
-        
-        let folders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: nil)
-        for folder in folders {
-            total += try await computeFolderSize(projectId: projectId, folderId: folder.id)
-        }
-        
-        return total
-    }
-    
-    private func computeFolderSize(projectId: String, folderId: String) async throws -> Int64 {
-        var total: Int64 = 0
-        let files = try await simianService.getProjectFiles(projectId: projectId, folderId: folderId)
-        total += try await sumFileSizes(projectId: projectId, files: files)
-        
-        let subfolders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: folderId)
-        for folder in subfolders {
-            total += try await computeFolderSize(projectId: projectId, folderId: folder.id)
-        }
-        
-        return total
-    }
-    
-    private func sumFileSizes(projectId: String, files: [SimianFile]) async throws -> Int64 {
-        var total: Int64 = 0
-        for file in files {
-            do {
-                let info = try await simianService.getFileInfo(projectId: projectId, fileId: file.id)
-                if let bytes = info.mediaSizeBytes {
-                    total += bytes
-                }
-            } catch {
-                continue
-            }
-        }
-        return total
-    }
 }
 
 private enum ProjectSortOption: String, CaseIterable, Identifiable {

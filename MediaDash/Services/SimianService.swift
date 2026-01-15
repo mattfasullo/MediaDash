@@ -23,6 +23,8 @@ class SimianService: ObservableObject {
     
     // URLSession with cookie storage for session management
     private let session: URLSession
+    // Separate session for archive downloads (longer timeouts)
+    private let archiveSession: URLSession
     
     /// Get username from keychain (shared or personal)
     private var usernameValue: String? {
@@ -58,6 +60,14 @@ class SimianService: ObservableObject {
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpCookieAcceptPolicy = .always
         self.session = URLSession(configuration: config)
+        
+        let archiveConfig = URLSessionConfiguration.default
+        archiveConfig.httpCookieStorage = HTTPCookieStorage.shared
+        archiveConfig.httpCookieAcceptPolicy = .always
+        archiveConfig.waitsForConnectivity = true
+        archiveConfig.timeoutIntervalForRequest = 60 * 30
+        archiveConfig.timeoutIntervalForResource = 60 * 60 * 6
+        self.archiveSession = URLSession(configuration: archiveConfig)
         
         // Always use Grayson's hardcoded URL - ignore any stored values
         let graysonURL = "https://graysonmusic.gosimian.com/api/prjacc"
@@ -617,6 +627,11 @@ class SimianService: ObservableObject {
     /// Fetch detailed project info for filtering and display
     func getProjectInfoDetails(projectId: String) async throws -> SimianProjectInfo {
         let info = try await getProjectInfo(projectId: projectId)
+        let projectSize = SimianService.stringValue(info["project_size"])
+            ?? SimianService.stringValue(info["project_size_total"])
+            ?? SimianService.stringValue(info["total_size"])
+            ?? SimianService.stringValue(info["size"])
+            ?? SimianService.stringValue(info["media_size"])
         return SimianProjectInfo(
             id: projectId,
             name: SimianService.stringValue(info["project_name"]),
@@ -624,7 +639,8 @@ class SimianService: ObservableObject {
             uploadDate: SimianService.stringValue(info["upload_date"]),
             startDate: SimianService.stringValue(info["start_date"]),
             completeDate: SimianService.stringValue(info["complete_date"]),
-            lastAccess: SimianService.stringValue(info["last_access"])
+            lastAccess: SimianService.stringValue(info["last_access"]),
+            projectSize: projectSize
         )
     }
     
@@ -1240,7 +1256,11 @@ class SimianService: ObservableObject {
     }
 
     /// Download a project ZIP archive from the Simian web UI
-    func downloadProjectArchive(projectId: String, to destinationURL: URL) async throws {
+    func downloadProjectArchive(
+        projectId: String,
+        to destinationURL: URL,
+        progress: ((Int64, Int64?) -> Void)? = nil
+    ) async throws {
         guard let baseURLString = baseURL, let base = URL(string: baseURLString) else {
             throw SimianError.notConfigured
         }
@@ -1254,6 +1274,7 @@ class SimianService: ObservableObject {
         
         var headRequest = URLRequest(url: archiveURL)
         headRequest.httpMethod = "HEAD"
+        headRequest.timeoutInterval = 60 * 10
         
         // #region agent log
         do {
@@ -1279,9 +1300,18 @@ class SimianService: ObservableObject {
         }
         // #endregion
         
-        let (_, headResponse) = try await session.data(for: headRequest)
+        let (_, headResponse) = try await archiveSession.data(for: headRequest)
         let headStatus = (headResponse as? HTTPURLResponse)?.statusCode ?? -1
         let headSize = (headResponse as? HTTPURLResponse)?.value(forHTTPHeaderField: "x-archive-estimated-size") ?? "nil"
+        let estimatedBytes: Int64? = {
+            if let value = Int64(headSize) {
+                return value
+            }
+            return SimianService.parseMediaSize(headSize)
+        }()
+        if let estimatedBytes {
+            progress?(0, estimatedBytes)
+        }
         
         // #region agent log
         do {
@@ -1308,14 +1338,30 @@ class SimianService: ObservableObject {
         }
         // #endregion
         
-        var request = URLRequest(url: archiveURL)
-        request.httpMethod = "GET"
-        
-        let (tempURL, response) = try await session.download(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw SimianError.apiError("Archive download failed: \(archiveURL.lastPathComponent)")
-        }
-        guard (200...299).contains(httpResponse.statusCode) else {
+        let maxAttempts = 3
+        var lastError: Error?
+        for attempt in 1...maxAttempts {
+            var request = URLRequest(url: archiveURL)
+            request.httpMethod = "GET"
+            
+            do {
+                let downloadDelegate = ArchiveDownloadDelegate(progress: progress)
+                let downloadSession = URLSession(
+                    configuration: archiveSession.configuration,
+                    delegate: downloadDelegate,
+                    delegateQueue: nil
+                )
+                defer { downloadSession.finishTasksAndInvalidate() }
+                
+                let result: ArchiveDownloadResult = try await withCheckedThrowingContinuation { continuation in
+                    downloadDelegate.attachContinuation(continuation)
+                    let task = downloadSession.downloadTask(with: request)
+                    task.resume()
+                }
+                guard let httpResponse = result.response as? HTTPURLResponse else {
+                    throw SimianError.apiError("Archive download failed: \(archiveURL.lastPathComponent)")
+                }
+                guard (200...299).contains(httpResponse.statusCode) else {
             // #region agent log
             do {
                 let logData: [String: Any] = [
@@ -1340,8 +1386,8 @@ class SimianService: ObservableObject {
                 }
             }
             // #endregion
-            throw SimianError.apiError("Archive download failed: \(archiveURL.lastPathComponent)")
-        }
+                    throw SimianError.apiError("Archive download failed: \(archiveURL.lastPathComponent)")
+                }
         
         // #region agent log
         do {
@@ -1369,11 +1415,27 @@ class SimianService: ObservableObject {
         }
         // #endregion
         
-        let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            try fileManager.removeItem(at: destinationURL)
+                let fileManager = FileManager.default
+                if fileManager.fileExists(atPath: destinationURL.path) {
+                    try fileManager.removeItem(at: destinationURL)
+                }
+                try fileManager.moveItem(at: result.tempURL, to: destinationURL)
+                return
+            } catch {
+                lastError = error
+                if let urlError = error as? URLError,
+                   urlError.code == .timedOut,
+                   attempt < maxAttempts {
+                    let backoffSeconds = Double(attempt) * 2.0
+                    try await Task.sleep(nanoseconds: UInt64(backoffSeconds * 1_000_000_000))
+                    continue
+                }
+                throw error
+            }
         }
-        try fileManager.moveItem(at: tempURL, to: destinationURL)
+        if let lastError = lastError {
+            throw lastError
+        }
     }
     
     /// Create a folder in a project
@@ -2301,6 +2363,7 @@ struct SimianProjectInfo: Identifiable, Hashable {
     let startDate: String?
     let completeDate: String?
     let lastAccess: String?
+    let projectSize: String?
     
     func dateValue(for field: SimianProjectDateField) -> Date? {
         let rawValue: String?
@@ -2318,6 +2381,11 @@ struct SimianProjectInfo: Identifiable, Hashable {
             return nil
         }
         return SimianProjectInfo.parseDate(rawValue)
+    }
+
+    var projectSizeBytes: Int64? {
+        guard let projectSize = projectSize else { return nil }
+        return SimianService.parseMediaSize(projectSize)
     }
     
     private static func parseDate(_ rawValue: String) -> Date? {
@@ -2498,6 +2566,58 @@ extension SimianService {
         default:
             return Int64(number)
         }
+    }
+}
+
+private struct ArchiveDownloadResult {
+    let tempURL: URL
+    let response: URLResponse?
+}
+
+private final class ArchiveDownloadDelegate: NSObject, URLSessionDownloadDelegate {
+    private let progressHandler: ((Int64, Int64?) -> Void)?
+    private var continuation: CheckedContinuation<ArchiveDownloadResult, Error>?
+    private var tempURL: URL?
+    private var didComplete = false
+    
+    init(progress: ((Int64, Int64?) -> Void)?) {
+        self.progressHandler = progress
+    }
+    
+    func attachContinuation(_ continuation: CheckedContinuation<ArchiveDownloadResult, Error>) {
+        self.continuation = continuation
+    }
+    
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        let expected = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
+        progressHandler?(totalBytesWritten, expected)
+    }
+    
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        tempURL = location
+    }
+    
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard !didComplete else { return }
+        didComplete = true
+        
+        if let error = error {
+            continuation?.resume(throwing: error)
+            return
+        }
+        
+        guard let tempURL = tempURL else {
+            continuation?.resume(throwing: SimianError.apiError("Archive download failed."))
+            return
+        }
+        
+        continuation?.resume(returning: ArchiveDownloadResult(tempURL: tempURL, response: task.response))
     }
 }
 

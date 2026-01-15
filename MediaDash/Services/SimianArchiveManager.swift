@@ -132,7 +132,18 @@ final class SimianArchiveManager: ObservableObject {
                 }
                 // #endregion
                 
-                try await simianService.downloadProjectArchive(projectId: project.id, to: zipURL)
+                try await simianService.downloadProjectArchive(
+                    projectId: project.id,
+                    to: zipURL
+                ) { [weak self] downloaded, total in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.downloadedBytes = downloaded
+                        if let total, total > 0 {
+                            self.totalBytes = total
+                        }
+                    }
+                }
                 
                 // #region agent log
                 do {
