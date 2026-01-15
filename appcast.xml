@@ -5,6 +5,23 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.9.9</title>
+            <description><![CDATA[
+                <h2>What's New in 0.9.9<\/h2><ul><li>Simian Archiver: bulk date-range download via server-side ZIP</li><li>Archiver window + dashboard entry</li></ul>
+            ]]></description>
+            <pubDate>Thu, 15 Jan 2026 22:00:43 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.9/MediaDash.zip"
+                sparkle:version="99"
+                sparkle:shortVersionString="0.9.9"
+                sparkle:edSignature="bRZI1tfb1e4HKZMsOU/HoQ+QdSjF0zB+zgrX9uXwX7WhdqvZGtKuIjhyAbHqrGzfsQYqq2EwrdXVbuEFCstyAQ=="
+                length="6313548"
+                type="application/octet-stream"
+            />
+        </item>
+
+        <item>
             <title>Version 0.9.8</title>
             <description><![CDATA[
                 <h2>What's New in 0.9.8</h2><ul><li>Bundle cache sync helper script with the app</li><li>Fix cache sync setup error on installed builds</li></ul>
