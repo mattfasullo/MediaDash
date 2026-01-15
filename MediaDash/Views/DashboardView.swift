@@ -378,14 +378,21 @@ struct DashboardTopBar: View {
                 .buttonStyle(.plain)
                 .help(rightPanelCollapsed ? "Show New Dockets" : "Hide New Dockets")
                 
-                // Settings
-                Button(action: { showSettingsSheet = true }) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 16))
-                        .foregroundColor(.secondary)
+                // Archiver
+                Button(action: { SimianArchiverWindowManager.shared.show(settingsManager: settingsManager) }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 11))
+                        Text("Archiver")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .cornerRadius(6)
                 }
                 .buttonStyle(.plain)
-                .help("Settings (⌘,)")
+                .help("Open Simian Archiver")
                 
                 // User profile
                 if case .loggedIn(let profile) = sessionManager.authenticationState {

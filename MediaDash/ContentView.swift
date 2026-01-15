@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 // Focus management for all navigable buttons
 enum ActionButtonFocus: Hashable {
-    case file, prep, both, convert, jobInfo, search, settings
+    case file, prep, both, convert, jobInfo, search, archiver
 }
 
 struct ContentView: View {
@@ -412,12 +412,22 @@ struct ContentView: View {
                 }
                 .overlay(alignment: .topTrailing) {
                     // Dashboard button in very top right - only in compact mode
-                    DashboardButton(settingsManager: settingsManager)
-                        .padding(.top, 8)
-                        .padding(.trailing, 8)
-                        .offset(x: 2.7109375, y: -29.5390625) // Layout edit: dashboardButton offset
-                        .draggableLayout(id: "dashboardButton")
-                        .zIndex(1000) // Ensure it stays on top
+                    HStack(spacing: 6) {
+                        Button(action: { showSettingsSheet = true }) {
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 14))
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Settings (⌘,)")
+                        
+                        DashboardButton(settingsManager: settingsManager)
+                    }
+                    .padding(.top, 8)
+                    .padding(.trailing, 8)
+                    .offset(x: 2.7109375, y: -29.5390625) // Layout edit: dashboardButton offset
+                    .draggableLayout(id: "dashboardButtonGroup")
+                    .zIndex(1000) // Ensure it stays on top
                 }
                 .overlay(alignment: .topLeading) {
                     // Layout Edit Mode Indicator
@@ -589,7 +599,7 @@ struct ContentView: View {
     private func moveGridFocus(direction: GridDirection) {
         // Grid layout: [file, prep]
         //              [both, convert]
-        // Then linear: [search, jobInfo, settings]
+        // Then linear: [search, jobInfo, archiver]
 
         // If no button is focused, auto-focus the first one
         if focusedButton == nil {
@@ -603,7 +613,7 @@ struct ContentView: View {
         case .up:
             switch current {
             case .file, .prep:
-                focusedButton = .settings  // Wrap to bottom
+                focusedButton = .archiver  // Wrap to bottom
             case .both:
                 focusedButton = .file
             case .convert:
@@ -612,7 +622,7 @@ struct ContentView: View {
                 focusedButton = .both  // Return to grid from below
             case .jobInfo:
                 focusedButton = .search
-            case .settings:
+            case .archiver:
                 focusedButton = .jobInfo
             }
 
@@ -627,8 +637,8 @@ struct ContentView: View {
             case .search:
                 focusedButton = .jobInfo
             case .jobInfo:
-                focusedButton = .settings
-            case .settings:
+                focusedButton = .archiver
+            case .archiver:
                 focusedButton = .file  // Wrap to top
             }
 
@@ -656,7 +666,7 @@ struct ContentView: View {
 
     private func moveFocus(direction: Int) {
         // Linear navigation fallback
-        let mainButtons: [ActionButtonFocus] = [.file, .prep, .both, .convert, .search, .jobInfo, .settings]
+        let mainButtons: [ActionButtonFocus] = [.file, .prep, .both, .convert, .search, .jobInfo, .archiver]
 
         // If no button is focused, auto-focus the first one when using arrow keys
         if focusedButton == nil {
@@ -689,8 +699,8 @@ struct ContentView: View {
             showQuickSearchSheet = true
         case .search:
             showSearchSheet = true
-        case .settings:
-            showSettingsSheet = true
+        case .archiver:
+            SimianArchiverWindowManager.shared.show(settingsManager: settingsManager)
         }
     }
     

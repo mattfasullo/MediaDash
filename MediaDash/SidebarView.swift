@@ -168,14 +168,14 @@ struct SidebarView: View {
                     .keyboardShortcut("d", modifiers: .command)
                     
                     FocusableNavButton(
-                        icon: "gearshape",
-                        title: "Settings",
-                        shortcut: "⌘,",
-                        isFocused: focusedButton.wrappedValue == .settings,
+                        icon: "archivebox",
+                        title: "Archiver",
+                        shortcut: "⌘⇧A",
+                        isFocused: focusedButton.wrappedValue == .archiver,
                         showShortcut: isCommandKeyHeld,
-                        action: { showSettingsSheet = true }
+                        action: { SimianArchiverWindowManager.shared.show(settingsManager: settingsManager) }
                     )
-                    .focused(focusedButton, equals: .settings)
+                    .focused(focusedButton, equals: .archiver)
                     .focusEffectDisabled()
                     .onHover { hovering in
                         if hovering {
@@ -184,7 +184,6 @@ struct SidebarView: View {
                             isKeyboardMode = false
                         }
                     }
-                    .keyboardShortcut(",", modifiers: .command)
 
                     Divider()
                         .padding(.vertical, 4)

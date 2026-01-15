@@ -546,6 +546,87 @@ class SimianService: ObservableObject {
         
         return projectInfo
     }
+
+    /// Fetch list of projects current user has access to
+    func getProjectList() async throws -> [SimianProject] {
+        try await ensureAuthenticated()
+        
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        
+        let endpointURL = base.appendingPathComponent("get_project_list")
+        
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let params = [
+            "auth_token": authToken,
+            "auth_key": authKey
+        ]
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SimianError.apiError("Invalid response from API")
+        }
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
+            throw SimianError.apiError("Failed to fetch project list: \(errorMessage)")
+        }
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let root = json["root"] as? [String: Any] else {
+            throw SimianError.apiError("Invalid response format from get_project_list")
+        }
+        
+        let projectId = "project_list"
+        let folderId: String? = nil
+        _ = (projectId, folderId)
+        
+        let payloadArray: [[String: Any]]
+        if let payload = root["payload"] as? [[String: Any]] {
+            payloadArray = payload
+        } else if let payload = root["payload"] as? [String: Any] {
+            payloadArray = [payload]
+        } else {
+            payloadArray = []
+        }
+        
+        return payloadArray.compactMap { projectDict in
+            guard let id = projectDict["id"] as? String,
+                  let name = projectDict["project_name"] as? String else {
+                return nil
+            }
+            return SimianProject(
+                id: id,
+                name: name,
+                accessAreas: SimianService.stringArrayValue(projectDict["access_areas"])
+            )
+        }
+    }
+
+    /// Fetch detailed project info for filtering and display
+    func getProjectInfoDetails(projectId: String) async throws -> SimianProjectInfo {
+        let info = try await getProjectInfo(projectId: projectId)
+        return SimianProjectInfo(
+            id: projectId,
+            name: SimianService.stringValue(info["project_name"]),
+            projectNumber: SimianService.stringValue(info["project_number"]),
+            uploadDate: SimianService.stringValue(info["upload_date"]),
+            startDate: SimianService.stringValue(info["start_date"]),
+            completeDate: SimianService.stringValue(info["complete_date"]),
+            lastAccess: SimianService.stringValue(info["last_access"])
+        )
+    }
     
     /// Set project information (project_number, project_manager, etc.)
     /// - Parameters:
@@ -720,6 +801,579 @@ class SimianService: ObservableObject {
         }
         
         return payload
+    }
+
+    /// Get folders from a project with typed models
+    func getProjectFolders(projectId: String, parentFolderId: String? = nil) async throws -> [SimianFolder] {
+        let rawFolders = try await getFolders(projectId: projectId, parentFolderId: parentFolderId)
+        
+        // #region agent log
+        do {
+            let sample = rawFolders.prefix(3).map { folder -> [String: Any] in
+                [
+                    "id": folder["id"] ?? "nil",
+                    "name": folder["name"] ?? "nil",
+                    "sub_files": folder["sub_files"] ?? "nil",
+                    "sub_folders": folder["sub_folders"] ?? "nil"
+                ]
+            }
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H5",
+                "location": "SimianService.swift:getProjectFolders",
+                "message": "getProjectFolders payload",
+                "data": [
+                    "projectId": projectId,
+                    "parentFolderId": parentFolderId ?? "root",
+                    "folderCount": rawFolders.count,
+                    "sample": sample
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+        return rawFolders.compactMap { folder in
+            guard let id = SimianService.stringValue(folder["id"]),
+                  let name = SimianService.stringValue(folder["name"]) else {
+                return nil
+            }
+            return SimianFolder(
+                id: id,
+                name: name,
+                parentId: SimianService.stringValue(folder["parent"])
+            )
+        }
+    }
+
+    /// Get files in a project folder
+    func getProjectFiles(projectId: String, folderId: String? = nil) async throws -> [SimianFile] {
+        try await ensureAuthenticated()
+        
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        
+        let endpointURL = base.appendingPathComponent("get_files").appendingPathComponent(projectId)
+        
+        // #region agent log
+        do {
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H1",
+                "location": "SimianService.swift:getProjectFiles",
+                "message": "getProjectFiles request",
+                "data": [
+                    "projectId": projectId,
+                    "folderId": folderId ?? "root",
+                    "endpoint": endpointURL.absoluteString
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+        
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        var params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey
+        ]
+        if let folderId = folderId, !folderId.isEmpty {
+            params["folder_id"] = folderId
+        }
+        
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SimianError.apiError("Invalid response from API")
+        }
+        
+        // #region agent log
+        do {
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H1",
+                "location": "SimianService.swift:getProjectFiles",
+                "message": "getProjectFiles response",
+                "data": [
+                    "projectId": projectId,
+                    "folderId": folderId ?? "root",
+                    "statusCode": httpResponse.statusCode,
+                    "dataLength": data.count
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
+            throw SimianError.apiError("Failed to get files: \(errorMessage)")
+        }
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let root = json["root"] as? [String: Any] else {
+            throw SimianError.apiError("Invalid response format from get_files")
+        }
+        
+        let payloadArray: [[String: Any]]
+        if let payload = root["payload"] as? [[String: Any]] {
+            payloadArray = payload
+        } else if let payload = root["payload"] as? [String: Any] {
+            payloadArray = [payload]
+        } else {
+            payloadArray = []
+        }
+
+        // #region agent log
+        do {
+            let statusValue = root["status"] as? String ?? "unknown"
+            let messageValue = root["message"] as? String ?? "unknown"
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H1",
+                "location": "SimianService.swift:getProjectFiles",
+                "message": "getProjectFiles payload parsed",
+                "data": [
+                    "projectId": projectId,
+                    "folderId": folderId ?? "root",
+                    "payloadCount": payloadArray.count,
+                    "status": statusValue,
+                    "message": messageValue,
+                    "dataLength": data.count
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+
+        if data.count < 512, let responseString = String(data: data, encoding: .utf8) {
+            // #region agent log
+            do {
+                let logData: [String: Any] = [
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "H1",
+                    "location": "SimianService.swift:getProjectFiles",
+                    "message": "getProjectFiles raw response",
+                    "data": [
+                        "projectId": projectId,
+                        "folderId": folderId ?? "root",
+                        "response": responseString
+                    ],
+                    "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+                ]
+                if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                    let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                    logFile.seekToEndOfFile()
+                    logFile.write(line)
+                    logFile.write("\n".data(using: .utf8)!)
+                    logFile.closeFile()
+                }
+            }
+            // #endregion
+        }
+        
+        if payloadArray.isEmpty {
+            // #region agent log
+            do {
+                let logData: [String: Any] = [
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "H6",
+                    "location": "SimianService.swift:getProjectFiles",
+                    "message": "getProjectFiles empty payload",
+                    "data": [
+                        "projectId": projectId,
+                        "folderId": folderId ?? "root"
+                    ],
+                    "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+                ]
+                if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                    let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                    logFile.seekToEndOfFile()
+                    logFile.write(line)
+                    logFile.write("\n".data(using: .utf8)!)
+                    logFile.closeFile()
+                }
+            }
+            // #endregion
+            
+            if let folderId = folderId, !folderId.isEmpty {
+                // Attempt alternate URL format for diagnostics
+                let altEndpointURL = base.appendingPathComponent("get_files")
+                    .appendingPathComponent(projectId)
+                    .appendingPathComponent(folderId)
+                
+                var altRequest = URLRequest(url: altEndpointURL)
+                altRequest.httpMethod = "POST"
+                altRequest.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+                
+                let altParams = [
+                    "auth_token": authToken,
+                    "auth_key": authKey
+                ]
+                altRequest.httpBody = altParams.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+                    .joined(separator: "&")
+                    .data(using: .utf8)
+                
+                if let (altData, altResponse) = try? await session.data(for: altRequest),
+                   let altHttp = altResponse as? HTTPURLResponse,
+                   (200...299).contains(altHttp.statusCode),
+                   let altJson = try? JSONSerialization.jsonObject(with: altData) as? [String: Any],
+                   let altRoot = altJson["root"] as? [String: Any] {
+                    let altPayload = (altRoot["payload"] as? [[String: Any]]) ??
+                        ((altRoot["payload"] as? [String: Any]).map { [$0] } ?? [])
+                    // #region agent log
+                    do {
+                        let logData: [String: Any] = [
+                            "sessionId": "debug-session",
+                            "runId": "run1",
+                            "hypothesisId": "H6",
+                            "location": "SimianService.swift:getProjectFiles",
+                            "message": "alternate get_files result",
+                            "data": [
+                                "projectId": projectId,
+                                "folderId": folderId,
+                                "statusCode": altHttp.statusCode,
+                                "payloadCount": altPayload.count
+                            ],
+                            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+                        ]
+                        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                            let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                            logFile.seekToEndOfFile()
+                            logFile.write(line)
+                            logFile.write("\n".data(using: .utf8)!)
+                            logFile.closeFile()
+                        }
+                    }
+                    // #endregion
+                }
+            }
+        }
+
+        return payloadArray.compactMap { fileDict in
+            guard let id = SimianService.stringValue(fileDict["id"]),
+                  let title = SimianService.stringValue(fileDict["title"]) else {
+                return nil
+            }
+            
+            let mediaFileURL: URL?
+            if let mediaFile = SimianService.stringValue(fileDict["media_file"]),
+               let url = URL(string: mediaFile) {
+                mediaFileURL = url
+            } else {
+                mediaFileURL = nil
+            }
+            
+            return SimianFile(
+                id: id,
+                title: title,
+                fileType: SimianService.stringValue(fileDict["file_type"]),
+                mediaURL: mediaFileURL,
+                folderId: folderId,
+                projectId: projectId
+            )
+        }
+    }
+
+    /// Get detailed info for a file in a project
+    func getFileInfo(projectId: String, fileId: String) async throws -> SimianFileInfo {
+        try await ensureAuthenticated()
+        
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        
+        let endpointURL = base.appendingPathComponent("get_file_info").appendingPathComponent(projectId)
+        
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let params = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "file_id": fileId
+        ]
+        
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SimianError.apiError("Invalid response from API")
+        }
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
+            throw SimianError.apiError("Failed to get file info: \(errorMessage)")
+        }
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let root = json["root"] as? [String: Any],
+              let payload = root["payload"] as? [[String: Any]],
+              let fileInfo = payload.first else {
+            throw SimianError.apiError("Invalid response format from get_file_info")
+        }
+        
+        return SimianFileInfo(
+            id: fileId,
+            title: SimianService.stringValue(fileInfo["title"]),
+            mediaSize: SimianService.stringValue(fileInfo["media_size"])
+        )
+    }
+
+    /// Download a file using the Simian session (cookies included)
+    func downloadFile(from sourceURL: URL, to destinationURL: URL) async throws {
+        var request = URLRequest(url: sourceURL)
+        request.httpMethod = "GET"
+        
+        // #region agent log
+        do {
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H2",
+                "location": "SimianService.swift:downloadFile",
+                "message": "downloadFile request",
+                "data": [
+                    "host": sourceURL.host ?? "nil",
+                    "path": sourceURL.path
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+        
+        let (tempURL, response) = try await session.download(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw SimianError.apiError("Failed to download file: \(sourceURL.lastPathComponent)")
+        }
+        
+        // #region agent log
+        do {
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H2",
+                "location": "SimianService.swift:downloadFile",
+                "message": "downloadFile response",
+                "data": [
+                    "statusCode": httpResponse.statusCode,
+                    "host": sourceURL.host ?? "nil",
+                    "path": sourceURL.path
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+        
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            try fileManager.removeItem(at: destinationURL)
+        }
+        try fileManager.moveItem(at: tempURL, to: destinationURL)
+    }
+
+    /// Download a project ZIP archive from the Simian web UI
+    func downloadProjectArchive(projectId: String, to destinationURL: URL) async throws {
+        guard let baseURLString = baseURL, let base = URL(string: baseURLString) else {
+            throw SimianError.notConfigured
+        }
+        // Convert API base (https://host/api/prjacc) -> https://host
+        let hostBase = base.deletingLastPathComponent().deletingLastPathComponent()
+        let archiveURL = hostBase
+            .appendingPathComponent("simian")
+            .appendingPathComponent("projects")
+            .appendingPathComponent("download_archive")
+            .appendingPathComponent(projectId)
+        
+        var headRequest = URLRequest(url: archiveURL)
+        headRequest.httpMethod = "HEAD"
+        
+        // #region agent log
+        do {
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H7",
+                "location": "SimianService.swift:downloadProjectArchive",
+                "message": "archive download request",
+                "data": [
+                    "projectId": projectId,
+                    "url": archiveURL.absoluteString
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+        
+        let (_, headResponse) = try await session.data(for: headRequest)
+        let headStatus = (headResponse as? HTTPURLResponse)?.statusCode ?? -1
+        let headSize = (headResponse as? HTTPURLResponse)?.value(forHTTPHeaderField: "x-archive-estimated-size") ?? "nil"
+        
+        // #region agent log
+        do {
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H7",
+                "location": "SimianService.swift:downloadProjectArchive",
+                "message": "archive HEAD response",
+                "data": [
+                    "projectId": projectId,
+                    "statusCode": headStatus,
+                    "estimatedSize": headSize
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+        
+        var request = URLRequest(url: archiveURL)
+        request.httpMethod = "GET"
+        
+        let (tempURL, response) = try await session.download(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SimianError.apiError("Archive download failed: \(archiveURL.lastPathComponent)")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            // #region agent log
+            do {
+                let logData: [String: Any] = [
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "H7",
+                    "location": "SimianService.swift:downloadProjectArchive",
+                    "message": "archive download non-2xx",
+                    "data": [
+                        "projectId": projectId,
+                        "statusCode": httpResponse.statusCode,
+                        "contentType": httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "nil"
+                    ],
+                    "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+                ]
+                if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                    let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                    logFile.seekToEndOfFile()
+                    logFile.write(line)
+                    logFile.write("\n".data(using: .utf8)!)
+                    logFile.closeFile()
+                }
+            }
+            // #endregion
+            throw SimianError.apiError("Archive download failed: \(archiveURL.lastPathComponent)")
+        }
+        
+        // #region agent log
+        do {
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H7",
+                "location": "SimianService.swift:downloadProjectArchive",
+                "message": "archive download response",
+                "data": [
+                    "projectId": projectId,
+                    "statusCode": httpResponse.statusCode,
+                    "contentType": httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "nil",
+                    "contentDisposition": httpResponse.value(forHTTPHeaderField: "Content-Disposition") ?? "nil"
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+        
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            try fileManager.removeItem(at: destinationURL)
+        }
+        try fileManager.moveItem(at: tempURL, to: destinationURL)
     }
     
     /// Create a folder in a project
@@ -1631,6 +2285,119 @@ struct SimianTemplate: Identifiable, Hashable {
     let name: String
 }
 
+// MARK: - Project Models
+
+struct SimianProject: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let accessAreas: [String]?
+}
+
+struct SimianProjectInfo: Identifiable, Hashable {
+    let id: String
+    let name: String?
+    let projectNumber: String?
+    let uploadDate: String?
+    let startDate: String?
+    let completeDate: String?
+    let lastAccess: String?
+    
+    func dateValue(for field: SimianProjectDateField) -> Date? {
+        let rawValue: String?
+        switch field {
+        case .uploadDate:
+            rawValue = uploadDate
+        case .startDate:
+            rawValue = startDate
+        case .completeDate:
+            rawValue = completeDate
+        case .lastAccess:
+            rawValue = lastAccess
+        }
+        guard let rawValue = rawValue, !rawValue.isEmpty else {
+            return nil
+        }
+        return SimianProjectInfo.parseDate(rawValue)
+    }
+    
+    private static func parseDate(_ rawValue: String) -> Date? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return nil
+        }
+        
+        let formats = [
+            "yyyy-MM-dd h:mm a",
+            "yyyy-MM-dd hh:mm a",
+            "yyyy-MM-dd HH:mm:ss",
+            "MM/dd/yyyy",
+            "MM/dd/yy"
+        ]
+        
+        for format in formats {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = format
+            if let date = formatter.date(from: trimmed) {
+                return date
+            }
+        }
+        
+        return nil
+    }
+}
+
+struct SimianFolder: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let parentId: String?
+}
+
+struct SimianFile: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let fileType: String?
+    let mediaURL: URL?
+    let folderId: String?
+    let projectId: String?
+}
+
+// MARK: - Project Date Filter
+
+enum SimianProjectDateField: String, CaseIterable, Identifiable {
+    case uploadDate = "upload_date"
+    case startDate = "start_date"
+    case completeDate = "complete_date"
+    case lastAccess = "last_access"
+    
+    var id: String { rawValue }
+    
+    var label: String {
+        switch self {
+        case .uploadDate:
+            return "Upload Date"
+        case .startDate:
+            return "Start Date"
+        case .completeDate:
+            return "Complete Date"
+        case .lastAccess:
+            return "Last Accessed"
+        }
+    }
+}
+
+struct SimianFileInfo: Identifiable, Hashable {
+    let id: String
+    let title: String?
+    let mediaSize: String?
+    
+    var mediaSizeBytes: Int64? {
+        guard let mediaSize = mediaSize else { return nil }
+        return SimianService.parseMediaSize(mediaSize)
+    }
+}
+
 // MARK: - Response Models
 
 struct SimianSetupResponse: Codable {
@@ -1684,6 +2451,52 @@ struct SimianLoginResponse: Codable {
             } else {
                 add_projects = nil
             }
+        }
+    }
+}
+
+// MARK: - Helpers
+
+extension SimianService {
+    fileprivate static func stringValue(_ value: Any?) -> String? {
+        if let stringValue = value as? String, !stringValue.isEmpty {
+            return stringValue
+        }
+        return nil
+    }
+    
+    fileprivate static func stringArrayValue(_ value: Any?) -> [String]? {
+        if let arrayValue = value as? [String] {
+            return arrayValue.isEmpty ? nil : arrayValue
+        }
+        if let stringValue = value as? String, !stringValue.isEmpty {
+            return [stringValue]
+        }
+        return nil
+    }
+
+    fileprivate static func parseMediaSize(_ value: String) -> Int64? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        
+        let parts = trimmed.split(separator: " ")
+        guard let numberPart = parts.first else { return nil }
+        
+        let unit = parts.count > 1 ? parts[1].uppercased() : "B"
+        let numberString = numberPart.replacingOccurrences(of: ",", with: "")
+        guard let number = Double(numberString) else { return nil }
+        
+        switch unit {
+        case "B":
+            return Int64(number)
+        case "KB":
+            return Int64(number * 1024)
+        case "MB":
+            return Int64(number * 1024 * 1024)
+        case "GB":
+            return Int64(number * 1024 * 1024 * 1024)
+        default:
+            return Int64(number)
         }
     }
 }
