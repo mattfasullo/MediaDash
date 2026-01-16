@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.9.11</title>
+            <description><![CDATA[
+                <h2>What's New in 0.9.11</h2><ul><li>Simian Archiver: stabilize archive downloads and prevent temp file errors</li><li>Simian Archiver: parallel downloads (up to 3) and per-download log file</li><li>Simian Archiver: simplified sort control (Last Accessed default) + loading overlay</li><li>Simian Archiver: exclude archive maintenance projects (IDs 91, 459)</li></ul>
+            ]]></description>
+            <pubDate>Fri, 16 Jan 2026 18:03:18 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.11/MediaDash.zip"
+                sparkle:version="101"
+                sparkle:shortVersionString="0.9.11"
+                sparkle:edSignature="XotyIboT2+LH/uvbcjfxE5YnLM7XgtQMfZB4iLZnwKEij7kMqFy5eB40NbCYF5SNCw7ugiuI2MNWwcExyNsJBw=="
+                length="6294056"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.9.10</title>
             <description><![CDATA[
                 <h2>What's New in 0.9.10</h2><ul><li>Simian Archiver: large archive downloads with live progress</li><li>Simian Archiver: size now uses Simian project info</li><li>Improved archive download reliability for huge projects</li></ul>
