@@ -1249,8 +1249,13 @@ class SimianService: ObservableObject {
         // #endregion
         
         let fileManager = FileManager.default
+        let destinationFolder = destinationURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
         if fileManager.fileExists(atPath: destinationURL.path) {
             try fileManager.removeItem(at: destinationURL)
+        }
+        guard fileManager.fileExists(atPath: tempURL.path) else {
+            throw SimianError.apiError("Download temp file missing before move: \(tempURL.lastPathComponent)")
         }
         try fileManager.moveItem(at: tempURL, to: destinationURL)
     }
@@ -1345,7 +1350,10 @@ class SimianService: ObservableObject {
             request.httpMethod = "GET"
             
             do {
-                let downloadDelegate = ArchiveDownloadDelegate(progress: progress)
+                let downloadDelegate = ArchiveDownloadDelegate(
+                    progress: progress,
+                    stagingDirectory: destinationURL.deletingLastPathComponent()
+                )
                 let downloadSession = URLSession(
                     configuration: archiveSession.configuration,
                     delegate: downloadDelegate,
@@ -1416,10 +1424,25 @@ class SimianService: ObservableObject {
         // #endregion
         
                 let fileManager = FileManager.default
+                let destinationFolder = destinationURL.deletingLastPathComponent()
+                try fileManager.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
+                guard fileManager.fileExists(atPath: result.tempURL.path) else {
+                    throw SimianError.apiError("Archive temp file missing before copy: \(result.tempURL.lastPathComponent)")
+                }
                 if fileManager.fileExists(atPath: destinationURL.path) {
                     try fileManager.removeItem(at: destinationURL)
                 }
-                try fileManager.moveItem(at: result.tempURL, to: destinationURL)
+                if result.tempURL.deletingLastPathComponent() == destinationFolder,
+                   result.tempURL.lastPathComponent.hasPrefix(".staged_") {
+                    try fileManager.moveItem(at: result.tempURL, to: destinationURL)
+                } else {
+                    let stagedURL = destinationFolder.appendingPathComponent(".staged_\(UUID().uuidString).zip")
+                    if fileManager.fileExists(atPath: stagedURL.path) {
+                        try fileManager.removeItem(at: stagedURL)
+                    }
+                    try fileManager.copyItem(at: result.tempURL, to: stagedURL)
+                    try fileManager.moveItem(at: stagedURL, to: destinationURL)
+                }
                 return
             } catch {
                 lastError = error
@@ -2434,10 +2457,10 @@ struct SimianFile: Identifiable, Hashable {
 // MARK: - Project Date Filter
 
 enum SimianProjectDateField: String, CaseIterable, Identifiable {
+    case lastAccess = "last_access"
     case uploadDate = "upload_date"
     case startDate = "start_date"
     case completeDate = "complete_date"
-    case lastAccess = "last_access"
     
     var id: String { rawValue }
     
@@ -2576,12 +2599,15 @@ private struct ArchiveDownloadResult {
 
 private final class ArchiveDownloadDelegate: NSObject, URLSessionDownloadDelegate {
     private let progressHandler: ((Int64, Int64?) -> Void)?
+    private let stagingDirectory: URL?
     private var continuation: CheckedContinuation<ArchiveDownloadResult, Error>?
     private var tempURL: URL?
     private var didComplete = false
+    private var finishError: Error?
     
-    init(progress: ((Int64, Int64?) -> Void)?) {
+    init(progress: ((Int64, Int64?) -> Void)?, stagingDirectory: URL?) {
         self.progressHandler = progress
+        self.stagingDirectory = stagingDirectory
     }
     
     func attachContinuation(_ continuation: CheckedContinuation<ArchiveDownloadResult, Error>) {
@@ -2600,7 +2626,23 @@ private final class ArchiveDownloadDelegate: NSObject, URLSessionDownloadDelegat
     func urlSession(_ session: URLSession,
                     downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
-        tempURL = location
+        guard let stagingDirectory else {
+            tempURL = location
+            return
+        }
+        
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+            let stagedURL = stagingDirectory.appendingPathComponent(".staged_\(UUID().uuidString).zip")
+            if fileManager.fileExists(atPath: stagedURL.path) {
+                try fileManager.removeItem(at: stagedURL)
+            }
+            try fileManager.copyItem(at: location, to: stagedURL)
+            tempURL = stagedURL
+        } catch {
+            finishError = error
+        }
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -2609,6 +2651,11 @@ private final class ArchiveDownloadDelegate: NSObject, URLSessionDownloadDelegat
         
         if let error = error {
             continuation?.resume(throwing: error)
+            return
+        }
+        
+        if let finishError {
+            continuation?.resume(throwing: finishError)
             return
         }
         

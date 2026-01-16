@@ -14,8 +14,7 @@ struct SimianArchiverView: View {
     @State private var loadProgress: Double = 0
     @State private var errorMessage: String?
     @State private var searchText = ""
-    @State private var dateField: SimianProjectDateField = .uploadDate
-    @State private var sortOption: ProjectSortOption = .dateDesc
+    @State private var dateField: SimianProjectDateField = .lastAccess
     @State private var fromDate: Date = Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date()
     @State private var toDate: Date = Date()
     @State private var loadTask: Task<Void, Never>?
@@ -25,6 +24,9 @@ struct SimianArchiverView: View {
         let range = normalizedDateRange()
         
         let filtered = projects.filter { project in
+            if project.id == "91" || project.id == "459" || project.name == "Misc/UNARCHIVE_Delete Every 3 Months" {
+                return false
+            }
             if !normalizedSearch.isEmpty && !project.name.lowercased().contains(normalizedSearch) {
                 return false
             }
@@ -36,24 +38,8 @@ struct SimianArchiverView: View {
         }
         
         return filtered.sorted { lhs, rhs in
-            switch sortOption {
-            case .nameAsc:
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            case .nameDesc:
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedDescending
-            case .dateAsc:
-                return (projectInfos[lhs.id]?.dateValue(for: dateField) ?? .distantPast) <
-                    (projectInfos[rhs.id]?.dateValue(for: dateField) ?? .distantPast)
-            case .dateDesc:
-                return (projectInfos[lhs.id]?.dateValue(for: dateField) ?? .distantPast) >
-                    (projectInfos[rhs.id]?.dateValue(for: dateField) ?? .distantPast)
-            case .lastAccessAsc:
-                return (projectInfos[lhs.id]?.dateValue(for: .lastAccess) ?? .distantPast) <
-                    (projectInfos[rhs.id]?.dateValue(for: .lastAccess) ?? .distantPast)
-            case .lastAccessDesc:
-                return (projectInfos[lhs.id]?.dateValue(for: .lastAccess) ?? .distantPast) >
-                    (projectInfos[rhs.id]?.dateValue(for: .lastAccess) ?? .distantPast)
-            }
+            (projectInfos[lhs.id]?.dateValue(for: dateField) ?? .distantPast) >
+                (projectInfos[rhs.id]?.dateValue(for: dateField) ?? .distantPast)
         }
     }
     
@@ -65,17 +51,24 @@ struct SimianArchiverView: View {
     }
     
     var body: some View {
-        VStack(spacing: 16) {
-            header
+        ZStack {
+            VStack(spacing: 16) {
+                header
+                
+                filterControls
+                
+                projectList
+                
+                footer
+            }
+            .padding(20)
+            .frame(minWidth: 820, minHeight: 640)
+            .disabled(isLoading)
             
-            filterControls
-            
-            projectList
-            
-            footer
+            if isLoading {
+                loadingOverlay
+            }
         }
-        .padding(20)
-        .frame(minWidth: 820, minHeight: 640)
         .onAppear {
             updateSimianServiceConfiguration()
             loadProjects()
@@ -123,19 +116,12 @@ struct SimianArchiverView: View {
     private var filterControls: some View {
         VStack(spacing: 12) {
             HStack(spacing: 12) {
-                Picker("Date Field", selection: $dateField) {
+                Picker("Sort By", selection: $dateField) {
                     ForEach(SimianProjectDateField.allCases) { field in
                         Text(field.label).tag(field)
                     }
                 }
-                .frame(width: 160)
-                
-                Picker("Sort", selection: $sortOption) {
-                    ForEach(ProjectSortOption.allCases) { option in
-                        Text(option.label).tag(option)
-                    }
-                }
-                .frame(width: 170)
+                .frame(width: 180)
                 
                 DatePicker("From", selection: $fromDate, displayedComponents: [.date])
                 DatePicker("To", selection: $toDate, displayedComponents: [.date])
@@ -173,6 +159,26 @@ struct SimianArchiverView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private var loadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.15)
+                .ignoresSafeArea()
+            VStack(spacing: 12) {
+                Text("Loading Simian projects…")
+                    .font(.headline)
+                ProgressView(value: loadProgress)
+                    .frame(width: 240)
+                Text("\(Int(loadProgress * 100))%")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(20)
+            .background(.thinMaterial)
+            .cornerRadius(12)
+        }
+        .transition(.opacity)
     }
     
     private var projectList: some View {
@@ -431,33 +437,5 @@ struct SimianArchiverView: View {
         selectedProjectIds = selectedProjectIds.intersection(filteredIds)
     }
 
-}
-
-private enum ProjectSortOption: String, CaseIterable, Identifiable {
-    case dateDesc
-    case dateAsc
-    case lastAccessDesc
-    case lastAccessAsc
-    case nameAsc
-    case nameDesc
-    
-    var id: String { rawValue }
-    
-    var label: String {
-        switch self {
-        case .dateDesc:
-            return "Date (Newest)"
-        case .dateAsc:
-            return "Date (Oldest)"
-        case .lastAccessDesc:
-            return "Last Accessed (Newest)"
-        case .lastAccessAsc:
-            return "Last Accessed (Oldest)"
-        case .nameAsc:
-            return "Name (A-Z)"
-        case .nameDesc:
-            return "Name (Z-A)"
-        }
-    }
 }
 

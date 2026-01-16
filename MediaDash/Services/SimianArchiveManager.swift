@@ -1,6 +1,26 @@
 import Foundation
 import Combine
 
+private actor DownloadLogWriter {
+    private let logURL: URL
+    
+    init(logURL: URL) {
+        self.logURL = logURL
+    }
+    
+    func appendLine(_ line: String) throws {
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: logURL.path) {
+            fileManager.createFile(atPath: logURL.path, contents: nil)
+        }
+        let data = (line + "\n").data(using: .utf8) ?? Data()
+        let handle = try FileHandle(forWritingTo: logURL)
+        defer { try? handle.close() }
+        handle.seekToEndOfFile()
+        handle.write(data)
+    }
+}
+
 final class SimianArchiveManager: ObservableObject {
     @Published var isRunning = false
     @Published var errorMessage: String?
@@ -63,17 +83,87 @@ final class SimianArchiveManager: ObservableObject {
     }
     
     private func archiveProjects(_ projects: [SimianProject], destinationURL: URL, simianService: SimianService) async throws {
-        for project in projects {
-            try Task.checkCancellation()
+        let logURL = destinationURL.appendingPathComponent("SimianArchiver_Downloads.txt")
+        let logWriter = DownloadLogWriter(logURL: logURL)
+        let maxConcurrentDownloads = 3
+        var index = 0
+        
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            func enqueueNext() {
+                guard index < projects.count else { return }
+                let project = projects[index]
+                index += 1
+                group.addTask { [weak self] in
+                    guard let self else { return }
+                    try await self.archiveProject(
+                        project,
+                        destinationURL: destinationURL,
+                        simianService: simianService,
+                        logWriter: logWriter
+                    )
+                }
+            }
+            
+            let initialCount = min(maxConcurrentDownloads, projects.count)
+            for _ in 0..<initialCount {
+                enqueueNext()
+            }
+            
+            while let _ = try await group.next() {
+                enqueueNext()
+            }
+        }
+    }
+
+    private func archiveProject(
+        _ project: SimianProject,
+        destinationURL: URL,
+        simianService: SimianService,
+        logWriter: DownloadLogWriter
+    ) async throws {
+        try Task.checkCancellation()
+        await MainActor.run {
+            currentProjectName = project.name
+            statusMessage = "Fetching project contents..."
+            completedFiles = 0
+            totalFiles = 0
+            downloadedBytes = 0
+            totalBytes = 0
+            scannedFolders = 0
+            currentFolderPath = nil
+        }
+        
+        // #region agent log
+        do {
+            let logData: [String: Any] = [
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H4",
+                "location": "SimianArchiveManager.swift:archiveProject",
+                "message": "archive project start",
+                "data": [
+                    "projectId": project.id,
+                    "projectName": project.name
+                ],
+                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+            ]
+            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                logFile.seekToEndOfFile()
+                logFile.write(line)
+                logFile.write("\n".data(using: .utf8)!)
+                logFile.closeFile()
+            }
+        }
+        // #endregion
+
+        // Prefer server-side ZIP archive (no per-file fallback)
+        let zipName = "\(Self.sanitizeFileName(project.name))_\(project.id).zip"
+        let zipURL = destinationURL.appendingPathComponent(zipName)
+        do {
             await MainActor.run {
                 currentProjectName = project.name
-                statusMessage = "Fetching project contents..."
-                completedFiles = 0
-                totalFiles = 0
-                downloadedBytes = 0
-                totalBytes = 0
-                scannedFolders = 0
-                currentFolderPath = nil
+                statusMessage = "Downloading project archive..."
             }
             
             // #region agent log
@@ -81,12 +171,12 @@ final class SimianArchiveManager: ObservableObject {
                 let logData: [String: Any] = [
                     "sessionId": "debug-session",
                     "runId": "run1",
-                    "hypothesisId": "H4",
-                    "location": "SimianArchiveManager.swift:archiveProjects",
-                    "message": "archive project start",
+                    "hypothesisId": "H7",
+                    "location": "SimianArchiveManager.swift:archiveProject",
+                    "message": "archive download start",
                     "data": [
                         "projectId": project.id,
-                        "projectName": project.name
+                        "zipPath": zipURL.path
                     ],
                     "timestamp": Int(Date().timeIntervalSince1970 * 1000)
                 ]
@@ -99,111 +189,119 @@ final class SimianArchiveManager: ObservableObject {
                 }
             }
             // #endregion
-
-            // Prefer server-side ZIP archive (no per-file fallback)
-            let zipName = "\(Self.sanitizeFileName(project.name))_\(project.id).zip"
-            let zipURL = destinationURL.appendingPathComponent(zipName)
-            do {
-                await MainActor.run {
-                    statusMessage = "Downloading project archive..."
-                }
-                
-                // #region agent log
-                do {
-                    let logData: [String: Any] = [
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "H7",
-                        "location": "SimianArchiveManager.swift:archiveProjects",
-                        "message": "archive download start",
-                        "data": [
-                            "projectId": project.id,
-                            "zipPath": zipURL.path
-                        ],
-                        "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-                    ]
-                    if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                        let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                        logFile.seekToEndOfFile()
-                        logFile.write(line)
-                        logFile.write("\n".data(using: .utf8)!)
-                        logFile.closeFile()
+            
+            try await simianService.downloadProjectArchive(
+                projectId: project.id,
+                to: zipURL
+            ) { [weak self] downloaded, total in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.currentProjectName = project.name
+                    self.downloadedBytes = downloaded
+                    if let total, total > 0 {
+                        self.totalBytes = total
                     }
                 }
-                // #endregion
-                
-                try await simianService.downloadProjectArchive(
-                    projectId: project.id,
-                    to: zipURL
-                ) { [weak self] downloaded, total in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        self.downloadedBytes = downloaded
-                        if let total, total > 0 {
-                            self.totalBytes = total
-                        }
-                    }
-                }
-                
-                // #region agent log
-                do {
-                    let logData: [String: Any] = [
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "H7",
-                        "location": "SimianArchiveManager.swift:archiveProjects",
-                        "message": "archive download success",
-                        "data": [
-                            "projectId": project.id,
-                            "zipPath": zipURL.path
-                        ],
-                        "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-                    ]
-                    if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                        let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                        logFile.seekToEndOfFile()
-                        logFile.write(line)
-                        logFile.write("\n".data(using: .utf8)!)
-                        logFile.closeFile()
-                    }
-                }
-                // #endregion
-                
-                await MainActor.run {
-                    completedProjects += 1
-                }
-                continue
-            } catch {
-                // #region agent log
-                do {
-                    let logData: [String: Any] = [
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "H7",
-                        "location": "SimianArchiveManager.swift:archiveProjects",
-                        "message": "archive download failed",
-                        "data": [
-                            "projectId": project.id,
-                            "error": error.localizedDescription
-                        ],
-                        "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-                    ]
-                    if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                        let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                        logFile.seekToEndOfFile()
-                        logFile.write(line)
-                        logFile.write("\n".data(using: .utf8)!)
-                        logFile.closeFile()
-                    }
-                }
-                // #endregion
-                
-                await MainActor.run {
-                    statusMessage = "Failed to download zip."
-                }
-                throw error
             }
+            
+            // #region agent log
+            do {
+                let logData: [String: Any] = [
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "H7",
+                    "location": "SimianArchiveManager.swift:archiveProject",
+                    "message": "archive download success",
+                    "data": [
+                        "projectId": project.id,
+                        "zipPath": zipURL.path
+                    ],
+                    "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+                ]
+                if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                    let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                    logFile.seekToEndOfFile()
+                    logFile.write(line)
+                    logFile.write("\n".data(using: .utf8)!)
+                    logFile.closeFile()
+                }
+            }
+            // #endregion
+            
+            let fileSizeBytes: Int64? = {
+                if let attributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
+                   let size = attributes[.size] as? NSNumber {
+                    return size.int64Value
+                }
+                return nil
+            }()
+            let logLine = Self.buildDownloadLogLine(
+                projectName: project.name,
+                projectId: project.id,
+                fileName: zipURL.lastPathComponent,
+                sizeBytes: fileSizeBytes
+            )
+            try await logWriter.appendLine(logLine)
+            
+            await MainActor.run {
+                completedProjects += 1
+            }
+        } catch {
+            // #region agent log
+            do {
+                let logData: [String: Any] = [
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "H7",
+                    "location": "SimianArchiveManager.swift:archiveProject",
+                    "message": "archive download failed",
+                    "data": [
+                        "projectId": project.id,
+                        "error": error.localizedDescription
+                    ],
+                    "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+                ]
+                if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
+                    let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
+                    logFile.seekToEndOfFile()
+                    logFile.write(line)
+                    logFile.write("\n".data(using: .utf8)!)
+                    logFile.closeFile()
+                }
+            }
+            // #endregion
+            
+            await MainActor.run {
+                statusMessage = "Failed to download zip."
+            }
+            throw error
         }
+    }
+
+    private static let logDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static func buildDownloadLogLine(
+        projectName: String,
+        projectId: String,
+        fileName: String,
+        sizeBytes: Int64?
+    ) -> String {
+        let timestamp = logDateFormatter.string(from: Date())
+        let safeProjectName = sanitizeLogValue(projectName)
+        let safeFileName = sanitizeLogValue(fileName)
+        let sizeValue = sizeBytes.map(String.init) ?? ""
+        return "\(timestamp)\t\(safeProjectName)\t\(projectId)\t\(safeFileName)\t\(sizeValue)"
+    }
+
+    private static func sanitizeLogValue(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\t", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
     }
     
     private func downloadFiles(_ files: [SimianFile], to directoryURL: URL, simianService: SimianService) async throws {
