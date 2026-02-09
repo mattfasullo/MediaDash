@@ -28,6 +28,7 @@ class NotificationCenter: ObservableObject {
             removeDuplicates() // Clean up any existing duplicates
             cleanupOldArchivedNotifications()
             cleanupOldCompletedRequests()
+            cleanupOldCompletedDockets()
             updateUnreadCount()
             
             // Sync completion status from shared cache
@@ -198,6 +199,42 @@ class NotificationCenter: ObservableObject {
             updateUnreadCount()
             saveNotifications()
         }
+    }
+    
+    /// Remove completed docket notifications older than 48 hours
+    func cleanupOldCompletedDockets() {
+        let cutoffDate = Date().addingTimeInterval(-48 * 60 * 60) // 48 hours ago
+        let beforeCount = notifications.count
+        notifications.removeAll { notification in
+            if notification.type == .newDocket,
+               notification.status == .completed,
+               let completedAt = notification.completedAt,
+               completedAt < cutoffDate {
+                print("📋 [NotificationCenter] Removing old completed docket: \(notification.title) (completed \(completedAt))")
+                return true
+            }
+            return false
+        }
+        if notifications.count < beforeCount {
+            rebuildIndices()
+            updateUnreadCount()
+            saveNotifications()
+        }
+    }
+    
+    /// Mark a notification as completed with history details
+    func markAsCompleted(_ notification: Notification, historyNote: String) {
+        guard let index = indexById(notification.id) else { return }
+        notifications[index].status = .completed
+        notifications[index].completedAt = Date()
+        notifications[index].historyNote = historyNote
+        updateUnreadCount()
+        saveNotifications()
+    }
+    
+    /// Get completed notifications for history display
+    var completedNotifications: [Notification] {
+        notifications.filter { $0.status == .completed }
     }
     
     /// Add a new notification (prevents duplicates by emailId, threadId, or docket+jobName)
@@ -603,11 +640,31 @@ class NotificationCenter: ObservableObject {
             return
         }
         
-        // Check Work Picture
-        if let mediaManager = mediaManager {
-            let docketName = "\(docketNumber)_\(jobName)"
+        // Check Work Picture via filesystem (same as view + "Open in Finder") so we don't show "Already" when folder is missing
+        let docketName = "\(docketNumber)_\(jobName)"
+        let hasSM = settingsManager != nil
+        let hasMM = mediaManager != nil
+        if let settingsManager = settingsManager {
+            let config = AppConfig(settings: settingsManager.currentSettings)
+            notifications[index].isInWorkPicture = config.findDocketYear(docket: docketName) != nil
+        } else if let mediaManager = mediaManager {
             notifications[index].isInWorkPicture = mediaManager.dockets.contains(docketName)
         }
+        // #region agent log
+        do {
+            let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "NotificationCenter.updateDuplicateDetection", "message": "updateDuplicateDetection WP", "data": ["docketName": docketName, "hasSettingsManager": hasSM, "hasMediaManager": hasMM, "isInWorkPicture": notifications[index].isInWorkPicture], "sessionId": "debug-session", "hypothesisId": "H3"]
+            let d = try JSONSerialization.data(withJSONObject: payload)
+            let line = String(data: d, encoding: .utf8)! + "\n"
+            let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+            let url = URL(fileURLWithPath: path)
+            if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+            if let stream = OutputStream(url: url, append: true) {
+                stream.open()
+                _ = line.data(using: .utf8)!.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: line.utf8.count) }
+                stream.close()
+            }
+        } catch {}
+        // #endregion
         
         // Check Simian - for now, we'll track this via a property set when Simian job is created
         // In the future, this could check Simian API if available
@@ -617,20 +674,27 @@ class NotificationCenter: ObservableObject {
         saveNotifications()
     }
     
-    /// Mark notification as in Simian
-    func markAsInSimian(_ notification: Notification) {
+    /// Mark notification as in Simian (created by us, not pre-existing)
+    func markAsInSimian(_ notification: Notification, createdByUs: Bool = true) {
         guard let index = notifications.firstIndex(where: { $0.id == notification.id }) else {
             return
         }
         notifications[index].isInSimian = true
+        if createdByUs {
+            notifications[index].simianCreatedByUs = true
+        }
         saveNotifications()
     }
     
-    func markAsInWorkPicture(_ notification: Notification) {
+    /// Mark notification as in Work Picture (created by us, not pre-existing)
+    func markAsInWorkPicture(_ notification: Notification, createdByUs: Bool = true) {
         guard let index = notifications.firstIndex(where: { $0.id == notification.id }) else {
             return
         }
         notifications[index].isInWorkPicture = true
+        if createdByUs {
+            notifications[index].workPictureCreatedByUs = true
+        }
         saveNotifications()
     }
     
@@ -709,10 +773,12 @@ class NotificationCenter: ObservableObject {
             .sorted { ($0.archivedAt ?? Date.distantPast) > ($1.archivedAt ?? Date.distantPast) }
     }
     
-    /// Get active notifications (not archived, only newDocket type - mediaFiles and requests excluded)
+    /// Get active notifications (not archived, not completed, only newDocket type - mediaFiles and requests excluded)
     var activeNotifications: [Notification] {
         let active = notifications.filter { 
-            ($0.status != .dismissed || $0.archivedAt == nil) && $0.type == .newDocket
+            ($0.status != .dismissed || $0.archivedAt == nil) && 
+            $0.status != .completed && 
+            $0.type == .newDocket
         }
         
         // Debug: Log if there's a mismatch between unreadCount and active notifications

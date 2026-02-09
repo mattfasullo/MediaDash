@@ -75,11 +75,10 @@ struct FileJobUseCase {
         
         // Prep operation
         if type == .prep || type == .both {
-            let dateStr = formatDate(prepDate)
-            let folderFormat = config.settings.prepFolderFormat
-            let folder = folderFormat
-                .replacingOccurrences(of: "{docket}", with: docket)
-                .replacingOccurrences(of: "{date}", with: dateStr)
+            let prepDateFormat = config.settings.prepDateFormat ?? "MMM.d.yy"
+            let dateStr = formatDate(prepDate, format: prepDateFormat)
+            // Standard format: docket#_JobName_PREP_Mmm.d.yy (parses docket/session name into number + job name)
+            let folder = AppConfig.prepFolderName(docket: docket, dateStr: dateStr)
             let root = paths.prep.appendingPathComponent(folder)
             prepFolderPath = root.path
             
@@ -97,9 +96,9 @@ struct FileJobUseCase {
                 }
             }
             
-            // Process each file
+            // Process each file (respect createPrep*Folder flags)
             for (flatFile, _) in flats {
-                let category = getCategory(flatFile, config: config)
+                guard let category = getPrepCategory(flatFile, config: config) else { continue }
                 let dir = root.appendingPathComponent(category)
                 
                 // Create category directory if needed
@@ -134,7 +133,13 @@ struct FileJobUseCase {
     
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMMdd.yy"
+        formatter.dateFormat = "MMM.d.yy"
+        return formatter.string(from: date)
+    }
+
+    private func formatDate(_ date: Date, format: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = format
         return formatter.string(from: date)
     }
     
@@ -208,6 +213,22 @@ struct FileJobUseCase {
         if config.settings.musicExtensions.contains(ext) { return config.settings.musicFolderName }
         if config.settings.aafOmfExtensions.contains(ext) { return config.settings.aafOmfFolderName }
         return config.settings.otherFolderName
+    }
+
+    /// Resolves prep folder for a file; nil means skip (category disabled and OTHER disabled).
+    private func getPrepCategory(_ url: URL, config: AppConfig) -> String? {
+        let cat = getCategory(url, config: config)
+        let s = config.settings
+        func create(_ name: String) -> Bool {
+            if name == s.pictureFolderName { return s.createPrepPictureFolder ?? true }
+            if name == s.musicFolderName { return s.createPrepMusicFolder ?? true }
+            if name == s.aafOmfFolderName { return s.createPrepAafOmfFolder ?? true }
+            if name == s.otherFolderName { return s.createPrepOtherFolder ?? true }
+            return true
+        }
+        if create(cat) { return cat }
+        if s.createPrepOtherFolder ?? true { return s.otherFolderName }
+        return nil
     }
     
     private func getAllFiles(at url: URL, fileSystem: FileSystem) -> [URL] {

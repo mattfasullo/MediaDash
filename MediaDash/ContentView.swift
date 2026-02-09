@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 // Focus management for all navigable buttons
 enum ActionButtonFocus: Hashable {
-    case file, prep, both, convert, jobInfo, search, archiver
+    case file, prep, calendar, convert, search, jobInfo, archiver
 }
 
 struct ContentView: View {
@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var hoverInfo: String = "Ready."
     @State private var initialSearchText = ""
     @State private var showNotificationCenter = false
+    @State private var showManualPrepSheet = false
     @FocusState private var mainViewFocused: Bool
     @EnvironmentObject var notificationCenter: NotificationCenter
     @EnvironmentObject var emailScanningService: EmailScanningService
@@ -35,6 +36,10 @@ struct ContentView: View {
     // Logic for auto-docket selection
     @State private var showDocketSelectionSheet = false
     @State private var pendingJobType: JobType? = nil
+    /// When true, next docket confirm will run file then open prep for a matching calendar session.
+    @State private var pendingFileThenPrep = false
+    /// After filing, open prep window for this session when isProcessing becomes false.
+    @State private var pendingPrepSessionAfterFile: DocketInfo? = nil
 
     @FocusState private var focusedButton: ActionButtonFocus?
 
@@ -49,11 +54,6 @@ struct ContentView: View {
     // Computed property for current theme
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
-    }
-
-    // Fixed window height
-    private var windowHeight: CGFloat {
-        550
     }
 
     // Theme-specific text
@@ -110,6 +110,7 @@ struct ContentView: View {
     
     var body: some View {
         mainContentView
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .environmentObject(layoutEditManager)
             .focusable()
             .focused($mainViewFocused)
@@ -163,6 +164,16 @@ struct ContentView: View {
                 manager: manager,
                 showSettingsSheet: $showSettingsSheet
             ))
+            .onChange(of: manager.isProcessing) { oldValue, newValue in
+                if oldValue == true && newValue == false, let session = pendingPrepSessionAfterFile {
+                    pendingPrepSessionAfterFile = nil
+                    CalendarPrepWindowManager.shared.show(
+                        session: session,
+                        asanaService: cacheManager.service,
+                        manager: manager
+                    )
+                }
+            }
             .modifier(SheetsModifier(
                 showNewDocketSheet: $showNewDocketSheet,
                 selectedDocket: $selectedDocket,
@@ -172,12 +183,15 @@ struct ContentView: View {
                 initialSearchText: initialSearchText,
                 showDocketSelectionSheet: $showDocketSelectionSheet,
                 pendingJobType: $pendingJobType,
+                showManualPrepSheet: $showManualPrepSheet,
                 wpDate: wpDate,
                 prepDate: prepDate,
                 showQuickSearchSheet: $showQuickSearchSheet,
                 cacheManager: cacheManager,
                 showSettingsSheet: $showSettingsSheet,
-                showVideoConverterSheet: $showVideoConverterSheet
+                showVideoConverterSheet: $showVideoConverterSheet,
+                pendingFileThenPrep: $pendingFileThenPrep,
+                onFileThenPrepConfirm: handleFileThenPrepConfirm
             ))
             .modifier(ContentViewLifecycleModifier(
                 showSearchSheet: $showSearchSheet,
@@ -238,6 +252,9 @@ struct ContentView: View {
                 // Open settings when requested (e.g., from menu bar status item)
                 showSettingsSheet = true
             }
+            .onReceive(Foundation.NotificationCenter.default.publisher(for: NotificationWindowManager.notificationWindowDidCloseNotification)) { _ in
+                showNotificationCenter = false
+            }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("windowModeChanged"))) { notification in
                 // Reload settings when window mode changes (e.g., from fullscreen)
                 settingsManager.reloadCurrentProfile()
@@ -247,25 +264,24 @@ struct ContentView: View {
                     showNotificationCenter = false
                 }
                 
-                // Resize window to appropriate size for the mode
+                // Set minimum size for the mode; only resize if currently smaller
                 DispatchQueue.main.async {
                     if let window = NSApplication.shared.windows.first {
                         let mode = settingsManager.currentSettings.windowMode
-                        let targetSize: NSSize
+                        let minSize: NSSize
                         if mode == .dashboard {
-                            targetSize = NSSize(width: LayoutMode.dashboardDefaultWidth, height: LayoutMode.dashboardDefaultHeight)
+                            minSize = NSSize(width: LayoutMode.dashboardMinWidth, height: LayoutMode.dashboardMinHeight)
                         } else {
-                            targetSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
+                            minSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
                         }
-                        
-                        // Update window constraints
-                        window.minSize = targetSize
-                        window.maxSize = targetSize
-                        
-                        // Resize window
+                        window.minSize = minSize
+                        window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
                         var frame = window.frame
-                        frame.size = targetSize
-                        window.setFrame(frame, display: true, animate: true)
+                        if frame.size.width < minSize.width || frame.size.height < minSize.height {
+                            frame.size.width = max(frame.size.width, minSize.width)
+                            frame.size.height = max(frame.size.height, minSize.height)
+                            window.setFrame(frame, display: true, animate: true)
+                        }
                     }
                 }
             }
@@ -281,9 +297,12 @@ struct ContentView: View {
             // }
     }
     
+    // Dashboard mode disabled for now; will be improved later. Always show compact.
+    private static let dashboardModeEnabled = false
+
     private var mainContentView: some View {
         Group {
-            if settingsManager.currentSettings.windowMode == .dashboard {
+            if Self.dashboardModeEnabled && settingsManager.currentSettings.windowMode == .dashboard {
                 // Dashboard Mode - Full desktop experience
                 ZStack(alignment: .topLeading) {
                     DashboardView(
@@ -302,7 +321,7 @@ struct ContentView: View {
                         attempt: attempt,
                         cacheManager: cacheManager
                     )
-                    .frame(minWidth: LayoutMode.dashboardMinWidth, minHeight: LayoutMode.dashboardMinHeight)
+                    .frame(minWidth: LayoutMode.dashboardMinWidth, maxWidth: .infinity, minHeight: LayoutMode.dashboardMinHeight, maxHeight: .infinity)
                     .draggableLayout(id: "dashboardView")
                     .focusable()
                     .focused($mainViewFocused)
@@ -390,7 +409,15 @@ struct ContentView: View {
                             prepDate: prepDate,
                             dateFormatter: dateFormatter,
                             attempt: attempt,
-                            cacheManager: cacheManager
+                            cacheManager: cacheManager,
+                            onPrepElementsFromCalendar: { session in
+                                CalendarPrepWindowManager.shared.show(
+                                    session: session,
+                                    asanaService: cacheManager.service,
+                                    manager: manager
+                                )
+                            },
+                            onFileThenPrep: attemptFileThenPrep
                         )
                         .offset(x: 0, y: -4) // Layout edit: sidebar offset
                         .draggableLayout(id: "sidebar")
@@ -403,8 +430,7 @@ struct ContentView: View {
                         .environmentObject(manager)
                         .draggableLayout(id: "stagingArea")
                     }
-                    .frame(width: LayoutMode.minWidth, height: windowHeight)
-                    .animation(.easeInOut(duration: 0.2), value: windowHeight)
+                    .frame(minWidth: LayoutMode.minWidth, maxWidth: .infinity, minHeight: LayoutMode.minHeight, maxHeight: .infinity)
                     .focusable()
                     .focused($mainViewFocused)
                     .focusEffectDisabled()
@@ -421,7 +447,7 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                         .help("Settings (⌘,)")
                         
-                        DashboardButton(settingsManager: settingsManager)
+                        CalendarButton(cacheManager: cacheManager, settingsManager: settingsManager)
                     }
                     .padding(.top, 8)
                     .padding(.trailing, 8)
@@ -511,9 +537,8 @@ struct ContentView: View {
             return
         }
         
-        // MediaDash should ONLY use shared cache - never sync from Asana API
-        // External service handles all syncing automatically
-        print("📦 [AutoSync] Checking for shared cache (MediaDash does not sync from Asana)...")
+        // Use shared cache if fresh; otherwise sync from Asana API so Job Info stays current
+        print("📦 [AutoSync] Checking cache / syncing from Asana if needed...")
         
         // Only try to use shared cache if configured
         if settings.useSharedCache, let sharedURL = settings.sharedCacheURL, !sharedURL.isEmpty {
@@ -581,7 +606,28 @@ struct ContentView: View {
 
         // 2. Always show docket selection sheet
         pendingJobType = type
+        pendingFileThenPrep = false
         showDocketSelectionSheet = true
+    }
+
+    /// Start "File + Prep" flow: show docket sheet; on confirm, file then open prep for a matching calendar session.
+    private func attemptFileThenPrep() {
+        guard !manager.selectedFiles.isEmpty else {
+            manager.pickFiles()
+            return
+        }
+        pendingFileThenPrep = true
+        pendingJobType = .workPicture
+        showDocketSelectionSheet = true
+    }
+
+    /// Called when user confirms docket in the sheet and we were in "File + Prep" mode. Run file, then set session to open prep when done.
+    private func handleFileThenPrepConfirm(docket: String) {
+        let sessions = cacheManager.matchingSessions(for: docket)
+        pendingPrepSessionAfterFile = sessions.first
+        manager.runJob(type: .workPicture, docket: docket, wpDate: wpDate, prepDate: prepDate)
+        pendingJobType = nil
+        pendingFileThenPrep = false
     }
 
     private func cycleTheme() {
@@ -598,10 +644,9 @@ struct ContentView: View {
 
     private func moveGridFocus(direction: GridDirection) {
         // Grid layout: [file, prep]
-        //              [both, convert]
+        //              [calendar, convert]
         // Then linear: [search, jobInfo, archiver]
 
-        // If no button is focused, auto-focus the first one
         if focusedButton == nil {
             focusedButton = .file
             return
@@ -613,13 +658,13 @@ struct ContentView: View {
         case .up:
             switch current {
             case .file, .prep:
-                focusedButton = .archiver  // Wrap to bottom
-            case .both:
+                focusedButton = .archiver
+            case .calendar:
                 focusedButton = .file
             case .convert:
                 focusedButton = .prep
             case .search:
-                focusedButton = .both  // Return to grid from below
+                focusedButton = .calendar
             case .jobInfo:
                 focusedButton = .search
             case .archiver:
@@ -629,17 +674,17 @@ struct ContentView: View {
         case .down:
             switch current {
             case .file:
-                focusedButton = .both
+                focusedButton = .calendar
             case .prep:
                 focusedButton = .convert
-            case .both, .convert:
+            case .calendar, .convert:
                 focusedButton = .search
             case .search:
                 focusedButton = .jobInfo
             case .jobInfo:
                 focusedButton = .archiver
             case .archiver:
-                focusedButton = .file  // Wrap to top
+                focusedButton = .file
             }
 
         case .left:
@@ -647,26 +692,26 @@ struct ContentView: View {
             case .prep:
                 focusedButton = .file
             case .convert:
-                focusedButton = .both
+                focusedButton = .calendar
             default:
-                break  // No left movement from left column or linear items
+                break
             }
 
         case .right:
             switch current {
             case .file:
                 focusedButton = .prep
-            case .both:
+            case .calendar:
                 focusedButton = .convert
             default:
-                break  // No right movement from right column or linear items
+                break
             }
         }
     }
 
     private func moveFocus(direction: Int) {
         // Linear navigation fallback
-        let mainButtons: [ActionButtonFocus] = [.file, .prep, .both, .convert, .search, .jobInfo, .archiver]
+        let mainButtons: [ActionButtonFocus] = [.file, .prep, .calendar, .convert, .search, .jobInfo, .archiver]
 
         // If no button is focused, auto-focus the first one when using arrow keys
         if focusedButton == nil {
@@ -690,15 +735,35 @@ struct ContentView: View {
         case .file:
             attempt(type: .workPicture)
         case .prep:
-            attempt(type: .prep)
-        case .both:
-            attempt(type: .both)
+            AsanaCalendarWindowManager.shared.show(
+                cacheManager: cacheManager,
+                settingsManager: settingsManager,
+                onPrepElements: { session in
+                    CalendarPrepWindowManager.shared.show(
+                        session: session,
+                        asanaService: cacheManager.service,
+                        manager: manager
+                    )
+                }
+            )
+        case .calendar:
+            AsanaFullCalendarWindowManager.shared.show(
+                cacheManager: cacheManager,
+                settingsManager: settingsManager,
+                onPrepElements: { session in
+                    CalendarPrepWindowManager.shared.show(
+                        session: session,
+                        asanaService: cacheManager.service,
+                        manager: manager
+                    )
+                }
+            )
+        case .search:
+            showSearchSheet = true
         case .convert:
             showVideoConverterSheet = true
         case .jobInfo:
             showQuickSearchSheet = true
-        case .search:
-            showSearchSheet = true
         case .archiver:
             SimianArchiverWindowManager.shared.show(settingsManager: settingsManager)
         }
@@ -1285,7 +1350,7 @@ struct DocketSearchView: View {
                                     VStack {
                                         Divider()
                                     }
-                                    Text("Recent Dockets")
+                                    Text("Select a Docket")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                         .padding(.horizontal, 8)
@@ -1350,19 +1415,23 @@ struct DocketSearchView: View {
             .frame(maxWidth: .infinity)
         }
         .frame(minWidth: 400, idealWidth: 600, maxWidth: 700, minHeight: 300, idealHeight: 500, maxHeight: 700)
-        .fixedSize(horizontal: false, vertical: false)
         .onAppear {
-            // Scan dockets based on job type
+            // Always show folders from Work Picture (never docket numbers from prep folder), sorted by most recently modified
             Task {
                 let currentConfig = manager.config
-                let scanType: JobType = jobType == .both ? .workPicture : jobType
+                let scanType: JobType = .workPicture
                 let dockets = await Task.detached {
                     MediaLogic.scanDockets(config: currentConfig, jobType: scanType)
                 }.value
                 await MainActor.run {
                     allDockets = dockets
                     filteredDockets = dockets
-                    jobNameByDocket = Dictionary(uniqueKeysWithValues: dockets.map { ($0, manager.getJobName(for: $0)) })
+                    // Build dict without uniqueKeysWithValues to tolerate duplicate docket names (e.g. same folder scanned twice)
+                    var jobByName: [String: String] = [:]
+                    for docket in dockets {
+                        jobByName[docket] = manager.getJobName(for: docket)
+                    }
+                    jobNameByDocket = jobByName
                     // Auto-select first docket
                     if let first = dockets.first {
                         selectedPath = first
@@ -1390,6 +1459,7 @@ struct DocketSearchView: View {
                 initialDocketNumber: prefillDocketNumber,
                 initialJobName: prefillJobName
             )
+            .sheetSizeStabilizer()
             .id("\(prefillDocketNumber ?? "nil")_\(prefillJobName ?? "nil")") // Force recreation when prefill values change
             .onDisappear {
                 // Clear prefill values when sheet closes
@@ -1418,6 +1488,7 @@ struct DocketSearchView: View {
                         }
                     }
                 )
+                .sheetSizeStabilizer()
             }
         }
         // Native Keyboard Navigation
@@ -1969,7 +2040,6 @@ struct SearchView: View {
             .frame(maxWidth: .infinity)
         }
         .frame(minWidth: 500, idealWidth: 650, maxWidth: 800, minHeight: 400, idealHeight: 600, maxHeight: 800)
-        .fixedSize(horizontal: false, vertical: false) // Allow resizing within constraints
         .onAppear {
             // Set initial focus when view appears
             isSearchFieldFocused = true
@@ -2323,10 +2393,10 @@ struct QuickDocketSearchView: View {
             infoBarSection
         }
         .frame(minWidth: 400, idealWidth: 600, maxWidth: 700, minHeight: 300, idealHeight: 500, maxHeight: 700)
-        .fixedSize(horizontal: false, vertical: false)
         .sheet(isPresented: $showSettingsSheet) {
             SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
                 .environmentObject(sessionManager)
+                .sheetSizeStabilizer()
         }
         .sheet(isPresented: $showMetadataEditor) {
             if let docket = selectedDocket {
@@ -2335,6 +2405,7 @@ struct QuickDocketSearchView: View {
                     isPresented: $showMetadataEditor,
                     metadataManager: metadataManager
                 )
+                .sheetSizeStabilizer()
             }
         }
         .onAppear {
@@ -2473,6 +2544,18 @@ struct QuickDocketSearchView: View {
             }
             
             Spacer()
+            
+            if settingsManager.currentSettings.docketSource == .asana {
+                Button {
+                    refreshJobInfoFromAsana()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.borderless)
+                .disabled(cacheManager.isSyncing)
+                .help("Refresh job list from Asana")
+            }
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
@@ -2486,7 +2569,7 @@ struct QuickDocketSearchView: View {
                 HStack {
                     ProgressView(value: cacheManager.syncProgress > 0 ? cacheManager.syncProgress : nil)
                         .scaleEffect(0.7)
-                    Text(cacheManager.syncPhase.isEmpty ? "External service syncing shared cache..." : cacheManager.syncPhase)
+                    Text(cacheManager.syncPhase.isEmpty ? "Syncing from Asana..." : cacheManager.syncPhase)
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
@@ -2971,6 +3054,37 @@ struct QuickDocketSearchView: View {
             // Server source not currently supported
             asanaError = "Server integration is currently unavailable. Please use Asana."
             isScanning = false
+        }
+    }
+    
+    private func refreshJobInfoFromAsana() {
+        let settings = settingsManager.currentSettings
+        guard settings.docketSource == .asana else { return }
+        Task {
+            do {
+                try await cacheManager.forceFullSync(
+                    workspaceID: settings.asanaWorkspaceID,
+                    projectID: settings.asanaProjectID,
+                    docketField: settings.asanaDocketField,
+                    jobNameField: settings.asanaJobNameField
+                )
+                await MainActor.run {
+                    let freshDockets = cacheManager.loadCachedDockets()
+                    if !freshDockets.isEmpty {
+                        allDockets = freshDockets
+                        if !searchText.isEmpty {
+                            searchAsana(query: searchText)
+                        } else {
+                            filteredDockets = freshDockets
+                            applySorting()
+                        }
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    asanaError = "Failed to refresh from Asana: \(error.localizedDescription)"
+                }
+            }
         }
     }
     
@@ -3721,13 +3835,16 @@ struct SheetsModifier: ViewModifier {
     let initialSearchText: String
     @Binding var showDocketSelectionSheet: Bool
     @Binding var pendingJobType: JobType?
+    @Binding var showManualPrepSheet: Bool
     let wpDate: Date
     let prepDate: Date
     @Binding var showQuickSearchSheet: Bool
     @ObservedObject var cacheManager: AsanaCacheManager
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
-    
+    @Binding var pendingFileThenPrep: Bool
+    var onFileThenPrepConfirm: (String) -> Void
+
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $showNewDocketSheet) {
@@ -3751,17 +3868,36 @@ struct SheetsModifier: ViewModifier {
                     selectedDocket: $selectedDocket,
                     jobType: pendingJobType ?? .workPicture,
                     onConfirm: {
+                        if pendingFileThenPrep {
+                            onFileThenPrepConfirm(selectedDocket)
+                            showDocketSelectionSheet = false
+                            return
+                        }
                         if let type = pendingJobType {
-                            manager.runJob(
-                                type: type,
-                                docket: selectedDocket,
-                                wpDate: wpDate,
-                                prepDate: prepDate
-                            )
+                            if type == .prep {
+                                showManualPrepSheet = true
+                            } else {
+                                manager.runJob(
+                                    type: type,
+                                    docket: selectedDocket,
+                                    wpDate: wpDate,
+                                    prepDate: prepDate
+                                )
+                            }
                             pendingJobType = nil
                         }
                     },
                     cacheManager: cacheManager
+                )
+                .sheetBorder()
+            }
+            .sheet(isPresented: $showManualPrepSheet) {
+                ManualPrepSheet(
+                    manager: manager,
+                    isPresented: $showManualPrepSheet,
+                    docket: selectedDocket,
+                    wpDate: wpDate,
+                    prepDate: prepDate
                 )
                 .sheetBorder()
             }
@@ -3892,6 +4028,24 @@ struct ContentViewLifecycleModifier: ViewModifier {
                 
                 // Auto-sync Asana cache on app launch if using Asana source
                 autoSyncAsanaCache()
+                
+                // Start watching Downloads folder for "Use with MediaDash" popup
+                Task { @MainActor in
+                    DownloadPromptManager.shared.startWatching()
+                }
+            }
+            .onReceive(Foundation.NotificationCenter.default.publisher(for: DownloadPromptNotification.addToStaging)) { notification in
+                guard let url = notification.userInfo?["url"] as? URL else { return }
+                DispatchQueue.main.async {
+                    guard url.isFileURL else { return }
+                    var isDirectory: ObjCBool = false
+                    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return }
+                    let fileItem = FileItem(url: url)
+                    let existing = Set(manager.selectedFiles.map { $0.url })
+                    if !existing.contains(fileItem.url) {
+                        manager.selectedFiles.append(fileItem)
+                    }
+                }
             }
             .onDisappear {
                 // Clean up task when view disappears
@@ -4085,17 +4239,18 @@ struct WorkspaceMenuButton: View {
     }
 }
 
-// MARK: - Dashboard Button
+// MARK: - Calendar Button (Asana sessions: today + 5 days)
 
-struct DashboardButton: View {
+struct CalendarButton: View {
+    let cacheManager: AsanaCacheManager
     @ObservedObject var settingsManager: SettingsManager
     @State private var isHovered = false
     
     var body: some View {
         Button(action: {
-            switchWindowMode(.dashboard)
+            AsanaCalendarWindowManager.shared.show(cacheManager: cacheManager, settingsManager: settingsManager)
         }) {
-            Image(systemName: "chart.bar.xaxis")
+            Image(systemName: "calendar")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(isHovered ? .primary : .secondary)
                 .frame(width: 28, height: 28)
@@ -4106,6 +4261,7 @@ struct DashboardButton: View {
         }
         .buttonStyle(.plain)
         .allowsHitTesting(true)
+        .help("Asana Calendar (today + 5 days)")
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovered = hovering

@@ -1,0 +1,6 @@
+- Demos/Submit: Track colour selector reorganized like spreadsheet (Composers table + Freelance/Extra, colours by name)
+- Demos/Submit: Completed tasks stay visible with checkmark and greyed out; DEMOS and SUBMIT task names both treated as demos
+- Posting legend: Copy legend to clipboard; editable Post task description with Save
+- Download prompt: When you download a file in the browser, popup asks "Use with MediaDash?" to stage it (top-right)
+- Calendar: Task detail opens in its own resizable window (consistent size, no more resize on cmd-tab; drag and resize)
+- Fix: Download prompt window no longer crashes (removed invalid collection behavior)

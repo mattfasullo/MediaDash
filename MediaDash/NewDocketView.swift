@@ -115,8 +115,6 @@ struct NewDocketView: View {
             .padding(.top, 4)
         }
         .padding(20)
-        .frame(idealWidth: 320, idealHeight: 200)
-        .fixedSize(horizontal: true, vertical: true)
     }
 
     private func createDocket() {

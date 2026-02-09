@@ -35,10 +35,11 @@ struct StagingAreaView: View {
             stagingContent
             statusBar
         }
-        .frame(width: 350)
+        .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: $showBatchRenameSheet) {
             BatchRenameSheet(manager: manager, filesToRename: filesToRename)
+                .sheetSizeStabilizer()
         }
     }
     
@@ -257,7 +258,6 @@ struct StagingAreaView: View {
                     if cacheManager.isSyncing {
                         HStack(spacing: 8) {
                             if cacheManager.syncProgress > 0 {
-                                // Show progress bar when we have progress info
                                 ProgressView(value: cacheManager.syncProgress)
                                     .progressViewStyle(.linear)
                                     .frame(width: 60)
@@ -265,12 +265,11 @@ struct StagingAreaView: View {
                                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                                     .foregroundColor(.blue)
                             } else {
-                                // Show spinner when starting
                                 ProgressView()
                                     .scaleEffect(0.6)
                                     .frame(width: 12, height: 12)
                             }
-                            Text(cacheManager.syncPhase.isEmpty ? "External service syncing shared cache" : cacheManager.syncPhase)
+                            Text(cacheManager.syncPhase.isEmpty ? "Syncing from Asana..." : cacheManager.syncPhase)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.blue)
                                 .lineLimit(1)

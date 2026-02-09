@@ -72,6 +72,7 @@ struct AuthenticatedRootView: View {
     @StateObject private var notificationCenter = NotificationCenter()
     @StateObject private var asanaCacheManager = AsanaCacheManager()
     @StateObject private var grabbedIndicatorService = GrabbedIndicatorService()
+    @StateObject private var simianService = SimianService()
     
     @State private var showSplashScreen = true
     @State private var initializationComplete = false
@@ -148,6 +149,7 @@ struct AuthenticatedRootView: View {
                     .zIndex(1)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
                 // Sync settings manager with profile settings
                 settingsManager.currentSettings = profile.settings
@@ -156,6 +158,18 @@ struct AuthenticatedRootView: View {
                 emailScanningService.mediaManager = manager
                 emailScanningService.settingsManager = settingsManager
                 emailScanningService.asanaCacheManager = asanaCacheManager
+                emailScanningService.simianService = simianService
+                
+                // Configure Simian service from settings
+                if settingsManager.currentSettings.simianEnabled,
+                   let baseURL = settingsManager.currentSettings.simianAPIBaseURL,
+                   !baseURL.isEmpty {
+                    simianService.setBaseURL(baseURL)
+                    if let username = settingsManager.currentSettings.simianUsername,
+                       let password = settingsManager.currentSettings.simianPassword {
+                        simianService.setCredentials(username: username, password: password)
+                    }
+                }
                 
                 // Update grabbed indicator service references
                 grabbedIndicatorService.gmailService = emailScanningService.gmailService

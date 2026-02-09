@@ -48,6 +48,13 @@ struct SidebarView: View {
     let dateFormatter: DateFormatter
     let attempt: (JobType) -> Void
     let cacheManager: AsanaCacheManager?
+    var onPrepElementsFromCalendar: ((DocketInfo) -> Void)?
+    /// Right-click File → "File + Prep": file then open prep for matching session.
+    var onFileThenPrep: (() -> Void)? = nil
+    /// Open Prep window (sessions, today + 5 business days).
+    var onOpenPrep: (() -> Void)? = nil
+    /// Open full 2-week Asana calendar view.
+    var onOpenFullCalendar: (() -> Void)? = nil
     
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
@@ -93,15 +100,10 @@ struct SidebarView: View {
                             showNotificationCenter: $showNotificationCenter
                         )
                         
-                        // Separate server and cache status indicators
                         if let cacheManager = cacheManager {
                             ServerStatusIndicator(
                                 cacheManager: cacheManager,
                                 showSettings: $showSettingsSheet
-                            )
-                            
-                            CacheStatusIndicator(
-                                cacheManager: cacheManager
                             )
                         }
                     }
@@ -119,7 +121,27 @@ struct SidebarView: View {
                     wpDate: wpDate,
                     prepDate: prepDate,
                     dateFormatter: dateFormatter,
-                    attempt: attempt
+                    attempt: attempt,
+                    cacheManager: cacheManager ?? AsanaCacheManager(),
+                    onOpenPrep: {
+                        if let cm = cacheManager {
+                            AsanaCalendarWindowManager.shared.show(
+                                cacheManager: cm,
+                                settingsManager: settingsManager,
+                                onPrepElements: onPrepElementsFromCalendar
+                            )
+                        }
+                    },
+                    onOpenFullCalendar: onOpenFullCalendar ?? {
+                        if let cm = cacheManager {
+                            AsanaFullCalendarWindowManager.shared.show(
+                                cacheManager: cm,
+                                settingsManager: settingsManager,
+                                onPrepElements: onPrepElementsFromCalendar
+                            )
+                        }
+                    },
+                    onFileThenPrep: onFileThenPrep
                 )
                 .draggableLayout(id: "actionButtons")
 
@@ -756,435 +778,6 @@ struct ServerConnectionDialogView: View {
         }
     }
 }
-
-// MARK: - Cache Status Indicator
-
-struct CacheStatusIndicator: View {
-    @ObservedObject var cacheManager: AsanaCacheManager
-    @EnvironmentObject var settingsManager: SettingsManager
-    @State private var isHovered = false
-    @State private var isProcessing = false
-    @State private var lastActionTime: Date?
-    @State private var pulsePhase: Double = 0.0
-    @State private var showCachePopover = false
-    
-    private var cacheState: (available: Bool, isShared: Bool) {
-        switch cacheManager.cacheStatus {
-        case .serverConnectedUsingShared:
-            return (true, true)
-        case .serverConnectedNoCache:
-            return (false, false)
-        case .serverDisconnectedNoCache:
-            return (false, false)
-        case .unknown:
-            return (false, false)
-        }
-    }
-    
-    private var tooltipText: String {
-        let state = cacheState
-        if state.available {
-            if state.isShared {
-                return "Cache: Using shared cache"
-            } else {
-                return "Cache: Using local cache"
-            }
-        } else {
-            return "Cache: Not available\nClick to refresh"
-        }
-    }
-    
-    var body: some View {
-        Group {
-            if isProcessing {
-                // Show spinning progress indicator when processing
-                ProgressView()
-                    .scaleEffect(0.4)
-                    .frame(width: 6, height: 6)
-                    .progressViewStyle(CircularProgressViewStyle(tint: .blue))
-            } else {
-                // Show cache status icon when not processing
-                let state = cacheState
-                if state.available {
-                    if state.isShared {
-                        Image(systemName: "externaldrive.connected.to.line.below.fill")
-                    .font(.system(size: 11))
-                    .foregroundColor(.green)
-                    } else {
-                Image(systemName: "internaldrive")
-                    .font(.system(size: 11))
-                    .foregroundColor(.green)
-                    }
-                } else {
-                    Image(systemName: "externaldrive.badge.exclamationmark")
-                    .font(.system(size: 11))
-                        .foregroundColor(.red)
-                }
-            }
-        }
-        .frame(width: 28, height: 28) // Fixed square size to match notification button height
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.gray.opacity(isHovered ? 0.15 : (isProcessing ? 0.2 : 0.08)))
-        )
-        .overlay(
-            // Pulsing border animation when processing
-            Group {
-                if isProcessing {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.blue.opacity(0.4 + pulsePhase * 0.4), lineWidth: 1.5)
-                }
-            }
-        )
-        .onChange(of: isProcessing) { _, newValue in
-            if newValue {
-                // Start pulsing animation
-                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                    pulsePhase = 1.0
-                }
-            } else {
-                // Stop pulsing animation
-                withAnimation(.easeOut(duration: 0.2)) {
-                    pulsePhase = 0.0
-                }
-            }
-        }
-        .help(isProcessing ? "Processing..." : tooltipText)
-        .onHover { hovering in
-            isHovered = hovering
-            if hovering {
-                NSCursor.pointingHand.push()
-            } else {
-                NSCursor.pop()
-            }
-        }
-        .popover(isPresented: $showCachePopover, arrowEdge: .bottom) {
-            CacheStatusPopover(
-                cacheManager: cacheManager,
-                isProcessing: $isProcessing
-            )
-            .environmentObject(settingsManager)
-            .frame(width: 350)
-        }
-        .onTapGesture {
-            // Show cache popover
-            showCachePopover = true
-            // Refresh status when opening popover
-            cacheManager.refreshCacheStatus()
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Cache Status Popover
-
-struct CacheStatusPopover: View {
-    @ObservedObject var cacheManager: AsanaCacheManager
-    @Binding var isProcessing: Bool
-    @EnvironmentObject var settingsManager: SettingsManager
-    @State private var lastSyncDate: Date?
-    
-    private var cacheState: (available: Bool, isShared: Bool) {
-        switch cacheManager.cacheStatus {
-        case .serverConnectedUsingShared:
-            return (true, true)
-        case .serverConnectedNoCache:
-            return (false, false)
-        case .serverDisconnectedNoCache:
-            return (false, false)
-        case .unknown:
-            return (false, false)
-        }
-    }
-    
-    private var cacheStateDescription: String {
-        switch cacheManager.cacheStatus {
-        case .serverConnectedUsingShared:
-            return "Using shared cache"
-        case .serverConnectedNoCache:
-            return "No cache available"
-        case .serverDisconnectedNoCache:
-            return "Server disconnected, no cache"
-        case .unknown:
-            return "Status unknown"
-        }
-    }
-    
-    private var sharedCachePath: String {
-        guard let urlString = settingsManager.currentSettings.sharedCacheURL, !urlString.isEmpty else {
-            return "Not configured"
-        }
-        
-        // Resolve to actual file path (appends cache filename if it's a directory)
-        let fileURL = cacheManager.getFileURL(from: urlString)
-        return fileURL.path
-    }
-    
-    private var localCachePath: String {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let appFolder = appSupport.appendingPathComponent("MediaDash", isDirectory: true)
-        return appFolder.appendingPathComponent("mediadash_docket_cache.json").path
-    }
-    
-    private var cacheFileModificationDate: Date? {
-        guard settingsManager.currentSettings.useSharedCache,
-              let urlString = settingsManager.currentSettings.sharedCacheURL,
-              !urlString.isEmpty else {
-            return nil
-        }
-        
-        let fileURL = cacheManager.getFileURL(from: urlString)
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-              let modificationDate = attributes[.modificationDate] as? Date else {
-            return nil
-        }
-        
-        return modificationDate
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Header
-            HStack {
-                let state = cacheState
-                if state.available {
-                    if state.isShared {
-                        Image(systemName: "externaldrive.connected.to.line.below.fill")
-                            .font(.system(size: 16))
-                            .foregroundColor(.green)
-                    } else {
-                        Image(systemName: "internaldrive")
-                            .font(.system(size: 16))
-                            .foregroundColor(.green)
-                    }
-                } else {
-                    Image(systemName: "externaldrive.badge.exclamationmark")
-                        .font(.system(size: 16))
-                        .foregroundColor(.red)
-                }
-                
-                Text("Cache Status")
-                    .font(.system(size: 14, weight: .semibold))
-                
-                Spacer()
-                
-                Circle()
-                    .fill(cacheState.available ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
-            }
-            
-            Divider()
-            
-            // Cache Status
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Status")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
-                
-                Text(cacheStateDescription)
-                    .font(.system(size: 12))
-                    .foregroundColor(.primary)
-            }
-            
-            // Cache Paths
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Cache Locations")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
-                
-                if settingsManager.currentSettings.useSharedCache {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Shared:")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                        Text(sharedCachePath)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.primary)
-                            .textSelection(.enabled)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Local:")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                    Text(localCachePath)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.primary)
-                        .textSelection(.enabled)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            
-            // Last Sync Date
-            if let lastSync = cacheManager.lastSyncDate {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Last Sync")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-                    Text(lastSync, style: .relative)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            // Cache File Updated
-            if let modificationDate = cacheFileModificationDate {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Cache File Updated")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-                    Text(modificationDate, style: .relative)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            // Docket Count
-            if settingsManager.currentSettings.useSharedCache {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Dockets Cached")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-                    Text("\(cacheManager.cachedDockets.count)")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            Divider()
-            
-            // Actions
-            HStack(spacing: 8) {
-                Button(action: {
-                    refreshAndUpgradeCache()
-                }) {
-                    HStack(spacing: 4) {
-                        if isProcessing {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .frame(width: 10, height: 10)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 10))
-                        }
-                        Text("Refresh")
-                            .font(.system(size: 11))
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(isProcessing)
-                
-                Button(action: {
-                    syncNow()
-                }) {
-                    HStack(spacing: 4) {
-                        if cacheManager.isSyncing {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .frame(width: 10, height: 10)
-                        } else {
-                            Image(systemName: "arrow.down.circle")
-                                .font(.system(size: 10))
-                        }
-                        Text("Sync Now")
-                            .font(.system(size: 11))
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(cacheManager.isSyncing || isProcessing)
-            }
-        }
-        .padding(12)
-    }
-    
-    private func refreshAndUpgradeCache() {
-        guard !isProcessing else { return }
-        
-        isProcessing = true
-        
-                Task { @MainActor in
-            defer {
-                Task {
-                    try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
-                    await MainActor.run {
-                        isProcessing = false
-                    }
-                }
-            }
-            
-                    // First refresh status
-                    cacheManager.refreshCacheStatus()
-                    
-            // Note: Only shared cache is supported now
-            if false {
-                        // Try to seed shared cache from local cache
-                        // DEBUG: Commented out for performance
-                        // print("🔄 [Cache] Attempting to seed shared cache from local cache...")
-                        
-                        // Get local cache dockets
-                        let localDockets = cacheManager.loadCachedDockets()
-                        
-                        if !localDockets.isEmpty {
-                            // Get shared cache URL from settings
-                    if let sharedURL = settingsManager.currentSettings.sharedCacheURL, !sharedURL.isEmpty {
-                                do {
-                                    try await cacheManager.saveToSharedCache(dockets: localDockets, url: sharedURL)
-                                    // DEBUG: Commented out for performance
-                                    // print("🟢 [Cache] Successfully created shared cache from local cache")
-                                } catch {
-                                    // DEBUG: Commented out for performance
-                                    // print("⚠️ [Cache] Failed to create shared cache: \(error.localizedDescription)")
-                                }
-                            } else {
-                                // DEBUG: Commented out for performance
-                                // print("⚠️ [Cache] No shared cache URL configured in settings")
-                            }
-                        }
-                        
-                        // Refresh status after attempt
-                        cacheManager.refreshCacheStatus()
-                    } else {
-                        // Just refresh status
-                        cacheManager.refreshCacheStatus()
-                    }
-                }
-            }
-    
-    private func syncNow() {
-        guard !cacheManager.isSyncing else { return }
-        
-        Task { @MainActor in
-            do {
-                let settings = settingsManager.currentSettings
-                try await cacheManager.syncWithAsana(
-                    workspaceID: settings.asanaWorkspaceID,
-                    projectID: settings.asanaProjectID,
-                    docketField: settings.asanaDocketField,
-                    jobNameField: settings.asanaJobNameField,
-                    sharedCacheURL: settings.sharedCacheURL,
-                    useSharedCache: settings.useSharedCache
-                )
-                // DEBUG: Commented out for performance
-                // print("🟢 [Cache] Manual sync complete")
-                
-                // Refresh status after sync
-                cacheManager.refreshCacheStatus()
-            } catch {
-                // DEBUG: Commented out for performance
-                // print("⚠️ [Cache] Manual sync failed: \(error.localizedDescription)")
-            }
-        }
-    }
-}
-
 
 // MARK: - Removed components
 

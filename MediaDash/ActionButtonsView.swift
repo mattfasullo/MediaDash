@@ -13,6 +13,13 @@ struct ActionButtonsView: View {
     let prepDate: Date
     let dateFormatter: DateFormatter
     let attempt: (JobType) -> Void
+    let cacheManager: AsanaCacheManager
+    /// Opens Prep window (sessions list for today + 5 business days).
+    var onOpenPrep: () -> Void = {}
+    /// Opens full 2-week Asana calendar view.
+    var onOpenFullCalendar: () -> Void = {}
+    /// Right-click "File + Prep": file first, then open prep for a matching calendar session.
+    var onFileThenPrep: (() -> Void)? = nil
     
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
@@ -35,6 +42,14 @@ struct ActionButtonsView: View {
                 ) {
                     attempt(.workPicture)
                 }
+                .contextMenu {
+                    if let onFileThenPrep = onFileThenPrep {
+                        Button("File + Prep") {
+                            onFileThenPrep()
+                        }
+                        .help("File to Work Picture, then open Prep for a matching calendar session (same docket)")
+                    }
+                }
                 .focused(focusedButton, equals: .file)
                 .focusEffectDisabled()
                 .onHover { hovering in
@@ -51,7 +66,7 @@ struct ActionButtonsView: View {
 
                 ActionButtonWithShortcut(
                     title: "Prep",
-                    subtitle: "Session Prep",
+                    subtitle: "Sessions",
                     shortcut: "⌘2",
                     color: currentTheme.buttonColors.prep,
                     isPrimary: false,
@@ -60,7 +75,7 @@ struct ActionButtonsView: View {
                     theme: currentTheme,
                     iconName: "list.clipboard"
                 ) {
-                    attempt(.prep)
+                    onOpenPrep()
                 }
                 .focused(focusedButton, equals: .prep)
                 .focusEffectDisabled()
@@ -71,28 +86,28 @@ struct ActionButtonsView: View {
                         isKeyboardMode = false
                     }
                     hoverInfo = hovering ?
-                        "Files to Session Prep (\(dateFormatter.string(from: prepDate)))" :
+                        "Open sessions (today + 5 business days) to prep from calendar" :
                         "Ready."
                 }
                 .keyboardShortcut("2", modifiers: .command)
             }
 
-            // Row 2: Both and Convert
+            // Row 2: Calendar (2-week view) and Convert
             HStack(spacing: 8) {
                 ActionButtonWithShortcut(
-                    title: "File + Prep",
-                    subtitle: "Both",
+                    title: "Calendar",
+                    subtitle: "2 weeks",
                     shortcut: "⌘3",
-                    color: currentTheme.buttonColors.both,
+                    color: currentTheme.buttonColors.prep,
                     isPrimary: false,
-                    isFocused: focusedButton.wrappedValue == .both,
+                    isFocused: focusedButton.wrappedValue == .calendar,
                     showShortcut: isCommandKeyHeld,
                     theme: currentTheme,
-                    iconName: "doc.on.doc"
+                    iconName: "calendar"
                 ) {
-                    attempt(.both)
+                    onOpenFullCalendar()
                 }
-                .focused(focusedButton, equals: .both)
+                .focused(focusedButton, equals: .calendar)
                 .focusEffectDisabled()
                 .onHover { hovering in
                     if hovering {
@@ -101,7 +116,7 @@ struct ActionButtonsView: View {
                         isKeyboardMode = false
                     }
                     hoverInfo = hovering ?
-                        "Processes both Work Picture and Prep" :
+                        "Open Asana calendar (next 2 weeks)" :
                         "Ready."
                 }
                 .keyboardShortcut("3", modifiers: .command)

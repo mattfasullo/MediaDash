@@ -14,7 +14,7 @@ enum RenameToken: String, CaseIterable {
         switch self {
         case .original: return "Original filename (without extension)"
         case .docket: return "Current docket number"
-        case .date: return "Today's date (MMMd.yy)"
+        case .date: return "Today's date (MMM.d.yy)"
         case .sequence: return "Sequence number (01, 02, ...)"
         case .extension_: return "File extension"
         }
@@ -59,7 +59,7 @@ struct BatchRenameSheet: View {
     // Preview of renamed files
     private var previewItems: [RenamePreviewItem] {
         let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "MMMd.yy"
+        dateFormatter.dateFormat = "MMM.d.yy"
         let dateString = dateFormatter.string(from: Date())
         
         var previews: [RenamePreviewItem] = []

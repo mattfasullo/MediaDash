@@ -15,6 +15,7 @@ class GrabbedIndicatorService: ObservableObject {
         self.notificationCenter = notificationCenter
         self.settingsManager = settingsManager
     }
+
     
     /// Start monitoring for replies from media team members
     func startMonitoring() {
@@ -38,6 +39,27 @@ class GrabbedIndicatorService: ObservableObject {
     /// Check for replies from media team members that should mark threads as "Grabbed"
     func checkForGrabbedReplies() async {
         print("GrabbedIndicatorService: Starting check for grabbed replies...")
+        // #region agent log
+        let payload: [String: Any] = [
+            "sessionId": "debug-session",
+            "runId": "run2",
+            "hypothesisId": "H3",
+            "location": "GrabbedIndicatorService.checkForGrabbedReplies:entry",
+            "message": "checkForGrabbedReplies start",
+            "data": [
+                "hasGmailService": gmailService != nil
+            ],
+            "timestamp": Date().timeIntervalSince1970 * 1000
+        ]
+        if let json = try? JSONSerialization.data(withJSONObject: payload),
+           let line = String(data: json, encoding: .utf8) {
+            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log")) {
+                handle.seekToEndOfFile()
+                handle.write((line + "\n").data(using: .utf8) ?? Data())
+                try? handle.close()
+            }
+        }
+        // #endregion
         
         guard let gmailService = gmailService,
               let notificationCenter = notificationCenter,
@@ -84,11 +106,33 @@ class GrabbedIndicatorService: ObservableObject {
         print("GrabbedIndicatorService: Found \(mediaNotifications.count) ungrabbed media file notifications to check")
         
         // Check each notification's thread for new replies
-        for notification in mediaNotifications {
+        for (index, notification) in mediaNotifications.enumerated() {
             print("GrabbedIndicatorService: Checking notification \(notification.id) (thread: \(notification.threadId ?? "nil"))")
             guard let threadId = notification.threadId else { continue }
             
             do {
+                // #region agent log
+                let payload: [String: Any] = [
+                    "sessionId": "debug-session",
+                    "runId": "run2",
+                    "hypothesisId": "H3",
+                    "location": "GrabbedIndicatorService.checkForGrabbedReplies:threadFetch",
+                    "message": "getThread start",
+                    "data": [
+                        "index": index,
+                        "total": mediaNotifications.count
+                    ],
+                    "timestamp": Date().timeIntervalSince1970 * 1000
+                ]
+                if let json = try? JSONSerialization.data(withJSONObject: payload),
+                   let line = String(data: json, encoding: .utf8) {
+                    if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log")) {
+                        handle.seekToEndOfFile()
+                        handle.write((line + "\n").data(using: .utf8) ?? Data())
+                        try? handle.close()
+                    }
+                }
+                // #endregion
                 // Fetch thread messages
                 let thread = try await gmailService.getThread(threadId: threadId)
                 

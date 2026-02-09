@@ -10,6 +10,8 @@ class EmailScanningService: ObservableObject {
     @Published var lastScanTime: Date?
     @Published var totalDocketsCreated = 0
     @Published var lastError: String?
+    @Published var cachedUnreadMessages: [GmailMessage] = []
+    @Published var lastRateLimitRetryAfter: Date?
     
     var gmailService: GmailService
     private var parser: EmailDocketParser
@@ -24,6 +26,7 @@ class EmailScanningService: ObservableObject {
     weak var notificationCenter: NotificationCenter?
     weak var metadataManager: DocketMetadataManager?
     weak var asanaCacheManager: AsanaCacheManager?
+    var simianService: SimianService?
     
     private var companyNameCache: CompanyNameCache {
         CompanyNameCache.shared
@@ -41,6 +44,7 @@ class EmailScanningService: ObservableObject {
             await self.checkAndAddGmailToWhitelist()
         }
     }
+
     
     /// Check if Gmail is authenticated and add email to Grayson whitelist
     private func checkAndAddGmailToWhitelist() async {
@@ -149,6 +153,13 @@ class EmailScanningService: ObservableObject {
     /// Perform a manual scan now
     func scanNow(forceRescan: Bool = false) async {
         print("🔍 EmailScanningService.scanNow() called")
+        if isScanning {
+            return
+        }
+
+        if let retryAfter = lastRateLimitRetryAfter, retryAfter > Date() {
+            return
+        }
         
         guard let settings = settingsManager?.currentSettings, settings.gmailEnabled else {
             let error = "Gmail integration is not enabled"
@@ -191,7 +202,6 @@ class EmailScanningService: ObservableObject {
             print("  🔎 Query: \(query) (scanning all unread emails)")
             
             print("EmailScanningService: Starting email scan - query: \(query), gmailEnabled: \(settings.gmailEnabled), gmailAuthenticated: \(gmailService.isAuthenticated)")
-            
             // Fetch emails matching query
             let messageRefs = try await gmailService.fetchEmails(
                 query: query,
@@ -222,7 +232,6 @@ class EmailScanningService: ObservableObject {
                 guard let labelIds = message.labelIds else { return false }
                 return labelIds.contains("UNREAD")
             }
-            
             print("  ✅ \(unreadMessages.count) are unread (filtered out \(messages.count - unreadMessages.count) already-read emails)")
             
             // DEBUG: Check if Kids Help Phone email is in the unread list
@@ -243,6 +252,11 @@ class EmailScanningService: ObservableObject {
                 print("     1. Email is marked as read in Gmail")
                 print("     2. Email is not in the first 50 unread emails (Gmail query limit)")
                 print("     3. Email was already processed and is in processedEmailIds/processedThreadIds")
+            }
+            
+            // Cache unread emails for reuse in checklist flow
+            await MainActor.run {
+                self.cachedUnreadMessages = unreadMessages
             }
             
             // Log ALL unread emails found
@@ -371,6 +385,9 @@ class EmailScanningService: ObservableObject {
             
         } catch {
             let errorMessage = error.localizedDescription
+            if let retryAfter = parseRetryAfterDate(from: errorMessage) {
+                lastRateLimitRetryAfter = retryAfter
+            }
             await withCheckedContinuation { continuation in
                 DispatchQueue.main.async {
                     self.lastError = errorMessage
@@ -379,6 +396,33 @@ class EmailScanningService: ObservableObject {
                 }
             }
         }
+    }
+    
+    // MARK: - Helper Methods
+
+    private func parseRetryAfterDate(from text: String) -> Date? {
+        let pattern = #"Retry\s+after\s+([0-9T:\.\-Z]+(?:\s+[0-9:\-+]+)?)"#
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            if let match = regex.firstMatch(in: text, options: [], range: range),
+               match.numberOfRanges >= 2,
+               let retryRange = Range(match.range(at: 1), in: text) {
+                let value = String(text[retryRange])
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let date = formatter.date(from: value) {
+                    return date
+                }
+                let fallback = ISO8601DateFormatter()
+                fallback.formatOptions = [.withInternetDateTime]
+                if let date = fallback.date(from: value) { return date }
+                let spaced = DateFormatter()
+                spaced.locale = Locale(identifier: "en_US_POSIX")
+                spaced.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+                if let date = spaced.date(from: value) { return date }
+            }
+        }
+        return nil
     }
     
     /// Process a single email and create notification (don't auto-create docket)
@@ -555,6 +599,11 @@ class EmailScanningService: ObservableObject {
             print("EmailScanningService: Adding notification for docket \(docketNumber ?? "TBD"): \(parsedDocket.jobName)")
             notificationCenter.add(notification)
             print("EmailScanningService: Notification added. Total notifications: \(notificationCenter.notifications.count)")
+            
+            // Auto-scan for duplicates (Work Picture folder and Simian project)
+            Task {
+                await checkDuplicatesForNotification(notification)
+            }
             
             // Show system notification
             NotificationService.shared.showNewDocketNotification(
@@ -935,10 +984,17 @@ class EmailScanningService: ObservableObject {
         }
     }
     
-    /// Create docket from notification (called when user approves)
-    func createDocketFromNotification(_ notification: Notification) async throws {
-        guard let docketNumber = notification.docketNumber,
-              let jobName = notification.jobName,
+    /// Create docket from notification (called when user approves).
+    /// If docket was found in Asana, pass effectiveDocketNumber and effectiveJobName from Asana so the folder matches Asana; otherwise uses notification values.
+    func createDocketFromNotification(
+        _ notification: Notification,
+        effectiveDocketNumber: String? = nil,
+        effectiveJobName: String? = nil
+    ) async throws {
+        let docketNumber = effectiveDocketNumber ?? notification.docketNumber
+        let jobName = effectiveJobName ?? notification.jobName
+        guard let docketNumber = docketNumber,
+              let jobName = jobName,
               let manager = mediaManager,
               let settingsManager = settingsManager else {
             throw DocketCreationError.invalidInput("Missing docket information")
@@ -1343,11 +1399,74 @@ class EmailScanningService: ObservableObject {
         print("EmailScanningService: ✅ Created notification for docket \(docketNumber) - \(jobName)")
         totalDocketsCreated += 1
         
+        // Auto-scan for duplicates (Work Picture folder and Simian project)
+        Task {
+            await checkDuplicatesForNotification(notification)
+        }
+        
         // Show system notification
         NotificationService.shared.showNewDocketNotification(
             docketNumber: docketNumber,
             jobName: jobName
         )
+    }
+    
+    /// Check for existing Work Picture folder and Simian project when notification is added
+    private func checkDuplicatesForNotification(_ notification: Notification) async {
+        guard let docketNumber = notification.docketNumber, docketNumber != "TBD",
+              let jobName = notification.jobName else {
+            return
+        }
+        
+        print("📋 [EmailScanningService] Auto-scanning for duplicates: \(docketNumber)_\(jobName)")
+        
+        var workPictureExists = false
+        var simianExists = false
+        
+        // Check Work Picture folder
+        if let mediaManager = mediaManager {
+            let docketName = "\(docketNumber)_\(jobName)"
+            workPictureExists = mediaManager.dockets.contains(docketName)
+            if workPictureExists {
+                print("📋 [EmailScanningService] ✅ Found existing Work Picture folder: \(docketName)")
+            }
+        }
+        
+        // Check Simian project
+        if let simianService = simianService,
+           let settings = settingsManager?.currentSettings,
+           settings.simianEnabled,
+           simianService.isConfigured {
+            do {
+                simianExists = try await simianService.projectExists(docketNumber: docketNumber, jobName: jobName)
+                if simianExists {
+                    print("📋 [EmailScanningService] ✅ Found existing Simian project: \(docketNumber)_\(jobName)")
+                }
+            } catch {
+                print("📋 [EmailScanningService] ⚠️ Error checking Simian: \(error.localizedDescription)")
+            }
+        }
+        
+        // Update notification with duplicate info using public methods
+        if workPictureExists {
+            await MainActor.run {
+                if let nc = notificationCenter,
+                   let currentNotification = nc.notifications.first(where: { $0.id == notification.id }) {
+                    nc.markAsInWorkPicture(currentNotification, createdByUs: false)
+                    print("📋 [EmailScanningService] Marked notification as pre-existing in Work Picture")
+                }
+            }
+        }
+        
+        if simianExists {
+            await MainActor.run {
+                if let nc = notificationCenter,
+                   let currentNotification = nc.notifications.first(where: { $0.id == notification.id }) {
+                    nc.markAsInSimian(currentNotification, createdByUs: false)
+                    print("📋 [EmailScanningService] Marked notification as pre-existing in Simian")
+                }
+            }
+        }
     }
 }
 

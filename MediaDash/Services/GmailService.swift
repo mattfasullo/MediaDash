@@ -11,6 +11,29 @@ class GmailService: ObservableObject {
     private let baseURL = "https://www.googleapis.com/gmail/v1"
     private var accessToken: String?
     private var refreshTask: Task<String, Error>? // Shared task to prevent race conditions
+    private var lastRateLimitRetryAfter: Date?
+    
+    private func debugLog(_ location: String, message: String, data: [String: Any], hypothesisId: String, runId: String = "run2") {
+        // #region agent log
+        let payload: [String: Any] = [
+            "sessionId": "debug-session",
+            "runId": runId,
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": Date().timeIntervalSince1970 * 1000
+        ]
+        if let json = try? JSONSerialization.data(withJSONObject: payload),
+           let line = String(data: json, encoding: .utf8) {
+            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log")) {
+                handle.seekToEndOfFile()
+                handle.write((line + "\n").data(using: .utf8) ?? Data())
+                try? handle.close()
+            }
+        }
+        // #endregion
+    }
     
     /// Initialize with access token
     init(accessToken: String? = nil) {
@@ -162,6 +185,18 @@ class GmailService: ObservableObject {
         guard let token = accessToken else {
             throw GmailError.notAuthenticated
         }
+
+        if let retryAfter = lastRateLimitRetryAfter, retryAfter > Date() {
+            debugLog(
+                "GmailService.makeAuthenticatedRequest:skip",
+                message: "rate limited - skipping request",
+                data: [
+                    "retryAfter": retryAfter.timeIntervalSince1970
+                ],
+                hypothesisId: "H3"
+            )
+            throw GmailError.apiError("Gmail rate limit exceeded. Retry after \(retryAfter)")
+        }
         
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
@@ -169,6 +204,20 @@ class GmailService: ObservableObject {
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GmailError.invalidResponse
+        }
+
+        if httpResponse.statusCode == 429 {
+            if let retryAfter = parseRetryAfterDate(from: data) {
+                lastRateLimitRetryAfter = retryAfter
+            }
+            debugLog(
+                "GmailService.makeAuthenticatedRequest:rateLimit",
+                message: "received 429 response",
+                data: [
+                    "retryAfter": lastRateLimitRetryAfter?.timeIntervalSince1970 as Any
+                ],
+                hypothesisId: "H3"
+            )
         }
         
         // If we get 401, try refreshing the token and retry once
@@ -226,6 +275,16 @@ class GmailService: ObservableObject {
         isFetching = true
         lastError = nil
         defer { isFetching = false }
+        debugLog(
+            "GmailService.fetchEmails:entry",
+            message: "fetchEmails called",
+            data: [
+                "maxResults": maxResults,
+                "queryLength": query.count,
+                "queryHasUnread": query.contains("is:unread")
+            ],
+            hypothesisId: "H2"
+        )
         
         var components = URLComponents(string: "\(baseURL)/users/me/messages")!
         components.queryItems = [
@@ -239,6 +298,15 @@ class GmailService: ObservableObject {
         
         var request = URLRequest(url: url)
         let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
+        debugLog(
+            "GmailService.fetchEmails:response",
+            message: "fetchEmails response",
+            data: [
+                "statusCode": httpResponse.statusCode,
+                "dataSize": data.count
+            ],
+            hypothesisId: "H2"
+        )
         
         if httpResponse.statusCode == 401 {
             throw GmailError.notAuthenticated
@@ -333,6 +401,14 @@ class GmailService: ObservableObject {
     /// - Returns: Array of full GmailMessage objects
     func getEmails(messageReferences: [GmailMessageReference]) async throws -> [GmailMessage] {
         var messages: [GmailMessage] = []
+        debugLog(
+            "GmailService.getEmails:entry",
+            message: "getEmails called",
+            data: [
+                "messageRefs": messageReferences.count
+            ],
+            hypothesisId: "H2"
+        )
         
         // Fetch messages with limited concurrency to avoid rate limits
         let maxConcurrent = 5
@@ -368,8 +444,38 @@ class GmailService: ObservableObject {
                 messages.append(message)
             }
         }
+        debugLog(
+            "GmailService.getEmails:exit",
+            message: "getEmails completed",
+            data: [
+                "messages": messages.count
+            ],
+            hypothesisId: "H2"
+        )
         
         return messages
+    }
+
+    private func parseRetryAfterDate(from data: Data) -> Date? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        let pattern = #"Retry\s+after\s+([0-9T:\.\-Z]+)"#
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            if let match = regex.firstMatch(in: text, options: [], range: range),
+               match.numberOfRanges >= 2,
+               let retryRange = Range(match.range(at: 1), in: text) {
+                let value = String(text[retryRange])
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let date = formatter.date(from: value) {
+                    return date
+                }
+                let fallback = ISO8601DateFormatter()
+                fallback.formatOptions = [.withInternetDateTime]
+                return fallback.date(from: value)
+            }
+        }
+        return nil
     }
     
     /// Parse email content to extract docket information

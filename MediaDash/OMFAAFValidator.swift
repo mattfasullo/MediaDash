@@ -745,7 +745,6 @@ struct OMFAAFValidatorView: View {
             .onPreferenceChange(TimelineFrameKey.self) { frame in
                 timelineFrame = frame
             }
-            .frame(width: 700, height: 600)
             .alert("Error", isPresented: $validator.showError) {
                 Button("OK", role: .cancel) {}
             } message: {

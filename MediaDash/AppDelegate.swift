@@ -12,7 +12,6 @@ import Sparkle
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var updaterController: SPUStandardUpdaterController!
     private var quitEventMonitor: Any?
-    private var cacheSyncStatusItem: CacheSyncStatusItem?
 
     private var currentUpdateChannel: UpdateChannel {
         // Check if this is a dev build (MediaDash-Dev bundle ID)
@@ -115,12 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize floating progress window manager (it auto-shows/hides based on FloatingProgressManager.shared.isVisible)
         _ = FloatingProgressWindowManager.shared
         
-        // Initialize cache sync status item (menu bar icon)
-        Task { @MainActor in
-            let cacheSyncService = CacheSyncServiceManager()
-            cacheSyncService.checkStatus()
-            self.cacheSyncStatusItem = CacheSyncStatusItem(cacheSyncService: cacheSyncService)
-        }
+        // Cache sync status item removed - sync is now handled internally by AsanaCacheManager
     }
     
     private func setupGlobalQuitHandler() {

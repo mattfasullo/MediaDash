@@ -13,6 +13,14 @@ class AsanaCacheManager: ObservableObject {
     @Published var syncProgress: Double = 0  // 0.0 to 1.0
     @Published var syncPhase: String = ""    // Human-readable phase description
     @Published var cachedDockets: [DocketInfo] = []
+    @Published var cachedSessions: [AsanaTask] = []  // Upcoming sessions for Prep (today + 5 business days)
+    @Published var lastSessionSyncDate: Date?
+    /// Sessions for the full 2-week calendar view (next 14 calendar days).
+    @Published var cachedSessionsTwoWeeks: [AsanaTask] = []
+    @Published var lastSessionTwoWeeksSyncDate: Date?
+    /// All tasks (sessions + other) for the full 2-week calendar (next 14 days).
+    @Published var cachedTasksTwoWeeks: [AsanaTask] = []
+    @Published var lastTasksTwoWeeksSyncDate: Date?
     
     // Track the last reported progress to ensure monotonic increase
     private var lastReportedProgress: Double = 0
@@ -47,12 +55,13 @@ class AsanaCacheManager: ObservableObject {
     private var lastSharedCacheError: String?
     private var lastEmptyFileCheck: Date?
     
-    // Track shared cache file modification time to detect external service updates
-    private var lastCacheModificationTime: Date?
-    // Note: Using nonisolated(unsafe) to allow cleanup from deinit.
-    // This is safe because timers are only invalidated (not created) from nonisolated context.
-    nonisolated(unsafe) private var cacheFileMonitorTimer: Timer?
-    private var externalSyncStartTime: Date?
+    // Date formatter for YYYY-MM-DD comparison
+    private static let dateOnlyFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
     
     /// Cache status indicator with server connection information
     enum CacheStatus {
@@ -72,14 +81,13 @@ class AsanaCacheManager: ObservableObject {
         // Initial cache status will be set when settings are loaded via updateCacheSettings
     }
     
+    /// Public access to the Asana service for fetching additional data (e.g., subtask assignees)
+    var service: AsanaService {
+        asanaService
+    }
+    
     /// Update cache settings (call when settings change or on init)
     func updateCacheSettings(sharedCacheURL: String?, useSharedCache: Bool, serverBasePath: String? = nil, serverConnectionURL: String? = nil) {
-        // Stop existing monitoring if settings changed
-        let settingsChanged = self.sharedCacheURL != sharedCacheURL || self.useSharedCache != useSharedCache
-        if settingsChanged {
-            stopCacheFileMonitoring()
-        }
-        
         self.sharedCacheURL = sharedCacheURL
         self.useSharedCache = useSharedCache
         
@@ -103,11 +111,8 @@ class AsanaCacheManager: ObservableObject {
             }
         }
         
-        // Start periodic status checking (every 5 seconds) for live updates
+        // Start periodic status checking for cache status
         startPeriodicStatusCheck()
-        
-        // Start monitoring shared cache file for external service updates
-        startCacheFileMonitoring()
 
         // Preload cache data so views can render immediately
         Task { @MainActor in
@@ -116,7 +121,7 @@ class AsanaCacheManager: ObservableObject {
         }
     }
     
-    /// Update sync settings (for manual sync only - automatic sync is handled by external service)
+    /// Update sync settings (for manual sync from Job Info or Settings)
     func updateSyncSettings(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?) {
         self.syncWorkspaceID = workspaceID
         self.syncProjectID = projectID
@@ -126,8 +131,6 @@ class AsanaCacheManager: ObservableObject {
         // Reload lastSyncDate from shared cache
         reloadLastSyncDate()
         
-        // Don't start automatic periodic sync - external service handles automatic updates
-        // Users can manually sync via the cache icon popup if needed
         stopPeriodicSync()
     }
     
@@ -151,151 +154,6 @@ class AsanaCacheManager: ObservableObject {
         }
     }
     
-    /// Start monitoring shared cache file for external service updates
-    private func startCacheFileMonitoring() {
-        // Stop existing monitor if any
-        cacheFileMonitorTimer?.invalidate()
-        
-        // Only monitor if shared cache is enabled
-        guard useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty else {
-            return
-        }
-        
-        // Check file modification time every 2 seconds to detect active syncing
-        cacheFileMonitorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.checkCacheFileActivity()
-            }
-        }
-        
-        // Add timer to run loop
-        if let timer = cacheFileMonitorTimer {
-            RunLoop.main.add(timer, forMode: .common)
-        }
-        
-        // Initial check
-        checkCacheFileActivity()
-    }
-    
-    /// Stop monitoring shared cache file
-    private func stopCacheFileMonitoring() {
-        cacheFileMonitorTimer?.invalidate()
-        cacheFileMonitorTimer = nil
-        lastCacheModificationTime = nil
-        externalSyncStartTime = nil
-        
-        // Clear sync state if we were showing external sync
-        if isSyncing && syncPhase.contains("External service") {
-            isSyncing = false
-            syncProgress = 0
-            syncPhase = ""
-        }
-    }
-    
-    /// Check if shared cache file is being actively updated by external service
-    private func checkCacheFileActivity() {
-        guard useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty else {
-            stopCacheFileMonitoring()
-            return
-        }
-        
-        let fileURL = getFileURL(from: sharedURL)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            // File doesn't exist - not syncing
-            if isSyncing && syncPhase.contains("External service") {
-                isSyncing = false
-                syncProgress = 0
-                syncPhase = ""
-            }
-            lastCacheModificationTime = nil
-            externalSyncStartTime = nil
-            return
-        }
-        
-        // Get current modification time
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-              let modificationDate = attributes[.modificationDate] as? Date else {
-            return
-        }
-        
-        // Check if file was recently modified (within last 5 seconds)
-        let timeSinceModification = Date().timeIntervalSince(modificationDate)
-        let isRecentlyModified = timeSinceModification < 5.0
-        
-        // Check if modification time changed (file is being actively written)
-        let modificationChanged = lastCacheModificationTime != nil && 
-                                  lastCacheModificationTime! != modificationDate
-        
-        if modificationChanged || (isRecentlyModified && lastCacheModificationTime == nil) {
-            // File is being actively updated - external service is syncing
-            if !isSyncing {
-                // Sync just started
-                isSyncing = true
-                syncProgress = 0.1 // Start with 10% to show activity
-                syncPhase = "External service syncing with Asana..."
-                externalSyncStartTime = Date()
-                print("🔄 [Cache] Detected external service sync start")
-            } else {
-                // Sync is ongoing - update progress based on elapsed time
-                // Estimate progress: assume sync takes 2-5 minutes, show progress accordingly
-                if let startTime = externalSyncStartTime {
-                    let elapsed = Date().timeIntervalSince(startTime)
-                    let estimatedDuration: TimeInterval = 180.0 // 3 minutes average
-                    let progress = min(0.1 + (elapsed / estimatedDuration) * 0.8, 0.95) // Cap at 95% until complete
-                    syncProgress = progress
-                    
-                    // Update phase message based on elapsed time
-                    if elapsed < 30 {
-                        syncPhase = "External service syncing with Asana... (fetching projects)"
-                    } else if elapsed < 90 {
-                        syncPhase = "External service syncing with Asana... (fetching tasks)"
-                    } else {
-                        syncPhase = "External service syncing with Asana... (updating cache)"
-                    }
-                }
-            }
-            
-            lastCacheModificationTime = modificationDate
-            refreshCachedDocketsFromDisk()
-        } else if isSyncing && syncPhase.contains("External service") {
-            // File hasn't been modified recently - check if sync completed
-            if let startTime = externalSyncStartTime {
-                let elapsed = Date().timeIntervalSince(startTime)
-                // If file hasn't changed in 10 seconds and we've been syncing for at least 30 seconds, assume complete
-                if timeSinceModification > 10.0 && elapsed > 30.0 {
-                    // Sync appears complete
-                    isSyncing = false
-                    syncProgress = 1.0
-                    syncPhase = "External service sync complete"
-                    
-                    // Update lastSyncDate from the cache
-                    reloadLastSyncDate()
-                    refreshCachedDocketsFromDisk()
-                    
-                    // Clear sync state after a brief moment
-                    Task {
-                        try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-                        await MainActor.run {
-                            if !self.isSyncing {
-                                self.syncProgress = 0
-                                self.syncPhase = ""
-                            }
-                        }
-                    }
-                    
-                    externalSyncStartTime = nil
-                    print("🟢 [Cache] External service sync complete")
-                } else {
-                    // Still might be syncing, just slow updates
-                    // Keep showing progress but don't update modification time
-                }
-            }
-        } else {
-            // Not syncing and file is stable
-            lastCacheModificationTime = modificationDate
-        }
-    }
-    
     /// Stop periodic status checking
     nonisolated private func stopPeriodicStatusCheck() {
         // Timer invalidation can be done from any thread
@@ -308,25 +166,18 @@ class AsanaCacheManager: ObservableObject {
     
     nonisolated deinit {
         // Invalidate timers from deinit (runs in nonisolated context)
-        // Note: We can only invalidate here, not set to nil, but that's sufficient
-        // because invalidation prevents the timer from firing again
         statusCheckTimer?.invalidate()
         syncTimer?.invalidate()
-        cacheFileMonitorTimer?.invalidate()
     }
 
     /// Call this to cleanly shut down the cache manager before releasing it
     func shutdown() {
         isShuttingDown = true
 
-        // Stop all timers
         statusCheckTimer?.invalidate()
         statusCheckTimer = nil
-
         syncTimer?.invalidate()
         syncTimer = nil
-        
-        stopCacheFileMonitoring()
     }
     
     /// Start periodic background sync to detect changes automatically
@@ -735,6 +586,68 @@ class AsanaCacheManager: ObservableObject {
         return cachedDockets
     }
     
+    /// Returns calendar sessions (as DocketInfo) that match the given docket number/folder name (e.g. "21419" or "21419-US").
+    /// Used for "File + Prep" to open prep for a matching session after filing.
+    func matchingSessions(for docket: String) -> [DocketInfo] {
+        let normalized = docket.trimmingCharacters(in: .whitespaces)
+        let matching = cachedSessions.filter { task in
+            guard let sessionNum = Self.extractDocketNumber(from: task.name) else { return false }
+            return sessionNum == normalized || sessionNum.hasPrefix(normalized + "-") || normalized.hasPrefix(sessionNum)
+        }
+        return matching.sorted { a, b in
+            let dateA = a.effectiveDueDate ?? ""
+            let dateB = b.effectiveDueDate ?? ""
+            return dateA < dateB
+        }.map { docketInfo(from: $0) }
+    }
+    
+    private static func extractDocketNumber(from name: String) -> String? {
+        let pattern = #"\d{5}(?:-[A-Z]{1,3})?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
+              let match = regex.firstMatch(in: name, options: [], range: NSRange(name.startIndex..., in: name)),
+              let range = Range(match.range, in: name) else {
+            return nil
+        }
+        return String(name[range])
+    }
+    
+    private func cleanSessionName(_ name: String) -> String {
+        var cleaned = name
+        if let range = cleaned.range(of: "SESSION\\s*[-–]?\\s*", options: [.regularExpression, .caseInsensitive]) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+        if let range = cleaned.range(of: "^\\d{5}(?:-[A-Z]{1,3})?\\s*[-–]?\\s*", options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+        return cleaned.trimmingCharacters(in: .whitespaces)
+    }
+    
+    private func docketInfo(from task: AsanaTask) -> DocketInfo {
+        docketInfoFromSession(task)
+    }
+
+    /// Public conversion for use by full calendar view and other callers.
+    func docketInfoFromSession(_ task: AsanaTask) -> DocketInfo {
+        let docketNumber = Self.extractDocketNumber(from: task.name) ?? "SESSION"
+        let jobName = cleanSessionName(task.name)
+        let firstTag = task.tags?.first
+        return DocketInfo(
+            number: docketNumber,
+            jobName: jobName,
+            fullName: task.name,
+            updatedAt: task.modified_at,
+            createdAt: task.created_at,
+            metadataType: "SESSION",
+            subtasks: nil,
+            projectMetadata: nil,
+            dueDate: task.effectiveDueDate,
+            taskGid: task.gid,
+            studio: firstTag?.name,
+            studioColor: firstTag?.color,
+            completed: task.completed
+        )
+    }
+    
     /// Load from shared cache synchronously (returns both dockets and cache metadata)
     private func loadFromSharedCache(url: String) throws -> (dockets: [DocketInfo], cache: CachedDockets) {
         let fileURL = getFileURL(from: url)
@@ -818,15 +731,14 @@ class AsanaCacheManager: ObservableObject {
         }
     }
     
-    /// Check if cache should be synced (stale or missing)
-    /// NOTE: MediaDash does not sync from Asana - external service handles this
-    /// This method is kept for compatibility but always returns false
+    /// Check if cache should be synced (stale or missing) so Job Info can show recent Asana jobs
     func shouldSync(maxAgeMinutes: Int = 60) -> Bool {
-        // MediaDash does not perform syncing - external service handles it
-        return false
+        if cachedDockets.isEmpty { return true }
+        guard let last = lastSyncDate else { return true }
+        return Date().timeIntervalSince(last) > Double(maxAgeMinutes * 60)
     }
     
-    /// Fetch from shared cache if available, otherwise sync with Asana API
+    /// Fetch from shared cache if fresh, otherwise sync from Asana API so Job Info always has recent data
     func syncWithAsana(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?, sharedCacheURL: String?, useSharedCache: Bool) async throws {
         isSyncing = true
         syncError = nil
@@ -843,38 +755,281 @@ class AsanaCacheManager: ObservableObject {
             syncPhase = ""
         }
         
-        // Check if shared cache is available and use it
-        // External service automatically updates the shared cache, so MediaDash should ONLY use it
-        // MediaDash should NEVER sync from Asana API - that's handled by the external service
+        // If shared cache is configured and recently updated (within 60 min), use it without calling API
+        // UNLESS the cache appears incomplete or hasn't had a full sync in a while
+        let cacheFreshMinutes = 60
+        var forceFullSyncReason: String? = nil
+        
         if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
             let fileURL = getFileURL(from: sharedURL)
             if let data = try? Data(contentsOf: fileURL),
-               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
-                let lastSync = cached.lastSync // lastSync is non-optional Date
+               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data),
+               !cached.dockets.isEmpty {
+                let ageMinutes = Date().timeIntervalSince(cached.lastSync) / 60
                 
-                // Use shared cache regardless of age - external service keeps it updated
-                if !cached.dockets.isEmpty {
-                    print("🟢 [Cache] Using shared cache (updated \(Int(Date().timeIntervalSince(lastSync) / 60)) minutes ago)")
-                    
-                    // Update lastSyncDate from shared cache
-                    self.lastSyncDate = lastSync
-                    self.cachedDockets = cached.dockets
-                    
-                    return // Exit early - no sync needed!
-                } else {
-                    print("⚠️ [Cache] Shared cache exists but is empty - waiting for external service to populate it")
-                    throw AsanaError.cacheUnavailable("Shared cache is empty. External service will populate it.")
+                // Cache health checks - detect incomplete or corrupted cache
+                if let integrity = cached.integrity {
+                    // Check if cache appears incomplete (count dropped significantly below peak)
+                    if integrity.appearsIncomplete(currentCount: cached.dockets.count) {
+                        let peak = integrity.peakDocketCount ?? cached.dockets.count
+                        forceFullSyncReason = "Cache appears incomplete (\(cached.dockets.count) dockets, peak was \(peak))"
+                        print("⚠️ [Cache] \(forceFullSyncReason!) - forcing full sync")
+                    }
+                    // Check if it's been too long since a full sync (more than 7 days)
+                    else if integrity.needsFullSync(maxAgeDays: 7) {
+                        let daysSince = integrity.lastFullSyncDate.map { 
+                            Calendar.current.dateComponents([.day], from: $0, to: Date()).day ?? 0
+                        } ?? Int.max
+                        forceFullSyncReason = "No full sync in \(daysSince) days"
+                        print("⚠️ [Cache] \(forceFullSyncReason!) - forcing full sync")
+                    }
                 }
-            } else {
-                print("⚠️ [Cache] Shared cache not found or invalid - waiting for external service to create it")
-                throw AsanaError.cacheUnavailable("Shared cache not available. External service will create it.")
+                
+                // Check if cache has due date info (schema migration check)
+                // If most dockets are missing due dates, force a full sync to get them
+                let docketsWithDueDate = cached.dockets.filter { $0.dueDate != nil && !($0.dueDate?.isEmpty ?? true) }
+                let hasDueDateInfo = docketsWithDueDate.count > 0 || cached.dockets.count < 10
+                
+                // Check if due dates are current (not all older than 1 year)
+                // This catches stale caches with old data that would never match the calendar
+                let oneYearAgo = Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
+                let oneYearAgoStr = Self.dateOnlyFormatter.string(from: oneYearAgo)
+                let currentDueDates = docketsWithDueDate.filter { 
+                    guard let dueDate = $0.dueDate else { return false }
+                    return dueDate >= oneYearAgoStr  // String comparison works for YYYY-MM-DD format
+                }
+                let hasFreshDueDates = currentDueDates.count > 0 || docketsWithDueDate.count == 0
+                
+                // Use fresh cache ONLY if all health checks pass
+                if forceFullSyncReason == nil && ageMinutes < Double(cacheFreshMinutes) && hasDueDateInfo && hasFreshDueDates {
+                    print("🟢 [Cache] Using shared cache (updated \(Int(ageMinutes)) minutes ago) - \(cached.dockets.count) dockets, \(docketsWithDueDate.count) with due dates")
+                    self.lastSyncDate = cached.lastSync
+                    self.cachedDockets = cached.dockets
+                    return
+                } else if !hasDueDateInfo {
+                    forceFullSyncReason = "Cache missing due date info"
+                    print("⚠️ [Cache] \(forceFullSyncReason!) - forcing full sync for calendar support")
+                } else if !hasFreshDueDates {
+                    forceFullSyncReason = "Cache has stale due dates (all older than 1 year)"
+                    print("⚠️ [Cache] \(forceFullSyncReason!) - forcing full sync")
+                }
             }
         }
+        
+        // Cache is stale, empty, or missing — fetch from Asana API so Job Info shows recent jobs
+        guard asanaService.isAuthenticated else {
+            if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+                let fileURL = getFileURL(from: sharedURL)
+                if let data = try? Data(contentsOf: fileURL),
+                   let cached = try? JSONDecoder().decode(CachedDockets.self, from: data),
+                   !cached.dockets.isEmpty {
+                    self.lastSyncDate = cached.lastSync
+                    self.cachedDockets = cached.dockets
+                    return
+                }
+            }
+            throw AsanaError.notAuthenticated
+        }
+        
+        // Prefer incremental sync: load existing cache and only fetch tasks modified since last sync
+        var existingDockets: [DocketInfo] = []
+        var existingLastSync: Date?
+        var knownDocketBearingProjects: [String]? = nil
+        var needsDiscovery = true // Assume we need discovery unless we have recent project data
+        
+        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+            let fileURL = getFileURL(from: sharedURL)
+            if let data = try? Data(contentsOf: fileURL),
+               let cached = try? JSONDecoder().decode(CachedDockets.self, from: data),
+               !cached.dockets.isEmpty {
+                existingDockets = cached.dockets
+                existingLastSync = cached.lastSync
+                
+                // Extract known docket-bearing projects for smart sync
+                if let integrity = cached.integrity {
+                    knownDocketBearingProjects = integrity.docketBearingProjectIDs
+                    needsDiscovery = integrity.needsDiscovery(maxAgeDays: 7)
+                    
+                    if let projects = knownDocketBearingProjects, !projects.isEmpty {
+                        print("📊 [Cache] Found \(projects.count) known docket-bearing projects (discovery \(needsDiscovery ? "needed" : "not needed"))")
+                    }
+                }
+            }
+        }
+        // If we have no existing cache, use in-memory cachedDockets/lastSyncDate (e.g. from earlier load)
+        if existingDockets.isEmpty, !cachedDockets.isEmpty {
+            existingDockets = cachedDockets
+            existingLastSync = lastSyncDate
+        }
+        
+        // Check if existing dockets have due date info - if not, force full sync
+        let existingWithDueDate = existingDockets.filter { $0.dueDate != nil && !($0.dueDate?.isEmpty ?? true) }
+        let existingHasDueDateInfo = existingWithDueDate.count > 0 || existingDockets.count < 10
+        
+        // Only use incremental if:
+        // 1. We have valid existing data WITH due dates
+        // 2. AND cache health checks passed (no forceFullSyncReason)
+        let useIncremental = existingLastSync != nil && !existingDockets.isEmpty && existingHasDueDateInfo && forceFullSyncReason == nil
+        
+        if let reason = forceFullSyncReason {
+            print("📊 [Cache] Sync decision: FULL SYNC REQUIRED - \(reason)")
+            print("   existingDockets=\(existingDockets.count), existingWithDueDate=\(existingWithDueDate.count)")
+        } else {
+            print("📊 [Cache] Sync decision: useIncremental=\(useIncremental), existingDockets=\(existingDockets.count), existingWithDueDate=\(existingWithDueDate.count)")
+        }
+        
+        if useIncremental {
+            syncPhase = "Fetching latest changes from Asana..."
+        } else {
+            let fullSyncNote = forceFullSyncReason != nil ? " (auto-recovery: \(forceFullSyncReason!))" : ""
+            syncPhase = "Fetching all data from Asana\(fullSyncNote)..."
+        }
+        
+        // Determine if we should force discovery (scan all projects)
+        // Force discovery if: we have a forceFullSyncReason, OR needsDiscovery is true, OR no known projects
+        let shouldForceDiscovery = forceFullSyncReason != nil || needsDiscovery || knownDocketBearingProjects == nil
+        
+        do {
+            let syncResult = try await asanaService.fetchDockets(
+                workspaceID: workspaceID,
+                projectID: projectID,
+                docketField: docketField,
+                jobNameField: jobNameField,
+                modifiedSince: useIncremental ? existingLastSync : nil,
+                knownDocketBearingProjects: shouldForceDiscovery ? nil : knownDocketBearingProjects,
+                forceDiscovery: shouldForceDiscovery,
+                progressCallback: { [weak self] progress, phase in
+                    Task { @MainActor in
+                        self?.syncProgress = progress
+                        self?.syncPhase = phase
+                    }
+                }
+            )
+            
+            let merged: [DocketInfo]
+            let wasFullSync: Bool
+            let discoveredProjectIDs: [String]?
+            let wasDiscovery: Bool
+            
+            if useIncremental && !syncResult.dockets.isEmpty {
+                // Merge incremental results into existing cache (by fullName)
+                // Build dict without uniqueKeysWithValues to tolerate duplicate fullNames (same task in multiple projects)
+                var byFullName: [String: DocketInfo] = [:]
+                for docket in existingDockets {
+                    byFullName[docket.fullName] = docket
+                }
+                for docket in syncResult.dockets {
+                    byFullName[docket.fullName] = docket
+                }
+                merged = Array(byFullName.values)
+                wasFullSync = false
+                // For incremental, merge discovered projects with known projects
+                var allProjects = Set(knownDocketBearingProjects ?? [])
+                allProjects.formUnion(syncResult.docketBearingProjectIDs)
+                discoveredProjectIDs = Array(allProjects)
+                wasDiscovery = syncResult.wasDiscovery
+                print("🟢 [Cache] Incremental sync: \(syncResult.dockets.count) updated, \(merged.count) total dockets")
+            } else if useIncremental && syncResult.dockets.isEmpty {
+                // No changes since last sync
+                merged = existingDockets
+                wasFullSync = false
+                discoveredProjectIDs = knownDocketBearingProjects // Keep existing
+                wasDiscovery = false
+                print("🟢 [Cache] No changes since last sync, using existing \(merged.count) dockets")
+            } else {
+                merged = syncResult.dockets
+                wasFullSync = true
+                discoveredProjectIDs = Array(syncResult.docketBearingProjectIDs)
+                wasDiscovery = syncResult.wasDiscovery
+                print("🟢 [Cache] Full sync: \(merged.count) dockets from Asana (\(syncResult.projectsQueried) projects queried)")
+            }
+            
+            self.cachedDockets = merged
+            self.lastSyncDate = Date()
+            
+            if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+                syncPhase = "Saving to cache..."
+                try await saveToSharedCache(dockets: merged, url: sharedURL, lastSync: lastSyncDate, isFullSync: wasFullSync, docketBearingProjectIDs: discoveredProjectIDs, isDiscovery: wasDiscovery)
+            }
+        } catch {
+            // If incremental failed (e.g. API quirk), fall back to full sync once
+            if useIncremental {
+                print("⚠️ [Cache] Incremental sync failed, falling back to full sync: \(error.localizedDescription)")
+                syncPhase = "Fetching from Asana (full sync)..."
+                let syncResult = try await asanaService.fetchDockets(
+                    workspaceID: workspaceID,
+                    projectID: projectID,
+                    docketField: docketField,
+                    jobNameField: jobNameField,
+                    modifiedSince: nil,
+                    knownDocketBearingProjects: nil, // Full sync, scan all
+                    forceDiscovery: true,
+                    progressCallback: { [weak self] progress, phase in
+                        Task { @MainActor in
+                            self?.syncProgress = progress
+                            self?.syncPhase = phase
+                        }
+                    }
+                )
+                self.cachedDockets = syncResult.dockets
+                self.lastSyncDate = Date()
+                if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+                    syncPhase = "Saving to cache..."
+                    try await saveToSharedCache(dockets: syncResult.dockets, url: sharedURL, lastSync: lastSyncDate, isFullSync: true, docketBearingProjectIDs: Array(syncResult.docketBearingProjectIDs), isDiscovery: true)
+                }
+                print("🟢 [Cache] Full sync complete: \(syncResult.dockets.count) dockets from \(syncResult.projectsQueried) projects")
+            } else {
+                throw error
+            }
+        }
+    }
+    
+    /// Sync upcoming sessions for Prep view (today + 5 business days; ~7 calendar days).
+    func syncUpcomingSessions(workspaceID: String?) async throws {
+        guard asanaService.isAuthenticated else {
+            print("⚠️ [Sessions] Not authenticated, skipping session sync")
+            return
+        }
+        print("📅 [Sessions] Syncing upcoming sessions (7 days)...")
+        do {
+            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 7)
+            self.cachedSessions = sessions
+            self.lastSessionSyncDate = Date()
+            print("📅 [Sessions] Synced \(sessions.count) upcoming sessions")
+        } catch {
+            print("⚠️ [Sessions] Failed to sync sessions: \(error.localizedDescription)")
+        }
+    }
 
-        // If shared cache is not configured, MediaDash should not sync from Asana
-        // The external service handles all syncing
-        print("⚠️ [Cache] Shared cache not configured - MediaDash does not sync from Asana API")
-        throw AsanaError.cacheUnavailable("Shared cache not configured. Use external service for syncing.")
+    /// Sync sessions for the full 2-week calendar view (next 14 calendar days).
+    func syncSessionsTwoWeeks(workspaceID: String?) async throws {
+        guard asanaService.isAuthenticated else {
+            print("⚠️ [Sessions] Not authenticated, skipping 2-week session sync")
+            return
+        }
+        print("📅 [Sessions] Syncing sessions for 2-week calendar...")
+        do {
+            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 14)
+            self.cachedSessionsTwoWeeks = sessions
+            self.lastSessionTwoWeeksSyncDate = Date()
+            print("📅 [Sessions] Synced \(sessions.count) sessions for 2-week calendar")
+        } catch {
+            print("⚠️ [Sessions] Failed to sync 2-week sessions: \(error.localizedDescription)")
+        }
+    }
+
+    /// Sync all tasks (not just sessions) for the full 2-week calendar (next 14 days).
+    func syncTasksTwoWeeks(workspaceID: String?) async throws {
+        guard asanaService.isAuthenticated else { return }
+        print("📅 [Calendar] Syncing all tasks for 2-week calendar...")
+        do {
+            let tasks = try await asanaService.searchTasksByDueDate(workspaceID: workspaceID, daysAhead: 14)
+            self.cachedTasksTwoWeeks = tasks
+            self.lastTasksTwoWeeksSyncDate = Date()
+            print("📅 [Calendar] Synced \(tasks.count) tasks for 2-week calendar")
+        } catch {
+            print("⚠️ [Calendar] Failed to sync 2-week tasks: \(error.localizedDescription)")
+        }
     }
     
     private func refreshCachedDocketsFromDisk() {
@@ -907,14 +1062,47 @@ class AsanaCacheManager: ObservableObject {
     }
     
     /// Save dockets to shared cache file (public for manual seeding)
-    nonisolated func saveToSharedCache(dockets: [DocketInfo], url: String, lastSync: Date? = nil) async throws {
+    /// - Parameters:
+    ///   - dockets: The dockets to save
+    ///   - url: The cache file URL/path
+    ///   - lastSync: Optional sync timestamp (defaults to now)
+    ///   - isFullSync: Whether this was a full sync (vs incremental) - affects peak tracking
+    ///   - docketBearingProjectIDs: Project GIDs that contain dockets (for smart sync optimization)
+    ///   - isDiscovery: Whether this was a full discovery of all projects
+    nonisolated func saveToSharedCache(dockets: [DocketInfo], url: String, lastSync: Date? = nil, isFullSync: Bool = false, docketBearingProjectIDs: [String]? = nil, isDiscovery: Bool = false) async throws {
+        // Get the file URL (this handles directory vs file path)
+        let fileURL = getFileURL(from: url)
+        
+        // Read previous peak count from existing cache (if any) for health tracking
+        var previousPeakCount: Int? = nil
+        var existingProjectIDs: [String]? = nil
+        if let existingData = try? Data(contentsOf: fileURL),
+           let existing = try? JSONDecoder().decode(CachedDockets.self, from: existingData),
+           let existingIntegrity = existing.integrity {
+            previousPeakCount = existingIntegrity.peakDocketCount ?? existingIntegrity.docketCount
+            // Preserve existing project IDs if we're not doing discovery
+            if !isDiscovery {
+                existingProjectIDs = existingIntegrity.docketBearingProjectIDs
+            }
+        }
+        
+        // Use provided project IDs, or merge with existing if not doing discovery
+        let finalProjectIDs: [String]?
+        if isDiscovery {
+            finalProjectIDs = docketBearingProjectIDs
+        } else if let newIDs = docketBearingProjectIDs {
+            // Merge new with existing
+            var merged = Set(existingProjectIDs ?? [])
+            merged.formUnion(newIDs)
+            finalProjectIDs = Array(merged)
+        } else {
+            finalProjectIDs = existingProjectIDs
+        }
+        
         // Create CachedDockets and encode it in a nonisolated context
         // Use a nonisolated helper function to ensure encoding happens off the main actor
         let syncTimestamp = lastSync ?? Date()
-        let data = try await encodeCachedDockets(dockets: dockets, lastSync: syncTimestamp)
-        
-        // Get the file URL (this handles directory vs file path)
-        let fileURL = getFileURL(from: url)
+        let data = try await encodeCachedDockets(dockets: dockets, lastSync: syncTimestamp, previousPeakCount: previousPeakCount, isFullSync: isFullSync, docketBearingProjectIDs: finalProjectIDs, isDiscovery: isDiscovery)
         
         print("📝 [Cache] Saving to shared cache at: \(fileURL.path)")
         print("📝 [Cache] Original path was: \(url)")
@@ -960,9 +1148,9 @@ class AsanaCacheManager: ObservableObject {
     }
     
     /// Encode CachedDockets in a nonisolated context
-    nonisolated private func encodeCachedDockets(dockets: [DocketInfo], lastSync: Date = Date()) async throws -> Data {
+    nonisolated private func encodeCachedDockets(dockets: [DocketInfo], lastSync: Date = Date(), previousPeakCount: Int? = nil, isFullSync: Bool = false, docketBearingProjectIDs: [String]? = nil, isDiscovery: Bool = false) async throws -> Data {
         return try await Task.detached(priority: .utility) {
-            let cached = CachedDockets(dockets: dockets, lastSync: lastSync)
+            let cached = CachedDockets(dockets: dockets, lastSync: lastSync, previousPeakCount: previousPeakCount, isFullSync: isFullSync, docketBearingProjectIDs: docketBearingProjectIDs, isDiscovery: isDiscovery)
             let encoder = JSONEncoder()
             return try encoder.encode(cached)
         }.value
@@ -1129,11 +1317,48 @@ class AsanaCacheManager: ObservableObject {
         return sorted
     }
     
-    /// Force a complete sync from Asana
-    /// NOTE: MediaDash does not sync from Asana - external service handles this
+    /// Force a complete sync from Asana (e.g. when user taps Refresh in Job Info)
     func forceFullSync(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?) async throws {
-        print("⚠️ [Cache] MediaDash does not perform force syncs - external service handles all syncing")
-        throw AsanaError.cacheUnavailable("MediaDash does not sync from Asana API. Use external service for syncing.")
+        guard asanaService.isAuthenticated else {
+            throw AsanaError.notAuthenticated
+        }
+        isSyncing = true
+        syncError = nil
+        syncProgress = 0
+        syncPhase = "Fetching from Asana (full discovery)..."
+        defer {
+            isSyncing = false
+            syncProgress = 0
+            syncPhase = ""
+        }
+        let syncResult = try await asanaService.fetchDockets(
+            workspaceID: workspaceID,
+            projectID: projectID,
+            docketField: docketField,
+            jobNameField: jobNameField,
+            modifiedSince: nil,
+            knownDocketBearingProjects: nil, // Force full discovery
+            forceDiscovery: true,
+            progressCallback: { [weak self] progress, phase in
+                Task { @MainActor in
+                    self?.syncProgress = progress
+                    self?.syncPhase = phase
+                }
+            }
+        )
+        cachedDockets = syncResult.dockets
+        lastSyncDate = Date()
+        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+            try await saveToSharedCache(
+                dockets: syncResult.dockets,
+                url: sharedURL,
+                lastSync: lastSyncDate,
+                isFullSync: true,
+                docketBearingProjectIDs: Array(syncResult.docketBearingProjectIDs),
+                isDiscovery: true
+            )
+        }
+        print("🟢 [Cache] Force sync complete: \(syncResult.dockets.count) dockets from \(syncResult.projectsQueried) projects (\(syncResult.docketBearingProjectIDs.count) have dockets)")
     }
     
     /// Clear the cache state
@@ -1305,4 +1530,3 @@ class AsanaCacheManager: ObservableObject {
         return formatter.string(fromByteCount: size)
     }
 }
-

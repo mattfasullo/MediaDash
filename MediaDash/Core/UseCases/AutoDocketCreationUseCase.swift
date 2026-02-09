@@ -29,7 +29,8 @@ struct AutoDocketCreationUseCase {
             throw DocketCreationError.invalidInput("Job name cannot be empty")
         }
         
-        // Validate docket number format: exactly 5 digits, optionally with "-US" suffix
+        // Validate docket number format: at least 5 characters, optionally with "-US" suffix
+        // Supports both numeric (25493) and alphanumeric (26XXX) formats for testing
         let baseNumber: String
         if trimmedNumber.uppercased().hasSuffix("-US") {
             baseNumber = String(trimmedNumber.dropLast(3))
@@ -37,12 +38,8 @@ struct AutoDocketCreationUseCase {
             baseNumber = trimmedNumber
         }
         
-        guard baseNumber.count == 5 else {
-            throw DocketCreationError.invalidInput("Docket number must be exactly 5 digits (e.g., 25493 or 25493-US)")
-        }
-        
-        guard baseNumber.rangeOfCharacter(from: CharacterSet.decimalDigits.inverted) == nil else {
-            throw DocketCreationError.invalidInput("Docket number must be numeric (5 digits)")
+        guard baseNumber.count >= 5 else {
+            throw DocketCreationError.invalidInput("Docket number must be at least 5 characters (e.g., 25493 or 25493-US)")
         }
         
         let docketName = "\(trimmedNumber)_\(trimmedJobName)"

@@ -77,6 +77,133 @@ struct AppConfig: Sendable {
             .appendingPathComponent("\(settings.yearPrefix)\(year)")
         return serverRoot.appendingPathComponent("\(year)_\(settings.workPictureFolderName)")
     }
+
+    /// Root URL for Music Demos for a given year (e.g. …/GM_2026/2026_MUSIC DEMOS).
+    nonisolated func getMusicDemosRoot(for year: Int) -> URL {
+        let serverRoot = URL(fileURLWithPath: settings.serverBasePath)
+            .appendingPathComponent("\(settings.yearPrefix)\(year)")
+        return serverRoot.appendingPathComponent("\(year)_MUSIC DEMOS")
+    }
+
+    /// Build prep folder name in standard format: docket#_JobName_PREP_Mmm.d.yy
+    /// Parses "docket" (e.g. "25464_TD Insurance", "SESSION - 25464 TD Insurance - Feb 9") into number and job name.
+    nonisolated static func prepFolderName(docket: String, dateStr: String) -> String {
+        func sanitizeJobName(_ s: String) -> String {
+            var t = s
+                .replacingOccurrences(of: "/", with: "-")
+                .replacingOccurrences(of: ":", with: "-")
+                .trimmingCharacters(in: .whitespaces)
+            // Strip trailing date-like suffix (e.g. " - Feb 9", " - Feb 9.26", " - Feb.5.26")
+            if let range = t.range(of: "\\s*[-–]\\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[.\\s\\d]*$", options: .regularExpression) {
+                t = String(t[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+            }
+            return t
+        }
+        // Already "number_jobName" (e.g. 25464_TD Insurance or 26029_Volkswagen Radio)
+        if let underscoreIdx = docket.firstIndex(of: "_") {
+            let prefix = String(docket[..<underscoreIdx])
+            let numRegex = try? NSRegularExpression(pattern: #"^\d{5}(?:-[A-Z]{1,3})?$"#)
+            if let numRegex = numRegex,
+               numRegex.firstMatch(in: prefix, range: NSRange(prefix.startIndex..., in: prefix)) != nil {
+                let num = prefix
+                let job = sanitizeJobName(String(docket[docket.index(after: underscoreIdx)...]))
+                return "\(num)_\(job.isEmpty ? "Job" : job)_PREP_\(dateStr)"
+            }
+        }
+        // Extract 5-digit (optional -XXX) number and use rest as job name (e.g. Asana session name)
+        let docketNumPattern = #"\d{5}(?:-[A-Z]{1,3})?"#
+        guard let regex = try? NSRegularExpression(pattern: docketNumPattern),
+              let match = regex.firstMatch(in: docket, range: NSRange(docket.startIndex..., in: docket)),
+              let matchRange = Range(match.range, in: docket) else {
+            let safe = sanitizeJobName(docket)
+            return "\(safe.isEmpty ? "Prep" : safe)_PREP_\(dateStr)"
+        }
+        let number = String(docket[matchRange])
+        var jobPart = String(docket[matchRange.upperBound...])
+        if let range = jobPart.range(of: "^(?:\\s*[-–]?\\s*)?", options: .regularExpression) {
+            jobPart = String(jobPart[range.upperBound...])
+        }
+        let jobName = sanitizeJobName(jobPart)
+        return "\(number)_\(jobName.isEmpty ? "Job" : jobName)_PREP_\(dateStr)"
+    }
+
+    /// Date part only for demos folder name (e.g. "Feb.9.26"). Uses demosDateFolderFormat: the part after the first "_" (e.g. "dd_MMM.d.yy" → "MMM.d.yy").
+    nonisolated func demosDatePartFormat() -> String {
+        let full = settings.demosDateFolderFormat ?? "dd_MMM.d.yy"
+        if let idx = full.firstIndex(of: "_") {
+            return String(full[full.index(after: idx)...])
+        }
+        return full
+    }
+
+    /// Date folder name for demos (e.g. 01_Feb.9.26). When creating new: prefix is sequence (01, 02, 03…), then date part.
+    nonisolated func demosDateFolderName(for date: Date) -> String {
+        let format = settings.demosDateFolderFormat ?? "dd_MMM.d.yy"
+        let formatter = DateFormatter()
+        formatter.dateFormat = format
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter.string(from: date)
+    }
+
+    /// Next demos date folder name for a docket: next sequence number (01, 02, 03…) + "_" + date part (e.g. Feb.9.26).
+    nonisolated func nextDemosDateFolderName(docketPath: URL, date: Date) -> String {
+        let fm = FileManager.default
+        let datePartFormat = demosDatePartFormat()
+        let formatter = DateFormatter()
+        formatter.dateFormat = datePartFormat
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let datePart = formatter.string(from: date)
+        guard let subdirs = try? fm.contentsOfDirectory(at: docketPath, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
+            return "01_\(datePart)"
+        }
+        var maxSeq = 0
+        for url in subdirs {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let name = url.lastPathComponent
+            if let underscoreIdx = name.firstIndex(of: "_") {
+                let prefix = String(name[..<underscoreIdx])
+                if let n = Int(prefix), n > 0 { maxSeq = max(maxSeq, n) }
+            }
+        }
+        let nextSeq = maxSeq + 1
+        return String(format: "%02d_%@", nextSeq, datePart)
+    }
+
+    /// URL for the demos date folder for a docket (e.g. …/2026_MUSIC DEMOS/26014_Coors/01_Feb.9.26).
+    /// Prefers an existing date folder in the docket; only creates a new one when none exist, using next sequence (01, 02, 03…).
+    nonisolated func getOrCreateDemosDateFolder(docketFolderName: String, date: Date) throws -> URL {
+        try ensureYearFolderStructure()
+        let year = Calendar.current.component(.year, from: date)
+        let root = getMusicDemosRoot(for: year)
+        let docketPath = root.appendingPathComponent(docketFolderName)
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: docketPath.path) {
+            try fm.createDirectory(at: docketPath, withIntermediateDirectories: true, attributes: nil)
+        }
+        // See if the docket already has any date folders (e.g. 01_Feb.9.26) – use the most recent one instead of creating
+        if let existingSubdirs = try? fm.contentsOfDirectory(at: docketPath, includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey], options: [.skipsHiddenFiles]) {
+            let dateFolders = existingSubdirs.filter { url in
+                var isDir: ObjCBool = false
+                return fm.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+            }
+            if !dateFolders.isEmpty {
+                let best = dateFolders.max(by: { a, b in
+                    let tA = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    let tB = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    return tA < tB
+                })
+                if let use = best { return use }
+            }
+        }
+        // No existing date folder – create one with next sequence number (01, 02, 03…) + date part
+        let dateName = nextDemosDateFolderName(docketPath: docketPath, date: date)
+        let datePath = docketPath.appendingPathComponent(dateName)
+        if !fm.fileExists(atPath: datePath.path) {
+            try fm.createDirectory(at: datePath, withIntermediateDirectories: true, attributes: nil)
+        }
+        return datePath
+    }
     
     /// Find which year a docket folder exists in (searches across all years)
     nonisolated func findDocketYear(docket: String) -> Int? {
@@ -107,6 +234,21 @@ struct AppConfig: Sendable {
             
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: docketPath.path, isDirectory: &isDir) && isDir.boolValue {
+                // #region agent log
+                do {
+                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "AppConfig.findDocketYear", "message": "findDocketYear FOUND", "data": ["docket": docket, "year": year, "docketPath": docketPath.path, "serverBase": settings.serverBasePath], "sessionId": "debug-session", "hypothesisId": "H1"]
+                    let d = try JSONSerialization.data(withJSONObject: payload)
+                    let line = String(data: d, encoding: .utf8)! + "\n"
+                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                    let url = URL(fileURLWithPath: path)
+                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                    if let stream = OutputStream(url: url, append: true) {
+                        stream.open()
+                        _ = line.data(using: .utf8)!.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: line.utf8.count) }
+                        stream.close()
+                    }
+                } catch {}
+                // #endregion
                 return year
             }
         }
@@ -312,9 +454,10 @@ enum MediaLogic {
             return results
         }
         
-        // Scan across all year folders (like buildIndex does for workPicture)
+        // Work Picture: return full folder names (not just docket numbers), sorted by most recently modified
         if jobType == .workPicture {
             let workPictureFolderName = config.settings.workPictureFolderName
+            var docketDates: [String: Date] = [:]
             
             // Get all year folders
             guard let yearFolders = try? fm.contentsOfDirectory(at: serverBase, includingPropertiesForKeys: nil) else {
@@ -331,15 +474,19 @@ enum MediaLogic {
                     continue
                 }
                 
-                // Scan dockets in this year's folder
+                // Scan docket folders in this year's work picture
                 do {
                     let items = try fm.contentsOfDirectory(at: workPicPath, includingPropertiesForKeys: [.contentModificationDateKey])
                     for item in items {
                         if item.hasDirectoryPath && !item.lastPathComponent.hasPrefix(".") {
-                            let docketName = item.lastPathComponent
-                            // Only add if not already in results (avoid duplicates across years)
-                            if !results.contains(docketName) {
-                                results.append(docketName)
+                            let folderName = item.lastPathComponent
+                            let modDate = (try? item.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
+                            if let existing = docketDates[folderName] {
+                                if modDate > existing {
+                                    docketDates[folderName] = modDate
+                                }
+                            } else {
+                                docketDates[folderName] = modDate
                             }
                         }
                     }
@@ -348,6 +495,11 @@ enum MediaLogic {
                     continue
                 }
             }
+            
+            // Sort by most recently modified (newest first)
+            results = docketDates
+                .sorted { $0.value > $1.value }
+                .map { $0.key }
         } else {
             // For prep mode, scan current year only (prep folders are year-specific)
             let paths = config.getPaths()
@@ -471,6 +623,55 @@ enum MediaLogic {
             }
         }
         return results
+    }
+
+    nonisolated static func applyPrepChecklistAssignments(
+        session: PrepChecklistSession,
+        root: URL,
+        stagedFiles: [FileItem]
+    ) {
+        let fileById = Dictionary(uniqueKeysWithValues: stagedFiles.map { ($0.id, $0) })
+        let checklistRoot = root.appendingPathComponent("CHECKLIST")
+        let fm = FileManager.default
+
+        if !fm.fileExists(atPath: checklistRoot.path) {
+            try? fm.createDirectory(at: checklistRoot, withIntermediateDirectories: true)
+        }
+
+        for item in session.items {
+            let assigned = item.assignedFileIds.compactMap { fileById[$0] }
+            guard !assigned.isEmpty else { continue }
+
+            let folderName = sanitizeChecklistFolderName(item.title)
+            let itemFolder = checklistRoot.appendingPathComponent(folderName)
+            if !fm.fileExists(atPath: itemFolder.path) {
+                try? fm.createDirectory(at: itemFolder, withIntermediateDirectories: true)
+            }
+
+            for file in assigned {
+                let flatFiles = getAllFiles(at: file.url)
+                for flatFile in flatFiles {
+                    let destFile = itemFolder.appendingPathComponent(flatFile.lastPathComponent)
+                    if fm.fileExists(atPath: destFile.path) {
+                        continue
+                    }
+                    try? fm.copyItem(at: flatFile, to: destFile)
+                }
+            }
+        }
+    }
+
+    private nonisolated static func sanitizeChecklistFolderName(_ name: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        var sanitized = name.components(separatedBy: invalid).joined(separator: "_")
+        sanitized = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+        if sanitized.isEmpty {
+            sanitized = "ChecklistItem"
+        }
+        if sanitized.count > 80 {
+            sanitized = String(sanitized.prefix(80))
+        }
+        return sanitized
     }
 
     // MARK: - Prep Summary Generation
@@ -680,6 +881,25 @@ enum MediaLogic {
             }
         }
 
+        // CHECKLIST (when user assigned files to checklist items from session description)
+        let checklistPath = prepURL.appendingPathComponent("CHECKLIST")
+        if fm.fileExists(atPath: checklistPath.path) {
+            let itemDirs = (try? fm.contentsOfDirectory(at: checklistPath, includingPropertiesForKeys: nil))?.filter {
+                $0.hasDirectoryPath
+            } ?? []
+            for dir in itemDirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?.filter {
+                    !$0.hasDirectoryPath
+                } ?? []
+                if !files.isEmpty {
+                    summary += "\n\(dir.lastPathComponent):\n"
+                    for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                        summary += "  - \(file.lastPathComponent)\n"
+                    }
+                }
+            }
+        }
+
         return summary.trimmingCharacters(in: .newlines)
     }
 }
@@ -707,6 +927,11 @@ class MediaManager: ObservableObject {
     @Published var conversionProgress: [UUID: Double] = [:] // Per-file conversion progress
     @Published var showConvertVideosPrompt: Bool = false
     @Published var pendingPrepConversion: (root: URL, videoFiles: [(url: URL, sourceId: UUID)], docket: String)?
+    @Published var pendingPrepChecklistSession: PrepChecklistSession?
+    /// Per-file destination folder overrides for prep (e.g. from calendar prep). Key = FileItem.id; value = folder name. Nil = no overrides.
+    var pendingPrepFileOverrides: [UUID: String]?
+    /// When set (e.g. from calendar prep with flattened files), used to resolve checklist assigned file IDs. Otherwise uses staged files only.
+    var pendingPrepAllFileItemsForChecklist: [FileItem]?
 
     private var cachedSessions: [String] = [] // Legacy - for backward compatibility
     var folderCaches: [SearchFolder: [String]] = [:] // New cache system - internal for validation
@@ -1078,7 +1303,15 @@ class MediaManager: ObservableObject {
     }
     
     func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date) {
-        if selectedFiles.isEmpty { pickFiles(); return }
+        if selectedFiles.isEmpty {
+            if type == .prep || type == .both {
+                errorMessage = "No files staged.\n\nAdd files in the Staging area before starting Prep."
+                showError = true
+                return
+            }
+            pickFiles()
+            return
+        }
 
         // Check directory access before starting
         if !checkDirectoryAccess(for: type.rawValue) {
@@ -1090,6 +1323,15 @@ class MediaManager: ObservableObject {
         fileProgress.removeAll() // Clear any previous progress
         fileCompletionState.removeAll() // Clear completion states
         let files = selectedFiles
+        let checklistSession = (type == .prep || type == .both) ? pendingPrepChecklistSession : nil
+        let checklistAssignedFileIds = checklistSession?.allAssignedFileIds ?? []
+        let prepFileOverrides = (type == .prep || type == .both) ? pendingPrepFileOverrides : nil
+        let allFileItemsForChecklist = (type == .prep || type == .both) ? pendingPrepAllFileItemsForChecklist : nil
+        if type == .prep || type == .both {
+            pendingPrepChecklistSession = nil
+            pendingPrepFileOverrides = nil
+            pendingPrepAllFileItemsForChecklist = nil
+        }
         let currentConfig = self.config
 
         // Calculate total bytes for all files
@@ -1165,7 +1407,8 @@ class MediaManager: ObservableObject {
                     return
                 }
                 
-                let dateStr = self.formatDate(wpDate)
+                let wpDateFormat = currentConfig.settings.dateFormat
+                let dateStr = self.formatDate(wpDate, format: wpDateFormat)
                 let destFolder = self.getNextFolder(base: base, date: dateStr)
                 workPictureDestinationFolder = destFolder
                 
@@ -1265,12 +1508,10 @@ class MediaManager: ObservableObject {
                     return
                 }
                 
-                let dateStr = self.formatDate(prepDate)
-                // Use prepFolderFormat setting, replacing {docket} and {date} placeholders
-                let folderFormat = currentConfig.settings.prepFolderFormat
-                let folder = folderFormat
-                    .replacingOccurrences(of: "{docket}", with: docket)
-                    .replacingOccurrences(of: "{date}", with: dateStr)
+                let prepDateFormat = currentConfig.settings.prepDateFormat ?? "MMM.d.yy"
+                let dateStr = self.formatDate(prepDate, format: prepDateFormat)
+                // Standard format: docket#_JobName_PREP_Mmm.d.yy (parses docket/session name into number + job name)
+                let folder = AppConfig.prepFolderName(docket: docket, dateStr: dateStr)
                 let root = paths.prep.appendingPathComponent(folder)
                 prepDestinationFolder = root
                 
@@ -1351,7 +1592,48 @@ class MediaManager: ObservableObject {
                         continue
                     }
 
-                    let cat = self.getCategory(flatFile, config: currentConfig)
+                    // Files assigned to description-line checklist go only to CHECKLIST, not to format folders
+                    if checklistAssignedFileIds.contains(sourceId) {
+                        currentStep += 1
+                        completedPerFile[sourceId, default: 0] += 1
+                        let p = currentStep / total
+                        let fileP = Double(completedPerFile[sourceId]!) / Double(fileToFlatCount[sourceId]!)
+                        await MainActor.run {
+                            self.fileProgress[sourceId] = fileP
+                            self.progress = p
+                            if fileP >= 1.0 {
+                                if type == .both {
+                                    if self.fileCompletionState[sourceId] == .workPicDone { self.fileCompletionState[sourceId] = .complete }
+                                    else { self.fileCompletionState[sourceId] = .prepDone }
+                                } else { self.fileCompletionState[sourceId] = .complete }
+                            }
+                        }
+                        continue
+                    }
+
+                    let cat: String? = {
+                        if let overrides = prepFileOverrides, let folder = overrides[sourceId], !folder.isEmpty {
+                            return folder
+                        }
+                        return self.getPrepCategory(flatFile, config: currentConfig)
+                    }()
+                    guard let cat = cat else {
+                        currentStep += 1
+                        completedPerFile[sourceId, default: 0] += 1
+                        let p = currentStep / total
+                        let fileP = Double(completedPerFile[sourceId]!) / Double(fileToFlatCount[sourceId]!)
+                        await MainActor.run {
+                            self.fileProgress[sourceId] = fileP
+                            self.progress = p
+                            if fileP >= 1.0 {
+                                if type == .both {
+                                    if self.fileCompletionState[sourceId] == .workPicDone { self.fileCompletionState[sourceId] = .complete }
+                                    else { self.fileCompletionState[sourceId] = .prepDone }
+                                } else { self.fileCompletionState[sourceId] = .complete }
+                            }
+                        }
+                        continue
+                    }
                     let dir = root.appendingPathComponent(cat)
                     
                     // Create category directory if it doesn't exist
@@ -1437,6 +1719,12 @@ class MediaManager: ObservableObject {
                             }
                         }
                     }
+                }
+
+                if (currentConfig.settings.createPrepChecklistFolder ?? true),
+                   let session = checklistSession, session.docket == docket {
+                    let filesForChecklist = allFileItemsForChecklist ?? files
+                    MediaLogic.applyPrepChecklistAssignments(session: session, root: root, stagedFiles: filesForChecklist)
                 }
 
                 // Organize stems and generate summary
@@ -1542,7 +1830,12 @@ class MediaManager: ObservableObject {
     }
     
     nonisolated private func formatDate(_ d: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "MMMdd.yy"; return f.string(from: d)
+        let f = DateFormatter(); f.dateFormat = "MMM.d.yy"; return f.string(from: d)
+    }
+
+    /// Format date for prep folder name (e.g. "MMM.d.yy" → Feb.5.26).
+    nonisolated private func formatDate(_ d: Date, format: String) -> String {
+        let f = DateFormatter(); f.dateFormat = format; return f.string(from: d)
     }
     
     nonisolated private func getNextFolder(base: URL, date: String) -> URL {
@@ -1617,6 +1910,22 @@ class MediaManager: ObservableObject {
         if config.settings.musicExtensions.contains(e) { return config.settings.musicFolderName }
         if config.settings.aafOmfExtensions.contains(e) { return config.settings.aafOmfFolderName }
         return config.settings.otherFolderName
+    }
+
+    /// Resolves the prep folder for a file: if the natural category is disabled, uses OTHER if enabled, else nil (skip).
+    nonisolated private func getPrepCategory(_ u: URL, config: AppConfig) -> String? {
+        let cat = getCategory(u, config: config)
+        let s = config.settings
+        func create(_ name: String) -> Bool {
+            if name == s.pictureFolderName { return s.createPrepPictureFolder ?? true }
+            if name == s.musicFolderName { return s.createPrepMusicFolder ?? true }
+            if name == s.aafOmfFolderName { return s.createPrepAafOmfFolder ?? true }
+            if name == s.otherFolderName { return s.createPrepOtherFolder ?? true }
+            return true
+        }
+        if create(cat) { return cat }
+        if (s.createPrepOtherFolder ?? true) { return s.otherFolderName }
+        return nil
     }
     
     nonisolated private func copyItem(from: URL, to: URL) -> Bool {
@@ -1793,15 +2102,23 @@ class MediaManager: ObservableObject {
         }
     }
 
-    /// Get job name from docket metadata
+    /// Get job name from docket metadata (docket may be full folder name e.g. "12345_Job Name" or just "12345")
     func getJobName(for docket: String) -> String {
-        // Try to find metadata entry for this docket number
+        // Try exact match first
         for (_, metadata) in metadataManager.metadata {
             if metadata.docketNumber == docket && !metadata.jobName.isEmpty {
                 return metadata.jobName
             }
         }
-        // Fallback to docket number
+        // Try leading docket number from folder name (e.g. "12345_Job Name" or "12345_PREP_Date")
+        let docketNumber = docket.split(separator: "_").first.map(String.init) ?? docket
+        if docketNumber != docket {
+            for (_, metadata) in metadataManager.metadata {
+                if metadata.docketNumber == docketNumber && !metadata.jobName.isEmpty {
+                    return metadata.jobName
+                }
+            }
+        }
         return docket
     }
 

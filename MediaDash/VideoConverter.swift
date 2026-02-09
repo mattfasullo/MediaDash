@@ -688,7 +688,6 @@ struct VideoConverterView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(width: 500, height: 400)
         .alert("Error", isPresented: $showAlert) {
             Button("OK") { }
         } message: {

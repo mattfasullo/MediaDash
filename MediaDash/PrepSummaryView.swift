@@ -66,7 +66,6 @@ struct PrepSummaryView: View {
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
         }
-        .frame(width: 600, height: 500)
     }
 }
 

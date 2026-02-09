@@ -349,10 +349,6 @@ struct DashboardTopBar: View {
                         cacheManager: cache,
                         showSettings: $showSettingsSheet
                     )
-                    
-                    CacheStatusIndicator(
-                        cacheManager: cache
-                    )
                 }
                 
                 Divider()
@@ -1171,10 +1167,6 @@ struct StatusPanelView: View {
                             showSettings: $showSettings
                         )
                     }
-                    
-                    StatusCard(title: "Cache Status") {
-                        CacheStatusIndicator(cacheManager: cacheManager)
-                    }
                 }
             }
             .padding(16)
@@ -1291,6 +1283,7 @@ struct DashboardStagingArea: View {
         }
         .sheet(isPresented: $showBatchRenameSheet) {
             BatchRenameSheet(manager: manager, filesToRename: filesToRename)
+                .sheetSizeStabilizer()
         }
     }
     
@@ -1316,7 +1309,6 @@ struct DashboardStagingArea: View {
                 if let cache = cacheManager, cache.isSyncing {
                     HStack(spacing: 8) {
                         if cache.syncProgress > 0 {
-                            // Show progress bar when we have progress info
                             ProgressView(value: cache.syncProgress)
                                 .progressViewStyle(.linear)
                                 .frame(width: 80)
@@ -1324,12 +1316,11 @@ struct DashboardStagingArea: View {
                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                                 .foregroundColor(.blue)
                         } else {
-                            // Show spinner when starting
                             ProgressView()
                                 .scaleEffect(0.6)
                                 .frame(width: 12, height: 12)
                         }
-                        Text(cache.syncPhase.isEmpty ? "External service syncing shared cache" : cache.syncPhase)
+                        Text(cache.syncPhase.isEmpty ? "Syncing from Asana..." : cache.syncPhase)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.blue)
                             .lineLimit(1)
@@ -1814,6 +1805,7 @@ struct DashboardNotificationCard: View {
                         editedJobName = ""
                     }
                 )
+                .sheetSizeStabilizer()
                 .onAppear {
                     editedJobName = currentNotification.jobName ?? ""
                 }
@@ -1832,6 +1824,7 @@ struct DashboardNotificationCard: View {
                     }
                 }
             )
+            .sheetSizeStabilizer()
         }
     }
     

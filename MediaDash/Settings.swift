@@ -465,7 +465,7 @@ struct AppSettings: Codable, Equatable {
     var yearPrefix: String // e.g., "GM_"
 
     // Date Format
-    var dateFormat: String // e.g., "MMMd.yy"
+    var dateFormat: String // e.g., "MMM.d.yy" (Feb.5.26 — period after month, no leading zero on day)
 
     // File Categories
     var pictureExtensions: [String]
@@ -481,6 +481,17 @@ struct AppSettings: Codable, Equatable {
     // Folder Format Settings
     var workPicNumberFormat: String // e.g., "%02d" for "01", "02", etc.
     var prepFolderFormat: String // e.g., "{docket}_PREP_{date}"
+    /// Date format for the prep folder name (e.g. "MMM.d.yy" → Feb.5.26). Used for {date} in prepFolderFormat.
+    var prepDateFormat: String?
+    /// Date folder format for Music Demos (e.g. "dd_MMM.d.yy" → 09_Feb.9.26). Used for composer subfolder parent.
+    var demosDateFolderFormat: String?
+
+    /// When false, the PICTURE element folder is not created during prep (files that would go there are placed in OTHER if enabled, else skipped).
+    var createPrepPictureFolder: Bool?
+    var createPrepMusicFolder: Bool?
+    var createPrepAafOmfFolder: Bool?
+    var createPrepOtherFolder: Bool?
+    var createPrepChecklistFolder: Bool?
 
     // Search Settings
     var enableFuzzySearch: Bool
@@ -565,6 +576,45 @@ struct AppSettings: Codable, Equatable {
     var enableCursedImageReplies: Bool // Enable fun feature to send random images from Reddit instead of "Grabbed" text
     var cursedImageSubreddit: String // Subreddit name to fetch images from (e.g., "cursedimages")
 
+    /// Composer/writer display name (from Asana) → folder name (initials or nickname) for Music Demos folders.
+    var composerInitials: [String: String]?
+
+    /// Folder initials/nickname → display name to show (and use for new Asana subtasks). Right-click "Edit name for folder" updates this.
+    var displayNameForInitials: [String: String]?
+
+    /// Built-in preset: composer name → initials/nickname. Customizable in Settings; user values override these.
+    static let defaultComposerInitials: [String: String] = [
+        "Mark Domitric": "MD",
+        "Jeff Milutinovic": "JM",
+        "Andrew Austin": "AA",
+        "Igor Correia": "IC",
+        "Lowell Sostomi": "LS",
+        "Tyson Kuteyi": "TK",
+        "Tom Westin": "TW",
+        "Kevin MacInnis": "KJM",
+        "Jeremy Ugro": "JU",
+        "Matt Fasullo": "MF",
+        "Michael Goldchain": "Goldie",
+        "Goldchain": "Goldie",
+        "Michael Go": "MGo",
+    ]
+
+    /// Built-in preset: initials/nickname → name to display. User values (displayNameForInitials) override these.
+    static let defaultDisplayNameForInitials: [String: String] = [
+        "MD": "Mark Domitric",
+        "JM": "Jeff Milutinovic",
+        "AA": "Andrew Austin",
+        "IC": "Igor Correia",
+        "LS": "Lowell Sostomi",
+        "TK": "Tyson Kuteyi",
+        "TW": "Tom Westin",
+        "KJM": "Kevin MacInnis",
+        "JU": "Jeremy Ugro",
+        "MF": "Matt Fasullo",
+        "Goldie": "Michael Goldchain",
+        "MGo": "Michael Go",
+    ]
+
     static var `default`: AppSettings {
         AppSettings(
             profileName: "Default",
@@ -579,7 +629,7 @@ struct AppSettings: Codable, Equatable {
             workPictureFolderName: "WORK PICTURE",
             prepFolderName: "SESSION PREP",
             yearPrefix: "GM_",
-            dateFormat: "MMMd.yy",
+            dateFormat: "MMM.d.yy",
             pictureExtensions: ["mp4", "mov", "avi", "mxf", "prores", "m4v"],
             musicExtensions: ["wav", "mp3", "aiff", "aif", "flac", "m4a", "aac"],
             aafOmfExtensions: ["aaf", "omf"],
@@ -589,6 +639,13 @@ struct AppSettings: Codable, Equatable {
             otherFolderName: "OTHER",
             workPicNumberFormat: "%02d",
             prepFolderFormat: "{docket}_PREP_{date}",
+            prepDateFormat: "MMM.d.yy",
+            demosDateFolderFormat: "dd_MMM.d.yy",
+            createPrepPictureFolder: true,
+            createPrepMusicFolder: true,
+            createPrepAafOmfFolder: true,
+            createPrepOtherFolder: true,
+            createPrepChecklistFolder: true,
             enableFuzzySearch: true,
             defaultSearchFolder: .sessions,
             searchFolderPreference: .rememberLast,
@@ -665,7 +722,9 @@ struct AppSettings: Codable, Equatable {
             grabbedSenderWhitelist: [], // Default sender whitelist (empty, user can add)
             grabbedBodyExclusions: [], // Body exclusions (user-configurable, no defaults)
             enableCursedImageReplies: false, // Fun feature disabled by default
-            cursedImageSubreddit: "cursedimages" // Default subreddit
+            cursedImageSubreddit: "cursedimages", // Default subreddit
+            composerInitials: AppSettings.defaultComposerInitials, // Preset out of the box; user can edit in Settings
+            displayNameForInitials: AppSettings.defaultDisplayNameForInitials
         )
     }
 }

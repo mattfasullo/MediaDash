@@ -1,6 +1,21 @@
 import SwiftUI
 import AppKit
 
+// #region agent log
+private func _debugLogWP(_ message: String, _ data: [String: Any], _ hypothesisId: String) {
+    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "NotificationCenterView", "message": message, "data": data, "sessionId": "debug-session", "hypothesisId": hypothesisId]
+    guard let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) else { return }
+    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+    let url = URL(fileURLWithPath: path)
+    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+    guard let stream = OutputStream(url: url, append: true) else { return }
+    stream.open()
+    defer { stream.close() }
+    let out = (line + "\n").data(using: .utf8)!
+    _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+}
+// #endregion
+
 /// Information about where a docket already exists
 struct DocketExistenceInfo {
     var existsInWorkPicture: Bool = false
@@ -40,46 +55,16 @@ struct NotificationCenterView: View {
     @State private var debugInfo: String?
     @State private var showDebugInfo = false
     @State private var isArchivedExpanded = false
+    @State private var isHistoryExpanded = false
     @State private var isFileDeliveriesExpanded = true // Default to expanded (keeping for archived section)
     @State private var cacheInfo: String?
     @State private var showCacheInfo = false
     @State private var isLoadingCache = false // Keep for fallback if file write fails
     
-    // Computed properties for filtered notifications (cached to avoid repeated filtering)
+    // Computed properties for filtered notifications
+    // Active notifications exclude completed ones (those go to history section)
     private var allActiveNotifications: [Notification] {
-        let active = notificationCenter.activeNotifications
-        let filtered = active.filter { notification in
-            // If notification is completed, check if docket exists
-            if notification.status == .completed,
-               notification.type == .newDocket,
-               let docketNumber = notification.docketNumber,
-               docketNumber != "TBD",
-               let jobName = notification.jobName {
-                // Don't show completed notification if docket already exists
-                let docketName = "\(docketNumber)_\(jobName)"
-                let exists = mediaManager.dockets.contains(docketName)
-                if exists {
-                    // Remove the notification asynchronously to avoid blocking view updates
-                    // Mark email as read and remove notification
-                    Task { @MainActor in
-                        await notificationCenter.remove(notification, emailScanningService: emailScanningService)
-                    }
-                }
-                return !exists
-            }
-            // Show all other notifications (including media files)
-            return true
-        }
-        
-        // Debug logging when there's a mismatch
-        if notificationCenter.unreadCount > 0 && filtered.isEmpty && !active.isEmpty {
-            print("📋 [NotificationCenterView] DEBUG: unreadCount=\(notificationCenter.unreadCount), activeNotifications.count=\(active.count), but allActiveNotifications is empty")
-            for (index, notif) in active.enumerated() {
-                print("📋 [NotificationCenterView] DEBUG: Active[\(index)]: id=\(notif.id), type=\(notif.type), status=\(notif.status), archivedAt=\(notif.archivedAt?.description ?? "nil")")
-            }
-        }
-        
-        return filtered
+        notificationCenter.activeNotifications
     }
     
     private var mediaFileNotifications: [Notification] {
@@ -95,9 +80,10 @@ struct NotificationCenterView: View {
         return allActiveNotifications
     }
     
-    // Regular new docket notifications (only type we process now)
+    // Regular new docket notifications (only type we process now, excludes completed which go to history)
     private var regularNewDocketNotifications: [Notification] {
-        let filtered = regularNotifications.filter { $0.type == .newDocket }
+        // Filter to new dockets that are NOT completed (completed ones go to history section)
+        let filtered = regularNotifications.filter { $0.type == .newDocket && $0.status != .completed }
         // Debug logging to understand why notifications might not appear
         if notificationCenter.unreadCount > 0 && filtered.isEmpty {
             let allPending = notificationCenter.notifications.filter { $0.status == .pending }
@@ -127,6 +113,13 @@ struct NotificationCenterView: View {
     
     private var archivedNotifications: [Notification] {
         notificationCenter.archivedNotifications
+    }
+    
+    // Completed docket notifications for history section (auto-clears after 48 hours)
+    private var historyNotifications: [Notification] {
+        notificationCenter.notifications.filter { 
+            $0.type == .newDocket && $0.status == .completed 
+        }.sorted { ($0.completedAt ?? $0.timestamp) > ($1.completedAt ?? $1.timestamp) }
     }
     
     var body: some View {
@@ -464,6 +457,46 @@ struct NotificationCenterView: View {
                         }
                     }
                 }
+                
+                // History section (completed dockets, auto-clears after 48 hours)
+                if !historyNotifications.isEmpty {
+                    Divider()
+                    
+                    Button(action: {
+                        withAnimation {
+                            isHistoryExpanded.toggle()
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: isHistoryExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 11))
+                                .foregroundColor(.green)
+                            Text("History (\(historyNotifications.count))")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("Clears in 48h")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary.opacity(0.7))
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    
+                    if isHistoryExpanded {
+                        ForEach(historyNotifications) { notification in
+                            historyRowView(notification)
+                                .padding(.horizontal)
+                                .padding(.vertical, 6)
+                            
+                            Divider()
+                        }
+                    }
+                }
             }
             
             footerSection
@@ -554,6 +587,92 @@ struct NotificationCenterView: View {
             }
             .padding(8)
             .background(Color(nsColor: .controlBackgroundColor))
+        }
+    }
+    
+    // History row for completed notifications
+    @ViewBuilder
+    private func historyRowView(_ notification: Notification) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Title row
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(.green)
+                
+                Text(notification.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                // Time since completion
+                if let completedAt = notification.completedAt {
+                    Text(timeAgo(completedAt))
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            // What was created
+            if let historyNote = notification.historyNote {
+                HStack(spacing: 4) {
+                    // Show icons based on what was created
+                    if historyNote.contains("Work Picture") {
+                        if historyNote.contains("Work Picture failed") {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.red)
+                        } else {
+                            Image(systemName: "folder.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.blue)
+                        }
+                    }
+                    
+                    if historyNote.contains("Simian") {
+                        if historyNote.contains("Simian failed") {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.red)
+                        } else {
+                            Image(systemName: "s.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    
+                    Text(historyNote)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            // Docket info
+            if let docketNumber = notification.docketNumber, let jobName = notification.jobName {
+                Text("\(docketNumber)_\(jobName)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.8))
+            }
+        }
+        .padding(.vertical, 4)
+        .opacity(0.8)
+    }
+    
+    // Helper to format time ago
+    private func timeAgo(_ date: Date) -> String {
+        let interval = Date().timeIntervalSince(date)
+        if interval < 60 {
+            return "just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
         }
     }
     
@@ -1114,15 +1233,35 @@ struct NotificationRowView: View {
             (settingsManager.currentSettings.simianEnabled && simianService.isConfigured)
         let shouldCreateWorkPicture = updatedNotification.shouldCreateWorkPicture
         
+        // If docket was found in Asana, use Asana's name for WP and Simian so we don't create duplicates with different spelling
+        let existenceInfo = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
+        let (effectiveDocketNumber, effectiveJobName): (String, String) = {
+            if existenceInfo.existsInAsana, let asana = existenceInfo.asanaDocketInfo {
+                return (asana.number, asana.jobName)
+            }
+            return (docketNumber, jobName)
+        }()
+        
+        print("🔔 createSimianProject: shouldCreateSimian = \(shouldCreateSimian), shouldCreateWorkPicture = \(shouldCreateWorkPicture)")
+        print("🔔 createSimianProject: notification.shouldCreateWorkPicture = \(updatedNotification.shouldCreateWorkPicture)")
+        print("🔔 createSimianProject: notification.shouldCreateSimianJob = \(updatedNotification.shouldCreateSimianJob)")
+        if effectiveDocketNumber != docketNumber || effectiveJobName != jobName {
+            print("🔔 createSimianProject: Using Asana name for creation: \(effectiveDocketNumber)_\(effectiveJobName)")
+        }
+        
         var simianError: Error?
         var workPictureError: Error?
         
-        // Create Work Picture folder if requested
+        // Create Work Picture folder if requested (use Asana name when found so folder matches Asana)
         if shouldCreateWorkPicture {
             do {
                 updateProcessingStatus(notificationId, "Creating Work Picture folder...")
-                print("🔔 Creating Work Picture folder with docket: \(docketNumber), job: \(jobName)")
-                try await emailScanningService.createDocketFromNotification(updatedNotification)
+                print("🔔 Creating Work Picture folder with docket: \(effectiveDocketNumber), job: \(effectiveJobName)")
+                try await emailScanningService.createDocketFromNotification(
+                    updatedNotification,
+                    effectiveDocketNumber: effectiveDocketNumber,
+                    effectiveJobName: effectiveJobName
+                )
                 print("✅ Work Picture folder created successfully")
                 
                 await MainActor.run {
@@ -1138,24 +1277,45 @@ struct NotificationRowView: View {
             }
         }
         
-        // Create Simian project if requested
+        // Create Simian project if requested (use Asana name when found so project matches Asana)
         if shouldCreateSimian {
             updateSimianServiceConfiguration()
             
             do {
-                updateProcessingStatus(notificationId, "Creating Simian project...")
-                print("🔔 Creating Simian project with docket: \(docketNumber), job: \(jobName)")
-                try await simianService.createJob(
-                    docketNumber: docketNumber,
-                    jobName: jobName,
-                    projectManager: projectManager,
-                    projectTemplate: template ?? settingsManager.currentSettings.simianProjectTemplate
-                )
-                print("✅ Simian project created successfully")
+                // Check if project already exists in Simian before creating
+                updateProcessingStatus(notificationId, "Checking for existing Simian project...")
+                let projectAlreadyExists = try await simianService.projectExists(docketNumber: effectiveDocketNumber, jobName: effectiveJobName)
                 
-                await MainActor.run {
-                    if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                        notificationCenter.markAsInSimian(currentNotification)
+                if projectAlreadyExists {
+                    print("⚠️ Simian project already exists: \(effectiveDocketNumber)_\(effectiveJobName)")
+                    await MainActor.run {
+                        let errorNotification = Notification(
+                            type: .error,
+                            title: "Simian Project Already Exists",
+                            message: "Project \(effectiveDocketNumber)_\(effectiveJobName) already exists in Simian"
+                        )
+                        notificationCenter.add(errorNotification)
+                        
+                        // Mark as in Simian (pre-existing, not created by us)
+                        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                            notificationCenter.markAsInSimian(currentNotification, createdByUs: false)
+                        }
+                    }
+                } else {
+                    updateProcessingStatus(notificationId, "Creating Simian project...")
+                    print("🔔 Creating Simian project with docket: \(effectiveDocketNumber), job: \(effectiveJobName)")
+                    try await simianService.createJob(
+                        docketNumber: effectiveDocketNumber,
+                        jobName: effectiveJobName,
+                        projectManager: projectManager,
+                        projectTemplate: template ?? settingsManager.currentSettings.simianProjectTemplate
+                    )
+                    print("✅ Simian project created successfully")
+                    
+                    await MainActor.run {
+                        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                            notificationCenter.markAsInSimian(currentNotification, createdByUs: true)
+                        }
                     }
                 }
             } catch {
@@ -1195,7 +1355,7 @@ struct NotificationRowView: View {
         
         // Mark email as read and track interaction
         if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-            // Mark email as read BEFORE removing notification (await to ensure it completes)
+            // Mark email as read
             await markEmailAsReadIfNeeded(currentNotification)
             
             await MainActor.run {
@@ -1216,17 +1376,36 @@ struct NotificationRowView: View {
                     )
                 }
                 
-                // Close dialog first, then remove notification after a small delay
-                // This ensures the dialog doesn't get dismissed prematurely
+                // Close dialog
                 showSimianProjectDialog = false
                 
-                // Remove notification after both are created (or attempted)
-                // Use a delay to ensure dialog has time to close first
+                // Build history note based on what was created/failed
+                var historyParts: [String] = []
+                
+                if shouldCreateWorkPicture {
+                    if workPictureError == nil {
+                        historyParts.append("Created in Work Picture")
+                    } else {
+                        historyParts.append("Work Picture failed")
+                    }
+                }
+                
+                if shouldCreateSimian {
+                    if simianError == nil {
+                        historyParts.append("Created in Simian")
+                    } else {
+                        historyParts.append("Simian failed")
+                    }
+                }
+                
+                let historyNote = historyParts.isEmpty ? "Approved" : historyParts.joined(separator: " • ")
+                
+                // Mark as completed instead of removing (moves to history)
                 Task {
                     try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 second delay
                     if let finalNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                        await notificationCenter.remove(finalNotification, emailScanningService: emailScanningService)
-                        print("✅ Removed notification after project creation")
+                        notificationCenter.markAsCompleted(finalNotification, historyNote: historyNote)
+                        print("✅ Marked notification as completed: \(historyNote)")
                     }
                 }
             }
@@ -1363,26 +1542,20 @@ struct NotificationRowView: View {
                 let isSimianEnabled = notification.shouldCreateSimianJob || 
                     (settingsManager.currentSettings.simianEnabled && simianService.isConfigured)
                 
-                // Use the selected project manager from the notification if set,
-                // otherwise fall back to sourceEmail for auto-matching
-                let initialProjectManager = notification.projectManager ?? pendingSimianSourceEmail
-                
                 SimianProjectCreationDialog(
                     isPresented: $showSimianProjectDialog,
                     simianService: simianService,
                     settingsManager: settingsManager,
                     initialDocketNumber: pendingSimianDocketNumber,
                     initialJobName: pendingSimianJobName,
-                    sourceEmail: pendingSimianSourceEmail,
-                    initialProjectManager: initialProjectManager,
                     isSimianEnabled: isSimianEnabled,
-                    onConfirm: { docketNumber, jobName, projectManager, template in
+                    onConfirm: { docketNumber, jobName, _, template in
                         Task {
                             await createSimianProject(
                                 notificationId: notificationId,
                                 docketNumber: docketNumber,
                                 jobName: jobName,
-                                projectManager: projectManager,
+                                projectManager: nil,
                                 template: template
                             )
                         }
@@ -1605,24 +1778,41 @@ struct NotificationRowView: View {
     private func newDocketActionsView(notification: Notification) -> some View {
         // Update duplicate detection flags
         let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) ?? notification
-        let isInWorkPicture = checkIfInWorkPicture(notification: currentNotification)
-        let isInSimian = currentNotification.isInSimian
+        
+        // Check if folders exist in filesystem
+        let existsInWorkPicture = checkIfInWorkPicture(notification: currentNotification)
+        let existsInSimian = currentNotification.isInSimian
+        
+        // Only show "Already exists" if folder was PRE-EXISTING (not created by us)
+        // workPictureCreatedByUs = true means WE just created it, so it's not "already" there
+        let wasPreExistingInWorkPicture = existsInWorkPicture && !currentNotification.workPictureCreatedByUs
+        let wasPreExistingInSimian = existsInSimian && !currentNotification.simianCreatedByUs
+        
+        // For disabling toggles, use the full existence check (including ones we created)
+        let isInWorkPicture = existsInWorkPicture
+        let isInSimian = existsInSimian
         
         VStack(alignment: .leading, spacing: 8) {
-            // Visual indicators for duplicates
-            if isInWorkPicture || isInSimian {
+            // Visual indicators for PRE-EXISTING duplicates only
+            if wasPreExistingInWorkPicture || wasPreExistingInSimian {
                 HStack(spacing: 8) {
-                    if isInWorkPicture {
-                        HStack(spacing: 4) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.green)
-                            Text("Already in Work Picture")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
+                    if wasPreExistingInWorkPicture {
+                        Button(action: {
+                            openWorkPictureFolderForNotification(currentNotification)
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.green)
+                                Text("Already in Work Picture")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .help("Open this docket’s folder in Finder")
                     }
-                    if isInSimian {
+                    if wasPreExistingInSimian {
                         HStack(spacing: 4) {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.system(size: 10))
@@ -1660,41 +1850,46 @@ struct NotificationRowView: View {
                 .padding(.vertical, 2)
             }
             
-            if notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob == true && !isInSimian {
-                projectManagerFieldView(notification: notification)
-            }
-            
             approveArchiveButtons(notification: notification)
         }
         .padding(.top, 4)
         .onAppear {
+            // #region agent log
+            _debugLogWP("newDocketActionsView WP state", ["existsInWorkPicture_live": checkIfInWorkPicture(notification: currentNotification), "isInWorkPicture_stored": currentNotification.isInWorkPicture, "docketNumber": currentNotification.docketNumber ?? "", "jobName": currentNotification.jobName ?? ""], "H4")
+            // #endregion
             // Update duplicate detection when view appears
             if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
                 notificationCenter.updateDuplicateDetection(currentNotification, mediaManager: mediaManager, settingsManager: settingsManager)
-                
-                // Auto-match project manager from sourceEmail if not already set
-                if currentNotification.projectManager == nil || currentNotification.projectManager == currentNotification.sourceEmail {
-                    if let sourceEmail = currentNotification.sourceEmail {
-                        let emailAddress = extractEmailAddress(from: sourceEmail)
-                        // Try to match to a project manager from settings
-                        if let matchingEmail = settingsManager.currentSettings.simianProjectManagers.first(where: { $0.lowercased() == emailAddress.lowercased() }) {
-                            // Auto-set the project manager if it matches
-                            notificationCenter.updateProjectManager(currentNotification, to: matchingEmail)
-                        }
-                    }
-                }
             }
             // Update Simian service configuration first, then pre-load users if Simian is enabled
             updateSimianServiceConfiguration()
         }
     }
     
+    /// True only when the docket folder exists in Work Picture on disk (not Asana-only).
     private func checkIfInWorkPicture(notification: Notification) -> Bool {
         if let docketNumber = notification.docketNumber, docketNumber != "TBD",
            let jobName = notification.jobName {
-            return docketExists(docketNumber: docketNumber, jobName: jobName)
+            let info = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
+            return info.existsInWorkPicture
         }
         return false
+    }
+    
+    /// Open the Work Picture folder for this docket in Finder. If the exact docket folder is found (by year), open it; otherwise open the current year’s Work Picture root.
+    private func openWorkPictureFolderForNotification(_ notification: Notification) {
+        guard let docketNumber = notification.docketNumber, docketNumber != "TBD",
+              let jobName = notification.jobName else { return }
+        let docketName = "\(docketNumber)_\(jobName)"
+        let config = AppConfig(settings: settingsManager.currentSettings)
+        let url: URL
+        if let year = config.findDocketYear(docket: docketName) {
+            url = config.getWorkPicPath(for: year).appendingPathComponent(docketName)
+        } else {
+            url = config.getPaths().workPic
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        NSWorkspace.shared.open(url)
     }
     
     private func checkIfDocketExists(notification: Notification) -> Bool {
@@ -1718,53 +1913,10 @@ struct NotificationRowView: View {
     
     private func simianJobBinding() -> Binding<Bool> {
         Binding(
-            get: { notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob ?? false },
+            get: { notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob ?? true },
             set: { newValue in
                 if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
                     notificationCenter.updateActionFlags(currentNotification, simianJob: newValue)
-                }
-            }
-        )
-    }
-    
-    @ViewBuilder
-    private func projectManagerFieldView(notification: Notification) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Project Manager")
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-            
-            if settingsManager.currentSettings.simianProjectManagers.isEmpty {
-                Text("No project managers configured. Add them in Settings > Simian Integration.")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
-            } else {
-                Picker("Project Manager", selection: projectManagerEmailBinding(notification: notification)) {
-                    Text("None (use email sender)").tag(nil as String?)
-                    ForEach(settingsManager.currentSettings.simianProjectManagers.filter { !$0.isEmpty }, id: \.self) { email in
-                        Text(email)
-                            .tag(email as String?)
-                    }
-                }
-                .pickerStyle(.menu)
-                .font(.system(size: 11))
-            }
-            
-            Text("Defaults to email sender. Edit if needed.")
-                .font(.system(size: 9))
-                .foregroundColor(.secondary)
-        }
-    }
-    
-    private func projectManagerEmailBinding(notification: Notification) -> Binding<String?> {
-        Binding(
-            get: {
-                notificationCenter.notifications.first(where: { $0.id == notificationId })?.projectManager
-            },
-            set: { selectedEmail in
-                if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                    // Store the email address when selected (Simian will match it to a user)
-                    notificationCenter.updateProjectManager(currentNotification, to: selectedEmail)
                 }
             }
         )
@@ -2143,7 +2295,7 @@ struct NotificationRowView: View {
                     let existenceInfo = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
                     
                     if existenceInfo.existsAnywhere {
-                        docketExistenceWarningView(existenceInfo: existenceInfo)
+                        docketExistenceWarningView(existenceInfo: existenceInfo, existsInSimian: notification.isInSimian)
                     }
                 } else {
                     Text("Docket \(docketNumber)")
@@ -2165,17 +2317,25 @@ struct NotificationRowView: View {
         }
     }
     
-    /// Helper view for docket existence warning
+    /// Helper view for where docket exists. Show a warning when it's in Work Picture or Simian (so user doesn't duplicate). Asana is informational (bubbles only).
     @ViewBuilder
-    private func docketExistenceWarningView(existenceInfo: DocketExistenceInfo) -> some View {
+    private func docketExistenceWarningView(existenceInfo: DocketExistenceInfo, existsInSimian: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10))
-                    .foregroundColor(.orange)
-                Text("Docket already exists in \(existenceInfo.existenceDescription)")
-                    .font(.system(size: 10))
-                    .foregroundColor(.orange)
+            // Warning when already in Work Picture or Simian (not for Asana — that's expected)
+            let showWarning = existenceInfo.existsInWorkPicture || existsInSimian
+            if showWarning {
+                let parts: [String] = [
+                    existenceInfo.existsInWorkPicture ? "Work Picture" : nil,
+                    existsInSimian ? "Simian" : nil
+                ].compactMap { $0 }
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                    Text("Docket already exists in \(parts.joined(separator: " & "))")
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                }
             }
             
             HStack(spacing: 6) {
@@ -2698,14 +2858,22 @@ struct NotificationRowView: View {
     
     /// Comprehensive check of where a docket exists across all known databases
     /// Note: This function is called from within view body, so it must NOT trigger any @Published updates
+    /// Work Picture: we check the filesystem directly (same as "Open in Finder") so the badge and open action stay in sync.
     private func checkDocketExistence(docketNumber: String, jobName: String) -> DocketExistenceInfo {
         var info = DocketExistenceInfo()
         
-        // Check Work Picture
+        // Check Work Picture via filesystem (same logic as openWorkPictureFolderForNotification)
         let docketName = "\(docketNumber)_\(jobName)"
-        if mediaManager.dockets.contains(docketName) {
+        let config = AppConfig(settings: settingsManager.currentSettings)
+        let serverBase = settingsManager.currentSettings.serverBasePath
+        let foundYear = config.findDocketYear(docket: docketName)
+        if foundYear != nil {
             info.existsInWorkPicture = true
         }
+        // #region agent log
+        _debugLogWP("checkDocketExistence", ["docketNumber": docketNumber, "jobName": jobName, "docketName": docketName, "foundYear": foundYear as Any, "existsInWorkPicture": info.existsInWorkPicture, "serverBasePath": serverBase], "H1")
+        _debugLogWP("checkDocketExistence path", ["serverBasePath": serverBase, "workPictureFolderName": settingsManager.currentSettings.workPictureFolderName], "H2")
+        // #endregion
         
         // Check Asana cache by directly loading the cache file (no @Published updates)
         let settings = settingsManager.currentSettings

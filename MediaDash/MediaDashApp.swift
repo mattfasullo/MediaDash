@@ -32,7 +32,7 @@ struct MediaDashApp: App {
                     configureAllWindows()
                 }
         }
-        .windowResizability(.contentSize) // Fixed size - no resizing
+        .windowResizability(.contentMinSize) // Resizable with minimum size
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
         .commands {
@@ -133,28 +133,37 @@ struct MediaDashApp: App {
 /// Centralized window configuration to avoid code duplication
 /// All window configuration should go through this struct
 enum WindowConfiguration {
-    /// Configures a window with the standard MediaDash appearance and behavior
-    static func configureWindow(_ window: NSWindow) {
-        // CRITICAL: Remove resizable flag FIRST
-        var styleMask = window.styleMask
-        styleMask.remove(.resizable)
-        window.styleMask = styleMask
-        window.showsResizeIndicator = false
+    /// The main app window (set by WindowAccessor in GatekeeperView). Only this window is non-resizable.
+    static weak var mainAppWindow: NSWindow?
 
-        // Set window delegate to prevent resizing
-        if window.delegate == nil || !(window.delegate is NonResizableWindowDelegate) {
-            window.delegate = NonResizableWindowDelegate.shared
-            NonResizableWindowDelegate.shared.registerWindow(window)
+    /// Configures a window with the standard MediaDash appearance and behavior.
+    /// Main app window: not resizable. Other windows: resizable with a minimum size.
+    static func configureWindow(_ window: NSWindow) {
+        let isMainAppWindow = (window === mainAppWindow)
+        var styleMask = window.styleMask
+        if isMainAppWindow {
+            styleMask.remove(.resizable)
+            window.showsResizeIndicator = false
+        } else {
+            styleMask.insert(.resizable)
+            window.showsResizeIndicator = true
+        }
+        window.styleMask = styleMask
+
+        // Delegate enforces minimum size only (allows any size >= minSize)
+        if window.delegate == nil || !(window.delegate is MinSizeWindowDelegate) {
+            window.delegate = MinSizeWindowDelegate.shared
+            MinSizeWindowDelegate.shared.registerWindow(window)
         }
 
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
-
-        // Re-remove resizable after inserting fullSizeContentView
-        styleMask = window.styleMask
-        styleMask.remove(.resizable)
-        window.styleMask = styleMask
+        if !isMainAppWindow && !styleMask.contains(.resizable) {
+            styleMask = window.styleMask
+            styleMask.insert(.resizable)
+            window.styleMask = styleMask
+        }
 
         window.toolbar = nil
         window.contentView?.wantsLayer = true
@@ -168,10 +177,11 @@ enum WindowConfiguration {
         window.contentView?.layer?.borderColor = nil
         window.contentView?.layer?.cornerRadius = 0
 
-        // Keep window buttons visible
+        // Keep window buttons visible; hide zoom (maximize) on main window only
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
-        window.standardWindowButton(.zoomButton)?.isHidden = false
+        let isMainWindow = (window === NSApplication.shared.mainWindow)
+        window.standardWindowButton(.zoomButton)?.isHidden = isMainWindow
 
         // Enable fullscreen support
         window.collectionBehavior = [.fullScreenPrimary, .fullScreenAllowsTiling]
@@ -179,11 +189,18 @@ enum WindowConfiguration {
         // Set up fullscreen observers
         setupFullscreenObserverForDashboard(window)
 
-        // Set fixed window size (compact mode by default)
-        let fixedSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
-        window.minSize = fixedSize
-        window.maxSize = fixedSize
-        window.setContentSize(fixedSize)
+        // All windows: same minimum as main window (no smaller); no maximum (infinitely resizable)
+        let minSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
+        window.minSize = minSize
+        window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        // Ensure current content size is at least min (don't force a fixed size)
+        let current = window.frame.size
+        if current.width < minSize.width || current.height < minSize.height {
+            var frame = window.frame
+            frame.size.width = max(current.width, minSize.width)
+            frame.size.height = max(current.height, minSize.height)
+            window.setFrame(frame, display: true, animate: false)
+        }
 
         // Remove content border to ensure content extends fully to top
         window.setContentBorderThickness(0, for: .minY)
@@ -256,9 +273,9 @@ func setupFullscreenObserverForDashboard(_ window: NSWindow) {
     fullscreenObservers[windowId] = observers
 }
 
-// Window delegate to prevent resizing
-class NonResizableWindowDelegate: NSObject, NSWindowDelegate {
-    static let shared = NonResizableWindowDelegate()
+// Window delegate that enforces minimum size only (allows resizing above minimum)
+class MinSizeWindowDelegate: NSObject, NSWindowDelegate {
+    static let shared = MinSizeWindowDelegate()
     private var registeredWindows: [NSWindow] = []
     
     func registerWindow(_ window: NSWindow) {
@@ -268,10 +285,12 @@ class NonResizableWindowDelegate: NSObject, NSWindowDelegate {
         }
     }
     
-    // Prevent window from being resized - this is the key method
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        // Always return the current size to prevent any resizing
-        return sender.frame.size
+        let minSize = sender.minSize
+        return NSSize(
+            width: max(frameSize.width, minSize.width),
+            height: max(frameSize.height, minSize.height)
+        )
     }
 }
 
@@ -295,24 +314,25 @@ func switchWindowMode(_ mode: WindowMode) {
         if let encoded = try? JSONEncoder().encode(profiles) {
             UserDefaults.standard.set(encoded, forKey: "savedProfiles")
             
-            // Resize window to appropriate size for the mode
+            // Set minimum size for the mode; only resize window if currently smaller
             DispatchQueue.main.async {
                 if let window = NSApplication.shared.windows.first {
-                    let targetSize: NSSize
+                    let minSize: NSSize
                     if mode == .dashboard {
-                        targetSize = NSSize(width: LayoutMode.dashboardDefaultWidth, height: LayoutMode.dashboardDefaultHeight)
+                        minSize = NSSize(width: LayoutMode.dashboardMinWidth, height: LayoutMode.dashboardMinHeight)
                     } else {
-                        targetSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
+                        minSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
                     }
-                    
-                    // Update window constraints
-                    window.minSize = targetSize
-                    window.maxSize = targetSize
-                    
-                    // Resize window
+                    window.minSize = minSize
+                    window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
                     var frame = window.frame
-                    frame.size = targetSize
-                    window.setFrame(frame, display: true, animate: true)
+                    let needWidth = frame.size.width < minSize.width
+                    let needHeight = frame.size.height < minSize.height
+                    if needWidth || needHeight {
+                        frame.size.width = max(frame.size.width, minSize.width)
+                        frame.size.height = max(frame.size.height, minSize.height)
+                        window.setFrame(frame, display: true, animate: true)
+                    }
                 }
             }
             
@@ -500,6 +520,7 @@ struct WindowAccessor: NSViewRepresentable {
         let view = TitleBarDoubleClickView()
         DispatchQueue.main.async {
             if let window = view.window {
+                WindowConfiguration.mainAppWindow = window
                 WindowConfiguration.configureWindow(window)
             }
         }
@@ -507,9 +528,10 @@ struct WindowAccessor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        // Re-configure on update
+        // Re-configure on update (main window only)
         DispatchQueue.main.async {
             if let window = nsView.window {
+                WindowConfiguration.mainAppWindow = window
                 WindowConfiguration.configureWindow(window)
             }
         }

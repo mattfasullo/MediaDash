@@ -61,12 +61,24 @@ struct CacheIntegrity: Codable, Sendable {
     let checksum: String
     /// Timestamp when integrity was computed
     let computedAt: Date
+    /// Historical peak docket count (optional, for detecting incomplete syncs)
+    let peakDocketCount: Int?
+    /// Timestamp of last full sync (optional, helps determine when to force full sync)
+    let lastFullSyncDate: Date?
+    /// Project GIDs that contain docket tasks (for smart sync optimization)
+    let docketBearingProjectIDs: [String]?
+    /// Timestamp of last full project discovery (when we scanned all projects)
+    let lastDiscoveryDate: Date?
     
-    nonisolated init(version: Int = CacheFormat.version, docketCount: Int, checksum: String, computedAt: Date = Date()) {
+    nonisolated init(version: Int = CacheFormat.version, docketCount: Int, checksum: String, computedAt: Date = Date(), peakDocketCount: Int? = nil, lastFullSyncDate: Date? = nil, docketBearingProjectIDs: [String]? = nil, lastDiscoveryDate: Date? = nil) {
         self.version = version
         self.docketCount = docketCount
         self.checksum = checksum
         self.computedAt = computedAt
+        self.peakDocketCount = peakDocketCount
+        self.lastFullSyncDate = lastFullSyncDate
+        self.docketBearingProjectIDs = docketBearingProjectIDs
+        self.lastDiscoveryDate = lastDiscoveryDate
     }
     
     /// Compute checksum for a list of dockets
@@ -79,11 +91,46 @@ struct CacheIntegrity: Codable, Sendable {
     }
     
     /// Create integrity metadata for a list of dockets
-    nonisolated static func create(for dockets: [DocketInfo]) -> CacheIntegrity {
+    /// - Parameters:
+    ///   - dockets: The dockets to create integrity for
+    ///   - previousPeakCount: Previous peak count for comparison
+    ///   - isFullSync: Whether this was a full sync
+    ///   - docketBearingProjectIDs: Project GIDs that contain dockets (for smart sync)
+    ///   - isDiscovery: Whether this was a full discovery scan of all projects
+    nonisolated static func create(for dockets: [DocketInfo], previousPeakCount: Int? = nil, isFullSync: Bool = false, docketBearingProjectIDs: [String]? = nil, isDiscovery: Bool = false) -> CacheIntegrity {
+        let newPeak = max(dockets.count, previousPeakCount ?? 0)
         return CacheIntegrity(
             docketCount: dockets.count,
-            checksum: computeChecksum(for: dockets)
+            checksum: computeChecksum(for: dockets),
+            peakDocketCount: newPeak,
+            lastFullSyncDate: isFullSync ? Date() : nil,
+            docketBearingProjectIDs: docketBearingProjectIDs,
+            lastDiscoveryDate: isDiscovery ? Date() : nil
         )
+    }
+    
+    /// Check if a full project discovery is needed (scanned all projects to find docket-bearing ones)
+    nonisolated func needsDiscovery(maxAgeDays: Int = 7) -> Bool {
+        // Need discovery if we don't have the project list or it's stale
+        guard let projectIDs = docketBearingProjectIDs, !projectIDs.isEmpty else { return true }
+        guard let lastDiscovery = lastDiscoveryDate else { return true }
+        let daysSinceDiscovery = Calendar.current.dateComponents([.day], from: lastDiscovery, to: Date()).day ?? Int.max
+        return daysSinceDiscovery > maxAgeDays
+    }
+    
+    /// Check if the current docket count suggests an incomplete cache
+    /// Returns true if count dropped significantly below historical peak
+    nonisolated func appearsIncomplete(currentCount: Int, threshold: Double = 0.8) -> Bool {
+        guard let peak = peakDocketCount, peak > 100 else { return false }
+        let ratio = Double(currentCount) / Double(peak)
+        return ratio < threshold
+    }
+    
+    /// Check if a full sync is needed based on age
+    nonisolated func needsFullSync(maxAgeDays: Int = 7) -> Bool {
+        guard let lastFull = lastFullSyncDate else { return true }
+        let daysSinceFullSync = Calendar.current.dateComponents([.day], from: lastFull, to: Date()).day ?? Int.max
+        return daysSinceFullSync > maxAgeDays
     }
 }
 
@@ -106,7 +153,21 @@ struct DocketInfo: Identifiable, Hashable, Codable {
     // Project metadata (from Asana project)
     let projectMetadata: ProjectMetadata?
     
-    nonisolated init(id: UUID = UUID(), number: String, jobName: String, fullName: String, updatedAt: Date? = nil, createdAt: Date? = nil, metadataType: String? = nil, subtasks: [DocketSubtask]? = nil, projectMetadata: ProjectMetadata? = nil) {
+    /// Task due date (date-only), e.g. "YYYY-MM-DD". From Asana task due_on; used for calendar view.
+    let dueDate: String?
+    
+    /// Asana task GID (for fetching subtasks/assignees)
+    let taskGid: String?
+    
+    /// Studio from Asana task tags (e.g. "A - Blue", "B - Green", "C - Red", "M4 - Fuchsia"). Shown on calendar.
+    let studio: String?
+    /// Asana tag color name for the studio tag (e.g. "dark-blue"). Used to faintly colour the studio badge.
+    let studioColor: String?
+    
+    /// Whether the Asana task is completed. When true, calendar shows a check and greys out the row.
+    let completed: Bool?
+    
+    nonisolated init(id: UUID = UUID(), number: String, jobName: String, fullName: String, updatedAt: Date? = nil, createdAt: Date? = nil, metadataType: String? = nil, subtasks: [DocketSubtask]? = nil, projectMetadata: ProjectMetadata? = nil, dueDate: String? = nil, taskGid: String? = nil, studio: String? = nil, studioColor: String? = nil, completed: Bool? = nil) {
         self.id = id
         self.number = number
         self.jobName = jobName
@@ -116,6 +177,11 @@ struct DocketInfo: Identifiable, Hashable, Codable {
         self.metadataType = metadataType
         self.subtasks = subtasks
         self.projectMetadata = projectMetadata
+        self.dueDate = dueDate
+        self.taskGid = taskGid
+        self.studio = studio
+        self.studioColor = studioColor
+        self.completed = completed
     }
 
     func hash(into hasher: inout Hasher) {
@@ -154,6 +220,20 @@ struct CachedDockets: Codable, Sendable {
         self.dockets = dockets
         self.lastSync = lastSync
         self.integrity = includeIntegrity ? CacheIntegrity.create(for: dockets) : nil
+    }
+    
+    // Initializer with peak count tracking for cache health monitoring
+    nonisolated init(dockets: [DocketInfo], lastSync: Date, previousPeakCount: Int?, isFullSync: Bool) {
+        self.dockets = dockets
+        self.lastSync = lastSync
+        self.integrity = CacheIntegrity.create(for: dockets, previousPeakCount: previousPeakCount, isFullSync: isFullSync)
+    }
+    
+    // Full initializer with smart sync optimization (docket-bearing project tracking)
+    nonisolated init(dockets: [DocketInfo], lastSync: Date, previousPeakCount: Int?, isFullSync: Bool, docketBearingProjectIDs: [String]?, isDiscovery: Bool) {
+        self.dockets = dockets
+        self.lastSync = lastSync
+        self.integrity = CacheIntegrity.create(for: dockets, previousPeakCount: previousPeakCount, isFullSync: isFullSync, docketBearingProjectIDs: docketBearingProjectIDs, isDiscovery: isDiscovery)
     }
     
     // Explicit nonisolated Codable implementation to avoid main actor isolation

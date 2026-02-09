@@ -85,12 +85,13 @@ struct ExpandableSettingsHeader: View {
 struct WindowModeCard: View {
     let mode: WindowMode
     let isSelected: Bool
+    var isDisabled: Bool = false
     let onSelect: () -> Void
     
     @State private var isHovered = false
     
     var body: some View {
-        Button(action: onSelect) {
+        Button(action: { if !isDisabled { onSelect() } }) {
             VStack(spacing: 10) {
                 // Icon
                 ZStack {
@@ -100,21 +101,27 @@ struct WindowModeCard: View {
                     
                     Image(systemName: mode.icon)
                         .font(.system(size: 24))
-                        .foregroundColor(isSelected ? .accentColor : .secondary)
+                        .foregroundColor(isSelected ? .accentColor : (isDisabled ? .secondary.opacity(0.6) : .secondary))
                 }
                 
                 // Text
                 VStack(spacing: 3) {
                     Text(mode.displayName)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(isSelected ? .accentColor : .primary)
+                        .foregroundColor(isSelected ? .accentColor : (isDisabled ? .secondary : .primary))
                     
-                    Text(mode.description)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if isDisabled {
+                        Text("Coming soon")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text(mode.description)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .frame(width: 140, height: 120)
@@ -124,12 +131,14 @@ struct WindowModeCard: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.accentColor : (isHovered ? Color.gray.opacity(0.3) : Color.clear), lineWidth: isSelected ? 2 : 1)
+                    .stroke(isSelected ? Color.accentColor : (isHovered && !isDisabled ? Color.gray.opacity(0.3) : Color.clear), lineWidth: isSelected ? 2 : 1)
             )
+            .opacity(isDisabled ? 0.7 : 1)
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
         .onHover { hovering in
-            isHovered = hovering
+            isHovered = hovering && !isDisabled
         }
     }
 }
@@ -281,7 +290,7 @@ struct SettingsView: View {
             .padding(.vertical, 16)
             .background(Color(nsColor: .controlBackgroundColor))
 
-            // Content
+            // Content (use maxHeight: .infinity so ScrollView fills space between header and footer)
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     // Profile Management
@@ -343,6 +352,7 @@ struct SettingsView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
             }
+            .frame(maxHeight: .infinity)
 
             // Footer with Save/Reset buttons
             VStack(spacing: 0) {
@@ -389,13 +399,14 @@ struct SettingsView: View {
                 .background(Color(nsColor: .controlBackgroundColor))
             }
         }
-        .frame(width: 600, height: 500)
+        .frame(minWidth: 520, minHeight: 560)
         .sheet(isPresented: $showNewProfileSheet) {
             NewProfileView(
                 settingsManager: settingsManager,
                 currentSettings: settings,
                 isPresented: $showNewProfileSheet
             )
+            .sheetSizeStabilizer()
         }
         .alert("Delete Profile", isPresented: $showDeleteAlert) {
             Button("Cancel", role: .cancel) {}
@@ -916,7 +927,7 @@ struct PathSettingsSection: View {
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)
                             HStack(spacing: 8) {
-                                TextField("MMMd.yy", text: binding(for: \.dateFormat))
+                                TextField("MMM.d.yy", text: binding(for: \.dateFormat))
                                     .textFieldStyle(.roundedBorder)
                                     .frame(width: 120)
                                 Text("→ Today would be: \(exampleDate)")
@@ -3732,6 +3743,92 @@ struct InlineCategoryRow: View {
     }
 }
 
+// MARK: - Music Demos Composer Initials Section
+
+struct MusicDemosComposerInitialsSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+    @State private var newComposerName = ""
+    @State private var newComposerInitials = ""
+
+    private var composerMap: [String: String] {
+        settings.composerInitials ?? [:]
+    }
+
+    private func setComposerMap(_ map: [String: String]) {
+        settings.composerInitials = map.isEmpty ? nil : map
+        hasUnsavedChanges = true
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Music Demos – composer folder names")
+                .font(.system(size: 14, weight: .medium))
+            Text("Map composer/writer names (from Asana) to folder names (initials or nickname). Used when dropping demos onto a composer.")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(composerMap.keys.sorted(), id: \.self) { name in
+                    HStack(spacing: 8) {
+                        Text(name)
+                            .font(.system(size: 12))
+                            .frame(width: 140, alignment: .leading)
+                            .lineLimit(1)
+                        TextField("Initials or nickname", text: Binding(
+                            get: { composerMap[name] ?? "" },
+                            set: { newVal in
+                                var next = composerMap
+                                next[name] = newVal.isEmpty ? nil : newVal
+                                if next[name] == nil { next.removeValue(forKey: name) }
+                                setComposerMap(next)
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                        Button(action: {
+                            var next = composerMap
+                            next.removeValue(forKey: name)
+                            setComposerMap(next)
+                        }) {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundColor(.red)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                HStack(spacing: 8) {
+                    TextField("Composer name", text: $newComposerName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                    TextField("Initials", text: $newComposerInitials)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                    Button(action: {
+                        let name = newComposerName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let initials = newComposerInitials.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !name.isEmpty, !initials.isEmpty else { return }
+                        var next = composerMap
+                        next[name] = initials
+                        setComposerMap(next)
+                        newComposerName = ""
+                        newComposerInitials = ""
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus.circle.fill")
+                            Text("Add")
+                        }
+                        .font(.system(size: 12))
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(.top, 8)
+    }
+}
+
 // MARK: - General Options Section
 
 struct GeneralOptionsSection: View {
@@ -3820,6 +3917,18 @@ struct GeneralOptionsSection: View {
                             }
 
                             HStack(spacing: 8) {
+                                Text("Prep date format:")
+                                    .font(.system(size: 12))
+                                    .frame(width: 120, alignment: .leading)
+                                TextField("MMM.d.yy", text: bindingOptionalString(for: \.prepDateFormat, default: "MMM.d.yy"))
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 100)
+                                Text("Used for {date} (e.g. Feb.5.26 for Feb 5, 2026)")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.blue)
+                            }
+
+                            HStack(spacing: 8) {
                                 Text("Work Picture:")
                                     .font(.system(size: 12))
                                     .frame(width: 120, alignment: .leading)
@@ -3830,6 +3939,58 @@ struct GeneralOptionsSection: View {
                                     .font(.system(size: 12))
                                     .foregroundColor(.blue)
                             }
+
+                            HStack(spacing: 8) {
+                                Text("Music Demos date:")
+                                    .font(.system(size: 12))
+                                    .frame(width: 120, alignment: .leading)
+                                TextField("dd_MMM.d.yy", text: bindingOptionalString(for: \.demosDateFolderFormat, default: "dd_MMM.d.yy"))
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 120)
+                                Text("→ e.g. 09_Feb.9.26 for composer folders parent")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+
+                    // Music Demos – composer folder names (initials / nickname)
+                    MusicDemosComposerInitialsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+
+                    // Prep element folders – which folders to create during prep
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Prep element folders")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("Disable any element to skip creating that folder during prep (files that would go there are placed in OTHER if enabled, or skipped)")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Toggle(isOn: bindingOptionalBool(for: \.createPrepPictureFolder, default: true)) {
+                                Text("Create PICTURE folder")
+                                    .font(.system(size: 12))
+                            }
+                            .toggleStyle(.switch)
+                            Toggle(isOn: bindingOptionalBool(for: \.createPrepMusicFolder, default: true)) {
+                                Text("Create MUSIC folder")
+                                    .font(.system(size: 12))
+                            }
+                            .toggleStyle(.switch)
+                            Toggle(isOn: bindingOptionalBool(for: \.createPrepAafOmfFolder, default: true)) {
+                                Text("Create AAF-OMF folder")
+                                    .font(.system(size: 12))
+                            }
+                            .toggleStyle(.switch)
+                            Toggle(isOn: bindingOptionalBool(for: \.createPrepOtherFolder, default: true)) {
+                                Text("Create OTHER folder")
+                                    .font(.system(size: 12))
+                            }
+                            .toggleStyle(.switch)
+                            Toggle(isOn: bindingOptionalBool(for: \.createPrepChecklistFolder, default: true)) {
+                                Text("Create CHECKLIST folder (from Prep Elements)")
+                                    .font(.system(size: 12))
+                            }
+                            .toggleStyle(.switch)
                         }
                         .padding(.top, 4)
                     }
@@ -4031,6 +4192,26 @@ struct GeneralOptionsSection: View {
             }
         )
     }
+
+    private func bindingOptionalBool(for keyPath: WritableKeyPath<AppSettings, Bool?>, default defaultVal: Bool) -> Binding<Bool> {
+        Binding(
+            get: { settings[keyPath: keyPath] ?? defaultVal },
+            set: {
+                settings[keyPath: keyPath] = $0
+                hasUnsavedChanges = true
+            }
+        )
+    }
+
+    private func bindingOptionalString(for keyPath: WritableKeyPath<AppSettings, String?>, default defaultVal: String) -> Binding<String> {
+        Binding(
+            get: { settings[keyPath: keyPath] ?? defaultVal },
+            set: {
+                settings[keyPath: keyPath] = $0.isEmpty ? nil : $0
+                hasUnsavedChanges = true
+            }
+        )
+    }
 }
 
 // MARK: - Theme Selection Section
@@ -4137,6 +4318,7 @@ struct ThemeSelectionSection: View {
                             WindowModeCard(
                                 mode: .dashboard,
                                 isSelected: settings.windowMode == .dashboard,
+                                isDisabled: true, // Dashboard mode disabled for now; will be improved later
                                 onSelect: {
                                     if settings.windowMode != .dashboard {
                                         settings.windowMode = .dashboard

@@ -721,6 +721,7 @@ struct DesktopStagingArea: View {
         }
         .sheet(isPresented: $showBatchRenameSheet) {
             BatchRenameSheet(manager: manager, filesToRename: filesToRename)
+                .sheetSizeStabilizer()
         }
     }
     

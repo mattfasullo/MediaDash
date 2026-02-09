@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 0.9.12</title>
+            <description><![CDATA[
+                <h2>What's New in 0.9.12</h2><ul><li>Demos/Submit: Track colour selector reorganized like spreadsheet (Composers + Freelance/Extra, colours by name)</li><li>Demos/Submit: Completed tasks stay visible with checkmark and greyed out; DEMOS and SUBMIT both treated as demos</li><li>Posting legend: Copy legend to clipboard; editable Post task description with Save</li><li>Download prompt: When you download a file in the browser, popup asks "Use with MediaDash?" to stage it</li><li>Calendar: Task detail opens in its own resizable window (consistent size, drag and resize)</li><li>Fix: Download prompt window no longer crashes</li></ul>
+            ]]></description>
+            <pubDate>Sun, 09 Feb 2026 00:00:00 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v0.9.12/MediaDash.zip"
+                sparkle:version="102"
+                sparkle:shortVersionString="0.9.12"
+                sparkle:edSignature="REPLACE_WITH_SIGNATURE"
+                length="6304600"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.9.11</title>
             <description><![CDATA[
                 <h2>What's New in 0.9.11</h2><ul><li>Simian Archiver: stabilize archive downloads and prevent temp file errors</li><li>Simian Archiver: parallel downloads (up to 3) and per-download log file</li><li>Simian Archiver: simplified sort control (Last Accessed default) + loading overlay</li><li>Simian Archiver: exclude archive maintenance projects (IDs 91, 459)</li></ul>

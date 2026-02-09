@@ -144,6 +144,9 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         notificationWindow.isMovableByWindowBackground = !isLocked
     }
     
+    /// Posted when the New Dockets window is closed (X or Cmd+W) so the app can sync showNotificationCenter.
+    static let notificationWindowDidCloseNotification = Foundation.Notification.Name("NotificationWindowDidClose")
+
     func windowWillClose(_ notification: Foundation.Notification) {
         isVisible = false
         stopContinuousPositionMonitoring()
@@ -162,6 +165,9 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         notificationWindow = nil
         lockedPosition = nil
         lastMainWindowFrame = nil
+
+        // Notify so ContentView can sync showNotificationCenter (avoids needing two taps to reopen after Cmd+W)
+        Foundation.NotificationCenter.default.post(name: Self.notificationWindowDidCloseNotification, object: nil)
     }
     
     // MARK: - NSWindowDelegate Methods (for main window)
@@ -664,7 +670,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             notificationWindow.level = .normal
             notificationWindow.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             notificationWindow.isReleasedWhenClosed = false
-            notificationWindow.minSize = NSSize(width: 400, height: 500)
+            notificationWindow.minSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
+            notificationWindow.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             notificationWindow.isMovableByWindowBackground = false
             notificationWindow.delegate = self
             
@@ -705,6 +712,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         notificationWindow.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         notificationWindow.isReleasedWhenClosed = false
         notificationWindow.title = "New Dockets"
+        notificationWindow.minSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
+        notificationWindow.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         notificationWindow.acceptsMouseMovedEvents = true
         notificationWindow.ignoresMouseEvents = false
         notificationWindow.delegate = self

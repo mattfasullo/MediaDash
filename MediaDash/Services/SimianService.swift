@@ -557,6 +557,32 @@ class SimianService: ObservableObject {
         return projectInfo
     }
 
+    /// Check if a project with the given docket number and job name already exists
+    func projectExists(docketNumber: String, jobName: String) async throws -> Bool {
+        let projects = try await getProjectList()
+        let expectedName = "\(docketNumber)_\(jobName)"
+        
+        // Check for exact match or partial match (project name contains docket number)
+        for project in projects {
+            let projectNameLower = project.name.lowercased()
+            let expectedNameLower = expectedName.lowercased()
+            let docketLower = docketNumber.lowercased()
+            
+            if projectNameLower == expectedNameLower {
+                print("🔔 SimianService: Found exact match for project '\(expectedName)'")
+                return true
+            }
+            
+            // Also check if project name starts with docket number (e.g., "26XXX_TEST01" matches "26XXX_TEST01_v2")
+            if projectNameLower.hasPrefix(docketLower + "_") && projectNameLower.contains(jobName.lowercased()) {
+                print("🔔 SimianService: Found partial match for project '\(project.name)' (looking for '\(expectedName)')")
+                return true
+            }
+        }
+        
+        return false
+    }
+    
     /// Fetch list of projects current user has access to
     func getProjectList() async throws -> [SimianProject] {
         try await ensureAuthenticated()

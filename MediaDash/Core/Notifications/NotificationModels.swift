@@ -101,11 +101,18 @@ struct Notification: Identifiable, Codable, Equatable {
     
     // Action flags (mutable for toggling)
     var shouldCreateWorkPicture: Bool = true // Default to true
-    var shouldCreateSimianJob: Bool = false
+    var shouldCreateSimianJob: Bool = true
     
     // Duplicate detection flags (computed/checked, not stored)
     var isInWorkPicture: Bool = false // Whether docket folder exists in work picture
     var isInSimian: Bool = false // Whether job already exists in Simian
+    
+    // Flags to track if WE created the folder/project (vs it was pre-existing)
+    var workPictureCreatedByUs: Bool = false
+    var simianCreatedByUs: Bool = false
+    
+    // History tracking - what was created when approved
+    var historyNote: String? // Human-readable note about what happened (e.g., "Created in Work Picture and Simian")
     
     
     init(
