@@ -345,9 +345,6 @@ struct SettingsView: View {
 
                     // General Options (Search, Workflow, etc.)
                     GeneralOptionsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
-                    
-                    // Work Culture Enhancements
-                    WorkCultureEnhancementsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
@@ -500,91 +497,6 @@ struct ProfileSection: View {
                         .padding(.vertical, 4)
                 }
 
-                // Mode Selector (Media, Producer, Engineer, Admin)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Mode")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                    
-                    Menu {
-                        // Media Mode - Enabled
-                        Button {
-                            // Media mode is active, no action needed
-                        } label: {
-                            HStack {
-                                Text("Media")
-                                Spacer()
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                        
-                        Divider()
-                        
-                        // Producer Mode - Disabled
-                        Button {
-                            // Coming soon
-                        } label: {
-                            HStack {
-                                Text("Producer")
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text("Coming Soon")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .disabled(true)
-                        
-                        // Engineer Mode - Disabled
-                        Button {
-                            // Coming soon
-                        } label: {
-                            HStack {
-                                Text("Engineer")
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text("Coming Soon")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .disabled(true)
-                        
-                        // Admin Mode - Disabled
-                        Button {
-                            // Coming soon
-                        } label: {
-                            HStack {
-                                Text("Admin")
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text("Coming Soon")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .disabled(true)
-                    } label: {
-                        HStack {
-                            Text("Media")
-                                .foregroundColor(.primary)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .cornerRadius(6)
-                    }
-                    .menuStyle(.borderlessButton)
-                    
-                    Text("Each mode has different layouts and core features")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
             }
         }
     }
@@ -3196,56 +3108,6 @@ struct SimianIntegrationSection: View {
                         
                         if showAdvancedSettings {
                             VStack(alignment: .leading, spacing: 12) {
-                                
-                                // Project Managers List
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Project Managers")
-                                        .font(.system(size: 13))
-                                    
-                                    Text("Email addresses of project managers. Simian will match these to existing users when creating projects.")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                    
-                                    ForEach(settings.simianProjectManagers.indices, id: \.self) { index in
-                                        HStack {
-                                            TextField("Email address", text: Binding(
-                                                get: { settings.simianProjectManagers[index] },
-                                                set: { newValue in
-                                                    settings.simianProjectManagers[index] = newValue
-                                                    hasUnsavedChanges = true
-                                                }
-                                            ))
-                                            .textFieldStyle(.roundedBorder)
-                                            .disableAutocorrection(true)
-                                            
-                                            Button(action: {
-                                                settings.simianProjectManagers.remove(at: index)
-                                                hasUnsavedChanges = true
-                                            }) {
-                                                Image(systemName: "minus.circle.fill")
-                                                    .foregroundColor(.red)
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                    }
-                                    
-                                    Button(action: {
-                                        settings.simianProjectManagers.append("")
-                                        hasUnsavedChanges = true
-                                    }) {
-                                        HStack {
-                                            Image(systemName: "plus.circle")
-                                            Text("Add Project Manager")
-                                        }
-                                        .font(.system(size: 12))
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                }
-                                
-                                Divider()
-                                    .padding(.vertical, 4)
-                                
                                 // Project Template Dropdown
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Project Template")
@@ -4470,76 +4332,6 @@ struct CSVColumnMappingSection: View {
             ))
             .textFieldStyle(.roundedBorder)
             .frame(width: 280)
-        }
-    }
-}
-
-// MARK: - Work Culture Enhancements Section
-
-struct WorkCultureEnhancementsSection: View {
-    @Binding var settings: AppSettings
-    @Binding var hasUnsavedChanges: Bool
-
-    var body: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Image(systemName: "sparkles")
-                        .foregroundColor(.purple)
-                        .font(.system(size: 18))
-                    Text("Work Culture Enhancements")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-
-                Text("Fun features to enhance your workflow experience")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-
-                VStack(alignment: .leading, spacing: 12) {
-                    // Cursed Image Grabbed Replies
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle(isOn: Binding(
-                            get: { settings.enableCursedImageReplies },
-                            set: {
-                                settings.enableCursedImageReplies = $0
-                                hasUnsavedChanges = true
-                            }
-                        )) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Cursed Image Grabbed Replies")
-                                    .font(.system(size: 13))
-                                Text("Instead of sending 'Grabbed' text, send a random image from a Reddit subreddit (NSFW subreddits are automatically excluded)")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .toggleStyle(.switch)
-                        
-                        if settings.enableCursedImageReplies {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Subreddit Name")
-                                    .font(.system(size: 11))
-                                
-                                TextField("cursedimages", text: Binding(
-                                    get: { settings.cursedImageSubreddit },
-                                    set: {
-                                        settings.cursedImageSubreddit = $0
-                                        hasUnsavedChanges = true
-                                    }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                                
-                                Text("Enter subreddit name without 'r/' prefix (e.g., 'cursedimages', 'blursedimages')")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.leading, 16)
-                            .padding(.top, 4)
-                        }
-                    }
-                }
-            }
-            .padding(20)
         }
     }
 }

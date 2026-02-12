@@ -97,6 +97,7 @@ struct DesktopLayoutView: View {
 struct DesktopToolbar: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var manager: MediaManager
+    @EnvironmentObject var sessionManager: SessionManager
     @EnvironmentObject var notificationCenter: NotificationCenter
     @Environment(\.colorScheme) var colorScheme
     
@@ -233,7 +234,9 @@ struct DesktopToolbar: View {
                 .help("Job Info (⌘D)")
                 
                 // Settings
-                Button(action: { showSettingsSheet = true }) {
+                Button(action: { 
+                    SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
+                }) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 16))
                         .foregroundColor(.secondary)

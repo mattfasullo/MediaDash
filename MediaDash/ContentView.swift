@@ -224,8 +224,9 @@ struct ContentView: View {
                             mediaManager: manager,
                             settingsManager: settingsManager,
                             isExpanded: $showNotificationCenter,
-                            showSettings: $showSettingsSheet
+                            showSettings: .constant(false)
                         )
+                        .environmentObject(sessionManager)
                     )
                     NotificationWindowManager.shared.showNotificationWindow(content: content, isLocked: false)
                 } else {
@@ -250,7 +251,7 @@ struct ContentView: View {
             )
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("OpenSettings"))) { _ in
                 // Open settings when requested (e.g., from menu bar status item)
-                showSettingsSheet = true
+                SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
             }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: NotificationWindowManager.notificationWindowDidCloseNotification)) { _ in
                 showNotificationCenter = false
@@ -437,18 +438,16 @@ struct ContentView: View {
                     
                 }
                 .overlay(alignment: .topTrailing) {
-                    // Dashboard button in very top right - only in compact mode
-                    HStack(spacing: 6) {
-                        Button(action: { showSettingsSheet = true }) {
-                            Image(systemName: "gearshape")
-                                .font(.system(size: 14))
-                                .foregroundColor(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Settings (⌘,)")
-                        
-                        CalendarButton(cacheManager: cacheManager, settingsManager: settingsManager)
+                    // Settings button in very top right - only in compact mode
+                    Button(action: { 
+                        SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
+                    }) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
                     }
+                    .buttonStyle(.plain)
+                    .help("Settings (⌘,)")
                     .padding(.top, 8)
                     .padding(.trailing, 8)
                     .offset(x: 2.7109375, y: -29.5390625) // Layout edit: dashboardButton offset
@@ -2393,11 +2392,6 @@ struct QuickDocketSearchView: View {
             infoBarSection
         }
         .frame(minWidth: 400, idealWidth: 600, maxWidth: 700, minHeight: 300, idealHeight: 500, maxHeight: 700)
-        .sheet(isPresented: $showSettingsSheet) {
-            SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
-                .environmentObject(sessionManager)
-                .sheetSizeStabilizer()
-        }
         .sheet(isPresented: $showMetadataEditor) {
             if let docket = selectedDocket {
                 DocketMetadataEditorView(
@@ -2616,7 +2610,7 @@ struct QuickDocketSearchView: View {
                         }
                         
                         Button("Open Settings") {
-                            showSettingsSheet = true
+                            SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.regular)
@@ -3716,7 +3710,7 @@ struct KeyboardHandlersModifier: ViewModifier {
                     isKeyboardMode = true
                 }
 
-                guard !showSearchSheet && !showQuickSearchSheet && !showSettingsSheet && !showVideoConverterSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
+                guard !showSearchSheet && !showQuickSearchSheet && !SettingsWindowManager.shared.isVisible && !showVideoConverterSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
                     return .ignored
                 }
                 
@@ -3905,10 +3899,6 @@ struct SheetsModifier: ViewModifier {
                 QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager, cacheManager: cacheManager)
                     .sheetBorder()
             }
-            .sheet(isPresented: $showSettingsSheet) {
-                SettingsView(settingsManager: settingsManager, isPresented: $showSettingsSheet)
-                    .sheetBorder()
-            }
             .sheet(isPresented: $manager.showPrepSummary) {
                 PrepSummaryView(summary: manager.prepSummary, isPresented: $manager.showPrepSummary)
                     .sheetBorder()
@@ -3947,13 +3937,6 @@ struct ContentViewLifecycleModifier: ViewModifier {
             .onChange(of: showSearchSheet) { oldValue, newValue in
                 if !newValue {
                     initialSearchText = ""
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        mainViewFocused.wrappedValue = true
-                    }
-                }
-            }
-            .onChange(of: showSettingsSheet) { oldValue, newValue in
-                if !newValue {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         mainViewFocused.wrappedValue = true
                     }
@@ -4239,36 +4222,6 @@ struct WorkspaceMenuButton: View {
     }
 }
 
-// MARK: - Calendar Button (Asana sessions: today + 5 days)
-
-struct CalendarButton: View {
-    let cacheManager: AsanaCacheManager
-    @ObservedObject var settingsManager: SettingsManager
-    @State private var isHovered = false
-    
-    var body: some View {
-        Button(action: {
-            AsanaCalendarWindowManager.shared.show(cacheManager: cacheManager, settingsManager: settingsManager)
-        }) {
-            Image(systemName: "calendar")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(isHovered ? .primary : .secondary)
-                .frame(width: 28, height: 28)
-                .background(
-                    Circle()
-                        .fill(isHovered ? Color.primary.opacity(0.1) : Color.clear)
-                )
-        }
-        .buttonStyle(.plain)
-        .allowsHitTesting(true)
-        .help("Asana Calendar (today + 5 days)")
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
-    }
-}
 
 // MARK: - Preview
 

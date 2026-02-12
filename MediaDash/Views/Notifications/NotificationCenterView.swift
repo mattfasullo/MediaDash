@@ -45,6 +45,7 @@ struct NotificationCenterView: View {
     @ObservedObject var emailScanningService: EmailScanningService
     @ObservedObject var mediaManager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
+    @EnvironmentObject var sessionManager: SessionManager
     @Binding var isExpanded: Bool
     @Binding var showSettings: Bool
     
@@ -221,7 +222,7 @@ struct NotificationCenterView: View {
                 Spacer()
                 
                 Button("Settings") {
-                    showSettings = true
+                    SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
                     NotificationWindowManager.shared.hideNotificationWindow()
                     isExpanded = false
                 }
@@ -254,7 +255,7 @@ struct NotificationCenterView: View {
                 Spacer()
                 
                 Button("Settings") {
-                    showSettings = true
+                    SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
                     NotificationWindowManager.shared.hideNotificationWindow()
                     isExpanded = false
                 }
