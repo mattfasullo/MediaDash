@@ -20,6 +20,7 @@ class EmailScanningService: ObservableObject {
     private var processedThreadIds: Set<String> = []  // Track processed threads to prevent duplicates
     private let processedEmailsKey = "gmail_processed_email_ids"
     private let processedThreadsKey = "gmail_processed_thread_ids"
+    private let rateLimitRetryAfterKey = "gmail_rate_limit_retry_after"
     
     weak var mediaManager: MediaManager?
     weak var settingsManager: SettingsManager?
@@ -36,6 +37,7 @@ class EmailScanningService: ObservableObject {
         self.gmailService = gmailService
         self.parser = parser
         loadProcessedEmailIds()
+        loadRateLimitRetryAfter()
 
         // Check if Gmail is already authenticated and add to whitelist
         // Use detached task to avoid blocking app launch when network is slow
@@ -152,13 +154,30 @@ class EmailScanningService: ObservableObject {
     /// Check if an email is a reply or forward
     /// Perform a manual scan now
     func scanNow(forceRescan: Bool = false) async {
+        // #region agent log
+        do {
+            let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanNow entry", "data": ["forceRescan": forceRescan], "hypothesisId": "H4"]
+            if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                if !FileManager.default.fileExists(atPath: path) { try? Data().write(to: URL(fileURLWithPath: path)) }
+                if let stream = OutputStream(url: URL(fileURLWithPath: path), append: true) {
+                    stream.open()
+                    defer { stream.close() }
+                    let out = (line + "\n").data(using: .utf8)!
+                    _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                }
+            }
+        }
+        // #endregion
         print("🔍 EmailScanningService.scanNow() called")
         if isScanning {
             return
         }
 
-        if let retryAfter = lastRateLimitRetryAfter, retryAfter > Date() {
-            return
+        // Clear expired cooldown so banner goes away; we never block scan attempts — let Google return 429 if still limited
+        let now = Date()
+        if let retryAfter = lastRateLimitRetryAfter, retryAfter <= now {
+            clearRateLimitRetryAfter()
         }
         
         guard let settings = settingsManager?.currentSettings, settings.gmailEnabled else {
@@ -379,6 +398,7 @@ class EmailScanningService: ObservableObject {
                 DispatchQueue.main.async {
                     self.lastScanTime = Date()
                     self.isScanning = false
+                    self.clearRateLimitRetryAfter()
                     continuation.resume()
                 }
             }
@@ -387,6 +407,7 @@ class EmailScanningService: ObservableObject {
             let errorMessage = error.localizedDescription
             if let retryAfter = parseRetryAfterDate(from: errorMessage) {
                 lastRateLimitRetryAfter = retryAfter
+                saveRateLimitRetryAfter(retryAfter)
             }
             await withCheckedContinuation { continuation in
                 DispatchQueue.main.async {
@@ -401,8 +422,31 @@ class EmailScanningService: ObservableObject {
     // MARK: - Helper Methods
 
     private func parseRetryAfterDate(from text: String) -> Date? {
-        let pattern = #"Retry\s+after\s+([0-9T:\.\-Z]+(?:\s+[0-9:\-+]+)?)"#
-        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+        // Fix: Capture the full date string including timezone
+        // Handle two formats:
+        // 1. "Retry after 2026-02-12 20:15:59 +0000" (spaced format)
+        // 2. "Retry after 2026-02-12T20:17:04.952Z" (ISO8601 format)
+        
+        // Try spaced format first: "yyyy-MM-dd HH:mm:ss Z"
+        let spacedPattern = #"Retry\s+after\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+[+-]\d{4})"#
+        if let regex = try? NSRegularExpression(pattern: spacedPattern, options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            if let match = regex.firstMatch(in: text, options: [], range: range),
+               match.numberOfRanges >= 2,
+               let retryRange = Range(match.range(at: 1), in: text) {
+                let value = String(text[retryRange])
+                let spaced = DateFormatter()
+                spaced.locale = Locale(identifier: "en_US_POSIX")
+                spaced.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+                if let date = spaced.date(from: value) {
+                    return date
+                }
+            }
+        }
+        
+        // Try ISO8601 format: "2026-02-12T20:17:04.952Z" or "2026-02-12T20:17:04Z"
+        let isoPattern = #"Retry\s+after\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)"#
+        if let regex = try? NSRegularExpression(pattern: isoPattern, options: []) {
             let range = NSRange(text.startIndex..., in: text)
             if let match = regex.firstMatch(in: text, options: [], range: range),
                match.numberOfRanges >= 2,
@@ -415,13 +459,12 @@ class EmailScanningService: ObservableObject {
                 }
                 let fallback = ISO8601DateFormatter()
                 fallback.formatOptions = [.withInternetDateTime]
-                if let date = fallback.date(from: value) { return date }
-                let spaced = DateFormatter()
-                spaced.locale = Locale(identifier: "en_US_POSIX")
-                spaced.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
-                if let date = spaced.date(from: value) { return date }
+                if let date = fallback.date(from: value) {
+                    return date
+                }
             }
         }
+        
         return nil
     }
     
@@ -453,13 +496,19 @@ class EmailScanningService: ObservableObject {
         let subject = message.subject ?? ""
         let plainBody = message.plainTextBody ?? ""
         let htmlBody = message.htmlBody ?? ""
-        let body = !plainBody.isEmpty ? plainBody : htmlBody
+        var body = !plainBody.isEmpty ? plainBody : htmlBody
+        // When body is empty (e.g. HTML not extracted from nested multipart), use Gmail snippet so we still
+        // detect "new docket" and docket numbers that appear in the preview (subject + snippet are what we have)
+        if body.isEmpty, let snippet = message.snippet, !snippet.isEmpty {
+            body = snippet
+            print("  Using snippet as body fallback for parsing (\(snippet.count) chars)")
+        }
         
         print("EmailScanningService: Parsing email:")
         print("  Subject: \(subject)")
         print("  Plain body length: \(plainBody.count)")
         print("  HTML body length: \(htmlBody.count)")
-        print("  Using body: \(!plainBody.isEmpty ? "plain" : (!htmlBody.isEmpty ? "HTML" : "none"))")
+        print("  Using body: \(!plainBody.isEmpty ? "plain" : (!htmlBody.isEmpty ? "HTML" : (body.isEmpty ? "none" : "snippet")))")
         if !body.isEmpty {
         print("  Body preview: \(body.prefix(200))")
         } else {
@@ -479,6 +528,21 @@ class EmailScanningService: ObservableObject {
             } else {
                 // No existing notification - try to get the original sender from the thread
                 // Fetch the thread to get the first message (original sender)
+                // #region agent log
+                do {
+                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "processEmail_calling_getThread", "data": ["threadId": threadId], "hypothesisId": "H2"]
+                    if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                        let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                        if !FileManager.default.fileExists(atPath: path) { try? Data().write(to: URL(fileURLWithPath: path)) }
+                        if let stream = OutputStream(url: URL(fileURLWithPath: path), append: true) {
+                            stream.open()
+                            defer { stream.close() }
+                            let out = (line + "\n").data(using: .utf8)!
+                            _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                        }
+                    }
+                }
+                // #endregion
                 do {
                     let thread = try await gmailService.getThread(threadId: threadId)
                     if let messages = thread.messages, let firstMessage = messages.first {
@@ -500,6 +564,22 @@ class EmailScanningService: ObservableObject {
             body: body,
             from: originalSenderEmail
         )
+        // #region agent log
+        if parsedDocket == nil {
+            let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "parseEmail returned nil", "data": ["subjectLen": subject.count, "bodyLen": body.count, "bodyEmpty": body.isEmpty], "hypothesisId": "H5"]
+            if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                let url = URL(fileURLWithPath: path)
+                if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                if let stream = OutputStream(url: url, append: true) {
+                    stream.open()
+                    defer { stream.close() }
+                    let out = (line + "\n").data(using: .utf8)!
+                    _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                }
+            }
+        }
+        // #endregion
         
         // Check for multiple docket numbers in the parsed result
         if let docketNum = parsedDocket?.docketNumber {
@@ -1066,6 +1146,35 @@ class EmailScanningService: ObservableObject {
         }
     }
 
+    /// Load persisted rate limit retry-after; only apply if still in the future
+    private func loadRateLimitRetryAfter() {
+        let stored = UserDefaults.standard.double(forKey: rateLimitRetryAfterKey)
+        guard stored > 0 else { return }
+        let date = Date(timeIntervalSince1970: stored)
+        if date > Date() {
+            lastRateLimitRetryAfter = date
+        } else {
+            UserDefaults.standard.removeObject(forKey: rateLimitRetryAfterKey)
+        }
+    }
+
+    /// Persist rate limit retry-after so it survives app restart
+    private func saveRateLimitRetryAfter(_ date: Date) {
+        UserDefaults.standard.set(date.timeIntervalSince1970, forKey: rateLimitRetryAfterKey)
+    }
+
+    /// Clear in-memory and persisted rate limit so we don't block after cooldown has passed or after a successful scan
+    private func clearRateLimitRetryAfter() {
+        lastRateLimitRetryAfter = nil
+        UserDefaults.standard.removeObject(forKey: rateLimitRetryAfterKey)
+    }
+
+    /// Call when the countdown has reached 0 so the banner disappears without requiring a new scan
+    func clearExpiredRateLimitIfNeeded() {
+        guard let retryAfter = lastRateLimitRetryAfter, retryAfter <= Date() else { return }
+        clearRateLimitRetryAfter()
+    }
+
     /// Save processed email IDs to UserDefaults
     private func saveProcessedEmailIds() {
         if let data = try? JSONEncoder().encode(processedEmailIds) {
@@ -1142,8 +1251,40 @@ class EmailScanningService: ObservableObject {
     /// Scan for unread docket emails and create notifications (used when opening notification window)
     /// - Parameter forceRescan: If true, will rescan emails even if they already have notifications (useful after clearing all)
     func scanUnreadEmails(forceRescan: Bool = false) async {
+        // #region agent log
+        do {
+            let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails entry", "data": ["forceRescan": forceRescan], "hypothesisId": "H5"]
+            if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                let url = URL(fileURLWithPath: path)
+                if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                if let stream = OutputStream(url: url, append: true) {
+                    stream.open()
+                    defer { stream.close() }
+                    let out = (line + "\n").data(using: .utf8)!
+                    _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                }
+            }
+        }
+        // #endregion
         guard let settingsManager = settingsManager else {
             print("EmailScanningService: ERROR - settingsManager is nil")
+            // #region agent log
+            do {
+                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "settingsManager nil"], "hypothesisId": "H5"]
+                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                    let url = URL(fileURLWithPath: path)
+                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                    if let stream = OutputStream(url: url, append: true) {
+                        stream.open()
+                        defer { stream.close() }
+                        let out = (line + "\n").data(using: .utf8)!
+                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                    }
+                }
+            }
+            // #endregion
             return
         }
         
@@ -1151,24 +1292,93 @@ class EmailScanningService: ObservableObject {
         
         guard settings.gmailEnabled else {
             print("EmailScanningService: Gmail not enabled")
+            // #region agent log
+            do {
+                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "gmailEnabled false"], "hypothesisId": "H5"]
+                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                    let url = URL(fileURLWithPath: path)
+                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                    if let stream = OutputStream(url: url, append: true) {
+                        stream.open()
+                        defer { stream.close() }
+                        let out = (line + "\n").data(using: .utf8)!
+                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                    }
+                }
+            }
+            // #endregion
             return
         }
         
         guard gmailService.isAuthenticated else {
             print("EmailScanningService: Gmail not authenticated")
+            // #region agent log
+            do {
+                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "gmail not authenticated"], "hypothesisId": "H5"]
+                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                    let url = URL(fileURLWithPath: path)
+                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                    if let stream = OutputStream(url: url, append: true) {
+                        stream.open()
+                        defer { stream.close() }
+                        let out = (line + "\n").data(using: .utf8)!
+                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                    }
+                }
+            }
+            // #endregion
             return
         }
         
         guard let notificationCenter = notificationCenter else {
             print("EmailScanningService: ERROR - notificationCenter is nil")
+            // #region agent log
+            do {
+                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "notificationCenter nil"], "hypothesisId": "H5"]
+                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                    let url = URL(fileURLWithPath: path)
+                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                    if let stream = OutputStream(url: url, append: true) {
+                        stream.open()
+                        defer { stream.close() }
+                        let out = (line + "\n").data(using: .utf8)!
+                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                    }
+                }
+            }
+            // #endregion
             return
+        }
+        
+        // Clear expired cooldown so banner goes away; never block scan — user can always try; Google returns 429 if still limited
+        let now = Date()
+        if let retryAfter = lastRateLimitRetryAfter, retryAfter <= now {
+            clearRateLimitRetryAfter()
         }
         
         do {
             // Scan all unread emails to find new docket emails
             let query = "is:unread"
             print("EmailScanningService: Scanning all unread emails for new docket notifications")
-            
+            // #region agent log
+            do {
+                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "calling fetchEmails", "data": ["query": query], "hypothesisId": "H2"]
+                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                    let url = URL(fileURLWithPath: path)
+                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                    if let stream = OutputStream(url: url, append: true) {
+                        stream.open()
+                        defer { stream.close() }
+                        let out = (line + "\n").data(using: .utf8)!
+                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                    }
+                }
+            }
+            // #endregion
             // Fetch all unread emails
             let messageRefs = try await gmailService.fetchEmails(
                 query: query,
@@ -1176,9 +1386,41 @@ class EmailScanningService: ObservableObject {
             )
             
             print("EmailScanningService: Found \(messageRefs.count) unread emails")
+            // #region agent log
+            do {
+                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "fetchEmails result", "data": ["messageRefsCount": messageRefs.count], "hypothesisId": "H5"]
+                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                    let url = URL(fileURLWithPath: path)
+                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                    if let stream = OutputStream(url: url, append: true) {
+                        stream.open()
+                        defer { stream.close() }
+                        let out = (line + "\n").data(using: .utf8)!
+                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                    }
+                }
+            }
+            // #endregion
             
             guard !messageRefs.isEmpty else {
                 print("EmailScanningService: No unread emails found")
+                // #region agent log
+                do {
+                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "no unread emails"], "hypothesisId": "H5"]
+                    if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                        let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                        let url = URL(fileURLWithPath: path)
+                        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                        if let stream = OutputStream(url: url, append: true) {
+                            stream.open()
+                            defer { stream.close() }
+                            let out = (line + "\n").data(using: .utf8)!
+                            _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                        }
+                    }
+                }
+                // #endregion
                 return
             }
             
@@ -1210,6 +1452,22 @@ class EmailScanningService: ObservableObject {
             var failedCount = 0
             var interactedCount = 0
             
+            // #region agent log
+            do {
+                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails loop start", "data": ["initialEmailsCount": initialEmails.count, "existingCount": existingEmailIds.count], "hypothesisId": "H5"]
+                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                    let url = URL(fileURLWithPath: path)
+                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                    if let stream = OutputStream(url: url, append: true) {
+                        stream.open()
+                        defer { stream.close() }
+                        let out = (line + "\n").data(using: .utf8)!
+                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                    }
+                }
+            }
+            // #endregion
             for message in initialEmails {
                 // Skip if notification already exists for this email (unless force rescan)
                 if !forceRescan && existingEmailIds.contains(message.id) {
@@ -1241,6 +1499,23 @@ class EmailScanningService: ObservableObject {
                 
                 // Process email as new docket email
                 print("EmailScanningService: Email \(message.id) - attempting to process as new docket email...")
+                // #region agent log
+                do {
+                    let subj = message.subject ?? ""
+                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "calling processEmailAndCreateNotification", "data": ["emailId": message.id, "subjectLen": subj.count, "subjectPreview": String(subj.prefix(80))], "hypothesisId": "H5"]
+                    if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                        let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                        let url = URL(fileURLWithPath: path)
+                        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                        if let stream = OutputStream(url: url, append: true) {
+                            stream.open()
+                            defer { stream.close() }
+                            let out = (line + "\n").data(using: .utf8)!
+                            _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                        }
+                    }
+                }
+                // #endregion
                 let isNewDocket = await processEmailAndCreateNotification(message)
                 
                 if isNewDocket {
@@ -1257,6 +1532,10 @@ class EmailScanningService: ObservableObject {
             
             print("EmailScanningService: Summary - Created: \(createdCount), Skipped: \(skippedCount), Failed: \(failedCount), Interacted: \(interactedCount)")
             
+            // Scan completed successfully; update last scan time (so UI and 30s debounce work) and clear cooldown
+            lastScanTime = Date()
+            clearRateLimitRetryAfter()
+            
             // After scanning emails, check for grabbed replies immediately
             // (in addition to the periodic check)
             if let grabbedService = notificationCenter.grabbedIndicatorService {
@@ -1269,6 +1548,44 @@ class EmailScanningService: ObservableObject {
         } catch {
             print("EmailScanningService: Error scanning unread emails: \(error.localizedDescription)")
             let errorMessage = error.localizedDescription
+            // Remember rate-limit retry-after so we don't hammer the API (same as scanNow)
+            if let retryAfter = parseRetryAfterDate(from: errorMessage) {
+                // #region agent log
+                do {
+                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "setting lastRateLimitRetryAfter", "data": ["retryAfter": retryAfter.timeIntervalSince1970, "now": Date().timeIntervalSince1970], "hypothesisId": "H3"]
+                    if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                        let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                        let url = URL(fileURLWithPath: path)
+                        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                        if let stream = OutputStream(url: url, append: true) {
+                            stream.open()
+                            defer { stream.close() }
+                            let out = (line + "\n").data(using: .utf8)!
+                            _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                        }
+                    }
+                }
+                // #endregion
+                lastRateLimitRetryAfter = retryAfter
+                saveRateLimitRetryAfter(retryAfter)
+                print("EmailScanningService: Rate limited - will retry after \(retryAfter)")
+            }
+            // #region agent log
+            do {
+                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails catch", "data": ["error": errorMessage, "errorType": String(describing: type(of: error))], "hypothesisId": "H5"]
+                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
+                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+                    let url = URL(fileURLWithPath: path)
+                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+                    if let stream = OutputStream(url: url, append: true) {
+                        stream.open()
+                        defer { stream.close() }
+                        let out = (line + "\n").data(using: .utf8)!
+                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+                    }
+                }
+            }
+            // #endregion
             DispatchQueue.main.async {
                 self.lastError = errorMessage
             }

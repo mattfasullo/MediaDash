@@ -636,7 +636,7 @@ class AsanaService: ObservableObject {
         repeat {
             var components = URLComponents(string: "\(baseURL)/workspaces/\(resolvedWorkspaceID)/tasks/search")!
             var queryItems: [URLQueryItem] = [
-                URLQueryItem(name: "opt_fields", value: "gid,name,due_on,due_at,memberships,custom_fields,modified_at,created_at,completed,parent,assignee,assignee.name,tags,tags.name,tags.color"),
+                URLQueryItem(name: "opt_fields", value: "gid,name,due_on,due_at,memberships,memberships.project,memberships.project.name,custom_fields,modified_at,created_at,completed,parent,assignee,assignee.name,tags,tags.name,tags.color"),
                 URLQueryItem(name: "limit", value: "\(limit)"),
                 URLQueryItem(name: "text", value: "SESSION"),  // Search for tasks with "SESSION" in name
                 URLQueryItem(name: "due_on.after", value: yesterdayString),  // Exclusive, so use yesterday to include today

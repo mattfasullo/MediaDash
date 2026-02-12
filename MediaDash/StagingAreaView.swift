@@ -9,6 +9,7 @@ struct StagingAreaView: View {
     @ObservedObject var cacheManager: AsanaCacheManager
     @Binding var isStagingHovered: Bool
     @Binding var isStagingPressed: Bool
+    @Binding var showVideoConverterSheet: Bool
     @Environment(\.layoutMode) var layoutMode
     @Environment(\.windowSize) var windowSize
     
@@ -151,7 +152,8 @@ struct StagingAreaView: View {
                         StagingFileListView(
                             manager: manager,
                             showBatchRenameSheet: $showBatchRenameSheet,
-                            filesToRename: $filesToRename
+                            filesToRename: $filesToRename,
+                            showVideoConverterSheet: $showVideoConverterSheet
                         )
                         
                         // Drag overlay when files are being dragged
@@ -384,6 +386,7 @@ struct StagingFileListView: View {
     @State private var treeNodes: [FileTreeNode] = []
     @Binding var showBatchRenameSheet: Bool
     @Binding var filesToRename: [FileItem]
+    @Binding var showVideoConverterSheet: Bool
     
     // Supported thumbnail extensions
     private let thumbnailExtensions = ["jpg", "jpeg", "png", "gif", "heic", "mp4", "mov", "m4v", "avi", "mkv", "mxf"]
@@ -397,7 +400,8 @@ struct StagingFileListView: View {
                     selectedFileId: $selectedFileId,
                     thumbnailExtensions: thumbnailExtensions,
                     filesToRename: $filesToRename,
-                    showBatchRenameSheet: $showBatchRenameSheet
+                    showBatchRenameSheet: $showBatchRenameSheet,
+                    showVideoConverterSheet: $showVideoConverterSheet
                 )
             }
         }
@@ -469,6 +473,7 @@ struct TreeNodeView: View {
     let thumbnailExtensions: [String]
     @Binding var filesToRename: [FileItem]
     @Binding var showBatchRenameSheet: Bool
+    @Binding var showVideoConverterSheet: Bool
     
     var body: some View {
         if node.file.isDirectory {
@@ -480,7 +485,8 @@ struct TreeNodeView: View {
                         selectedFileId: $selectedFileId,
                         thumbnailExtensions: thumbnailExtensions,
                         filesToRename: $filesToRename,
-                        showBatchRenameSheet: $showBatchRenameSheet
+                        showBatchRenameSheet: $showBatchRenameSheet,
+                        showVideoConverterSheet: $showVideoConverterSheet
                     )
                 }
             } label: {
@@ -489,7 +495,8 @@ struct TreeNodeView: View {
                     manager: manager,
                     isSelected: selectedFileId == node.file.id,
                     supportsThumbnail: false,
-                    onRename: nil
+                    onRename: nil,
+                    showVideoConverterSheet: $showVideoConverterSheet
                 )
                 .tag(node.file.id)
             }
@@ -507,7 +514,8 @@ struct TreeNodeView: View {
                 onRename: {
                     filesToRename = [node.file]
                     showBatchRenameSheet = true
-                }
+                },
+                showVideoConverterSheet: $showVideoConverterSheet
             )
             .tag(node.file.id)
         }
@@ -522,6 +530,10 @@ struct StagingFileRow: View {
     let isSelected: Bool
     let supportsThumbnail: Bool
     var onRename: (() -> Void)?
+    @Binding var showVideoConverterSheet: Bool
+    
+    // Video file extensions
+    private let videoExtensions = ["mp4", "mov", "avi", "mxf", "m4v", "prores"]
     
     var body: some View {
         ZStack(alignment: .leading) {
@@ -600,6 +612,17 @@ struct StagingFileRow: View {
             Button("Remove from Staging") {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     manager.removeFile(withId: file.id)
+                }
+            }
+            
+            // Show context menu for video files
+            if !file.isDirectory {
+                let ext = file.url.pathExtension.lowercased()
+                if videoExtensions.contains(ext) {
+                    Divider()
+                    Button("Convert Video") {
+                        showVideoConverterSheet = true
+                    }
                 }
             }
             

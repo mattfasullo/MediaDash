@@ -181,14 +181,14 @@ struct DesktopToolbar: View {
                     .frame(height: 28)
                 
                 ToolbarActionButton(
-                    title: "Convert",
-                    subtitle: "Video",
+                    title: "Portal",
+                    subtitle: "",
                     icon: "film.fill",
                     color: Color(red: 0.50, green: 0.25, blue: 0.25),
                     shortcut: "⌘4",
                     disabled: false
                 ) {
-                    showVideoConverterSheet = true
+                    // Portal functionality to be implemented later
                 }
             }
             

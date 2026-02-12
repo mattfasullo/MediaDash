@@ -1,5 +1,20 @@
 import Foundation
 
+// #region agent log
+private func _parserLog(_ message: String, _ data: [String: Any], _ hypothesisId: String) {
+    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailDocketParser", "message": message, "data": data, "hypothesisId": hypothesisId]
+    guard let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) else { return }
+    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+    let url = URL(fileURLWithPath: path)
+    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+    guard let stream = OutputStream(url: url, append: true) else { return }
+    stream.open()
+    defer { stream.close() }
+    let out = (line + "\n").data(using: .utf8)!
+    _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
+}
+// #endregion
+
 /// Result of parsing an email for docket information
 struct ParsedDocket {
     let docketNumber: String
@@ -61,6 +76,10 @@ struct EmailDocketParser {
     func parseEmail(subject: String?, body: String?, from: String?) -> ParsedDocket? {
         let subjectText = subject ?? ""
         var bodyText = body ?? ""
+        // #region agent log
+        let preview = String(bodyText.prefix(120)).replacingOccurrences(of: "\n", with: " ")
+        _parserLog("parseEmail entry", ["subjectLen": subjectText.count, "bodyLen": bodyText.count, "bodyPreview": preview], "H5")
+        // #endregion
         
         // If body is empty but subject contains "Fwd:" or "Re:", try to extract from subject
         // Forwarded emails might have the docket info in the subject line
@@ -77,9 +96,18 @@ struct EmailDocketParser {
         bodyText = bodyText.replacingOccurrences(of: #"</tr>"#, with: "", options: .regularExpression)
         bodyText = bodyText.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression) // Remove remaining HTML tags
         bodyText = bodyText.replacingOccurrences(of: #"&nbsp;"#, with: " ", options: .regularExpression)
-        bodyText = bodyText.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression) // Normalize whitespace
+        // Normalize horizontal whitespace but preserve newlines so "26052 Job Name" on line 2 is still matchable
+        bodyText = bodyText.replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+        bodyText = bodyText.replacingOccurrences(of: #"\n+"#, with: "\n", options: .regularExpression)
         
         let combinedText = "\(subjectText)\n\(bodyText)"
+        
+        // A new-docket email is defined by ALL THREE: (1) contains "new", (2) contains "docket", (3) contains a valid docket number
+        let searchText = combinedText.lowercased()
+        let hasNewAndDocket = searchText.contains("new") && searchText.contains("docket")
+        // #region agent log
+        _parserLog("hasNewAndDocket", ["hasNewAndDocket": hasNewAndDocket, "hasNew": searchText.contains("new"), "hasDocket": searchText.contains("docket"), "searchTextLen": searchText.count], "H1")
+        // #endregion
         
         // First, try to extract docket number from body (like "25484-US")
         var extractedDocketNumber: String?
@@ -206,6 +234,11 @@ struct EmailDocketParser {
                 return nil
             }
             
+            // #region agent log
+            if !hasNewAndDocket { _parserLog("rejected path", ["path": "body_subject_combination", "reason": "hasNewAndDocket false", "docketNumber": docketNumber], "H2") }
+            // #endregion
+            guard hasNewAndDocket else { return nil }
+            _parserLog("parsed ok", ["method": "body_subject_combination", "docketNumber": docketNumber], "H2")
             return ParsedDocket(
                 docketNumber: docketNumber,
                 jobName: finalJobName,
@@ -256,6 +289,11 @@ struct EmailDocketParser {
                     continue
                 }
                 
+                // #region agent log
+                if !hasNewAndDocket { _parserLog("rejected path", ["path": "pattern_match", "reason": "hasNewAndDocket false", "docketNumber": parsed.docketNumber], "H2") }
+                // #endregion
+                guard hasNewAndDocket else { continue }
+                _parserLog("parsed ok", ["method": "pattern_match", "docketNumber": parsed.docketNumber], "H2")
                 return ParsedDocket(
                     docketNumber: parsed.docketNumber,
                     jobName: parsed.jobName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -277,7 +315,7 @@ struct EmailDocketParser {
             let foundInEmail = subjectText.contains(parsed.docketNumber) || bodyText.contains(parsed.docketNumber)
             
             // Validate: docket number must have valid year format and be found in email
-            if isValidYearBasedDocket(parsed.docketNumber) && foundInEmail {
+            if isValidYearBasedDocket(parsed.docketNumber) && foundInEmail && hasNewAndDocket {
                 return ParsedDocket(
                     docketNumber: parsed.docketNumber,
                     jobName: parsed.jobName,
@@ -300,25 +338,12 @@ struct EmailDocketParser {
             }
         }
         
-        // Final fallback: Search for docket numbers anywhere, even without "new docket" text
-        // This handles cases where producers just write the docket info in the body without mentioning "new docket"
-        // Also check if body contains "new docket" (case-insensitive)
-        let hasNewDocketText = subjectText.uppercased().contains("NEW DOCKET") || 
-                               subjectText.uppercased().contains("DOCKET") ||
-                               bodyText.uppercased().contains("NEW DOCKET") ||
-                               bodyText.uppercased().contains("NEW DOCKET -") ||
-                               bodyText.lowercased().contains("new docket") ||
-                               bodyText.lowercased().contains("new docket -")
-        
-        // Be more aggressive: if we find a 5+ digit number that looks like a docket (starts with valid year prefixes),
-        // treat it as a potential docket even without "new docket" text
-        let validYearPrefixes = getValidYearPrefixes()
-        let yearPrefixPattern = validYearPrefixes.map { String(format: "%02d", $0) }.joined(separator: "|")
-        let docketYearPattern = "\\b(\(yearPrefixPattern))\\d{3,}\\b"
-        let hasPotentialDocketNumber = bodyText.range(of: docketYearPattern, options: .regularExpression) != nil ||
-                                      subjectText.range(of: docketYearPattern, options: .regularExpression) != nil
-        
-        if hasNewDocketText || hasPotentialDocketNumber {
+        // Final fallback: only when email has BOTH "new" and "docket" (any order), search for a docket number.
+        // All three define a new-docket email: "new" + "docket" + valid docket number.
+        if hasNewAndDocket {
+            // #region agent log
+            _parserLog("fallback enter", ["searchTextLen": searchText.count], "H3")
+            // #endregion
             // Search for docket numbers (5+ digits, optionally with country code) anywhere in subject or body
             // Also match 4+ digit numbers at word boundaries (some dockets might be 4 digits)
             let docketPattern = #"\b(\d{4,}(?:-[A-Z]{2})?)\b"#
@@ -382,23 +407,20 @@ struct EmailDocketParser {
                 }
                 
                 // If not found in table format, search all matches in body
+                // Prefer 5-digit numbers that pass year validation (real dockets); skip 6+ digit numbers (often URLs/IDs)
                 if foundDocketNumber == nil {
                     if let regex = try? NSRegularExpression(pattern: docketPattern, options: []) {
                         let matches = regex.matches(in: bodyText, range: NSRange(bodyText.startIndex..., in: bodyText))
                         
-                        // Prefer 5+ digit numbers, but accept 4+ digit numbers
                         for match in matches {
                             guard match.numberOfRanges >= 2 else { continue }
                             let docketRange = Range(match.range(at: 1), in: bodyText)!
                             let candidate = String(bodyText[docketRange])
                             
-                            // Prefer 5+ digit numbers
-                            if candidate.count >= 5 {
+                            // Only accept exactly 5 digits that pass year check; 6+ digits are usually IDs/URLs
+                            if candidate.count == 5 && isValidYearBasedDocket(candidate) {
                                 foundDocketNumber = candidate
                                 break
-                            } else if foundDocketNumber == nil {
-                                // Accept 4 digit numbers as fallback
-                                foundDocketNumber = candidate
                             }
                         }
                     }
@@ -543,12 +565,20 @@ struct EmailDocketParser {
                 }
             }
             
+            // Require a valid docket number: all three (new + docket + number) define a new-docket email
+            guard foundDocketNumber != nil else {
+                // #region agent log
+                _parserLog("fallback exit", ["reason": "foundDocketNumber nil"], "H4")
+                // #endregion
+                return nil
+            }
+            _parserLog("parsed ok", ["method": "new_docket_with_number", "docketNumber": finalDocketNumber], "H2")
             return ParsedDocket(
                 docketNumber: finalDocketNumber,
                 jobName: finalJobName,
                 sourceEmail: from ?? "unknown",
                 rawData: [
-                    "method": foundDocketNumber != nil ? "new_docket_with_number" : "new_docket_label_fallback",
+                    "method": "new_docket_with_number",
                     "subject": subjectText,
                     "body": bodyText,
                     "has_docket_number": foundDocketNumber != nil,
@@ -560,7 +590,9 @@ struct EmailDocketParser {
                 ]
             )
         }
-        
+        // #region agent log
+        _parserLog("parse nil end", ["hasNewAndDocket": hasNewAndDocket, "reason": "no match or fallback not entered"], "H1")
+        // #endregion
         return nil
     }
     

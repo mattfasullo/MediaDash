@@ -31,6 +31,7 @@ struct SidebarView: View {
     @EnvironmentObject var sessionManager: SessionManager
     @EnvironmentObject var emailScanningService: EmailScanningService
     @EnvironmentObject var manager: MediaManager
+    @ObservedObject private var keyboardFocus = MainWindowKeyboardFocus.shared
     var focusedButton: FocusState<ActionButtonFocus?>.Binding
     var mainViewFocused: FocusState<Bool>.Binding
     @Binding var isKeyboardMode: Bool
@@ -55,7 +56,9 @@ struct SidebarView: View {
     var onOpenPrep: (() -> Void)? = nil
     /// Open full 2-week Asana calendar view.
     var onOpenFullCalendar: (() -> Void)? = nil
-    
+    /// Open Portal sheet (media layups hub).
+    var onOpenPortal: (() -> Void)? = nil
+
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
     }
@@ -141,7 +144,8 @@ struct SidebarView: View {
                             )
                         }
                     },
-                    onFileThenPrep: onFileThenPrep
+                    onFileThenPrep: onFileThenPrep,
+                    onOpenPortal: onOpenPortal ?? {}
                 )
                 .draggableLayout(id: "actionButtons")
 
@@ -155,7 +159,7 @@ struct SidebarView: View {
                         icon: "magnifyingglass",
                         title: "Search",
                         shortcut: "⌘F",
-                        isFocused: focusedButton.wrappedValue == .search,
+                        isFocused: keyboardFocus.focusedButton == .search,
                         showShortcut: isCommandKeyHeld,
                         action: { showSearchSheet = true }
                     )
@@ -174,7 +178,7 @@ struct SidebarView: View {
                         icon: "number.circle",
                         title: "Job Info",
                         shortcut: "⌘D",
-                        isFocused: focusedButton.wrappedValue == .jobInfo,
+                        isFocused: keyboardFocus.focusedButton == .jobInfo,
                         showShortcut: isCommandKeyHeld,
                         action: { showQuickSearchSheet = true }
                     )
@@ -193,7 +197,7 @@ struct SidebarView: View {
                         icon: "archivebox",
                         title: "Archiver",
                         shortcut: "⌘⇧A",
-                        isFocused: focusedButton.wrappedValue == .archiver,
+                        isFocused: keyboardFocus.focusedButton == .archiver,
                         showShortcut: isCommandKeyHeld,
                         action: { SimianArchiverWindowManager.shared.show(settingsManager: settingsManager) }
                     )

@@ -13,6 +13,8 @@ class GmailService: ObservableObject {
     private var refreshTask: Task<String, Error>? // Shared task to prevent race conditions
     private var lastRateLimitRetryAfter: Date?
     
+    private static let agentLogPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
+
     private func debugLog(_ location: String, message: String, data: [String: Any], hypothesisId: String, runId: String = "run2") {
         // #region agent log
         let payload: [String: Any] = [
@@ -26,11 +28,36 @@ class GmailService: ObservableObject {
         ]
         if let json = try? JSONSerialization.data(withJSONObject: payload),
            let line = String(data: json, encoding: .utf8) {
-            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log")) {
+            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: GmailService.agentLogPath)) {
                 handle.seekToEndOfFile()
                 handle.write((line + "\n").data(using: .utf8) ?? Data())
                 try? handle.close()
             }
+        }
+        // #endregion
+    }
+
+    /// Log every Gmail API call for app-wide rate-limit debugging (H1/H3/H5)
+    private func agentLogApiCall(method: String, data: [String: Any] = [:]) {
+        // #region agent log
+        var d = data
+        d["method"] = method
+        let payload: [String: Any] = [
+            "hypothesisId": "H1",
+            "location": "GmailService",
+            "message": "gmail_api_call",
+            "data": d,
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: payload),
+              let line = String(data: json, encoding: .utf8) else { return }
+        let path = GmailService.agentLogPath
+        if !FileManager.default.fileExists(atPath: path) { try? Data().write(to: URL(fileURLWithPath: path)) }
+        if let stream = OutputStream(url: URL(fileURLWithPath: path), append: true) {
+            stream.open()
+            defer { stream.close() }
+            let out = (line + "\n").data(using: .utf8)!
+            _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
         }
         // #endregion
     }
@@ -186,16 +213,10 @@ class GmailService: ObservableObject {
             throw GmailError.notAuthenticated
         }
 
-        if let retryAfter = lastRateLimitRetryAfter, retryAfter > Date() {
-            debugLog(
-                "GmailService.makeAuthenticatedRequest:skip",
-                message: "rate limited - skipping request",
-                data: [
-                    "retryAfter": retryAfter.timeIntervalSince1970
-                ],
-                hypothesisId: "H3"
-            )
-            throw GmailError.apiError("Gmail rate limit exceeded. Retry after \(retryAfter)")
+        // Clear expired cooldown only; never block the request — let Google return 429 if still rate limited
+        let now = Date()
+        if let retryAfter = lastRateLimitRetryAfter, retryAfter <= now {
+            lastRateLimitRetryAfter = nil
         }
         
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -272,6 +293,7 @@ class GmailService: ObservableObject {
     ///   - maxResults: Maximum number of results to return (default: 10)
     /// - Returns: Array of message references
     func fetchEmails(query: String, maxResults: Int = 10) async throws -> [GmailMessageReference] {
+        agentLogApiCall(method: "fetchEmails", data: ["maxResults": maxResults])
         isFetching = true
         lastError = nil
         defer { isFetching = false }
@@ -325,6 +347,7 @@ class GmailService: ObservableObject {
     /// - Parameter messageId: The message ID from fetchEmails
     /// - Returns: Full GmailMessage object
     func getEmail(messageId: String) async throws -> GmailMessage {
+        agentLogApiCall(method: "getEmail")
         isFetching = true
         lastError = nil
         defer { isFetching = false }
@@ -363,6 +386,7 @@ class GmailService: ObservableObject {
     /// - Parameter threadId: The thread ID
     /// - Returns: Full GmailThread object with all messages
     func getThread(threadId: String) async throws -> GmailThread {
+        agentLogApiCall(method: "getThread")
         isFetching = true
         lastError = nil
         defer { isFetching = false }

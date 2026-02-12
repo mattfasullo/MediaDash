@@ -174,16 +174,23 @@ extension GmailMessagePart {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
-    /// Get HTML body content
+    /// Get HTML body content (recursively searches nested parts, e.g. multipart/mixed → multipart/alternative → text/html)
     func getHTMLBody() -> String? {
         if mimeType == "text/html", let body = body, let data = body.data {
             return decodeBase64Url(data)
         }
         
         if let parts = parts {
+            // First try direct text/html children
             for part in parts {
-                if part.mimeType == "text/html" {
-                    return part.getHTMLBody()
+                if part.mimeType == "text/html", let html = part.getHTMLBody() {
+                    return html
+                }
+            }
+            // Recurse into nested parts (e.g. multipart/alternative) so we don't miss HTML when structure is nested
+            for part in parts {
+                if let html = part.getHTMLBody() {
+                    return html
                 }
             }
         }

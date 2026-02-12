@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ActionButtonsView: View {
     @EnvironmentObject var settingsManager: SettingsManager
+    @ObservedObject private var keyboardFocus = MainWindowKeyboardFocus.shared
     var focusedButton: FocusState<ActionButtonFocus?>.Binding
     var mainViewFocused: FocusState<Bool>.Binding
     @Binding var isKeyboardMode: Bool
@@ -20,9 +21,21 @@ struct ActionButtonsView: View {
     var onOpenFullCalendar: () -> Void = {}
     /// Right-click "File + Prep": file first, then open prep for a matching calendar session.
     var onFileThenPrep: (() -> Void)? = nil
-    
+    /// Open Portal sheet (media layups: video conversion, restriping, Simian).
+    var onOpenPortal: () -> Void = {}
+
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
+    }
+    
+    /// Washed-out forest green color for calendar button, matching the muted style of other buttons
+    private var calendarButtonColor: Color {
+        switch currentTheme {
+        case .modern:
+            return Color(red: 0.30, green: 0.45, blue: 0.30)  // Washed-out forest green
+        case .retroDesktop:
+            return Color(red: 0.25, green: 0.55, blue: 0.35)  // Slightly brighter forest green for retro
+        }
     }
     
     var body: some View {
@@ -35,7 +48,7 @@ struct ActionButtonsView: View {
                     shortcut: "⌘1",
                     color: currentTheme.buttonColors.file,
                     isPrimary: false,
-                    isFocused: focusedButton.wrappedValue == .file,
+                    isFocused: keyboardFocus.focusedButton == .file,
                     showShortcut: isCommandKeyHeld,
                     theme: currentTheme,
                     iconName: "folder"
@@ -70,7 +83,7 @@ struct ActionButtonsView: View {
                     shortcut: "⌘2",
                     color: currentTheme.buttonColors.prep,
                     isPrimary: false,
-                    isFocused: focusedButton.wrappedValue == .prep,
+                    isFocused: keyboardFocus.focusedButton == .prep,
                     showShortcut: isCommandKeyHeld,
                     theme: currentTheme,
                     iconName: "list.clipboard"
@@ -98,9 +111,9 @@ struct ActionButtonsView: View {
                     title: "Calendar",
                     subtitle: "2 weeks",
                     shortcut: "⌘3",
-                    color: currentTheme.buttonColors.prep,
+                    color: calendarButtonColor,
                     isPrimary: false,
-                    isFocused: focusedButton.wrappedValue == .calendar,
+                    isFocused: keyboardFocus.focusedButton == .calendar,
                     showShortcut: isCommandKeyHeld,
                     theme: currentTheme,
                     iconName: "calendar"
@@ -122,17 +135,17 @@ struct ActionButtonsView: View {
                 .keyboardShortcut("3", modifiers: .command)
 
                 ActionButtonWithShortcut(
-                    title: "Convert Video",
-                    subtitle: "ProRes Proxy",
+                    title: "Portal",
+                    subtitle: "",
                     shortcut: "⌘4",
                     color: Color(red: 0.50, green: 0.25, blue: 0.25),  // Subtle dark red
                     isPrimary: false,
-                    isFocused: focusedButton.wrappedValue == .convert,
+                    isFocused: keyboardFocus.focusedButton == .convert,
                     showShortcut: isCommandKeyHeld,
                     theme: currentTheme,
                     iconName: "film"
                 ) {
-                    showVideoConverterSheet = true
+                    onOpenPortal()
                 }
                 .focused(focusedButton, equals: .convert)
                 .focusEffectDisabled()
@@ -143,7 +156,7 @@ struct ActionButtonsView: View {
                         isKeyboardMode = false
                     }
                     hoverInfo = hovering ?
-                        "Convert videos" :
+                        "Media layups: video conversion, restriping, Simian" :
                         "Ready."
                 }
                 .keyboardShortcut("4", modifiers: .command)

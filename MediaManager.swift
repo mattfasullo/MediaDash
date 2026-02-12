@@ -2269,20 +2269,24 @@ class MediaManager: ObservableObject {
 
         statusMessage = "Moving originals to z_unconverted..."
 
-        // Copy video files directly to z_unconverted (they should have been skipped during prep)
+        // Move video files to z_unconverted (they should have been skipped during prep)
         for (videoURL, _) in pending.videoFiles {
             let filename = videoURL.lastPathComponent
             let unconvertedPath = unconvertedFolder.appendingPathComponent(filename)
-
-            // Copy source directly to z_unconverted (should not be in picture folder)
-            if !fm.fileExists(atPath: unconvertedPath.path) {
-                try? fm.copyItem(at: videoURL, to: unconvertedPath)
-            }
-            
-            // If file somehow ended up in picture folder, remove it
             let picturePath = pictureFolder.appendingPathComponent(filename)
+
+            // Priority 1: If file exists in PICTURE folder (duplicate), MOVE it to z_unconverted
             if fm.fileExists(atPath: picturePath.path) {
-                try? fm.removeItem(at: picturePath)
+                if !fm.fileExists(atPath: unconvertedPath.path) {
+                    // Move the duplicate from PICTURE to z_unconverted
+                    try? fm.moveItem(at: picturePath, to: unconvertedPath)
+                } else {
+                    // File already in z_unconverted, just remove the duplicate from PICTURE
+                    try? fm.removeItem(at: picturePath)
+                }
+            } else if !fm.fileExists(atPath: unconvertedPath.path) {
+                // Priority 2: File not in PICTURE, copy from source to z_unconverted
+                try? fm.copyItem(at: videoURL, to: unconvertedPath)
             }
 
             // Add source file to converter to create ProRes version in PICTURE folder

@@ -895,6 +895,111 @@ class SimianService: ObservableObject {
         }
     }
 
+    /// Upload a single file to a Simian project (root or into a folder).
+    /// - Parameters:
+    ///   - projectId: Simian project ID
+    ///   - folderId: Optional folder ID (nil = project root)
+    ///   - fileURL: Local file URL to upload
+    /// - Returns: Uploaded file ID from response
+    func uploadFile(projectId: String, folderId: String?, fileURL: URL) async throws -> String {
+        try await ensureAuthenticated()
+
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+
+        let endpointURL = base.appendingPathComponent("upload_file").appendingPathComponent(projectId)
+        let boundary = "SimianBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        var body = Data()
+
+        func appendPart(name: String, value: String) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+            body.append(value.data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+
+        appendPart(name: "auth_token", value: authToken)
+        appendPart(name: "auth_key", value: authKey)
+        if let folderId = folderId, !folderId.isEmpty {
+            appendPart(name: "folder_id", value: folderId)
+        }
+
+        let filename = fileURL.lastPathComponent
+        guard let fileData = try? Data(contentsOf: fileURL) else {
+            throw SimianError.apiError("Could not read file: \(fileURL.path)")
+        }
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"Filedata\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
+        request.httpBody = body
+
+        let uploadSession: URLSession
+        if fileData.count > 50 * 1024 * 1024 {
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 300
+            config.timeoutIntervalForResource = 3600
+            config.httpCookieStorage = HTTPCookieStorage.shared
+            uploadSession = URLSession(configuration: config)
+        } else {
+            uploadSession = session
+        }
+
+        let (data, response) = try await uploadSession.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SimianError.apiError("Invalid response from API")
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
+            throw SimianError.apiError("Upload failed: \(errorMessage)")
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let root = json["root"] as? [String: Any] else {
+            let snippet = String(data: data.prefix(200), encoding: .utf8) ?? ""
+            throw SimianError.apiError("Invalid upload response (missing root). Response: \(snippet)")
+        }
+
+        let status = root["status"] as? String ?? ""
+        let message = root["message"] as? String ?? ""
+        guard status.lowercased() == "success" else {
+            throw SimianError.apiError("Upload failed: \(message)")
+        }
+
+        // API may return file_id, id, or only a link (all indicate success)
+        let payload = root["payload"] as? [String: Any]
+        if let dict = payload {
+            if let s = dict["file_id"] as? String, !s.isEmpty { return s }
+            if let s = dict["id"] as? String, !s.isEmpty { return s }
+            if let n = dict["file_id"] as? Int { return String(n) }
+            if let n = dict["id"] as? Int { return String(n) }
+            if let link = dict["link"] as? String, !link.isEmpty {
+                // Extract last path component as id if present (e.g. .../1328/137962 -> 137962)
+                let parts = link.split(separator: "/")
+                if let last = parts.last, last.allSatisfy(\.isNumber) { return String(last) }
+                return link
+            }
+        }
+        if let s = root["file_id"] as? String, !s.isEmpty { return s }
+        if let s = root["id"] as? String, !s.isEmpty { return s }
+
+        // Success with no file_id (e.g. payload only has "link") — treat as success
+        return "uploaded"
+    }
+
     /// Get files in a project folder
     func getProjectFiles(projectId: String, folderId: String? = nil) async throws -> [SimianFile] {
         try await ensureAuthenticated()

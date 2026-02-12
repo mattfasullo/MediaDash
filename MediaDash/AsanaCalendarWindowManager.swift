@@ -46,7 +46,7 @@ final class AsanaCalendarWindowManager: NSObject, ObservableObject, NSWindowDele
             backing: .buffered,
             defer: false
         )
-        window.title = "Asana Calendar"
+        window.title = "Session Prep"
         window.contentView = hostingView
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)

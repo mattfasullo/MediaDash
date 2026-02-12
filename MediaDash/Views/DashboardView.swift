@@ -304,13 +304,13 @@ struct DashboardTopBar: View {
                 }
                 
                 DashboardQuickAction(
-                    title: "Convert",
+                    title: "Portal",
                     icon: "film.fill",
                     color: Color(red: 0.50, green: 0.25, blue: 0.35),
                     shortcut: "⌘4",
                     disabled: false
                 ) {
-                    showVideoConverterSheet = true
+                    // Portal functionality to be implemented later
                 }
             }
             
@@ -640,13 +640,13 @@ struct AsanaTaskRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         // Docket number badge
-                        Text(docket.number)
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        Text(docket.displayNumber)
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundColor(.white)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
                             .background(projectColor)
-                            .cornerRadius(3)
+                            .cornerRadius(4)
                         
                         // Job name
                         Text(docket.jobName)
@@ -842,11 +842,11 @@ struct CalendarDocketRow: View {
     
     var body: some View {
         HStack(spacing: 10) {
-            Text(docket.number)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+            Text(docket.displayNumber)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundColor(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
                 .background(Color.blue)
                 .cornerRadius(4)
             
@@ -1119,11 +1119,11 @@ struct RecentDocketRow: View {
     var body: some View {
         HStack(spacing: 10) {
             // Docket number
-            Text(docket.number)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+            Text(docket.displayNumber)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundColor(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
                 .background(Color.blue)
                 .cornerRadius(4)
             
@@ -1871,13 +1871,13 @@ struct DashboardNotificationCard: View {
     @ViewBuilder
     private var docketBadge: some View {
         if let docketNumber = notification.docketNumber, docketNumber != "TBD" {
-            Text(docketNumber)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+            Text(stripCountrySuffix(from: docketNumber))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundColor(.white)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
                 .background(typeColor)
-                .cornerRadius(3)
+                .cornerRadius(4)
         }
     }
     
@@ -2014,6 +2014,15 @@ struct DashboardNotificationCard: View {
         let year = Calendar.current.component(.year, from: Date()) % 100
         let random = Int.random(in: 100...999)
         return "\(year)\(random)"
+    }
+    
+    /// Strip country suffixes from docket numbers (e.g., "25464-US" -> "25464")
+    private func stripCountrySuffix(from docketNumber: String) -> String {
+        // Remove country suffixes like -US, -CA, -UK, etc. (1-3 uppercase letters after a dash)
+        if let range = docketNumber.range(of: #"-\p{Lu}{1,3}$"#, options: .regularExpression) {
+            return String(docketNumber[..<range.lowerBound])
+        }
+        return docketNumber
     }
 }
 

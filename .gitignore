@@ -36,6 +36,9 @@ dsa_priv.pem
 .LSOverride
 ._*
 
+# Cursor
+.cursor/debug.log
+
 # Temporary files
 *.swp
 *.swo

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 // #region agent log
 private func _debugLogWP(_ message: String, _ data: [String: Any], _ hypothesisId: String) {
@@ -200,8 +201,15 @@ struct NotificationCenterView: View {
                 gmailDisabledBanner
             } else if gmailEnabled && !isGmailConnected {
                 gmailNotConnectedBanner
+            } else if gmailEnabled && isGmailConnected, let retryAfter = emailScanningService.lastRateLimitRetryAfter, retryAfter > Date() {
+                rateLimitBanner(retryAfter: retryAfter)
             }
         }
+    }
+    
+    /// Banner shown when Gmail API rate limit is active, with live countdown
+    private func rateLimitBanner(retryAfter: Date) -> some View {
+        RateLimitCountdownView(retryAfter: retryAfter, emailScanningService: emailScanningService)
     }
     
     private var gmailDisabledBanner: some View {
@@ -370,6 +378,13 @@ struct NotificationCenterView: View {
                         .foregroundColor(.secondary)
                         .padding(.top, 4)
                 }
+                
+                Button(action: triggerManualScan) {
+                    Label("Scan for new dockets", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .padding(.top, 8)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -408,6 +423,12 @@ struct NotificationCenterView: View {
                             Text("No new docket notifications")
                                 .font(.system(size: 14))
                                 .foregroundColor(.secondary)
+                            Button(action: triggerManualScan) {
+                                Label("Scan for new dockets", systemImage: "arrow.clockwise")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.regular)
+                            .padding(.top, 4)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 40)
@@ -819,12 +840,16 @@ struct NotificationCenterView: View {
                 await emailScanningService.scanUnreadEmails(forceRescan: false)
                 isScanningEmails = false
                 
-                // Update status message
-                let activeCount = notificationCenter.activeNotifications.count
-                if activeCount == 0 {
-                    lastScanStatus = "No unread docket emails found"
+                // Update status: show rate limit message if scan was skipped, else scan result
+                if let retryAfter = emailScanningService.lastRateLimitRetryAfter, retryAfter > Date() {
+                    lastScanStatus = emailScanningService.lastError ?? "Scan skipped (rate limited). Use the timer above."
                 } else {
-                    lastScanStatus = "Found \(activeCount) notification\(activeCount == 1 ? "" : "s")"
+                    let activeCount = notificationCenter.activeNotifications.count
+                    if activeCount == 0 {
+                        lastScanStatus = "No unread docket emails found"
+                    } else {
+                        lastScanStatus = "Found \(activeCount) notification\(activeCount == 1 ? "" : "s")"
+                    }
                 }
             }
         } else {
@@ -835,6 +860,27 @@ struct NotificationCenterView: View {
             } else {
                 let minutesAgo = timeAgo / 60
                 lastScanStatus = "Last scan: \(minutesAgo)m ago"
+            }
+        }
+    }
+    
+    /// Manual refresh: scan for new docket emails (force rescan). Call from Refresh button or empty-state "Scan" button.
+    private func triggerManualScan() {
+        guard !isScanningEmails else { return }
+        Task {
+            isScanningEmails = true
+            lastScanStatus = nil
+            await emailScanningService.scanUnreadEmails(forceRescan: true)
+            isScanningEmails = false
+            if let retryAfter = emailScanningService.lastRateLimitRetryAfter, retryAfter > Date() {
+                lastScanStatus = emailScanningService.lastError ?? "Scan skipped (rate limited)."
+            } else {
+                let activeCount = notificationCenter.activeNotifications.count
+                if activeCount == 0 {
+                    lastScanStatus = "No new docket emails found"
+                } else {
+                    lastScanStatus = "Found \(activeCount) notification\(activeCount == 1 ? "" : "s")"
+                }
             }
         }
     }
@@ -880,198 +926,11 @@ struct NotificationCenterView: View {
             return
         }
         
-        // Scan all unread emails to find new docket emails
-        let query = "is:unread"
-        
-        debugMessages.append("🔍 Query Configuration:")
-        debugMessages.append("  Query: \(query) (scanning all unread emails)")
+        debugMessages.append("ℹ️ Gmail API is only used for new docket search.")
+        debugMessages.append("   This debug panel does not fetch emails (no extra API calls).")
+        debugMessages.append("   Use \"Scan for new dockets\" to run the real scan.")
         debugMessages.append("")
-        
-        // Try to fetch emails
-        do {
-            debugMessages.append("📧 Fetching emails...")
-            let messageRefs = try await emailScanningService.gmailService.fetchEmails(
-                query: query,
-                maxResults: 50
-            )
-            debugMessages.append("  ✅ Found \(messageRefs.count) email reference(s)")
-            debugMessages.append("")
-            
-            if messageRefs.isEmpty {
-                // Try fallback query
-                debugMessages.append("🔄 Trying fallback query (subject only)...")
-                let fallbackQuery = "subject:\"New Docket\" is:unread"
-                let fallbackRefs = try await emailScanningService.gmailService.fetchEmails(
-                    query: fallbackQuery,
-                    maxResults: 50
-                )
-                debugMessages.append("  ✅ Found \(fallbackRefs.count) email reference(s) with fallback")
-                debugMessages.append("")
-                
-                if fallbackRefs.isEmpty {
-                    debugMessages.append("⚠️  No unread emails found with either query")
-                    debugInfo = debugMessages.joined(separator: "\n")
-                    isScanningEmails = false
-                    return
-                }
-            }
-            
-            // Get full messages
-            debugMessages.append("📨 Fetching full email messages...")
-            let messages = try await emailScanningService.gmailService.getEmails(
-                messageReferences: messageRefs
-            )
-            debugMessages.append("  ✅ Fetched \(messages.count) full message(s)")
-            debugMessages.append("")
-            
-            // Check unread status
-            debugMessages.append("📬 Checking unread status:")
-            let unreadMessages = messages.filter { message in
-                guard let labelIds = message.labelIds else { return false }
-                return labelIds.contains("UNREAD")
-            }
-            debugMessages.append("  Total messages: \(messages.count)")
-            debugMessages.append("  Unread messages: \(unreadMessages.count)")
-            debugMessages.append("")
-            
-            // Show sample email info
-            if !unreadMessages.isEmpty {
-                debugMessages.append("📋 Sample unread email(s):")
-                for (index, message) in unreadMessages.prefix(3).enumerated() {
-                    debugMessages.append("  \(index + 1). ID: \(message.id)")
-                    debugMessages.append("     Subject: \(message.subject ?? "(no subject)")")
-                    debugMessages.append("     From: \(message.from ?? "(unknown)")")
-                    debugMessages.append("     Labels: \(message.labelIds?.joined(separator: ", ") ?? "none")")
-                    
-                    // Show body preview to check for docket numbers
-                    let plainBody = message.plainTextBody ?? ""
-                    let htmlBody = message.htmlBody ?? ""
-                    let bodyPreview = !plainBody.isEmpty ? plainBody : htmlBody
-                    
-                    if !bodyPreview.isEmpty {
-                        let preview = String(bodyPreview.prefix(500))
-                        debugMessages.append("     Body preview (\(bodyPreview.count) chars):")
-                        debugMessages.append("     \(preview)")
-                        if bodyPreview.count > 500 {
-                            debugMessages.append("     ... (truncated)")
-                        }
-                    } else {
-                        debugMessages.append("     Body: (empty - may need format=full in API request)")
-                        debugMessages.append("     Snippet: \(message.snippet ?? "(none)")")
-                    }
-                }
-                debugMessages.append("")
-            }
-            
-            // Check existing notifications
-            let existingEmailIds = Set(notificationCenter.notifications.compactMap { $0.emailId })
-            debugMessages.append("🔔 Notification Check:")
-            debugMessages.append("  Existing notifications: \(notificationCenter.notifications.count)")
-            debugMessages.append("  Existing email IDs: \(existingEmailIds.count)")
-            debugMessages.append("")
-            
-            // Try to process emails
-            debugMessages.append("⚙️  Processing emails...")
-            var createdCount = 0
-            var skippedCount = 0
-            var failedCount = 0
-            var parseFailures: [String] = []
-            var docketExistsCount = 0
-            
-            for message in unreadMessages {
-                if existingEmailIds.contains(message.id) {
-                    skippedCount += 1
-                    debugMessages.append("  ⏭️  Email \(message.id): Already has notification")
-                    continue
-                }
-                
-                // Try to parse the email first to see why it might fail
-                let subject = message.subject ?? ""
-                let body = message.plainTextBody ?? message.htmlBody ?? ""
-                
-                // Use parser with custom patterns if configured
-                let settings = settingsManager.currentSettings
-                let patterns = settings.docketParsingPatterns
-                let parser = patterns.isEmpty ? EmailDocketParser() : EmailDocketParser(patterns: patterns)
-                
-                let parsed = parser.parseEmail(
-                    subject: message.subject,
-                    body: body,
-                    from: message.from
-                )
-                
-                if let parsedDocket = parsed {
-                    // Check if docket already exists
-                    if parsedDocket.docketNumber != "TBD",
-                       mediaManager.dockets.contains("\(parsedDocket.docketNumber)_\(parsedDocket.jobName)") {
-                        docketExistsCount += 1
-                        debugMessages.append("  ⚠️  Email \(message.id): Docket already exists")
-                        debugMessages.append("     Subject: \(subject)")
-                        debugMessages.append("     Docket: \(parsedDocket.docketNumber)_\(parsedDocket.jobName)")
-                        continue
-                    }
-                } else {
-                    parseFailures.append(subject)
-                    debugMessages.append("  ❌ Email \(message.id): Failed to parse")
-                    debugMessages.append("     Subject: \(subject)")
-                    debugMessages.append("     From: \(message.from ?? "(unknown)")")
-                    debugMessages.append("     Body preview: \(body.prefix(100))...")
-                    debugMessages.append("     (No docket pattern matched)")
-                }
-                
-                // Try to process the email
-                let success = await emailScanningService.processEmailAndCreateNotification(message)
-                if success {
-                    createdCount += 1
-                    debugMessages.append("  ✅ Email \(message.id): Created notification")
-                    debugMessages.append("     Subject: \(subject)")
-                    if let parsed = parsed {
-                        debugMessages.append("     Docket: \(parsed.docketNumber) - \(parsed.jobName)")
-                    }
-                } else {
-                    failedCount += 1
-                    if parsed == nil {
-                        debugMessages.append("     (Parse failed - see above)")
-                    } else {
-                        debugMessages.append("     (Processing failed)")
-                    }
-                }
-            }
-            
-            debugMessages.append("")
-            debugMessages.append("📊 Summary:")
-            debugMessages.append("  Created: \(createdCount)")
-            debugMessages.append("  Skipped: \(skippedCount)")
-            debugMessages.append("  Failed to parse: \(parseFailures.count)")
-            debugMessages.append("  Docket already exists: \(docketExistsCount)")
-            debugMessages.append("  Other failures: \(failedCount)")
-            
-            let finalCount = notificationCenter.notifications.count
-            debugMessages.append("  ✅ Final notification count: \(finalCount)")
-            
-            // Update last scan status
-            await MainActor.run {
-                if createdCount > 0 {
-                    lastScanStatus = "✅ Found \(createdCount) new notification\(createdCount == 1 ? "" : "s")"
-                } else if unreadMessages.isEmpty {
-                    lastScanStatus = "⚠️ No unread emails found"
-                } else if parseFailures.count > 0 {
-                    lastScanStatus = "⚠️ \(parseFailures.count) email\(parseFailures.count == 1 ? "" : "s") couldn't be parsed"
-                } else if docketExistsCount > 0 {
-                    lastScanStatus = "⚠️ \(docketExistsCount) docket\(docketExistsCount == 1 ? "" : "s") already exist"
-                } else {
-                    lastScanStatus = "ℹ️ Scan completed - no new notifications"
-                }
-            }
-            
-        } catch {
-            debugMessages.append("")
-            debugMessages.append("❌ ERROR:")
-            debugMessages.append("  \(error.localizedDescription)")
-            if let gmailError = error as? GmailError {
-                debugMessages.append("  Type: \(gmailError)")
-            }
-        }
+        debugMessages.append("🔔 Current notifications: \(notificationCenter.notifications.count)")
         
         debugInfo = debugMessages.joined(separator: "\n")
         isScanningEmails = false
@@ -3138,6 +2997,64 @@ struct NotificationRowView: View {
         
         // Fallback: return as-is if we can't parse it
         return sourceEmail
+    }
+}
+
+// MARK: - Rate limit countdown (Timer-based to avoid TimelineView name collision)
+private struct RateLimitCountdownView: View {
+    let retryAfter: Date
+    weak var emailScanningService: EmailScanningService?
+    @State private var now = Date()
+    
+    private func rateLimitCountdownText(remaining: TimeInterval, retryAfter date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let timeStr = formatter.string(from: date)
+        if remaining > 0 {
+            let mins = Int(remaining) / 60
+            let secs = Int(remaining) % 60
+            if mins > 0 {
+                return "Try again in \(mins)m \(secs)s (after \(timeStr))"
+            } else {
+                return "Try again in \(secs)s (after \(timeStr))"
+            }
+        } else {
+            return "You can scan again now"
+        }
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "clock.badge.exclamationmark")
+                    .foregroundColor(.orange)
+                    .font(.system(size: 14))
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Gmail rate limit")
+                        .font(.system(size: 12, weight: .medium))
+                    Text(rateLimitCountdownText(remaining: max(0, retryAfter.timeIntervalSince(now)), retryAfter: retryAfter))
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.orange.opacity(0.12))
+            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+                now = Date()
+                if max(0, retryAfter.timeIntervalSince(now)) <= 0 {
+                    emailScanningService?.clearExpiredRateLimitIfNeeded()
+                }
+            }
+            .onAppear {
+                now = Date()
+            }
+            
+            Divider()
+        }
     }
 }
 

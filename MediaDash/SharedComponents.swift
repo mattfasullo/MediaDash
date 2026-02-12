@@ -167,6 +167,15 @@ struct DocketInfo: Identifiable, Hashable, Codable {
     /// Whether the Asana task is completed. When true, calendar shows a check and greys out the row.
     let completed: Bool?
     
+    /// Display number with country suffixes removed (e.g., "25464-US" -> "25464")
+    var displayNumber: String {
+        // Remove country suffixes like -US, -CA, -UK, etc. (1-3 uppercase letters after a dash)
+        if let range = number.range(of: #"-\p{Lu}{1,3}$"#, options: .regularExpression) {
+            return String(number[..<range.lowerBound])
+        }
+        return number
+    }
+    
     nonisolated init(id: UUID = UUID(), number: String, jobName: String, fullName: String, updatedAt: Date? = nil, createdAt: Date? = nil, metadataType: String? = nil, subtasks: [DocketSubtask]? = nil, projectMetadata: ProjectMetadata? = nil, dueDate: String? = nil, taskGid: String? = nil, studio: String? = nil, studioColor: String? = nil, completed: Bool? = nil) {
         self.id = id
         self.number = number
@@ -358,6 +367,59 @@ struct ProjectMetadata: Codable, Hashable {
         case team
         case customFields = "custom_fields"
     }
+}
+
+// MARK: - Docket Hub Data Models
+
+struct DocketHubData {
+    let docketNumber: String
+    let jobName: String
+    
+    // Aggregated data (no email/Gmail — that lives only in the notification centre)
+    let asanaTasks: [DocketHubAsanaTask]
+    let simianProjects: [DocketHubSimianProject]
+    let serverFolders: [DocketHubServerFolder]
+    
+    // Metadata (from existing DocketMetadata)
+    let metadata: DocketMetadata?
+}
+
+struct DocketHubAsanaTask: Identifiable {
+    let id: String // taskGid
+    let taskGid: String
+    let name: String
+    let projectName: String?
+    let projectGid: String?
+    let dueDate: String?
+    let completed: Bool
+    let customFields: [String: String]
+    let assignee: String?
+    let notes: String?
+    let tags: [String]?
+    let url: URL? // Asana task URL
+}
+
+struct DocketHubSimianProject: Identifiable {
+    let id: String // projectId
+    let projectId: String
+    let name: String
+    let projectNumber: String?
+    let uploadDate: String?
+    let startDate: String?
+    let completeDate: String?
+    let lastAccess: String?
+    let projectSize: String?
+    let fileCount: Int
+    let folderStructure: [SimianFile]?
+}
+
+struct DocketHubServerFolder: Identifiable {
+    let id: String // path string
+    let path: URL
+    let folderName: String
+    let fileCount: Int
+    let lastModified: Date?
+    let folderType: String? // e.g., "WORK PICTURE", "PREP", etc.
 }
 
 // MARK: - Search Result Row

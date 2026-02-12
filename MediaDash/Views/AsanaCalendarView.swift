@@ -84,16 +84,35 @@ struct AsanaCalendarView: View {
             
             // Convert AsanaTask sessions to DocketInfo for display
             let dockets = sessionsForDate.map { session -> DocketInfo in
-                // Extract docket number from session name (e.g., "SESSION - 21419 Client Name")
-                let docketNumber = extractDocketNumber(from: session.name) ?? "SESSION"
+                // Extract docket number with priority:
+                // 1. From session name (e.g., "SESSION - 21419 Client Name")
+                // 2. From custom fields
+                // 3. From project name (e.g., "25464_TD Insurance Golden Ticket")
+                // 4. Fallback to "—"
+                var docketNumber = extractDocketNumber(from: session.name) ?? extractDocketFromCustomFields(session)
+                
+                // Try to extract from project name if not found
+                if docketNumber == nil, let memberships = session.memberships {
+                    for membership in memberships {
+                        if let projectName = membership.project?.name, !projectName.isEmpty {
+                            if let projectDocket = extractDocketNumber(from: projectName) {
+                                docketNumber = projectDocket
+                                break
+                            }
+                        }
+                    }
+                }
+                
+                let finalDocketNumber = docketNumber ?? "—"
                 let jobName = cleanSessionName(session.name)
+                
                 // Studio from task tags (e.g. "A - Blue", "B - Green", "C - Red", "M4 - Fuchsia")
                 let firstTag = session.tags?.first
                 let studio = firstTag?.name
                 let studioColor = firstTag?.color
                 
                 return DocketInfo(
-                    number: docketNumber,
+                    number: finalDocketNumber,
                     jobName: jobName,
                     fullName: session.name,
                     updatedAt: session.modified_at,
@@ -124,14 +143,87 @@ struct AsanaCalendarView: View {
     
     /// Extract docket number from session name (e.g., "SESSION - 21419 Client" -> "21419")
     private func extractDocketNumber(from name: String) -> String? {
-        // Pattern: 5 digits, optionally followed by -XX suffix (like -US, -CA)
-        let pattern = #"\d{5}(?:-[A-Z]{1,3})?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: name, options: [], range: NSRange(name.startIndex..., in: name)),
-              let range = Range(match.range, in: name) else {
-            return nil
+        // First try: Pattern for 5 digits (standard), optionally followed by -XX suffix (like -US, -CA)
+        let standardPattern = #"\d{5}(?:-[A-Z]{1,3})?"#
+        if let regex = try? NSRegularExpression(pattern: standardPattern, options: []) {
+            let nsString = name as NSString
+            let range = NSRange(location: 0, length: nsString.length)
+            if let match = regex.firstMatch(in: name, options: [], range: range),
+               let swiftRange = Range(match.range, in: name) {
+                return String(name[swiftRange])
+            }
         }
-        return String(name[range])
+        
+        // Fallback: Try 4-6 digits (more flexible for edge cases)
+        let flexiblePattern = #"\d{4,6}(?:-[A-Z]{1,3})?"#
+        if let regex = try? NSRegularExpression(pattern: flexiblePattern, options: []) {
+            let nsString = name as NSString
+            let range = NSRange(location: 0, length: nsString.length)
+            if let match = regex.firstMatch(in: name, options: [], range: range),
+               let swiftRange = Range(match.range, in: name) {
+                let found = String(name[swiftRange])
+                // Prefer 5-digit matches, but accept 4-6 if that's all we find
+                return found
+            }
+        }
+        
+        return nil
+    }
+    
+    /// Try to extract docket number from custom fields if not found in name
+    private func extractDocketFromCustomFields(_ session: AsanaTask) -> String? {
+        // First, check common custom field names for docket number
+        let docketFieldNames = ["Docket", "Docket Number", "Docket #", "Docket#", "Job Number", "Job #"]
+        for fieldName in docketFieldNames {
+            if let value = session.getCustomFieldValue(name: fieldName), !value.isEmpty {
+                // Extract just the number part if it contains other text
+                if let number = extractDocketNumber(from: value) {
+                    return number
+                }
+                // If it's already just a number (5 digits with optional suffix), return it
+                if value.range(of: #"^\d{5}(?:-[A-Z]{1,3})?$"#, options: .regularExpression) != nil {
+                    return value
+                }
+                // Also check for any sequence of 4-6 digits (more flexible)
+                if let flexibleMatch = value.range(of: #"\d{4,6}(?:-[A-Z]{1,3})?"#, options: .regularExpression) {
+                    return String(value[flexibleMatch])
+                }
+                // If the value looks like it might be a docket number (starts with digits), try to extract it
+                let trimmed = value.trimmingCharacters(in: .whitespaces)
+                if trimmed.range(of: #"^\d"#, options: .regularExpression) != nil {
+                    // Extract first sequence of digits
+                    if let digitMatch = trimmed.range(of: #"\d+"#, options: .regularExpression) {
+                        let digits = String(trimmed[digitMatch])
+                        // If it's 4-6 digits, use it
+                        if digits.count >= 4 && digits.count <= 6 {
+                            return digits
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If not found in named fields, check ALL custom fields for values that look like docket numbers
+        if let customFields = session.custom_fields {
+            for field in customFields {
+                guard let value = field.display_value, !value.isEmpty else { continue }
+                // Skip if this field name contains "name" or "description" (likely not a docket number)
+                let fieldNameLower = field.name.lowercased()
+                if fieldNameLower.contains("name") || fieldNameLower.contains("description") || fieldNameLower.contains("note") {
+                    continue
+                }
+                // Check if value looks like a docket number
+                if let number = extractDocketNumber(from: value) {
+                    return number
+                }
+                // Check for 4-6 digit sequences
+                if let flexibleMatch = value.range(of: #"\d{4,6}(?:-[A-Z]{1,3})?"#, options: .regularExpression) {
+                    return String(value[flexibleMatch])
+                }
+            }
+        }
+        
+        return nil
     }
     
     /// Clean session name for display (remove "SESSION - " prefix, docket number, etc.)
@@ -154,7 +246,7 @@ struct AsanaCalendarView: View {
             HStack {
                 Image(systemName: "calendar")
                     .font(.system(size: 18, weight: .medium))
-                Text("Asana Calendar")
+                Text("Session Prep")
                     .font(.system(size: 16, weight: .semibold))
                 Spacer()
                 Button(action: {
@@ -345,13 +437,25 @@ struct AsanaCalendarRow: View {
                         .foregroundColor(.secondary)
                         .frame(width: 12)
                     
-                    Text(docket.number)
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(projectColor)
-                        .cornerRadius(3)
+                    // Docket number badge - always visible
+                    if docket.number != "—" && !docket.number.isEmpty {
+                        Text(docket.displayNumber)
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(projectColor)
+                            .cornerRadius(4)
+                    } else {
+                        // Show a placeholder when docket number is not found
+                        Text("No #")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.secondary.opacity(0.2))
+                            .cornerRadius(4)
+                    }
                     
                     VStack(alignment: .leading, spacing: 2) {
                         Text(docket.jobName)

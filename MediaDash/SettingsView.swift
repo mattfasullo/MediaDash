@@ -2061,29 +2061,12 @@ struct GmailIntegrationSection: View {
         
         Task {
             do {
-                // Always scan all unread emails for testing
-                let query = "is:unread"
-                
-                // Fetch a few emails to test the connection
-                let messageRefs = try await gmailService.fetchEmails(query: query, maxResults: 5)
-                
-                if messageRefs.isEmpty {
-                    await MainActor.run {
-                        testResult = "Connection successful! No emails found matching query: \(query)"
-                        testError = nil
-                        isTestingConnection = false
-                    }
-                } else {
-                    // Get full details of first email
-                    let firstMessage = try await gmailService.getEmail(messageId: messageRefs.first!.id)
-                    
-                    await MainActor.run {
-                        let subject = firstMessage.subject ?? "No subject"
-                        let from = firstMessage.from ?? "Unknown sender"
-                        testResult = "Connection successful! Found \(messageRefs.count) email(s).\n\nSample email:\nFrom: \(from)\nSubject: \(subject)"
-                        testError = nil
-                        isTestingConnection = false
-                    }
+                // Test connection with a single lightweight call (no fetchEmails/getEmail — Gmail API is only for new docket search)
+                let email = try await gmailService.getUserEmail()
+                await MainActor.run {
+                    testResult = "Connection successful! Authenticated as \(email)"
+                    testError = nil
+                    isTestingConnection = false
                 }
             } catch {
                 await MainActor.run {

@@ -29,9 +29,15 @@ struct AsanaFullCalendarView: View {
     @State private var sessionsSectionExpanded = true
     @State private var mediaTasksSectionExpanded = true
     @State private var otherTasksSectionExpanded = true
-    @State private var filterSessions = true
-    @State private var filterMediaTasks = true
-    @State private var filterOtherTasks = true
+    
+    // Filter states with UserDefaults persistence
+    private static let filterSessionsKey = "asanaFullCalendar.filterSessions"
+    private static let filterMediaTasksKey = "asanaFullCalendar.filterMediaTasks"
+    private static let filterOtherTasksKey = "asanaFullCalendar.filterOtherTasks"
+    
+    @State private var filterSessions = UserDefaults.standard.object(forKey: Self.filterSessionsKey) as? Bool ?? true
+    @State private var filterMediaTasks = UserDefaults.standard.object(forKey: Self.filterMediaTasksKey) as? Bool ?? true
+    @State private var filterOtherTasks = UserDefaults.standard.object(forKey: Self.filterOtherTasksKey) as? Bool ?? true
 
     private static let dateOnlyFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -208,15 +214,33 @@ struct AsanaFullCalendarView: View {
             Text("Show:")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary)
-            Toggle("Sessions", isOn: $filterSessions)
-                .toggleStyle(.checkbox)
-                .controlSize(.small)
-            Toggle("Media Tasks", isOn: $filterMediaTasks)
-                .toggleStyle(.checkbox)
-                .controlSize(.small)
-            Toggle("Other Tasks", isOn: $filterOtherTasks)
-                .toggleStyle(.checkbox)
-                .controlSize(.small)
+            Toggle("Sessions", isOn: Binding(
+                get: { filterSessions },
+                set: { newValue in
+                    filterSessions = newValue
+                    UserDefaults.standard.set(newValue, forKey: Self.filterSessionsKey)
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            Toggle("Media Tasks", isOn: Binding(
+                get: { filterMediaTasks },
+                set: { newValue in
+                    filterMediaTasks = newValue
+                    UserDefaults.standard.set(newValue, forKey: Self.filterMediaTasksKey)
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            Toggle("Other Tasks", isOn: Binding(
+                get: { filterOtherTasks },
+                set: { newValue in
+                    filterOtherTasks = newValue
+                    UserDefaults.standard.set(newValue, forKey: Self.filterOtherTasksKey)
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
         }
     }
 

@@ -8,6 +8,51 @@ enum ActionButtonFocus: Hashable {
     case file, prep, calendar, convert, search, jobInfo, archiver
 }
 
+/// Shared keyboard focus state so the NSEvent key handler can update focus and the view observes it.
+/// @FocusState does not reliably update when set from the key-down monitor path.
+final class MainWindowKeyboardFocus: ObservableObject {
+    static let shared = MainWindowKeyboardFocus()
+    @Published var focusedButton: ActionButtonFocus?
+    private init() {}
+
+    /// Same logic as ContentView.moveGridFocus; returns the next focus so the key handler can set focusedButton.
+    static func nextFocus(from current: ActionButtonFocus?, direction: ContentView.GridDirection) -> ActionButtonFocus? {
+        let cur = current ?? .file
+        switch direction {
+        case .up:
+            switch cur {
+            case .file, .prep: return .archiver
+            case .calendar: return .file
+            case .convert: return .prep
+            case .search: return .calendar
+            case .jobInfo: return .search
+            case .archiver: return .jobInfo
+            }
+        case .down:
+            switch cur {
+            case .file: return .calendar
+            case .prep: return .convert
+            case .calendar, .convert: return .search
+            case .search: return .jobInfo
+            case .jobInfo: return .archiver
+            case .archiver: return .file
+            }
+        case .left:
+            switch cur {
+            case .prep: return .file
+            case .convert: return .calendar
+            default: return cur
+            }
+        case .right:
+            switch cur {
+            case .file: return .prep
+            case .calendar: return .convert
+            default: return cur
+            }
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var metadataManager: DocketMetadataManager
@@ -20,6 +65,7 @@ struct ContentView: View {
     @State private var showQuickSearchSheet = false
     @State private var showSettingsSheet = false
     @State private var showVideoConverterSheet = false
+    @State private var showPortalSheet = false
     @State private var showAlert = false
     @State private var alertMessage = ""
     @State private var hoverInfo: String = "Ready."
@@ -42,6 +88,7 @@ struct ContentView: View {
     @State private var pendingPrepSessionAfterFile: DocketInfo? = nil
 
     @FocusState private var focusedButton: ActionButtonFocus?
+    @ObservedObject private var keyboardFocus = MainWindowKeyboardFocus.shared
 
     // Keyboard mode tracking
     @State private var isKeyboardMode = false
@@ -114,6 +161,20 @@ struct ContentView: View {
             .environmentObject(layoutEditManager)
             .focusable()
             .focused($mainViewFocused)
+            .onAppear {
+                mainViewFocused = true
+            }
+            .onReceive(Foundation.NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+                if notification.object as? NSWindow === WindowConfiguration.mainAppWindow {
+                    mainViewFocused = true
+                }
+            }
+            .onChange(of: keyboardFocus.focusedButton) { _, newValue in
+                focusedButton = newValue
+            }
+            .onChange(of: focusedButton) { _, newValue in
+                MainWindowKeyboardFocus.shared.focusedButton = newValue
+            }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("CreateTestDocketNotification"))) { _ in
                 // Backup listener in ContentView - create test notification directly
                 print("🔔 ContentView received CreateTestDocketNotification")
@@ -149,11 +210,13 @@ struct ContentView: View {
                 focusedButton: $focusedButton,
                 moveGridFocus: moveGridFocus,
                 activateFocusedButton: activateFocusedButton,
+                performActionForFocus: performAction(for:),
                 settingsManager: settingsManager,
                 showSearchSheet: $showSearchSheet,
                 showQuickSearchSheet: $showQuickSearchSheet,
                 showSettingsSheet: $showSettingsSheet,
                 showVideoConverterSheet: $showVideoConverterSheet,
+                showPortalSheet: $showPortalSheet,
                 showNewDocketSheet: $showNewDocketSheet,
                 showDocketSelectionSheet: $showDocketSelectionSheet,
                 initialSearchText: $initialSearchText
@@ -174,11 +237,20 @@ struct ContentView: View {
                     )
                 }
             }
+            .onChange(of: manager.selectedFiles) { oldFiles, newFiles in
+                // Auto-continue filing process when files are staged after clicking File button
+                if pendingJobType != nil, !newFiles.isEmpty, oldFiles.isEmpty {
+                    // Files were just added and we have a pending job type
+                    // Automatically continue to docket selection (preserve pendingFileThenPrep state)
+                    showDocketSelectionSheet = true
+                }
+            }
             .modifier(SheetsModifier(
                 showNewDocketSheet: $showNewDocketSheet,
                 selectedDocket: $selectedDocket,
                 manager: manager,
                 settingsManager: settingsManager,
+                sessionManager: sessionManager,
                 showSearchSheet: $showSearchSheet,
                 initialSearchText: initialSearchText,
                 showDocketSelectionSheet: $showDocketSelectionSheet,
@@ -190,6 +262,7 @@ struct ContentView: View {
                 cacheManager: cacheManager,
                 showSettingsSheet: $showSettingsSheet,
                 showVideoConverterSheet: $showVideoConverterSheet,
+                showPortalSheet: $showPortalSheet,
                 pendingFileThenPrep: $pendingFileThenPrep,
                 onFileThenPrepConfirm: handleFileThenPrepConfirm
             ))
@@ -227,6 +300,7 @@ struct ContentView: View {
                             showSettings: .constant(false)
                         )
                         .environmentObject(sessionManager)
+                        .environmentObject(emailScanningService)
                     )
                     NotificationWindowManager.shared.showNotificationWindow(content: content, isLocked: false)
                 } else {
@@ -418,7 +492,8 @@ struct ContentView: View {
                                     manager: manager
                                 )
                             },
-                            onFileThenPrep: attemptFileThenPrep
+                            onFileThenPrep: attemptFileThenPrep,
+                            onOpenPortal: { showPortalSheet = true }
                         )
                         .offset(x: 0, y: -4) // Layout edit: sidebar offset
                         .draggableLayout(id: "sidebar")
@@ -426,7 +501,8 @@ struct ContentView: View {
                         StagingAreaView(
                             cacheManager: cacheManager,
                             isStagingHovered: $isStagingHovered,
-                            isStagingPressed: $isStagingPressed
+                            isStagingPressed: $isStagingPressed,
+                            showVideoConverterSheet: $showVideoConverterSheet
                         )
                         .environmentObject(manager)
                         .draggableLayout(id: "stagingArea")
@@ -597,8 +673,10 @@ struct ContentView: View {
 
     
     private func attempt(type: JobType) {
-        // 1. If no files are staged, open file picker
+        // 1. If no files are staged, set pending job type and open file picker
         guard !manager.selectedFiles.isEmpty else {
+            pendingJobType = type
+            pendingFileThenPrep = false
             manager.pickFiles()
             return
         }
@@ -612,6 +690,8 @@ struct ContentView: View {
     /// Start "File + Prep" flow: show docket sheet; on confirm, file then open prep for a matching calendar session.
     private func attemptFileThenPrep() {
         guard !manager.selectedFiles.isEmpty else {
+            pendingFileThenPrep = true
+            pendingJobType = .workPicture
             manager.pickFiles()
             return
         }
@@ -706,6 +786,7 @@ struct ContentView: View {
                 break
             }
         }
+        MainWindowKeyboardFocus.shared.focusedButton = focusedButton
     }
 
     private func moveFocus(direction: Int) {
@@ -728,9 +809,14 @@ struct ContentView: View {
     }
 
     private func activateFocusedButton() {
-        guard let focused = focusedButton else { return }
+        let focused = MainWindowKeyboardFocus.shared.focusedButton ?? focusedButton
+        guard let focused = focused else { return }
+        performAction(for: focused)
+    }
 
-        switch focused {
+    /// Performs the action for a given focus target; used so the key handler can activate from shared state.
+    private func performAction(for focus: ActionButtonFocus) {
+        switch focus {
         case .file:
             attempt(type: .workPicture)
         case .prep:
@@ -760,7 +846,7 @@ struct ContentView: View {
         case .search:
             showSearchSheet = true
         case .convert:
-            showVideoConverterSheet = true
+            showPortalSheet = true
         case .jobInfo:
             showQuickSearchSheet = true
         case .archiver:
@@ -1490,6 +1576,30 @@ struct DocketSearchView: View {
                 .sheetSizeStabilizer()
             }
         }
+        .keyboardNavigationHandler(handleKey: { event in
+            switch event.keyCode {
+            case 125: // down
+                if !filteredDockets.isEmpty {
+                    isSearchFieldFocused = false
+                    isListFocused = true
+                    moveSelection(1)
+                }
+                return true
+            case 126: // up
+                if !filteredDockets.isEmpty {
+                    isSearchFieldFocused = false
+                    isListFocused = true
+                    moveSelection(-1)
+                }
+                return true
+            case 36: // return
+                if isListFocused, let selected = selectedPath {
+                    selectDocket(selected)
+                }
+                return true
+            default: return false
+            }
+        })
         // Native Keyboard Navigation
         .onKeyPress(.upArrow) {
             if !filteredDockets.isEmpty {
@@ -2084,6 +2194,30 @@ struct SearchView: View {
             }
             return .ignored
         }
+        .keyboardNavigationHandler(handleKey: { event in
+            switch event.keyCode {
+            case 125: // down
+                if !exactResults.isEmpty || !fuzzyResults.isEmpty {
+                    isSearchFieldFocused = false
+                    isListFocused = true
+                    moveSelection(1)
+                }
+                return true
+            case 126: // up
+                if !exactResults.isEmpty || !fuzzyResults.isEmpty {
+                    isSearchFieldFocused = false
+                    isListFocused = true
+                    moveSelection(-1)
+                }
+                return true
+            case 36: // return
+                if isListFocused && selectedPath != nil {
+                    openInFinder()
+                }
+                return true
+            default: return false
+            }
+        })
         // Native Keyboard Navigation
         .onKeyPress(.upArrow) {
             if !exactResults.isEmpty || !fuzzyResults.isEmpty {
@@ -2352,6 +2486,7 @@ struct QuickDocketSearchView: View {
     @ObservedObject var cacheManager: AsanaCacheManager
     @EnvironmentObject var manager: MediaManager
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var notificationCenter: NotificationCenter
     @StateObject private var metadataManager: DocketMetadataManager
 
     @State private var searchText: String
@@ -2392,14 +2527,16 @@ struct QuickDocketSearchView: View {
             infoBarSection
         }
         .frame(minWidth: 400, idealWidth: 600, maxWidth: 700, minHeight: 300, idealHeight: 500, maxHeight: 700)
-        .sheet(isPresented: $showMetadataEditor) {
-            if let docket = selectedDocket {
-                DocketMetadataEditorView(
+        .onChange(of: showMetadataEditor) { oldValue, newValue in
+            if newValue, let docket = selectedDocket {
+                DocketHubWindowManager.shared.show(
                     docket: docket,
-                    isPresented: $showMetadataEditor,
-                    metadataManager: metadataManager
+                    metadataManager: metadataManager,
+                    cacheManager: cacheManager,
+                    settingsManager: settingsManager
                 )
-                .sheetSizeStabilizer()
+                // Reset the flag since window manager handles its own state
+                showMetadataEditor = false
             }
         }
         .onAppear {
@@ -2422,6 +2559,35 @@ struct QuickDocketSearchView: View {
             // Cancel any pending search
             searchTask?.cancel()
         }
+        .keyboardNavigationHandler(handleKey: { event in
+            switch event.keyCode {
+            case 125: // down
+                if !filteredDockets.isEmpty {
+                    isSearchFocused = false
+                    isListFocused = true
+                    moveSelection(1)
+                }
+                return true
+            case 126: // up
+                if !filteredDockets.isEmpty {
+                    isSearchFocused = false
+                    isListFocused = true
+                    moveSelection(-1)
+                }
+                return true
+            case 36: // return
+                if isListFocused, let docket = selectedDocket {
+                    if let callback = onDocketSelectedForFolder {
+                        callback(docket)
+                        isPresented = false
+                    } else {
+                        showMetadataEditor = true
+                    }
+                }
+                return true
+            default: return false
+            }
+        })
         .onKeyPress(.escape) {
             isPresented = false
             return .handled
@@ -2723,6 +2889,9 @@ struct QuickDocketSearchView: View {
                 if let callback = onDocketSelectedForFolder {
                     callback(docket)
                     isPresented = false
+                } else {
+                    // Open docket hub
+                    showMetadataEditor = true
                 }
             }) {
                 docketRowContent(docket: docket)
@@ -2747,7 +2916,7 @@ struct QuickDocketSearchView: View {
     private func docketRowContent(docket: DocketInfo) -> some View {
         HStack(spacing: 12) {
             // Number badge
-            Text(docket.number)
+            Text(docket.displayNumber)
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white)
                 .padding(.horizontal, 8)
@@ -2774,17 +2943,10 @@ struct QuickDocketSearchView: View {
 
             Spacer()
 
-            // Info button to open metadata editor
-            Button(action: {
-                selectedDocket = docket
-                showMetadataEditor = true
-            }) {
-                Image(systemName: "info.circle.fill")
-                    .foregroundColor(metadataManager.hasMetadata(for: docket.fullName) ? .blue : .secondary)
-                    .font(.caption)
-            }
-            .buttonStyle(.plain)
-            .help("View/Edit docket information")
+            // Info icon (visual indicator only, whole row is clickable)
+            Image(systemName: "info.circle.fill")
+                .foregroundColor(metadataManager.hasMetadata(for: docket.fullName) ? .blue : .secondary)
+                .font(.caption)
 
             Button(action: {
                 NSPasteboard.general.clearContents()
@@ -2795,6 +2957,9 @@ struct QuickDocketSearchView: View {
             }
             .buttonStyle(.plain)
             .help("Copy full name")
+            .highPriorityGesture(TapGesture().onEnded {
+                // Stop propagation - copy button should work independently
+            })
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
@@ -3643,6 +3808,20 @@ struct QuickDocketSearchView: View {
     }
 }
 
+// MARK: - Main window focus driver (avoids stale closure capture in key handler)
+
+/// Holds the current main-window keyboard navigation actions. Updated every time the modifier's body runs
+/// so the key handler always calls into the live ContentView state.
+final class MainWindowFocusDriver {
+    static let shared = MainWindowFocusDriver()
+    var moveGridFocus: ((ContentView.GridDirection) -> Void)?
+    var activateFocusedButton: (() -> Void)?
+    var isKeyboardModeBinding: Binding<Bool>?
+    /// For debugging: returns current focus description from the view that last updated the driver.
+    var getFocusDescription: (() -> String)?
+    private init() {}
+}
+
 // MARK: - View Modifiers
 
 struct KeyboardHandlersModifier: ViewModifier {
@@ -3650,18 +3829,62 @@ struct KeyboardHandlersModifier: ViewModifier {
     var focusedButton: FocusState<ActionButtonFocus?>.Binding
     let moveGridFocus: (ContentView.GridDirection) -> Void
     let activateFocusedButton: () -> Void
+    let performActionForFocus: (ActionButtonFocus) -> Void
     @ObservedObject var settingsManager: SettingsManager
     @Binding var showSearchSheet: Bool
     @Binding var showQuickSearchSheet: Bool
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
+    @Binding var showPortalSheet: Bool
     @Binding var showNewDocketSheet: Bool
     @Binding var showDocketSelectionSheet: Bool
     @Binding var initialSearchText: String
-    
+
     func body(content: Content) -> some View {
-        content
+        let driver = MainWindowFocusDriver.shared
+        driver.moveGridFocus = moveGridFocus
+        driver.activateFocusedButton = { [performActionForFocus] in
+            guard let f = MainWindowKeyboardFocus.shared.focusedButton else { return }
+            performActionForFocus(f)
+        }
+        driver.isKeyboardModeBinding = $isKeyboardMode
+        driver.getFocusDescription = { String(describing: MainWindowKeyboardFocus.shared.focusedButton) }
+        let mainWindowKeyHandler: (NSEvent) -> Bool = { event in
+            if LayoutEditManager.shared.isEditMode { return true }
+            driver.isKeyboardModeBinding?.wrappedValue = true
+            let keyCode = event.keyCode
+            switch keyCode {
+            case 123:
+                MainWindowKeyboardFocus.shared.focusedButton = MainWindowKeyboardFocus.nextFocus(from: MainWindowKeyboardFocus.shared.focusedButton, direction: .left)
+            case 124:
+                MainWindowKeyboardFocus.shared.focusedButton = MainWindowKeyboardFocus.nextFocus(from: MainWindowKeyboardFocus.shared.focusedButton, direction: .right)
+            case 125:
+                MainWindowKeyboardFocus.shared.focusedButton = MainWindowKeyboardFocus.nextFocus(from: MainWindowKeyboardFocus.shared.focusedButton, direction: .down)
+            case 126:
+                MainWindowKeyboardFocus.shared.focusedButton = MainWindowKeyboardFocus.nextFocus(from: MainWindowKeyboardFocus.shared.focusedButton, direction: .up)
+            case 36:
+                if MainWindowKeyboardFocus.shared.focusedButton == nil {
+                    MainWindowKeyboardFocus.shared.focusedButton = .file
+                }
+                driver.activateFocusedButton?()
+            default:
+                return false
+            }
+            let focusAfter = driver.getFocusDescription?() ?? "nil"
+            KeyboardNavigationCoordinator.logDebug(location: "ContentView.swift:mainWindowKeyHandler", message: "After move/activate", data: ["keyCode": Int(keyCode), "focusAfter": focusAfter], hypothesisId: "H11")
+            return true
+        }
+        return content
+            .keyboardNavigationHandler(handleKey: mainWindowKeyHandler)
             .onKeyPress(.leftArrow) {
+                // #region agent log
+                KeyboardNavigationCoordinator.logDebug(
+                    location: "ContentView.swift:onKeyPress(.leftArrow)",
+                    message: "onKeyPress received left arrow",
+                    data: [:],
+                    hypothesisId: "H9"
+                )
+                // #endregion
                 // Don't handle arrow keys if in layout edit mode
                 if LayoutEditManager.shared.isEditMode {
                     return .ignored
@@ -3671,6 +3894,14 @@ struct KeyboardHandlersModifier: ViewModifier {
                 return .handled
             }
             .onKeyPress(.rightArrow) {
+                // #region agent log
+                KeyboardNavigationCoordinator.logDebug(
+                    location: "ContentView.swift:onKeyPress(.rightArrow)",
+                    message: "onKeyPress received right arrow",
+                    data: [:],
+                    hypothesisId: "H9"
+                )
+                // #endregion
                 // Don't handle arrow keys if in layout edit mode
                 if LayoutEditManager.shared.isEditMode {
                     return .ignored
@@ -3680,6 +3911,14 @@ struct KeyboardHandlersModifier: ViewModifier {
                 return .handled
             }
             .onKeyPress(.upArrow) {
+                // #region agent log
+                KeyboardNavigationCoordinator.logDebug(
+                    location: "ContentView.swift:onKeyPress(.upArrow)",
+                    message: "onKeyPress received up arrow",
+                    data: [:],
+                    hypothesisId: "H9"
+                )
+                // #endregion
                 // Don't handle arrow keys if in layout edit mode
                 if LayoutEditManager.shared.isEditMode {
                     return .ignored
@@ -3689,6 +3928,14 @@ struct KeyboardHandlersModifier: ViewModifier {
                 return .handled
             }
             .onKeyPress(.downArrow) {
+                // #region agent log
+                KeyboardNavigationCoordinator.logDebug(
+                    location: "ContentView.swift:onKeyPress(.downArrow)",
+                    message: "onKeyPress received down arrow",
+                    data: [:],
+                    hypothesisId: "H9"
+                )
+                // #endregion
                 // Don't handle arrow keys if in layout edit mode
                 if LayoutEditManager.shared.isEditMode {
                     return .ignored
@@ -3710,7 +3957,7 @@ struct KeyboardHandlersModifier: ViewModifier {
                     isKeyboardMode = true
                 }
 
-                guard !showSearchSheet && !showQuickSearchSheet && !SettingsWindowManager.shared.isVisible && !showVideoConverterSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
+                guard !showSearchSheet && !showQuickSearchSheet && !SettingsWindowManager.shared.isVisible && !showVideoConverterSheet && !showPortalSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
                     return .ignored
                 }
                 
@@ -3825,6 +4072,7 @@ struct SheetsModifier: ViewModifier {
     @Binding var selectedDocket: String
     @ObservedObject var manager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
+    @ObservedObject var sessionManager: SessionManager
     @Binding var showSearchSheet: Bool
     let initialSearchText: String
     @Binding var showDocketSelectionSheet: Bool
@@ -3836,6 +4084,7 @@ struct SheetsModifier: ViewModifier {
     @ObservedObject var cacheManager: AsanaCacheManager
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
+    @Binding var showPortalSheet: Bool
     @Binding var pendingFileThenPrep: Bool
     var onFileThenPrepConfirm: (String) -> Void
 
@@ -3906,6 +4155,24 @@ struct SheetsModifier: ViewModifier {
             .sheet(isPresented: $showVideoConverterSheet) {
                 VideoConverterView(manager: manager)
                     .sheetBorder()
+            }
+            .sheet(isPresented: $showPortalSheet) {
+                PortalView(
+                    isPresented: $showPortalSheet,
+                    onOpenVideoConverter: {
+                        showPortalSheet = false
+                        showVideoConverterSheet = true
+                    },
+                    onOpenRestripe: {
+                        showPortalSheet = false
+                        RestripeWindowManager.shared.show()
+                    },
+                    onOpenSimian: {
+                        showPortalSheet = false
+                        SimianPostWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
+                    }
+                )
+                .sheetBorder()
             }
             .sheet(isPresented: $manager.showOMFAAFValidator) {
                 if let fileURL = manager.omfAafFileToValidate,

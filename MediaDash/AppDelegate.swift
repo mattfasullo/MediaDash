@@ -121,15 +121,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func setupGlobalQuitHandler() {
-        // Monitor local events to catch CMD+Q even when sheets/modals are open
-        // This intercepts the key event before SwiftUI can block it
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Check for CMD+Q
-            if event.modifierFlags.contains(.command) && 
+        // Single keyDown monitor: CMD+Q quit + app-wide arrow/return so the system never beeps
+        quitEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // CMD+Q: quit
+            if event.modifierFlags.contains(.command) &&
                event.charactersIgnoringModifiers?.lowercased() == "q" {
-                // Force quit immediately
                 NSApplication.shared.terminate(nil)
-                return nil // Consume the event so it doesn't propagate
+                return nil
+            }
+            // Arrow keys and return: for the main app window, pass through so SwiftUI's .onKeyPress receives them.
+            // Only intercept for other windows (e.g. sheets) so we can drive list navigation there.
+            let keyCodes: [UInt16] = [123, 124, 125, 126, 36] // left, right, down, up, return
+            if keyCodes.contains(event.keyCode) {
+                let keyWindow = NSApplication.shared.keyWindow
+                let isEditing = KeyboardNavigationCoordinator.isEditingText(in: keyWindow)
+                if isEditing {
+                    return event
+                }
+                let isMainWindow = (keyWindow === WindowConfiguration.mainAppWindow)
+                // Try coordinator first - if it handles, use it. Otherwise pass through for .onKeyPress
+                let handled = KeyboardNavigationCoordinator.shared.handle(event: event)
+                if handled {
+                    // #region agent log
+                    KeyboardNavigationCoordinator.logDebug(
+                        location: "AppDelegate.swift:keyDown",
+                        message: "Coordinator handled",
+                        data: [
+                            "keyCode": Int(event.keyCode),
+                            "isMainWindow": isMainWindow
+                        ],
+                        hypothesisId: "H10"
+                    )
+                    // #endregion
+                    return nil
+                }
+                if isMainWindow {
+                    // #region agent log
+                    KeyboardNavigationCoordinator.logDebug(
+                        location: "AppDelegate.swift:keyDown",
+                        message: "Main window - passing through arrow/return",
+                        data: [
+                            "keyCode": Int(event.keyCode),
+                            "keyWindowNil": keyWindow == nil
+                        ],
+                        hypothesisId: "H9"
+                    )
+                    // #endregion
+                    return event
+                }
+                // For non-main windows (sheets), coordinator already handled above
             }
             return event
         }
