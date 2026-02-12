@@ -149,6 +149,13 @@ final class DownloadPromptManager {
         popupWindow?.close()
         popupWindow = nil
     }
+    
+    deinit {
+        // Safety net: ensure timer is invalidated if manager is deallocated
+        checkTimer?.invalidate()
+        checkTimer = nil
+        hidePopup()
+    }
 }
 
 // MARK: - Popup view

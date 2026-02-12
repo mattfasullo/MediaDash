@@ -39,13 +39,8 @@ struct SelectableTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.selectedTextBinding = $selectedText
         
-        // Set up selection monitoring
-        Foundation.NotificationCenter.default.addObserver(
-            context.coordinator,
-            selector: #selector(Coordinator.selectionChanged(_:)),
-            name: NSTextView.didChangeSelectionNotification,
-            object: textView
-        )
+        // Set up selection monitoring using coordinator method
+        context.coordinator.setupObserver(for: textView)
         
         return scrollView
     }
@@ -74,6 +69,30 @@ struct SelectableTextView: NSViewRepresentable {
     class Coordinator: NSObject {
         weak var textView: NSTextView?
         var selectedTextBinding: Binding<String?>?
+        // Store textView reference for observer cleanup
+        private weak var observedTextView: NSTextView?
+        
+        func setupObserver(for textView: NSTextView) {
+            // Remove existing observer if any (safe to call even if observer was already removed)
+            if let oldTextView = observedTextView, oldTextView !== textView {
+                Foundation.NotificationCenter.default.removeObserver(
+                    self,
+                    name: NSTextView.didChangeSelectionNotification,
+                    object: oldTextView
+                )
+            }
+            
+            // Store reference to textView for cleanup
+            observedTextView = textView
+            
+            // Add new observer (target-action pattern doesn't return a value)
+            Foundation.NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(selectionChanged(_:)),
+                name: NSTextView.didChangeSelectionNotification,
+                object: textView
+            )
+        }
         
         @objc func selectionChanged(_ notification: NSNotification) {
             guard let textView = textView,
@@ -86,6 +105,16 @@ struct SelectableTextView: NSViewRepresentable {
             } else {
                 binding.wrappedValue = nil
             }
+        }
+        
+        deinit {
+            // Remove observer when coordinator is deallocated
+            // Safe to call even if textView is nil or deallocated - NotificationCenter handles this gracefully
+            Foundation.NotificationCenter.default.removeObserver(
+                self,
+                name: NSTextView.didChangeSelectionNotification,
+                object: observedTextView
+            )
         }
     }
 }

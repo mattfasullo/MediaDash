@@ -33,6 +33,8 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     private var displayLink: CVDisplayLink?
     private var lastAnimationStartTime: CFTimeInterval = 0
     private var pendingTargetOrigin: NSPoint?
+    // Store frameDidChangeNotification observer for proper cleanup
+    private var frameDidChangeObserver: NSObjectProtocol?
 
     // Flag to track if we're being deallocated (for displayLink callback safety)
     private var isShuttingDown = false
@@ -150,6 +152,12 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     func windowWillClose(_ notification: Foundation.Notification) {
         isVisible = false
         stopContinuousPositionMonitoring()
+
+        // Remove frameDidChangeNotification observer
+        if let observer = frameDidChangeObserver {
+            Foundation.NotificationCenter.default.removeObserver(observer)
+            frameDidChangeObserver = nil
+        }
 
         // Remove child window relationship
         if let mainWindow = mainWindow, let notificationWindow = notificationWindow {
@@ -737,7 +745,12 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
             
             // Update mask when view resizes
             // Capture contentView weakly to avoid retain cycle and Sendable issues
-            Foundation.NotificationCenter.default.addObserver(
+            // Remove existing observer if any
+            if let existingObserver = frameDidChangeObserver {
+                Foundation.NotificationCenter.default.removeObserver(existingObserver)
+            }
+            // Store observer for cleanup
+            frameDidChangeObserver = Foundation.NotificationCenter.default.addObserver(
                 forName: NSView.frameDidChangeNotification,
                 object: contentView,
                 queue: OperationQueue.main
@@ -1266,6 +1279,12 @@ class NotificationWindowManager: NSObject, ObservableObject, NSWindowDelegate {
         // Invalidate timer
         positionUpdateTimer?.invalidate()
         positionUpdateTimer = nil
+
+        // Remove frameDidChangeNotification observer
+        if let observer = frameDidChangeObserver {
+            Foundation.NotificationCenter.default.removeObserver(observer)
+            frameDidChangeObserver = nil
+        }
 
         // Clear all cancellables
         cancellables.removeAll()

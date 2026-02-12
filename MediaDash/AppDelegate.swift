@@ -12,6 +12,9 @@ import Sparkle
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var updaterController: SPUStandardUpdaterController!
     private var quitEventMonitor: Any?
+    // Store NotificationCenter observers for proper cleanup
+    private var windowBecomeKeyObserver: NSObjectProtocol?
+    private var windowBecomeMainObserver: NSObjectProtocol?
 
     private var currentUpdateChannel: UpdateChannel {
         // Check if this is a dev build (MediaDash-Dev bundle ID)
@@ -89,8 +92,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Configure windows when they become key
-        Foundation.NotificationCenter.default.addObserver(
+        // Configure windows when they become key - store observer for cleanup
+        windowBecomeKeyObserver = Foundation.NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
             object: nil,
             queue: .main
@@ -100,8 +103,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Configure windows when they become main
-        Foundation.NotificationCenter.default.addObserver(
+        // Configure windows when they become main - store observer for cleanup
+        windowBecomeMainObserver = Foundation.NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeMainNotification,
             object: nil,
             queue: .main
@@ -136,6 +139,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Clean up event monitor
         if let monitor = quitEventMonitor {
             NSEvent.removeMonitor(monitor)
+        }
+        // Remove NotificationCenter observers
+        if let observer = windowBecomeKeyObserver {
+            Foundation.NotificationCenter.default.removeObserver(observer)
+            windowBecomeKeyObserver = nil
+        }
+        if let observer = windowBecomeMainObserver {
+            Foundation.NotificationCenter.default.removeObserver(observer)
+            windowBecomeMainObserver = nil
+        }
+    }
+    
+    deinit {
+        // Safety net: ensure observers are removed even if applicationWillTerminate isn't called
+        if let observer = windowBecomeKeyObserver {
+            Foundation.NotificationCenter.default.removeObserver(observer)
+            windowBecomeKeyObserver = nil
+        }
+        if let observer = windowBecomeMainObserver {
+            Foundation.NotificationCenter.default.removeObserver(observer)
+            windowBecomeMainObserver = nil
         }
     }
     

@@ -33,8 +33,6 @@ struct FileJobUseCase {
         
         // Work Picture operation
         if type == .workPicture || type == .both {
-            let dateStr = formatDate(wpDate)
-            
             // Find which year the docket folder exists in (searches across all years)
             let docketYear = config.findDocketYear(docket: docket)
             let workPicPath: URL
@@ -53,6 +51,8 @@ struct FileJobUseCase {
                 throw AppError.configuration(.pathNotConfigured(base.path))
             }
             
+            // Use FolderNamingService for consistent work picture folder naming
+            let dateStr = config.namingService.formatDate(wpDate)
             let destFolder = getNextFolder(base: base, date: dateStr, fileSystem: fm)
             
             // Create folder if needed
@@ -75,10 +75,8 @@ struct FileJobUseCase {
         
         // Prep operation
         if type == .prep || type == .both {
-            let prepDateFormat = config.settings.prepDateFormat ?? "MMM.d.yy"
-            let dateStr = formatDate(prepDate, format: prepDateFormat)
-            // Standard format: docket#_JobName_PREP_Mmm.d.yy (parses docket/session name into number + job name)
-            let folder = AppConfig.prepFolderName(docket: docket, dateStr: dateStr)
+            // Use FolderNamingService for consistent prep folder naming
+            let folder = config.prepFolderName(docket: docket, date: prepDate)
             let root = paths.prep.appendingPathComponent(folder)
             prepFolderPath = root.path
             
@@ -131,17 +129,8 @@ struct FileJobUseCase {
     
     // MARK: - Helper Methods
     
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM.d.yy"
-        return formatter.string(from: date)
-    }
-
-    private func formatDate(_ date: Date, format: String) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = format
-        return formatter.string(from: date)
-    }
+    // Date formatting now handled by FolderNamingService
+    // Use config.namingService.formatDate() instead
     
     private func getNextFolder(base: URL, date: String, fileSystem: FileSystem) -> URL {
         var p = 1
