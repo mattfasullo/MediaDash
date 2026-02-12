@@ -464,8 +464,8 @@ struct AppSettings: Codable, Equatable {
     var prepFolderName: String
     var yearPrefix: String // e.g., "GM_"
 
-    // Date Format
-    var dateFormat: String // e.g., "MMM.d.yy" (Feb.5.26 — period after month, no leading zero on day)
+    // Date Format (legacy - all dates now use FolderNamingService.standardDateFormat "MMMdd.yy")
+    var dateFormat: String // e.g., "MMMdd.yy" (Feb09.26 — standardized app-wide format)
 
     // File Categories
     var pictureExtensions: [String]
@@ -480,11 +480,7 @@ struct AppSettings: Codable, Equatable {
 
     // Folder Format Settings
     var workPicNumberFormat: String // e.g., "%02d" for "01", "02", etc.
-    var prepFolderFormat: String // e.g., "{docket}_PREP_{date}"
-    /// Date format for the prep folder name (e.g. "MMM.d.yy" → Feb.5.26). Used for {date} in prepFolderFormat.
-    var prepDateFormat: String?
-    /// Date folder format for Music Demos (e.g. "dd_MMM.d.yy" → 09_Feb.9.26). Used for composer subfolder parent.
-    var demosDateFolderFormat: String?
+    var prepFolderFormat: String // e.g., "{docket}_{jobName}_PREP_{date}" - uses FolderNamingService.standardDateFormat for {date}
 
     /// When false, the PICTURE element folder is not created during prep (files that would go there are placed in OTHER if enabled, else skipped).
     var createPrepPictureFolder: Bool?
@@ -629,7 +625,7 @@ struct AppSettings: Codable, Equatable {
             workPictureFolderName: "WORK PICTURE",
             prepFolderName: "SESSION PREP",
             yearPrefix: "GM_",
-            dateFormat: "MMM.d.yy",
+            dateFormat: "MMMdd.yy",
             pictureExtensions: ["mp4", "mov", "avi", "mxf", "prores", "m4v"],
             musicExtensions: ["wav", "mp3", "aiff", "aif", "flac", "m4a", "aac"],
             aafOmfExtensions: ["aaf", "omf"],
@@ -638,9 +634,7 @@ struct AppSettings: Codable, Equatable {
             aafOmfFolderName: "AAF-OMF",
             otherFolderName: "OTHER",
             workPicNumberFormat: "%02d",
-            prepFolderFormat: "{docket}_PREP_{date}",
-            prepDateFormat: "MMM.d.yy",
-            demosDateFolderFormat: "dd_MMM.d.yy",
+            prepFolderFormat: "{docket}_{jobName}_PREP_{date}",
             createPrepPictureFolder: true,
             createPrepMusicFolder: true,
             createPrepAafOmfFolder: true,

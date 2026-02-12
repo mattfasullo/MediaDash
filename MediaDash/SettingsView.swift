@@ -3908,24 +3908,17 @@ struct GeneralOptionsSection: View {
                                 Text("Prep Folders:")
                                     .font(.system(size: 12))
                                     .frame(width: 120, alignment: .leading)
-                                TextField("{docket}_PREP_{date}", text: binding(for: \.prepFolderFormat))
+                                TextField("{docket}_{jobName}_PREP_{date}", text: binding(for: \.prepFolderFormat))
                                     .textFieldStyle(.roundedBorder)
-                                    .frame(width: 200)
-                                Text("{docket} and {date} will be replaced")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.blue)
-                            }
-
-                            HStack(spacing: 8) {
-                                Text("Prep date format:")
-                                    .font(.system(size: 12))
-                                    .frame(width: 120, alignment: .leading)
-                                TextField("MMM.d.yy", text: bindingOptionalString(for: \.prepDateFormat, default: "MMM.d.yy"))
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 100)
-                                Text("Used for {date} (e.g. Feb.5.26 for Feb 5, 2026)")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.blue)
+                                    .frame(width: 250)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Placeholders: {docket}, {jobName}, {date}")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.blue)
+                                    Text("Date format is standardized app-wide (MmmDD.YY)")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
                             }
 
                             HStack(spacing: 8) {
@@ -3935,19 +3928,7 @@ struct GeneralOptionsSection: View {
                                 TextField("%02d", text: binding(for: \.workPicNumberFormat))
                                     .textFieldStyle(.roundedBorder)
                                     .frame(width: 80)
-                                Text("Creates: 01, 02, 03...")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.blue)
-                            }
-
-                            HStack(spacing: 8) {
-                                Text("Music Demos date:")
-                                    .font(.system(size: 12))
-                                    .frame(width: 120, alignment: .leading)
-                                TextField("dd_MMM.d.yy", text: bindingOptionalString(for: \.demosDateFolderFormat, default: "dd_MMM.d.yy"))
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 120)
-                                Text("→ e.g. 09_Feb.9.26 for composer folders parent")
+                                Text("Creates: 01_Feb09.26, 02_Feb09.26...")
                                     .font(.system(size: 12))
                                     .foregroundColor(.blue)
                             }
