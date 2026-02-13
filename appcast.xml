@@ -5,6 +5,31 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.0</title>
+            <description><![CDATA[
+                <p>MediaDash 1.0 - Full release
+
+- Demos/Submit: Track colour selector reorganized (Composers + Freelance/Extra, colours by name)
+- Demos/Submit: Completed tasks stay visible with checkmark; DEMOS and SUBMIT both treated as demos
+- Posting legend: Copy legend to clipboard; editable Post task description with Save
+- Download prompt: Popup asks 'Use with MediaDash?' when downloading files in browser
+- Calendar: Task detail opens in resizable window
+- New: Download demos task picker sheet
+- New: Services setup prompt for first-time configuration
+- Fix: Download prompt window no longer crashes</p>
+            ]]></description>
+            <pubDate>Fri, 13 Feb 2026 17:27:02 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.0/MediaDash.zip"
+                sparkle:version="100"
+                sparkle:shortVersionString="1.0"
+                sparkle:edSignature="fUOGjmZ7rVmAn7/0AvpEwzaVt946SZtnggV5ybhL02oEvrHsRjeY35dYMe7cnEOxEdnNEYFAbXpfo9yxdCepCg=="
+                length="8446910"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 0.9.12</title>
             <description><![CDATA[
                 <h2>What's New in 0.9.12</h2><ul><li>Demos/Submit: Track colour selector reorganized like spreadsheet (Composers + Freelance/Extra, colours by name)</li><li>Demos/Submit: Completed tasks stay visible with checkmark and greyed out; DEMOS and SUBMIT both treated as demos</li><li>Posting legend: Copy legend to clipboard; editable Post task description with Save</li><li>Download prompt: When you download a file in the browser, popup asks "Use with MediaDash?" to stage it</li><li>Calendar: Task detail opens in its own resizable window (consistent size, drag and resize)</li><li>Fix: Download prompt window no longer crashes</li></ul>
