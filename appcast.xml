@@ -22,9 +22,9 @@
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="https://github.com/mattfasullo/MediaDash/releases/download/v1.0/MediaDash.zip"
-                sparkle:version="100"
+                sparkle:version="103"
                 sparkle:shortVersionString="1.0"
-                sparkle:edSignature="fUOGjmZ7rVmAn7/0AvpEwzaVt946SZtnggV5ybhL02oEvrHsRjeY35dYMe7cnEOxEdnNEYFAbXpfo9yxdCepCg=="
+                sparkle:edSignature="UaqV+3roNPiVwszpJ7eVl9GLQrqkFzQ6T0PkXsuuYD+lW9ADpdC0oYL8nHzDlHkJI3w6Eniw7hnO71F1NVILCA=="
                 length="8446910"
                 type="application/octet-stream"
             />

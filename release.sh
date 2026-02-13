@@ -299,13 +299,21 @@ This app is not notarized (no Developer ID certificate). macOS may show a securi
 
 $RELEASE_NOTES"
 
-# Create release (as pre-release)
-gh release create "v$VERSION" \
-    "$RELEASE_DIR/$APP_NAME.zip" \
-    "install_mediadash.sh" \
-    --title "$APP_NAME v$VERSION" \
-    --notes "$GATEKEEPER_NOTES" \
-    --prerelease
+# Create release (pre-release for beta versions, full release for 1.0+)
+if [ "$VERSION" = "1.0" ]; then
+    gh release create "v$VERSION" \
+        "$RELEASE_DIR/$APP_NAME.zip" \
+        "install_mediadash.sh" \
+        --title "$APP_NAME v$VERSION" \
+        --notes "$GATEKEEPER_NOTES"
+else
+    gh release create "v$VERSION" \
+        "$RELEASE_DIR/$APP_NAME.zip" \
+        "install_mediadash.sh" \
+        --title "$APP_NAME v$VERSION" \
+        --notes "$GATEKEEPER_NOTES" \
+        --prerelease
+fi
 
 echo ""
 echo -e "${GREEN}✅ Release v$VERSION published!${NC}"
