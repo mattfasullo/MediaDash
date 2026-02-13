@@ -84,8 +84,9 @@ struct EmailDocketParser {
         // If body is empty but subject contains "Fwd:" or "Re:", try to extract from subject
         // Forwarded emails might have the docket info in the subject line
         if bodyText.isEmpty && (subjectText.contains("Fwd:") || subjectText.contains("Re:")) {
-            // Try to extract docket info from subject for forwarded emails
+            #if DEBUG
             print("EmailDocketParser: Body is empty, attempting to parse from subject only")
+            #endif
         }
         
         // Clean up HTML/table formatting that might interfere with parsing
@@ -114,9 +115,9 @@ struct EmailDocketParser {
         var extractedJobName: String?
         
         // FIRST: Try to find docket number and job name on the first line of body (most common case)
-        // Pattern: "25489 12 Days of Connection" or "25489 Job Name"
-        // Made more restrictive: only match exactly 5 digits (not 5+) to prevent false positives
-        let firstLinePattern = #"^(\d{5})\s+(.+?)(?:\s*$|\n|\.)"#
+        // Pattern: "25489 12 Days of Connection" or "25489 Job Name" or "26053-US Ferring - IVF"
+        // Supports optional -XX country code (e.g. -US, -CA) between docket number and job name
+        let firstLinePattern = #"^(\d{5}(?:-[A-Z]{2})?)\s+(.+?)(?:\s*$|\n|\.)"#
         if let regex = try? NSRegularExpression(pattern: firstLinePattern, options: [.anchorsMatchLines]),
            let match = regex.firstMatch(in: bodyText, range: NSRange(bodyText.startIndex..., in: bodyText)),
            match.numberOfRanges >= 3 {
@@ -136,7 +137,9 @@ struct EmailDocketParser {
                     }
                 }
             } else {
+                #if DEBUG
                 print("EmailDocketParser: ⚠️ First line match rejected - invalid year format: \(docketNum)")
+                #endif
             }
         }
         
@@ -153,12 +156,14 @@ struct EmailDocketParser {
                         }
                         break
                     } else {
+                        #if DEBUG
                         print("EmailDocketParser: ⚠️ Pattern match rejected - invalid year format: \(parsed.docketNumber)")
+                        #endif
                     }
                 }
             }
         }
-        
+
         // THIRD: If we found a docket number but no job name, try to extract from the same line in body
         if extractedDocketNumber != nil, extractedJobName == nil {
             // Try to find job name on the same line as the docket number
@@ -230,7 +235,9 @@ struct EmailDocketParser {
             
             // Validate: docket number must have valid year format
             guard isValidYearBasedDocket(docketNumber) else {
+                #if DEBUG
                 print("EmailDocketParser: ⚠️ Rejecting match - invalid year format: \(docketNumber)")
+                #endif
                 return nil
             }
             
@@ -267,25 +274,33 @@ struct EmailDocketParser {
                 if isPattern7 {
                     // Pattern 7 is too broad - reject if year validation fails
                     if !isValidYearBasedDocket(parsed.docketNumber) {
+                        #if DEBUG
                         print("EmailDocketParser: ⚠️ Rejecting Pattern 7 match - invalid year format: \(parsed.docketNumber)")
+                        #endif
                         continue // Skip this match, try next pattern or return nil
                     }
                     // Also require that the docket number appears in the email content
                     if !foundInEmail {
+                        #if DEBUG
                         print("EmailDocketParser: ⚠️ Rejecting Pattern 7 match - docket number not found in email: \(parsed.docketNumber)")
+                        #endif
                         continue
                     }
                 }
                 
                 // Validate: docket number must have valid year format
                 guard isValidYearBasedDocket(parsed.docketNumber) else {
+                    #if DEBUG
                     print("EmailDocketParser: ⚠️ Rejecting pattern match - invalid year format: \(parsed.docketNumber)")
+                    #endif
                     continue
                 }
                 
                 // Validate: docket number must be found in email
                 guard foundInEmail else {
+                    #if DEBUG
                     print("EmailDocketParser: ⚠️ Rejecting pattern match - docket number not found in email: \(parsed.docketNumber)")
+                    #endif
                     continue
                 }
                 
@@ -329,15 +344,17 @@ struct EmailDocketParser {
                     ]
                 )
             } else {
+                #if DEBUG
                 if !isValidYearBasedDocket(parsed.docketNumber) {
                     print("EmailDocketParser: ⚠️ Rejecting subject fallback - invalid year format: \(parsed.docketNumber)")
                 }
                 if !foundInEmail {
                     print("EmailDocketParser: ⚠️ Rejecting subject fallback - docket number not found in email: \(parsed.docketNumber)")
                 }
+                #endif
             }
         }
-        
+
         // Final fallback: only when email has BOTH "new" and "docket" (any order), search for a docket number.
         // All three define a new-docket email: "new" + "docket" + valid docket number.
         if hasNewAndDocket {
@@ -359,9 +376,9 @@ struct EmailDocketParser {
             }
             
             // If not found in subject, try body (search all matches, prefer 5+ digit numbers)
-            // FIRST: Check first line of body for "25489 Job Name" pattern
+            // FIRST: Check first line of body for "25489 Job Name" or "26053-US Ferring - IVF" pattern
             if foundDocketNumber == nil {
-                let firstLinePattern = #"^(\d{5,})\s+(.+?)(?:\s*$|\n|\.)"#
+                let firstLinePattern = #"^(\d{5}(?:-[A-Z]{2})?)\s+(.+?)(?:\s*$|\n|\.)"#
                 if let regex = try? NSRegularExpression(pattern: firstLinePattern, options: [.anchorsMatchLines]),
                    let match = regex.firstMatch(in: bodyText, range: NSRange(bodyText.startIndex..., in: bodyText)),
                    match.numberOfRanges >= 3 {
@@ -417,8 +434,11 @@ struct EmailDocketParser {
                             let docketRange = Range(match.range(at: 1), in: bodyText)!
                             let candidate = String(bodyText[docketRange])
                             
-                            // Only accept exactly 5 digits that pass year check; 6+ digits are usually IDs/URLs
-                            if candidate.count == 5 && isValidYearBasedDocket(candidate) {
+                            // Accept 5-digit dockets (e.g. 26053) or 5 digits + country code (e.g. 26053-US)
+                            // Reject 6+ digit numbers (often IDs/URLs) unless they have -XX suffix
+                            let numericPart = candidate.components(separatedBy: "-").first ?? candidate
+                            let isValidFormat = (numericPart.count == 5 && numericPart.allSatisfy { $0.isNumber })
+                            if isValidFormat && isValidYearBasedDocket(candidate) {
                                 foundDocketNumber = candidate
                                 break
                             }
@@ -554,13 +574,17 @@ struct EmailDocketParser {
             // Validate: if we have a docket number, it must have valid year format
             if let docketNum = foundDocketNumber {
                 guard isValidYearBasedDocket(docketNum) else {
+                    #if DEBUG
                     print("EmailDocketParser: ⚠️ Rejecting new docket fallback - invalid year format: \(docketNum)")
+                    #endif
                     return nil
                 }
                 
                 // Validate: docket number must be found in email
                 guard foundInEmail else {
+                    #if DEBUG
                     print("EmailDocketParser: ⚠️ Rejecting new docket fallback - docket number not found in email: \(docketNum)")
+                    #endif
                     return nil
                 }
             }

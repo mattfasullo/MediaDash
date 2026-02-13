@@ -56,7 +56,6 @@ class EmailScanningService: ObservableObject {
         if let savedEmail = UserDefaults.standard.string(forKey: "gmail_connected_email"),
            savedEmail.lowercased().hasSuffix("@graysonmusicgroup.com") {
             _ = GraysonEmployeeWhitelist.shared.addEmail(savedEmail)
-            print("✅ Added existing Gmail email \(savedEmail) to Grayson employee whitelist")
             return
         }
         
@@ -66,7 +65,6 @@ class EmailScanningService: ObservableObject {
             if email.lowercased().hasSuffix("@graysonmusicgroup.com") {
                 _ = GraysonEmployeeWhitelist.shared.addEmail(email)
                 UserDefaults.standard.set(email, forKey: "gmail_connected_email")
-                print("✅ Fetched and added Gmail email \(email) to Grayson employee whitelist")
             }
         } catch {
             // Silently fail - email will be added when user connects Gmail in settings
@@ -169,7 +167,9 @@ class EmailScanningService: ObservableObject {
             }
         }
         // #endregion
+        #if DEBUG
         print("🔍 EmailScanningService.scanNow() called")
+        #endif
         if isScanning {
             return
         }
@@ -1617,14 +1617,19 @@ class EmailScanningService: ObservableObject {
         return validDockets
     }
     
-    /// Validate a docket number: must be exactly 5 digits with valid year prefix, optionally with "-US" suffix
+    /// Validate a docket number: must be exactly 5 digits with valid year prefix, optionally with -XX country suffix (e.g. -US, -CA)
     private func isValidDocketNumber(_ docketNumber: String) -> Bool {
         let trimmed = docketNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Check for -US suffix
+        // Strip optional -XX country suffix (e.g. -US, -CA); suffix must be 2-3 uppercase letters
         let baseNumber: String
-        if trimmed.uppercased().hasSuffix("-US") {
-            baseNumber = String(trimmed.dropLast(3)) // Remove "-US"
+        if let dashIndex = trimmed.firstIndex(of: "-"),
+           dashIndex > trimmed.startIndex,
+           let suffixStart = trimmed.index(dashIndex, offsetBy: 1, limitedBy: trimmed.endIndex),
+           trimmed.distance(from: suffixStart, to: trimmed.endIndex) >= 2,
+           trimmed.distance(from: suffixStart, to: trimmed.endIndex) <= 3,
+           trimmed[suffixStart...].allSatisfy({ $0.isLetter }) {
+            baseNumber = String(trimmed[..<dashIndex])
         } else {
             baseNumber = trimmed
         }

@@ -43,8 +43,11 @@ class FileLogger {
         fileHandle = try? FileHandle(forWritingTo: logFileURL)
         fileHandle?.seekToEndOfFile()
         
-        // Log initialization
-        log("FileLogger initialized - logs will be written to: \(logFileURL.path)", level: .info)
+        // Write init to file only (avoid duplicate console/OSLog output)
+        let initMsg = "FileLogger initialized - logs will be written to: \(logFileURL.path)"
+        if let data = "[\(dateFormatter.string(from: Date()))] INFO  [App] \(initMsg)\n".data(using: .utf8) {
+            fileHandle?.write(data)
+        }
     }
     
     deinit {
@@ -57,10 +60,12 @@ class FileLogger {
         let levelPrefix = levelPrefix(for: level)
         let logLine = "[\(timestamp)] \(levelPrefix) [\(component)] \(message)\n"
         
-        // Write to file
+        // Write to file (only fsync on errors to reduce I/O overhead)
         if let data = logLine.data(using: .utf8) {
             fileHandle?.write(data)
-            fileHandle?.synchronizeFile()
+            if level == .error || level == .critical {
+                fileHandle?.synchronizeFile()
+            }
         }
         
         // Also log to OSLog

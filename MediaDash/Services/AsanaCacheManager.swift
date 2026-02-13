@@ -491,7 +491,7 @@ class AsanaCacheManager: ObservableObject {
             newStatus = .serverDisconnectedNoCache
         }
         
-        // Only log when status actually changes to reduce log spam
+        #if DEBUG
         let statusChanged = newStatus != cacheStatus
         if statusChanged {
             switch newStatus {
@@ -502,9 +502,10 @@ class AsanaCacheManager: ObservableObject {
             case .serverDisconnectedNoCache:
                 print("⚪ [Cache Status] Server disconnected, no cache available")
             case .unknown:
-                break // Don't log unknown status
+                break
             }
         }
+        #endif
         
         // Defer to next run loop to avoid publishing during view updates
         Task { @MainActor in
@@ -723,11 +724,11 @@ class AsanaCacheManager: ObservableObject {
         if let data = try? Data(contentsOf: fileURL),
            let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
             lastSyncDate = cached.lastSync
+            #if DEBUG
             print("🔄 [Cache] Reloaded lastSyncDate from shared cache: \(cached.lastSync)")
+            #endif
         } else {
-            // No cache found
             lastSyncDate = nil
-            print("🔄 [Cache] No shared cache found, lastSyncDate is nil")
         }
     }
     
@@ -802,7 +803,9 @@ class AsanaCacheManager: ObservableObject {
                 
                 // Use fresh cache ONLY if all health checks pass
                 if forceFullSyncReason == nil && ageMinutes < Double(cacheFreshMinutes) && hasDueDateInfo && hasFreshDueDates {
-                    print("🟢 [Cache] Using shared cache (updated \(Int(ageMinutes)) minutes ago) - \(cached.dockets.count) dockets, \(docketsWithDueDate.count) with due dates")
+                    #if DEBUG
+                    print("🟢 [Cache] Using shared cache (updated \(Int(ageMinutes)) min ago) - \(cached.dockets.count) dockets")
+                    #endif
                     self.lastSyncDate = cached.lastSync
                     self.cachedDockets = cached.dockets
                     return

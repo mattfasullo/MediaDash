@@ -38,6 +38,7 @@ struct AsanaFullCalendarView: View {
     @State private var filterSessions = UserDefaults.standard.object(forKey: Self.filterSessionsKey) as? Bool ?? true
     @State private var filterMediaTasks = UserDefaults.standard.object(forKey: Self.filterMediaTasksKey) as? Bool ?? true
     @State private var filterOtherTasks = UserDefaults.standard.object(forKey: Self.filterOtherTasksKey) as? Bool ?? true
+    @State private var manualLinkVersion = 0
 
     private static let dateOnlyFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -330,11 +331,7 @@ struct AsanaFullCalendarView: View {
                         count: mediaList.count,
                         isExpanded: $mediaTasksSectionExpanded
                     ) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(mediaList, id: \.gid) { task in
-                                taskRow(task)
-                            }
-                        }
+                        mediaTasksSection(mediaList)
                     }
                 }
                 if filterOtherTasks && !otherList.isEmpty {
@@ -385,6 +382,136 @@ struct AsanaFullCalendarView: View {
                 content()
             }
         }
+    }
+
+    @ViewBuilder
+    private func mediaTasksSection(_ mediaList: [AsanaTask]) -> some View {
+        let (pairs, linkedPostGids) = DemosPostLinkStore.linkedPairsForDay(mediaList)
+        let linkedDemosGids = Set(pairs.map { $0.0.gid })
+        let standaloneDemos = mediaList.filter { DemosPostLinkStore.isDemosTask($0) && !linkedDemosGids.contains($0.gid) }
+        let standalonePosts = mediaList.filter { DemosPostLinkStore.isPostTask($0) && !linkedPostGids.contains($0.gid) }
+        let otherMedia = mediaList.filter { t in
+            !DemosPostLinkStore.isDemosTask(t) && !DemosPostLinkStore.isPostTask(t)
+        }
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(pairs, id: \.0.gid) { demos, post in
+                linkedPairRow(demos: demos, post: post)
+            }
+            ForEach(standaloneDemos, id: \.gid) { task in
+                mediaTaskRowWithLinkMenu(task: task, mediaList: mediaList)
+            }
+            ForEach(standalonePosts, id: \.gid) { task in
+                mediaTaskRowWithLinkMenu(task: task, mediaList: mediaList)
+            }
+            ForEach(otherMedia, id: \.gid) { task in
+                taskRow(task)
+            }
+        }
+    }
+
+    private func linkedPairRow(demos: AsanaTask, post: AsanaTask) -> some View {
+        let demosColor = taskColor(demos)
+        return VStack(spacing: 0) {
+            Button(action: { openTask(demos) }) {
+                mediaTaskRowContent(task: demos)
+            }
+            .buttonStyle(.plain)
+            HStack(spacing: 4) {
+                Image(systemName: "link")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 1)
+            Button(action: { openTask(post) }) {
+                mediaTaskRowContent(task: post)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(demosColor.opacity(0.15))
+        )
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(demosColor)
+                .frame(width: 4)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contextMenu {
+            Button("Unlink") {
+                DemosPostLinkStore.addManualUnlink(demosGid: demos.gid, postGid: post.gid)
+                manualLinkVersion += 1
+            }
+        }
+    }
+
+    private func mediaTaskRowWithLinkMenu(task: AsanaTask, mediaList: [AsanaTask]) -> some View {
+        let posts = mediaList.filter { DemosPostLinkStore.isPostTask($0) }
+        let demos = mediaList.filter { DemosPostLinkStore.isDemosTask($0) }
+        return taskRow(task)
+            .contextMenu {
+                if DemosPostLinkStore.isDemosTask(task) {
+                    ForEach(posts.filter { $0.gid != task.gid }, id: \.gid) { post in
+                        Button("Link to \(post.name)") {
+                            DemosPostLinkStore.addManualLink(demosGid: task.gid, postGid: post.gid)
+                            manualLinkVersion += 1
+                        }
+                    }
+                } else if DemosPostLinkStore.isPostTask(task) {
+                    ForEach(demos.filter { $0.gid != task.gid }, id: \.gid) { demosTask in
+                        Button("Link to \(demosTask.name)") {
+                            DemosPostLinkStore.addManualLink(demosGid: demosTask.gid, postGid: task.gid)
+                            manualLinkVersion += 1
+                        }
+                    }
+                }
+            }
+    }
+
+    private func openTask(_ task: AsanaTask) {
+        let item = TaskDetailSheetItem(id: task.gid, taskGid: task.gid, taskName: task.name)
+        AsanaTaskDetailWindowManager.shared.show(
+            item: item,
+            asanaService: cacheManager.service,
+            config: AppConfig(settings: settingsManager.currentSettings),
+            settingsManager: settingsManager,
+            cacheManager: cacheManager,
+            onDismiss: {}
+        )
+    }
+
+    private func mediaTaskRowContent(task: AsanaTask) -> some View {
+        let color = taskColor(task)
+        let completed = task.completed == true
+        return HStack {
+            HStack(spacing: 6) {
+                if completed {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                Text(task.name)
+                    .font(.system(size: 12))
+                    .lineLimit(2)
+                    .foregroundColor(.primary)
+                if let badge = taskKindBadge(task) {
+                    Text(badge)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Capsule().strokeBorder(Color.secondary.opacity(0.5), lineWidth: 1))
+                }
+            }
+            Spacer()
+            if let assignee = task.assignee?.name, !assignee.isEmpty {
+                Text(assignee)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .opacity(completed ? 0.65 : 1)
     }
 
     private func sessionRow(_ task: AsanaTask) -> some View {

@@ -20,7 +20,7 @@ final class SimianPostWindowManager: NSObject, ObservableObject, NSWindowDelegat
         super.init()
     }
 
-    func show(settingsManager: SettingsManager, sessionManager: SessionManager) {
+    func show(settingsManager: SettingsManager, sessionManager: SessionManager, manager: MediaManager) {
         if let existingWindow = simianPostWindow {
             existingWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -31,6 +31,7 @@ final class SimianPostWindowManager: NSObject, ObservableObject, NSWindowDelegat
         let rootView = SimianPostView()
             .environmentObject(settingsManager)
             .environmentObject(sessionManager)
+            .environmentObject(manager)
 
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.frame = NSRect(x: 0, y: 0, width: 720, height: 620)

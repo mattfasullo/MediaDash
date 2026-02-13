@@ -807,19 +807,19 @@ class SimianService: ObservableObject {
             throw SimianError.notConfigured
         }
         
-        var endpointURL = base.appendingPathComponent("get_folders").appendingPathComponent(projectId)
+        let endpointURL = base.appendingPathComponent("get_folders").appendingPathComponent(projectId)
+        
+        var params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey
+        ]
         if let parentId = parentFolderId, !parentId.isEmpty {
-            endpointURL = endpointURL.appendingPathComponent(parentId)
+            params["folder_id"] = parentId
         }
         
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        
-        let params = [
-            "auth_token": authToken,
-            "auth_key": authKey
-        ]
         request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
             .joined(separator: "&")
             .data(using: .utf8)
@@ -1662,6 +1662,201 @@ class SimianService: ObservableObject {
         return folderId
     }
     
+    /// Create a folder in a project (public API for SimianPostView uploads)
+    /// - Parameters:
+    ///   - projectId: The project ID
+    ///   - folderName: The folder name
+    ///   - parentFolderId: Optional parent folder ID (nil for root level)
+    /// - Returns: The created folder ID
+    func createFolderPublic(projectId: String, folderName: String, parentFolderId: String? = nil) async throws -> String {
+        try await createFolder(projectId: projectId, folderName: folderName, parentFolderId: parentFolderId)
+    }
+
+    /// Move a file to a different folder
+    func moveFile(projectId: String, fileId: String, folderId: String) async throws {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("move_file").appendingPathComponent(projectId)
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "file_id": fileId,
+            "folder_id": folderId
+        ]
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
+            throw SimianError.apiError("Failed to move file: \(msg)")
+        }
+    }
+
+    /// Update folder sort order within a parent folder
+    /// - Parameters:
+    ///   - projectId: Project ID
+    ///   - parentFolderId: Parent folder ID (nil for root)
+    ///   - folderIds: Folder IDs in desired order (comma-separated)
+    func updateFolderSort(projectId: String, parentFolderId: String?, folderIds: [String]) async throws {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("update_folder_sort").appendingPathComponent(projectId)
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "folders": folderIds.joined(separator: ",")
+        ]
+        if let pid = parentFolderId, !pid.isEmpty {
+            params["folder_id"] = pid
+        }
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
+            throw SimianError.apiError("Failed to update folder sort: \(msg)")
+        }
+    }
+
+    /// Update file sort order within a folder
+    func updateFileSort(projectId: String, folderId: String, fileIds: [String]) async throws {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("update_file_sort").appendingPathComponent(projectId)
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "files": fileIds.joined(separator: ",")
+        ]
+        if !folderId.isEmpty {
+            params["folder_id"] = folderId
+        }
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
+            throw SimianError.apiError("Failed to update file sort: \(msg)")
+        }
+    }
+
+    /// Get a Simian short link for a folder (same as Share → Get Shortlink → Create Link in Simian UI).
+    /// - Parameters:
+    ///   - projectId: The project ID
+    ///   - folderId: The folder ID (required - API does not support project root)
+    /// - Returns: The short link URL string (e.g. https://reel.io/6mq)
+    func getShortLink(projectId: String, folderId: String) async throws -> String {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("get_short_link").appendingPathComponent(projectId)
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "folder_id": folderId
+        ]
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
+            throw SimianError.apiError("Failed to get short link: \(msg)")
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let root = json["root"] as? [String: Any],
+              root["status"] as? String == "success",
+              let payload = root["payload"] as? [String: Any],
+              let shortLink = payload["short_link"] as? String,
+              !shortLink.isEmpty else {
+            throw SimianError.apiError("Invalid short link response")
+        }
+        return shortLink
+    }
+
+    /// Build a shareable web URL for a Simian project or folder.
+    /// - Parameters:
+    ///   - projectId: The project ID
+    ///   - folderId: Optional folder ID (nil for project root)
+    /// - Returns: URL like https://graysonmusic.gosimian.com/projects/123 or .../projects/123?folder_id=456
+    static func folderLinkURL(projectId: String, folderId: String?) -> URL? {
+        let base = "https://graysonmusic.gosimian.com"
+        var path = "\(base)/projects/\(projectId)"
+        if let folderId = folderId, !folderId.isEmpty {
+            path += "?folder_id=\(folderId)"
+        }
+        return URL(string: path)
+    }
+
+    /// Get the next folder number in sequence for numbered folders (01_, 02_, 03_, etc.)
+    /// Only applies numbering when the destination already has numbered folders.
+    /// - Parameters:
+    ///   - existingFolderNames: Names of folders already in the destination
+    ///   - sourceFolderName: The folder name we're uploading (may have number prefix)
+    /// - Returns: Folder name with correct sequence number (e.g. "04_Delivery"), or source name if no numbering needed
+    static func nextNumberedFolderName(existingFolderNames: [String], sourceFolderName: String) -> String {
+        let numberPrefixPattern = try? NSRegularExpression(pattern: "^([0-9]{1,3})_(.+)$")
+        let existingNumbers: Set<Int> = existingFolderNames.reduce(into: []) { result, name in
+            if let match = numberPrefixPattern?.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
+               let numRange = Range(match.range(at: 1), in: name),
+               let num = Int(name[numRange]) {
+                result.insert(num)
+            }
+        }
+        // Only apply numbering when destination already has numbered folders
+        guard !existingNumbers.isEmpty else {
+            return sourceFolderName
+        }
+        let nextNum = (existingNumbers.max() ?? 0) + 1
+        let prefix = String(format: "%02d_", nextNum)
+        let baseName: String
+        if let match = numberPrefixPattern?.firstMatch(in: sourceFolderName, range: NSRange(sourceFolderName.startIndex..., in: sourceFolderName)),
+           let restRange = Range(match.range(at: 2), in: sourceFolderName) {
+            baseName = String(sourceFolderName[restRange])
+        } else {
+            baseName = sourceFolderName
+        }
+        return prefix + baseName
+    }
+    
     /// Copy folder structure from template project to new project
     /// - Parameters:
     ///   - fromTemplateProjectId: The template project ID
@@ -1863,7 +2058,9 @@ class SimianService: ObservableObject {
         
         // Parse response
         let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode"
+        #if DEBUG
         print("🔍 SimianService.getUsers() raw response: \(responseString)")
+        #endif
         
         // #region agent log
         let logDataResponse: [String: Any] = [
@@ -2418,10 +2615,11 @@ class SimianService: ObservableObject {
             throw SimianError.apiError("Failed to fetch project templates: \(errorMessage)")
         }
         
-        // Log raw response for debugging
+        #if DEBUG
         if let responseString = String(data: data, encoding: .utf8) {
             print("🔍 SimianService.getTemplates() raw response: \(responseString)")
         }
+        #endif
         
         // Parse response - get_project_list returns array of projects
         // Use do-catch to capture JSON parsing errors

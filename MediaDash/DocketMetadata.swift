@@ -119,30 +119,19 @@ class DocketMetadataManager: ObservableObject {
     }
 
     private func loadMetadata() {
-        print("DocketMetadataManager: Attempting to load CSV from: \(csvFileURL.path)")
-
-        guard FileManager.default.fileExists(atPath: csvFileURL.path) else {
-            print("DocketMetadataManager: CSV file does not exist at path")
-            return
-        }
+        guard FileManager.default.fileExists(atPath: csvFileURL.path) else { return }
 
         do {
             let csvContent = try String(contentsOf: csvFileURL, encoding: .utf8)
             var rows = csvContent.components(separatedBy: .newlines).filter { !$0.isEmpty }
 
-            print("DocketMetadataManager: CSV file loaded, found \(rows.count) rows")
-
             // Skip title row if it exists (e.g., "docket_metadata" on first line)
             if rows.count > 0 && !rows[0].contains(",") {
-                print("DocketMetadataManager: Skipping title row: \(rows[0])")
                 rows.removeFirst()
             }
 
             // Skip header row
-            guard rows.count > 1 else {
-                print("DocketMetadataManager: CSV file is empty or only has header row")
-                return
-            }
+            guard rows.count > 1 else { return }
 
             var loadedMetadata: [String: DocketMetadata] = [:]
 
@@ -159,9 +148,6 @@ class DocketMetadataManager: ObservableObject {
                 columnMap[cleanedHeader] = index
                 columnMapLowercase[cleanedHeader.lowercased()] = index
             }
-
-            print("CSV Headers: \(headerFields)")
-            print("Column map: \(columnMap)")
 
             // Helper function to find column index with fallback logic
             func findColumnIndex(_ columnName: String, fallbackNames: [String] = []) -> Int? {
@@ -194,22 +180,14 @@ class DocketMetadataManager: ObservableObject {
             // Common variations for project column
             let projectFallbacks = ["job_name", "job name", "job", "Job", "Job Name", "Job_Name", "project", "project_name", "project title", "Licensor/Project Title"]
 
-            print("Looking for docket column: '\(docketCol)' (with fallbacks: \(docketFallbacks.joined(separator: ", ")))")
             let numIdx = findColumnIndex(docketCol, fallbackNames: docketFallbacks)
-            if let idx = numIdx {
-                print("✅ Found docket column at index \(idx)")
-            } else {
+            if numIdx == nil {
                 print("❌ WARNING: Docket column not found! Available columns: \(headerFields.joined(separator: ", "))")
-                print("   Tried: '\(docketCol)' and fallbacks: \(docketFallbacks.joined(separator: ", "))")
             }
             
-            print("Looking for project column: '\(projectCol)' (with fallbacks: \(projectFallbacks.joined(separator: ", ")))")
             let nameIdx = findColumnIndex(projectCol, fallbackNames: projectFallbacks)
-            if let idx = nameIdx {
-                print("✅ Found project column at index \(idx)")
-            } else {
+            if nameIdx == nil {
                 print("❌ WARNING: Project column not found! Available columns: \(headerFields.joined(separator: ", "))")
-                print("   Tried: '\(projectCol)' and fallbacks: \(projectFallbacks.joined(separator: ", "))")
             }
 
             // Must have both columns to proceed
@@ -232,7 +210,9 @@ class DocketMetadataManager: ObservableObject {
                 // Get docket number and project title using found column indices
                 guard fields.count > docketIndex,
                       fields.count > projectIndex else {
+                    #if DEBUG
                     print("Skipping row: not enough columns (expected at least \(max(docketIndex, projectIndex) + 1), got \(fields.count))")
+                    #endif
                     continue
                 }
 
@@ -241,7 +221,9 @@ class DocketMetadataManager: ObservableObject {
 
                 // Skip if either is empty
                 guard !docketNumber.isEmpty && !jobName.isEmpty else {
+                    #if DEBUG
                     print("Skipping row with empty docket number or job name")
+                    #endif
                     continue
                 }
 
@@ -282,12 +264,12 @@ class DocketMetadataManager: ObservableObject {
                 }
 
                 loadedMetadata[key] = meta
-                print("Loaded docket: \(docketNumber) - \(jobName)")
             }
 
             metadata = loadedMetadata
-            print("DocketMetadataManager: Successfully loaded \(loadedMetadata.count) dockets from CSV")
-            print("DocketMetadataManager: CSV location: \(csvFileURL.path)")
+            #if DEBUG
+            print("DocketMetadataManager: Loaded \(loadedMetadata.count) dockets from CSV")
+            #endif
 
             if loadedMetadata.isEmpty {
                 print("DocketMetadataManager: WARNING - No dockets were loaded. Check CSV format:")

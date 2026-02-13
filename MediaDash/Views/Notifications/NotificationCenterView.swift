@@ -1633,6 +1633,18 @@ struct NotificationRowView: View {
         }
     }
     
+    /// Check if server (Work Picture path) is connected/accessible
+    private var isServerConnected: Bool {
+        let path = settingsManager.currentSettings.serverBasePath
+        guard !path.isEmpty else { return false }
+        return FileManager.default.fileExists(atPath: path)
+    }
+    
+    /// Check if Simian is configured and ready
+    private var isSimianConnected: Bool {
+        settingsManager.currentSettings.simianEnabled && simianService.isConfigured
+    }
+    
     /// Helper view for new docket actions
     @ViewBuilder
     private func newDocketActionsView(notification: Notification) -> some View {
@@ -1652,7 +1664,27 @@ struct NotificationRowView: View {
         let isInWorkPicture = existsInWorkPicture
         let isInSimian = existsInSimian
         
+        // Disable toggles when not connected to that service
+        let workPictureToggleDisabled = isInWorkPicture || !isServerConnected
+        let simianToggleDisabled = isInSimian || !isSimianConnected
+        let neitherConnected = !isServerConnected && !isSimianConnected
+        
         VStack(alignment: .leading, spacing: 8) {
+            // Warning when not connected to either server or Simian
+            if neitherConnected {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.orange)
+                    Text("Not connected to the server or Simian. Connect in Settings to create dockets.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.15))
+                .cornerRadius(6)
+            }
             // Visual indicators for PRE-EXISTING duplicates only
             if wasPreExistingInWorkPicture || wasPreExistingInSimian {
                 HStack(spacing: 8) {
@@ -1691,13 +1723,13 @@ struct NotificationRowView: View {
             
             Toggle("Create Work Picture Folder", isOn: workPictureBinding())
                 .font(.system(size: 11))
-                .disabled(isInWorkPicture)
-                .opacity(isInWorkPicture ? 0.5 : 1.0)
+                .disabled(workPictureToggleDisabled)
+                .opacity(workPictureToggleDisabled ? 0.5 : 1.0)
             
             Toggle("Create Simian Job", isOn: simianJobBinding())
                 .font(.system(size: 11))
-                .disabled(isInSimian)
-                .opacity(isInSimian ? 0.5 : 1.0)
+                .disabled(simianToggleDisabled)
+                .opacity(simianToggleDisabled ? 0.5 : 1.0)
             
             if processingNotification == notificationId {
                 HStack(spacing: 6) {
@@ -1762,8 +1794,12 @@ struct NotificationRowView: View {
     
     private func workPictureBinding() -> Binding<Bool> {
         Binding(
-            get: { notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateWorkPicture ?? true },
+            get: {
+                guard isServerConnected else { return false }
+                return notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateWorkPicture ?? true
+            },
             set: { newValue in
+                guard isServerConnected else { return }
                 if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
                     notificationCenter.updateActionFlags(currentNotification, workPicture: newValue)
                 }
@@ -1773,8 +1809,12 @@ struct NotificationRowView: View {
     
     private func simianJobBinding() -> Binding<Bool> {
         Binding(
-            get: { notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob ?? true },
+            get: {
+                guard isSimianConnected else { return false }
+                return notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob ?? true
+            },
             set: { newValue in
+                guard isSimianConnected else { return }
                 if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
                     notificationCenter.updateActionFlags(currentNotification, simianJob: newValue)
                 }

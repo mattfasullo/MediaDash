@@ -82,7 +82,9 @@ class NotificationSyncManager: ObservableObject {
     /// Sync with shared cache - merges completion status intelligently
     func syncWithSharedCache() async {
         guard let sharedURL = sharedCacheURL else {
+            #if DEBUG
             print("📋 [NotificationSync] No shared cache URL configured")
+            #endif
             return
         }
         
@@ -91,8 +93,6 @@ class NotificationSyncManager: ObservableObject {
             print("📋 [NotificationSync] Cannot access shared cache - server not connected")
             return
         }
-        
-        print("📋 [NotificationSync] Starting cache sync")
         
         await MainActor.run {
             isSyncing = true
@@ -107,17 +107,9 @@ class NotificationSyncManager: ObservableObject {
         }
         
         do {
-            // Load local completion status
             let localData = try await loadLocalCompletionData()
-            print("📋 [NotificationSync] Loaded local data: \(localData.completions.count) completions")
-            
-            // Load shared completion status
             let sharedData = try await loadSharedCompletionData(from: sharedURL)
-            print("📋 [NotificationSync] Loaded shared data: \(sharedData.completions.count) completions")
-            
-            // Merge: keep most recent completion status for each notification ID
             let mergedData = mergeCompletionData(local: localData, shared: sharedData)
-            print("📋 [NotificationSync] Merged data: \(mergedData.completions.count) completions")
             
             // Save merged data to local location first
             try await saveCompletionData(mergedData, to: getLocalCacheURL())
@@ -130,10 +122,11 @@ class NotificationSyncManager: ObservableObject {
                 }
                 
                 try await saveSharedCompletionData(mergedData, to: sharedURL)
-                print("📋 [NotificationSync] Cache sync completed successfully")
+                #if DEBUG
+                print("📋 [NotificationSync] Cache sync completed: \(mergedData.completions.count) completions")
+                #endif
             } catch {
                 print("📋 [NotificationSync] Failed to save to shared cache: \(error.localizedDescription)")
-                print("📋 [NotificationSync] Local cache sync succeeded")
             }
         } catch {
             print("📋 [NotificationSync] Cache sync failed: \(error.localizedDescription)")

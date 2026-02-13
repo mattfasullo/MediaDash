@@ -62,10 +62,23 @@ extension View {
         modifier(SheetBorderModifier())
             .modifier(SheetSizeStabilizer())
     }
-    
+
+    /// Border only, no size stabilizer. Use for compact sheets where the stabilizer
+    /// (which captures the sheet's default size) would prevent the sheet from sizing to fit.
+    func compactSheetBorder() -> some View {
+        modifier(SheetBorderModifier())
+    }
+
     /// Apply just the size stabilizer without the border
     func sheetSizeStabilizer() -> some View {
         modifier(SheetSizeStabilizer())
+    }
+    
+    /// Prevents sheet content from expanding to fill the sheet window.
+    /// Apply to sheet views with fixed/compact content so the sheet sizes to fit.
+    /// Use instead of or before .sheetBorder() for dialogs, option pickers, etc.
+    func compactSheetContent() -> some View {
+        fixedSize(horizontal: true, vertical: true)
     }
 }
 

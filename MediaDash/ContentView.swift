@@ -86,6 +86,8 @@ struct ContentView: View {
     @State private var pendingFileThenPrep = false
     /// After filing, open prep window for this session when isProcessing becomes false.
     @State private var pendingPrepSessionAfterFile: DocketInfo? = nil
+    /// Show task picker when download prompt user chose "Demo" — pick which Demos task to associate.
+    @State private var showDownloadDemosTaskPicker = false
 
     @FocusState private var focusedButton: ActionButtonFocus?
     @ObservedObject private var keyboardFocus = MainWindowKeyboardFocus.shared
@@ -262,8 +264,8 @@ struct ContentView: View {
                 cacheManager: cacheManager,
                 showSettingsSheet: $showSettingsSheet,
                 showVideoConverterSheet: $showVideoConverterSheet,
-                showPortalSheet: $showPortalSheet,
                 pendingFileThenPrep: $pendingFileThenPrep,
+                showDownloadDemosTaskPicker: $showDownloadDemosTaskPicker,
                 onFileThenPrepConfirm: handleFileThenPrepConfirm
             ))
             .modifier(ContentViewLifecycleModifier(
@@ -279,7 +281,8 @@ struct ContentView: View {
                 cacheManager: cacheManager,
                 isCommandKeyHeld: $isCommandKeyHeld,
                 autoSyncAsanaCache: autoSyncAsanaCache,
-                hourlySyncTask: $hourlySyncTask
+                hourlySyncTask: $hourlySyncTask,
+                onDownloadStagedWithIntent: handleDownloadStagedWithIntent
             ))
             // Notification popup is now handled by NotificationPopupWindowManager
             .onChange(of: showNotificationCenter) { oldValue, newValue in
@@ -493,7 +496,7 @@ struct ContentView: View {
                                 )
                             },
                             onFileThenPrep: attemptFileThenPrep,
-                            onOpenPortal: { showPortalSheet = true }
+                            showPortalSheet: $showPortalSheet
                         )
                         .offset(x: 0, y: -4) // Layout edit: sidebar offset
                         .draggableLayout(id: "sidebar")
@@ -698,6 +701,32 @@ struct ContentView: View {
         pendingFileThenPrep = true
         pendingJobType = .workPicture
         showDocketSelectionSheet = true
+    }
+
+    /// Called when a downloaded file is staged and user chose File/Prep/Demo in the popup.
+    private func handleDownloadStagedWithIntent(_ intent: String) {
+        switch intent {
+        case "file":
+            pendingJobType = .workPicture
+            pendingFileThenPrep = false
+            showDocketSelectionSheet = true
+        case "prep":
+            AsanaCalendarWindowManager.shared.show(
+                cacheManager: cacheManager,
+                settingsManager: settingsManager,
+                onPrepElements: { session in
+                    CalendarPrepWindowManager.shared.show(
+                        session: session,
+                        asanaService: cacheManager.service,
+                        manager: manager
+                    )
+                }
+            )
+        case "demo":
+            showDownloadDemosTaskPicker = true
+        default:
+            break
+        }
     }
 
     /// Called when user confirms docket in the sheet and we were in "File + Prep" mode. Run file, then set session to open prep when done.
@@ -4084,8 +4113,8 @@ struct SheetsModifier: ViewModifier {
     @ObservedObject var cacheManager: AsanaCacheManager
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
-    @Binding var showPortalSheet: Bool
     @Binding var pendingFileThenPrep: Bool
+    @Binding var showDownloadDemosTaskPicker: Bool
     var onFileThenPrepConfirm: (String) -> Void
 
     func body(content: Content) -> some View {
@@ -4097,6 +4126,7 @@ struct SheetsModifier: ViewModifier {
                     manager: manager,
                     settingsManager: settingsManager
                 )
+                .compactSheetContent()
                 .sheetBorder()
             }
             .sheet(isPresented: $showSearchSheet) {
@@ -4148,6 +4178,14 @@ struct SheetsModifier: ViewModifier {
                 QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager, cacheManager: cacheManager)
                     .sheetBorder()
             }
+            .sheet(isPresented: $showDownloadDemosTaskPicker) {
+                DownloadDemosTaskPickerSheet(
+                    isPresented: $showDownloadDemosTaskPicker,
+                    cacheManager: cacheManager,
+                    settingsManager: settingsManager
+                )
+                .sheetBorder()
+            }
             .sheet(isPresented: $manager.showPrepSummary) {
                 PrepSummaryView(summary: manager.prepSummary, isPresented: $manager.showPrepSummary)
                     .sheetBorder()
@@ -4155,24 +4193,6 @@ struct SheetsModifier: ViewModifier {
             .sheet(isPresented: $showVideoConverterSheet) {
                 VideoConverterView(manager: manager)
                     .sheetBorder()
-            }
-            .sheet(isPresented: $showPortalSheet) {
-                PortalView(
-                    isPresented: $showPortalSheet,
-                    onOpenVideoConverter: {
-                        showPortalSheet = false
-                        showVideoConverterSheet = true
-                    },
-                    onOpenRestripe: {
-                        showPortalSheet = false
-                        RestripeWindowManager.shared.show()
-                    },
-                    onOpenSimian: {
-                        showPortalSheet = false
-                        SimianPostWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
-                    }
-                )
-                .sheetBorder()
             }
             .sheet(isPresented: $manager.showOMFAAFValidator) {
                 if let fileURL = manager.omfAafFileToValidate,
@@ -4198,6 +4218,7 @@ struct ContentViewLifecycleModifier: ViewModifier {
     @Binding var isCommandKeyHeld: Bool
     let autoSyncAsanaCache: () -> Void
     @Binding var hourlySyncTask: Task<Void, Never>?
+    var onDownloadStagedWithIntent: ((String) -> Void)? = nil
     
     func body(content: Content) -> some View {
         content
@@ -4286,6 +4307,7 @@ struct ContentViewLifecycleModifier: ViewModifier {
             }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: DownloadPromptNotification.addToStaging)) { notification in
                 guard let url = notification.userInfo?["url"] as? URL else { return }
+                let intent = notification.userInfo?["intent"] as? String
                 DispatchQueue.main.async {
                     guard url.isFileURL else { return }
                     var isDirectory: ObjCBool = false
@@ -4294,6 +4316,9 @@ struct ContentViewLifecycleModifier: ViewModifier {
                     let existing = Set(manager.selectedFiles.map { $0.url })
                     if !existing.contains(fileItem.url) {
                         manager.selectedFiles.append(fileItem)
+                    }
+                    if let intent = intent {
+                        onDownloadStagedWithIntent?(intent)
                     }
                 }
             }

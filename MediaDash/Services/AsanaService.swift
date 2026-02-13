@@ -382,10 +382,9 @@ class AsanaService: ObservableObject {
     ///   - maxTasks: Maximum number of tasks to fetch per project (stops early if reached)
     ///   - modifiedSince: Optional date to only fetch tasks modified since this date (for incremental sync)
     func fetchTasks(workspaceID: String?, projectID: String?, maxTasks: Int? = nil, modifiedSince: Date? = nil) async throws -> [AsanaTask] {
-        print("🔵 [AsanaService] fetchTasks() called")
-        print("   - Workspace ID: \(workspaceID ?? "nil")")
-        print("   - Project ID: \(projectID ?? "nil")")
-        
+        #if DEBUG
+        print("🔵 [AsanaService] fetchTasks() called - Workspace: \(workspaceID ?? "nil"), Project: \(projectID ?? "nil")")
+        #endif
         guard accessToken != nil else {
             print("🔴 [AsanaService] ERROR: No access token")
             throw AsanaError.notAuthenticated
@@ -725,7 +724,7 @@ class AsanaService: ObservableObject {
         repeat {
             var components = URLComponents(string: "\(baseURL)/workspaces/\(wid)/tasks/search")!
             var queryItems: [URLQueryItem] = [
-                URLQueryItem(name: "opt_fields", value: "gid,name,due_on,due_at,memberships,custom_fields,modified_at,created_at,completed,parent,assignee,assignee.name,tags,tags.name,tags.color"),
+                URLQueryItem(name: "opt_fields", value: "gid,name,due_on,due_at,memberships,memberships.project,memberships.project.gid,custom_fields,modified_at,created_at,completed,parent,assignee,assignee.name,tags,tags.name,tags.color"),
                 URLQueryItem(name: "limit", value: "100"),
                 URLQueryItem(name: "due_on.after", value: yesterdayString),
                 URLQueryItem(name: "due_on.before", value: endDateString),
@@ -759,7 +758,7 @@ class AsanaService: ObservableObject {
         
         var components = URLComponents(string: "\(baseURL)/tasks/\(taskGid)")!
         components.queryItems = [
-            URLQueryItem(name: "opt_fields", value: "gid,name,notes,html_notes,due_on,due_at,modified_at,created_at,parent,parent.name,custom_fields,custom_fields.name,custom_fields.display_value,memberships,completed")
+            URLQueryItem(name: "opt_fields", value: "gid,name,notes,html_notes,due_on,due_at,modified_at,created_at,parent,parent.name,custom_fields,custom_fields.name,custom_fields.display_value,memberships,memberships.project,memberships.project.name,completed")
         ]
         
         guard let url = components.url else {
@@ -915,7 +914,8 @@ class AsanaService: ObservableObject {
     }
 
     /// Resolve the Music Demos docket folder name (e.g. "26014_Coors") from Asana task data.
-    /// Uses: (1) parent task docket/job if this task is a subtask, (2) task custom fields, (3) parse task name.
+    /// Uses: (1) parent task docket/job if this task is a subtask, (2) project name from memberships
+    /// (authoritative for demos/submit tasks – project is the docket, e.g. "26014_Coors"), (3) custom fields, (4) task name.
     func resolveDocketFolder(for task: AsanaTask, docketField: String?, jobNameField: String?) async throws -> String? {
         func folderFrom(docketNumber: String, jobName: String) -> String {
             let safe = jobName
@@ -946,7 +946,19 @@ class AsanaService: ObservableObject {
             return "\(docketNumber)_\(safe.isEmpty ? "Job" : safe)"
         }
         
-        // Prefer custom fields if configured
+        // Project name is authoritative for demos/submit tasks (e.g. "26014_Coors", "25464_TD Toddler")
+        if let memberships = task.memberships {
+            for membership in memberships {
+                if let projectName = membership.project?.name, !projectName.isEmpty {
+                    let (docket, jobName, _) = parseDocketFromString(projectName)
+                    if let docket = docket, !docket.isEmpty {
+                        return folderFrom(docketNumber: docket, jobName: jobName)
+                    }
+                }
+            }
+        }
+        
+        // Custom fields if configured
         if let docketField = docketField, !docketField.isEmpty,
            let docketNumber = task.getCustomFieldValue(name: docketField), !docketNumber.isEmpty {
             let jobName = jobNameField.flatMap { task.getCustomFieldValue(name: $0) } ?? ""

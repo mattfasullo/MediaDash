@@ -78,6 +78,7 @@ struct AuthenticatedRootView: View {
     @State private var initializationComplete = false
     @State private var initializationProgress: Double = 0.0
     @State private var initializationStatus: String = "Initializing..."
+    @State private var showServicesSetupPrompt = false
 
     init(sessionManager: SessionManager, profile: WorkspaceProfile) {
         self.sessionManager = sessionManager
@@ -150,6 +151,25 @@ struct AuthenticatedRootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showServicesSetupPrompt) {
+            let (gmail, asana, simian) = ServicesSetupPromptBuilder.buildStatus(
+                settings: settingsManager.currentSettings,
+                emailScanningService: emailScanningService,
+                simianService: simianService
+            )
+            ServicesSetupPromptSheet(
+                isPresented: $showServicesSetupPrompt,
+                onOpenSettings: {
+                    Foundation.NotificationCenter.default.post(
+                        name: Foundation.Notification.Name("OpenSettings"),
+                        object: nil
+                    )
+                },
+                gmailStatus: gmail,
+                asanaStatus: asana,
+                simianStatus: simian
+            )
+        }
         .onAppear {
                 // Sync settings manager with profile settings
                 settingsManager.currentSettings = profile.settings
@@ -232,17 +252,18 @@ struct AuthenticatedRootView: View {
                     // #endregion
                     // Restore tokens from Keychain
                     if let accessToken = SharedKeychainService.getGmailAccessToken(), !accessToken.isEmpty {
-                        // Restore refresh token if available
                         let refreshToken = SharedKeychainService.getGmailRefreshToken()
+                        #if DEBUG
                         print("GmailService: Restoring tokens on app launch")
-                        print("  - Access token: \(accessToken.prefix(20))...")
-                        print("  - Refresh token: \(refreshToken != nil ? "\(refreshToken!.prefix(20))..." : "nil")")
+                        #endif
                         emailScanningService.gmailService.setAccessToken(accessToken, refreshToken: refreshToken)
                         
                         // Start scanning - token will auto-refresh if expired
                         emailScanningService.startScanning()
                     } else {
+                        #if DEBUG
                         print("GmailService: No access token found in Keychain")
+                        #endif
                     }
                 }
                 
@@ -553,6 +574,18 @@ struct AuthenticatedRootView: View {
                 // Hide splash screen with animation
                 withAnimation(.easeOut(duration: 0.3)) {
                     self.showSplashScreen = false
+                }
+                // After splash is hidden, prompt to connect integrations if needed
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    let dontShowAgain = UserDefaults.standard.bool(forKey: "servicesPromptDontShowAgain")
+                    if ServicesSetupPromptBuilder.shouldShowPrompt(
+                        settings: settingsManager.currentSettings,
+                        emailScanningService: emailScanningService,
+                        simianService: simianService,
+                        dontShowAgain: dontShowAgain
+                    ) {
+                        showServicesSetupPrompt = true
+                    }
                 }
             }
         }

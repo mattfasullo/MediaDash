@@ -1,0 +1,29 @@
+---
+description: SwiftUI sheet sizing convention - prevent sheets from being larger than content
+globs: **/*.swift
+alwaysApply: false
+---
+
+# SwiftUI Sheet Sizing
+
+When creating new sheet views with **fixed or compact content** (dialogs, option pickers, forms, etc.), apply `.compactSheetContent()` **before** `.sheetBorder()` so the sheet sizes to fit its content instead of expanding to fill the window.
+
+## Usage
+
+```swift
+.sheet(isPresented: $showMySheet) {
+    MyCompactSheetView(...)
+        .compactSheetContent()
+        .sheetBorder()
+}
+```
+
+## When to use
+
+- **Use** for: Portal-style menus, simple forms, confirmation dialogs, option pickers, small input sheets
+- **Don't use** for: Sheets with ScrollViews, Lists, or variable-height content that needs to grow
+
+## Examples in this codebase
+
+- `PortalView` — compact menu with option cards
+- `NewDocketView` — simple form (docket number + job name)

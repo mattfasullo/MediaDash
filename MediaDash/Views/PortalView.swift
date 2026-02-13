@@ -18,7 +18,7 @@ struct PortalView: View {
     var onOpenSimian: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Portal")
                 .font(.title)
                 .fontWeight(.bold)
@@ -26,7 +26,7 @@ struct PortalView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            VStack(spacing: 12) {
+            VStack(spacing: 8) {
                 PortalOptionRow(
                     title: "Video conversion",
                     subtitle: "Convert to ProRes Proxy, adjust aspect ratio",
@@ -63,11 +63,9 @@ struct PortalView: View {
                     ) {}
                 }
             }
-
-            Spacer()
         }
-        .padding(28)
-        .frame(minWidth: 380, minHeight: 320)
+        .padding(20)
+        .frame(minWidth: 380, maxWidth: 380, minHeight: 300, maxHeight: 300)
     }
 }
 
@@ -77,6 +75,8 @@ private struct PortalOptionRow: View {
     let icon: String
     var disabled: Bool = false
     let action: () -> Void
+
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -101,11 +101,21 @@ private struct PortalOptionRow: View {
                 }
             }
             .padding(14)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(hoverBackgroundColor)
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+        .onHover { hovering in
+            isHovered = hovering && !disabled
+        }
+    }
+
+    private var hoverBackgroundColor: Color {
+        if disabled { return Color(nsColor: .controlBackgroundColor) }
+        return isHovered
+            ? Color.accentColor.opacity(0.2)
+            : Color(nsColor: .controlBackgroundColor)
     }
 }
 

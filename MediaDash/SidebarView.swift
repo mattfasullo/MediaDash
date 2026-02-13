@@ -56,8 +56,8 @@ struct SidebarView: View {
     var onOpenPrep: (() -> Void)? = nil
     /// Open full 2-week Asana calendar view.
     var onOpenFullCalendar: (() -> Void)? = nil
-    /// Open Portal sheet (media layups hub).
-    var onOpenPortal: (() -> Void)? = nil
+    /// Portal popover visibility (attach popover to button for correct arrow alignment).
+    @Binding var showPortalSheet: Bool
 
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
@@ -145,7 +145,7 @@ struct SidebarView: View {
                         }
                     },
                     onFileThenPrep: onFileThenPrep,
-                    onOpenPortal: onOpenPortal ?? {}
+                    showPortalSheet: $showPortalSheet
                 )
                 .draggableLayout(id: "actionButtons")
 

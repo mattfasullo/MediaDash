@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ActionButtonsView: View {
     @EnvironmentObject var settingsManager: SettingsManager
+    @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var manager: MediaManager
     @ObservedObject private var keyboardFocus = MainWindowKeyboardFocus.shared
     var focusedButton: FocusState<ActionButtonFocus?>.Binding
     var mainViewFocused: FocusState<Bool>.Binding
@@ -21,8 +23,7 @@ struct ActionButtonsView: View {
     var onOpenFullCalendar: () -> Void = {}
     /// Right-click "File + Prep": file first, then open prep for a matching calendar session.
     var onFileThenPrep: (() -> Void)? = nil
-    /// Open Portal sheet (media layups: video conversion, restriping, Simian).
-    var onOpenPortal: () -> Void = {}
+    @Binding var showPortalSheet: Bool
 
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
@@ -145,7 +146,7 @@ struct ActionButtonsView: View {
                     theme: currentTheme,
                     iconName: "film"
                 ) {
-                    onOpenPortal()
+                    showPortalSheet = true
                 }
                 .focused(focusedButton, equals: .convert)
                 .focusEffectDisabled()
@@ -160,6 +161,25 @@ struct ActionButtonsView: View {
                         "Ready."
                 }
                 .keyboardShortcut("4", modifiers: .command)
+                .popover(isPresented: $showPortalSheet, arrowEdge: .leading) {
+                    PortalView(
+                        isPresented: $showPortalSheet,
+                        onOpenVideoConverter: {
+                            showPortalSheet = false
+                            showVideoConverterSheet = true
+                        },
+                        onOpenRestripe: {
+                            showPortalSheet = false
+                            RestripeWindowManager.shared.show()
+                        },
+                        onOpenSimian: {
+                            showPortalSheet = false
+                            SimianPostWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager, manager: manager)
+                        }
+                    )
+                    .compactSheetBorder()
+                    .frame(width: 380, height: 300)
+                }
             }
         }
     }

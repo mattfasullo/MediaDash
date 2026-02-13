@@ -90,6 +90,89 @@ struct AppConfig: Sendable {
         return serverRoot.appendingPathComponent("\(year)_MUSIC DEMOS")
     }
 
+    // MARK: - Writers (Shared Server Store)
+
+    /// Writers file lives in MediaDash_Cache folder (sharedCacheURL) when configured; otherwise at server base/_MediaDash.
+    private nonisolated var writersFileURL: URL {
+        if let sharedURL = settings.sharedCacheURL, !sharedURL.isEmpty,
+           !sharedURL.hasPrefix("http://"), !sharedURL.hasPrefix("https://") {
+            let sharedPath = sharedURL.hasPrefix("file://") ? String(sharedURL.dropFirst(7)) : sharedURL
+            let cacheURL = URL(fileURLWithPath: sharedPath)
+            return cacheURL.appendingPathComponent("writers.json")
+        }
+        let base = URL(fileURLWithPath: settings.serverBasePath)
+        return base.appendingPathComponent("_MediaDash", isDirectory: true).appendingPathComponent("writers.json")
+    }
+
+    private nonisolated var writersBasePathExists: Bool {
+        if let sharedURL = settings.sharedCacheURL, !sharedURL.isEmpty,
+           !sharedURL.hasPrefix("http://"), !sharedURL.hasPrefix("https://") {
+            let sharedPath = sharedURL.hasPrefix("file://") ? String(sharedURL.dropFirst(7)) : sharedURL
+            let cacheURL = URL(fileURLWithPath: sharedPath)
+            return FileManager.default.fileExists(atPath: cacheURL.path)
+        }
+        return FileManager.default.fileExists(atPath: settings.serverBasePath)
+    }
+
+    /// Load saved writers from server. Returns empty array if file doesn't exist or isn't readable.
+    nonisolated func loadWritersFromServer() -> [(name: String, folderName: String)] {
+        let url = writersFileURL
+        let fm = FileManager.default
+        migrateWritersFromOldLocationIfNeeded(to: url)
+        guard fm.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else {
+            return []
+        }
+        return array.compactMap { dict -> (String, String)? in
+            guard let name = dict["name"], let folder = dict["folderName"], !name.isEmpty, !folder.isEmpty else { return nil }
+            return (name, folder)
+        }
+    }
+
+    /// Migrate writers.json from old location (server base) to new location (Misc.) if needed.
+    private nonisolated func migrateWritersFromOldLocationIfNeeded(to newURL: URL) {
+        guard settings.sharedCacheURL != nil else { return }
+        let oldURL = URL(fileURLWithPath: settings.serverBasePath)
+            .appendingPathComponent("_MediaDash", isDirectory: true).appendingPathComponent("writers.json")
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: newURL.path), fm.fileExists(atPath: oldURL.path) else { return }
+        try? fm.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
+        try? fm.copyItem(at: oldURL, to: newURL)
+    }
+
+    /// Append or update a writer in the server list. Merges with existing (updates if name matches).
+    nonisolated func saveWriterToServer(name: String, folderName: String) {
+        let url = writersFileURL
+        let fm = FileManager.default
+        let dir = url.deletingLastPathComponent()
+        guard writersBasePathExists else { return }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
+        var writers = loadWritersFromServer()
+        if let idx = writers.firstIndex(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            writers[idx] = (name, folderName)
+        } else {
+            writers.append((name, folderName))
+        }
+        let array = writers.map { ["name": $0.name, "folderName": $0.folderName] }
+        if let data = try? JSONSerialization.data(withJSONObject: array) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Ensure the docket folder exists under Music Demos (e.g. …/2026_MUSIC DEMOS/26014_Coors).
+    /// Creates the folder if it doesn't exist. Use when auto-linking demos/submit tasks.
+    nonisolated func ensureMusicDemosDocketFolder(docketFolderName: String, forYear year: Int? = nil) throws {
+        try ensureYearFolderStructure()
+        let y = year ?? Calendar.current.component(.year, from: Date())
+        let root = getMusicDemosRoot(for: y)
+        let docketPath = root.appendingPathComponent(docketFolderName)
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: docketPath.path) {
+            try fm.createDirectory(at: docketPath, withIntermediateDirectories: true, attributes: nil)
+        }
+    }
+
     /// Build prep folder name using format string from settings
     /// Uses FolderNamingService for consistent formatting
     nonisolated func prepFolderName(docket: String, date: Date) -> String {
@@ -125,6 +208,31 @@ struct AppConfig: Sendable {
         }
         let nextSeq = maxSeq + 1
         return namingService.demosDateFolderName(sequenceNumber: nextSeq, date: date)
+    }
+
+    /// Get the demos date folder for a docket if it already exists. Never creates folders.
+    /// Returns nil if the docket folder doesn't exist or has no date subfolders. Use for read-only listing.
+    nonisolated func getDemosDateFolderIfExists(docketFolderName: String, date: Date) -> URL? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: URL(fileURLWithPath: settings.serverBasePath).path) else { return nil }
+        let year = Calendar.current.component(.year, from: date)
+        let root = getMusicDemosRoot(for: year)
+        let docketPath = root.appendingPathComponent(docketFolderName)
+        guard fm.fileExists(atPath: docketPath.path) else { return nil }
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: docketPath.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        guard let existingSubdirs = try? fm.contentsOfDirectory(at: docketPath, includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey], options: [.skipsHiddenFiles]) else { return nil }
+        let dateFolders = existingSubdirs.filter { url in
+            var d: ObjCBool = false
+            return fm.fileExists(atPath: url.path, isDirectory: &d) && d.boolValue
+        }
+        guard !dateFolders.isEmpty else { return nil }
+        let best = dateFolders.max(by: { a, b in
+            let tA = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let tB = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return tA < tB
+        })
+        return best
     }
 
     /// URL for the demos date folder for a docket (e.g. …/2026_MUSIC DEMOS/26014_Coors/01_Feb.9.26).
@@ -1098,8 +1206,9 @@ class MediaManager: ObservableObject {
                 self.indexingFolders.remove(folder)
                 self.isIndexing = !self.indexingFolders.isEmpty
 
-                // Log the result for debugging
+                #if DEBUG
                 print("\(folder.displayName): Indexed \(index.count) items")
+                #endif
             }
         }
     }

@@ -39,11 +39,13 @@ class GraysonEmployeeWhitelist {
         }
         
         var currentWhitelist = whitelistedEmails
-        currentWhitelist.insert(normalizedEmail)
+        let (inserted, _) = currentWhitelist.insert(normalizedEmail)
         
         if let data = try? JSONEncoder().encode(currentWhitelist) {
             UserDefaults.standard.set(data, forKey: whitelistKey)
-            print("✅ GraysonEmployeeWhitelist: Added \(normalizedEmail) to whitelist")
+            #if DEBUG
+            if inserted { print("✅ GraysonEmployeeWhitelist: Added \(normalizedEmail) to whitelist") }
+            #endif
             return true
         }
         

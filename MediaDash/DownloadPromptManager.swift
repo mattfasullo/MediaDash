@@ -10,8 +10,9 @@ import SwiftUI
 import AppKit
 import Foundation
 
-/// Notification when user chooses "Use with MediaDash" for a downloaded file.
+/// Notification when user chooses an action for a downloaded file.
 /// userInfo["url"] = URL of the file to add to staging.
+/// userInfo["intent"] = optional String: "file" | "prep" | "demo" — which flow to start after staging.
 enum DownloadPromptNotification {
     static let addToStaging = Foundation.Notification.Name("MediaDashAddDownloadToStaging")
 }
@@ -94,12 +95,16 @@ final class DownloadPromptManager {
         let urlToSend = fileURL
         let view = DownloadPromptView(
             filename: filename,
-            onUseWithMediaDash: { [weak self] in
+            onSelect: { [weak self] intent in
                 self?.hidePopup()
+                var userInfo: [String: Any] = ["url": urlToSend]
+                if let intent = intent {
+                    userInfo["intent"] = intent
+                }
                 Foundation.NotificationCenter.default.post(
                     name: DownloadPromptNotification.addToStaging,
                     object: nil as Any?,
-                    userInfo: ["url": urlToSend]
+                    userInfo: userInfo
                 )
             },
             onDismiss: { [weak self] in
@@ -109,7 +114,7 @@ final class DownloadPromptManager {
         let controller = NSHostingController(rootView: view)
         
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 100),
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 130),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -130,8 +135,8 @@ final class DownloadPromptManager {
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
             let margin: CGFloat = 20
-            let w: CGFloat = 320
-            let h: CGFloat = 100
+            let w: CGFloat = 340
+            let h: CGFloat = 130
             let x = screenFrame.maxX - w - margin
             let y = screenFrame.maxY - h - margin
             window.setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
@@ -162,12 +167,13 @@ final class DownloadPromptManager {
 
 private struct DownloadPromptView: View {
     let filename: String
-    let onUseWithMediaDash: () -> Void
+    /// intent: "file" | "prep" | "demo" — which flow to start. Nil = just stage.
+    let onSelect: (String?) -> Void
     let onDismiss: () -> Void
     
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Use MediaDash with this file?")
+            Text("What is this?")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.primary)
             Text(filename)
@@ -176,9 +182,24 @@ private struct DownloadPromptView: View {
                 .lineLimit(2)
                 .truncationMode(.middle)
             HStack(spacing: 8) {
-                Button("Use with MediaDash", action: onUseWithMediaDash)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                Button("File") {
+                    onSelect("file")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Stage and file to Work Picture")
+                Button("Prep") {
+                    onSelect("prep")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Stage and select a session to prep")
+                Button("Demo") {
+                    onSelect("demo")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Stage and associate with a Demos task")
                 Button("Dismiss", action: onDismiss)
                     .buttonStyle(.bordered)
                     .controlSize(.small)

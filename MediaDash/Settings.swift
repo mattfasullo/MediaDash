@@ -575,7 +575,7 @@ struct AppSettings: Codable, Equatable {
     /// Composer/writer display name (from Asana) → folder name (initials or nickname) for Music Demos folders.
     var composerInitials: [String: String]?
 
-    /// Folder initials/nickname → display name to show (and use for new Asana subtasks). Right-click "Edit name for folder" updates this.
+    /// Folder initials/nickname → display name to show (and use for new Asana subtasks). Right-click "Edit display name" updates this.
     var displayNameForInitials: [String: String]?
 
     /// Built-in preset: composer name → initials/nickname. Customizable in Settings; user values override these.

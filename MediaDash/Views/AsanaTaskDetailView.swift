@@ -42,6 +42,9 @@ struct AsanaTaskDetailView: View {
     @State private var newFolderPromptName: String = ""
     @State private var promptedNewFolderKeys: Set<String> = []
     @State private var demosDropError: String?
+    @State private var demosFolderMissing: Bool = false
+    @State private var isEditingDemosFolderName: Bool = false
+    @State private var demosFolderNameEditText: String = ""
     @State private var expandedWriterNames: Set<String> = []
     @State private var trackInUse: [String: Set<String>] = [:] // composerName -> Set of filenames
     @State private var trackColors: [String: [String: String]] = [:] // composerName -> [filename: colorName]
@@ -51,14 +54,23 @@ struct AsanaTaskDetailView: View {
     @State private var postingLegendText: String = ""
     @State private var isSavingPostNotes: Bool = false
     @State private var postSaveError: String?
-    @FocusState private var postingLegendFocused: Bool
     @State private var isCreatingSubtask = false
     @State private var createSubtaskError: String?
+    @State private var isAddingWriter = false
+    @State private var addWriterName = ""
+    @State private var addWriterFolderName = ""
+    @State private var savedWriters: [(name: String, folderName: String)] = []
+    @State private var isAddingNewWriter = false
     @State private var whoSubmittingDropTargeted = false
     @State private var trackColorPopoverTarget: TrackColorPopoverTarget?
     @State private var isMarkingCurrentComplete = false
     @State private var isMarkingPostComplete = false
     @State private var markCompleteError: String?
+    @State private var isDescriptionCollapsed: Bool = false
+    @State private var isEditingPostingLegend: Bool = false
+    @State private var editableTaskDescription: String = ""
+    @State private var isSavingTaskDescription: Bool = false
+    @State private var taskDescriptionSaveError: String?
     private static let demosDocketUserDefaultsKeyPrefix = "mediaDash.demosTaskDocket."
     private static let demosTrackInUseKeyPrefix = "mediaDash.demosTrackInUse."
     private static let demosTrackColorKeyPrefix = "mediaDash.demosTrackColor."
@@ -113,6 +125,16 @@ struct AsanaTaskDetailView: View {
             .alert("Create subtask", isPresented: createSubtaskErrorBinding) {
                 Button("OK", role: .cancel) { createSubtaskError = nil }
             } message: { createSubtaskAlertMessage() }
+            .alert("Save description", isPresented: taskDescriptionSaveErrorBinding) {
+                Button("OK", role: .cancel) { taskDescriptionSaveError = nil }
+            } message: { taskDescriptionSaveAlertMessage() }
+    }
+
+    private var taskDescriptionSaveErrorBinding: Binding<Bool> {
+        Binding(
+            get: { taskDescriptionSaveError != nil },
+            set: { if !$0 { taskDescriptionSaveError = nil } }
+        )
     }
 
     private var contentWithPostSaveAlert: some View {
@@ -186,6 +208,11 @@ struct AsanaTaskDetailView: View {
         if let err = createSubtaskError { Text(err) }
     }
 
+    @ViewBuilder
+    private func taskDescriptionSaveAlertMessage() -> some View {
+        if let err = taskDescriptionSaveError { Text(err) }
+    }
+
     private func onAppearAction() {
         loadTaskAndSubtasks()
         demosDocketFolder = UserDefaults.standard.string(forKey: Self.demosDocketUserDefaultsKeyPrefix + taskGid) ?? ""
@@ -201,15 +228,15 @@ struct AsanaTaskDetailView: View {
     }
 
     private func onChangeTrackInUse() {
-        if !postingLegendFocused { postingLegendText = computedPostingLegendString() }
+        if !isEditingPostingLegend { postingLegendText = computedPostingLegendString() }
     }
 
     private func onChangeTrackColors() {
-        if !postingLegendFocused { postingLegendText = computedPostingLegendString() }
+        if !isEditingPostingLegend { postingLegendText = computedPostingLegendString() }
     }
 
     private func onChangeComposerFolderContents() {
-        if !postingLegendFocused { postingLegendText = computedPostingLegendString() }
+        if !isEditingPostingLegend { postingLegendText = computedPostingLegendString() }
         if taskKind == .demos, newFolderPromptKey == nil {
             let set = Set(subtasks.compactMap { $0.assignee?.name ?? $0.name }.filter { !$0.isEmpty })
             let other = composerFolderContents.keys.filter { !set.contains($0) && !knownComposerNames.contains($0) }
@@ -226,6 +253,9 @@ struct AsanaTaskDetailView: View {
                 let name = first.assignee?.name ?? first.name
                 if !name.isEmpty { composerInitialsPromptName = name }
             }
+        }
+        if taskKind == .demos, !new.isEmpty {
+            refreshComposerFolderContents()
         }
     }
 
@@ -257,10 +287,9 @@ struct AsanaTaskDetailView: View {
                 dueSection(task)
                 if taskKind == .demos {
                     demosDocketSection
-                    demosTrackSummarySection
                     subtasksSection
+                    demosPostingLegendSection
                     descriptionSection(task)
-                    postingLegendSection
                     if linkedPostTask != nil {
                         postTaskSection
                     }
@@ -294,6 +323,15 @@ struct AsanaTaskDetailView: View {
             set: { if !$0 { newFolderPromptKey = nil; newFolderPromptName = "" } }
         )) {
             newFolderPromptSheet
+        }
+        .sheet(isPresented: $isEditingDemosFolderName) {
+            editDemosFolderNameSheet
+        }
+        .sheet(isPresented: $isAddingWriter) {
+            AddWriterSheetWithSizing { addWriterSheet }
+        }
+        .sheet(isPresented: $isEditingPostingLegend) {
+            postingLegendEditSheet
         }
         .alert("Demos drop error", isPresented: Binding(
             get: { demosDropError != nil },
@@ -399,16 +437,46 @@ struct AsanaTaskDetailView: View {
 
     private func descriptionSection(_ task: AsanaTask) -> some View {
         let text = effectiveDescription(from: task)
+        let canEdit = taskKind == .post && task.completed != true
         return Group {
-            if !text.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
+            if canEdit {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Description")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.secondary)
+                    TextEditor(text: $editableTaskDescription)
+                        .font(.system(size: 12))
+                        .frame(minHeight: 60, maxHeight: 200)
+                        .padding(8)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    Button(action: saveTaskDescription) {
+                        if isSavingTaskDescription {
+                            ProgressView().scaleEffect(0.7)
+                        } else {
+                            Text("Save")
+                        }
+                    }
+                    .disabled(isSavingTaskDescription)
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(12)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                .cornerRadius(8)
+            } else if !text.isEmpty {
+                DisclosureGroup(isExpanded: Binding(
+                    get: { !isDescriptionCollapsed },
+                    set: { isDescriptionCollapsed = !$0 }
+                )) {
                     Text(text)
                         .font(.system(size: 12))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
+                        .padding(.top, 4)
+                } label: {
+                    Text("Description")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.secondary)
                 }
                 .padding(12)
                 .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
@@ -417,44 +485,64 @@ struct AsanaTaskDetailView: View {
         }
     }
 
-    /// POSTING LEGEND: ASSIGNED COLOUR - INITIALS/NICKNAME - RAW FILE NAME (live-updating).
-    private var demosTrackSummarySection: some View {
-        let entries: [(colorName: String, initials: String, filename: String)] = {
-            var list: [(String, String, String)] = []
-            for key in composerFolderContents.keys.sorted() {
-                guard let inUse = trackInUse[key], !inUse.isEmpty else { continue }
-                let initials = composerFolderName(for: key).isEmpty ? key : composerFolderName(for: key)
-                for filename in inUse.sorted() {
-                    let colorName = trackColor(composerName: key, filename: filename)
-                    list.append((colorName, initials, filename))
+    private func saveTaskDescription() {
+        guard taskKind == .post, let t = task else { return }
+        isSavingTaskDescription = true
+        Task {
+            do {
+                try await asanaService.updateTaskNotes(taskGid: t.gid, notes: editableTaskDescription)
+                await MainActor.run {
+                    isSavingTaskDescription = false
+                    loadTaskAndSubtasks()
+                }
+            } catch {
+                await MainActor.run {
+                    isSavingTaskDescription = false
+                    taskDescriptionSaveError = error.localizedDescription
                 }
             }
-            return list
-        }()
-        return Group {
-            if !entries.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("POSTING LEGEND")
-                        .font(.system(size: 12, weight: .bold))
-                        .underline()
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(entries.enumerated()), id: \.offset) { _, e in
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(colorForTrackColorName(e.colorName))
-                                    .frame(width: 8, height: 8)
-                                Text("\(e.colorName.isEmpty ? "—" : e.colorName.uppercased()) - \(e.initials.uppercased()) - \(e.filename)")
-                                    .font(.system(size: 10))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
+        }
+    }
+
+    /// Unified POSTING LEGEND: one section, right-click to copy. Replaces separate summary + editable legend.
+    private var demosPostingLegendSection: some View {
+        let fullText = postingLegendText.isEmpty
+            ? "POSTING LEGEND\n(No tracks in use yet)"
+            : "POSTING LEGEND\n" + postingLegendText
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Posting legend")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                Spacer()
+                if linkedPostTask != nil, linkedPostTask?.completed != true {
+                    Button(action: saveToPostTask) {
+                        if isSavingPostNotes {
+                            ProgressView().scaleEffect(0.6)
+                        } else {
+                            Text("Push to Post task")
                         }
                     }
-                    .padding(10)
-                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .disabled(isSavingPostNotes)
+                    .buttonStyle(.borderedProminent)
+                    .help("Save description and posting legend to the linked Post task in Asana")
                 }
             }
+            Text(fullText)
+                .font(.system(size: 11))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(10)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .contextMenu {
+                    Button("Copy") {
+                        copyPostingLegendToPasteboard()
+                    }
+                    Button("Edit legend…") {
+                        isEditingPostingLegend = true
+                    }
+                }
         }
     }
 
@@ -466,11 +554,19 @@ struct AsanaTaskDetailView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.secondary)
                     HStack(spacing: 8) {
-                        TextField("e.g. 26014_Coors", text: $demosDocketFolder)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: demosDocketFolder) { _, newVal in
-                                UserDefaults.standard.set(newVal.isEmpty ? nil : newVal, forKey: Self.demosDocketUserDefaultsKeyPrefix + taskGid)
-                                refreshComposerFolderContents()
+                        Text(demosDocketFolder.isEmpty ? "Not set" : demosDocketFolder)
+                            .font(.system(size: 13))
+                            .foregroundColor(demosDocketFolder.isEmpty ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .background(Color(nsColor: .controlBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .contextMenu {
+                                Button("Edit folder name…") {
+                                    isEditingDemosFolderName = true
+                                }
                             }
                         Button("Choose in Finder…") {
                             browseForDemosDocketFolder()
@@ -478,7 +574,23 @@ struct AsanaTaskDetailView: View {
                         .buttonStyle(.bordered)
                         .help("Select the docket folder under Music Demos")
                     }
-                    Text("Folder under Music Demos for this task. Set automatically from Asana when possible; you can change it or choose in Finder.")
+                    if demosFolderMissing {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text("Folder not found on server.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            Button("Create folder") {
+                                createDemosFolder()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                        .padding(8)
+                        .background(Color.orange.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    Text("Folder under Music Demos for this task. Right-click to edit name. Set automatically from Asana when possible.")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
@@ -486,28 +598,32 @@ struct AsanaTaskDetailView: View {
         }
     }
 
-    /// Posting legend (for Demos/Submit tasks). Edit here, then copy and paste into the Post task description yourself.
-    private var postingLegendSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("POSTING LEGEND")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.secondary)
+    /// Sheet for editing the posting legend (opened via context menu).
+    private var postingLegendEditSheet: some View {
+        VStack(spacing: 12) {
+            Text("Edit posting legend")
+                .font(.headline)
             TextEditor(text: $postingLegendText)
                 .font(.system(size: 11))
-                .frame(minHeight: 80, maxHeight: 160)
+                .frame(minWidth: 360, minHeight: 120, maxHeight: 200)
                 .padding(8)
                 .background(Color(nsColor: .textBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-                .focused($postingLegendFocused)
-            Button(action: copyPostingLegendToPasteboard) {
-                Text("Copy legend")
+            HStack {
+                Button("Copy") {
+                    copyPostingLegendToPasteboard()
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+                Button("Done") {
+                    isEditingPostingLegend = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.bordered)
-            .help("Copy to clipboard so you can paste into the Post task description in Asana")
         }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(20)
+        .frame(width: 400, height: 280)
     }
 
     /// Post task card: name, description, Mark complete. Shown only when a linked Post task exists.
@@ -675,7 +791,7 @@ struct AsanaTaskDetailView: View {
 
     private var editFolderNameSheet: some View {
         VStack(spacing: 16) {
-            Text("Edit folder name")
+            Text("Edit folder initials")
                 .font(.headline)
             if let name = editFolderNameComposer {
                 Text("Folder/initials for \"\(name)\" (used in Music Demos and POSTING LEGEND).")
@@ -706,9 +822,199 @@ struct AsanaTaskDetailView: View {
         .frame(width: 320)
     }
 
+    private var addWriterSheet: some View {
+        VStack(spacing: 16) {
+            Text("Add writer")
+                .font(.title2)
+            if isAddingNewWriter {
+                addNewWriterForm
+            } else {
+                savedWritersList
+                Divider()
+                Button("Add new writer…") {
+                    addWriterName = ""
+                    addWriterFolderName = ""
+                    isAddingNewWriter = true
+                }
+                .buttonStyle(.bordered)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    isAddingWriter = false
+                    isAddingNewWriter = false
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 420, height: isAddingNewWriter ? 260 : 380)
+        .onAppear { loadSavedWriters() }
+        .onChange(of: isAddingNewWriter) { _, showingForm in
+            if !showingForm { loadSavedWriters() }
+        }
+    }
+
+    private var savedWritersList: some View {
+        let currentNames = Set(subtasks.compactMap { $0.assignee?.name ?? $0.name }.filter { !$0.isEmpty })
+        let available = savedWriters.filter { !currentNames.contains($0.name) }
+        let allAlreadyAdded = !savedWriters.isEmpty && available.isEmpty
+        return Group {
+            if available.isEmpty {
+                VStack(spacing: 12) {
+                    if allAlreadyAdded {
+                        Text("All saved writers are already added to this task.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("No saved writers yet.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Text("Writers are saved from Settings (Composer initials) or when you add a new writer below. Add one now, or open Settings to configure composer→folder mappings.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                        if settingsManager != nil {
+                            HStack(spacing: 12) {
+                                Button("Open Settings") {
+                                    Foundation.NotificationCenter.default.post(name: Foundation.Notification.Name("OpenSettings"), object: nil)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                Button("Refresh") {
+                                    loadSavedWriters()
+                                }
+                                .buttonStyle(.bordered)
+                                .help("Reload writers after adding them in Settings")
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+                .padding(.horizontal, 16)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(available, id: \.name) { writer in
+                            Button {
+                                Task { await addWriterSubtask(name: writer.name, folderName: writer.folderName) }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(writer.name)
+                                            .font(.body)
+                                            .fontWeight(.medium)
+                                            .foregroundColor(.primary)
+                                        Text("Folder: \(writer.folderName)")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.title3)
+                                        .foregroundColor(.accentColor)
+                                }
+                                .padding(12)
+                                .background(Color(nsColor: .controlBackgroundColor))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            }
+        }
+    }
+
+    private var addNewWriterForm: some View {
+        VStack(spacing: 16) {
+            Text("Enter name and folder initials/nickname for the new writer.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            TextField("Writer name", text: $addWriterName)
+                .textFieldStyle(.roundedBorder)
+            TextField("Folder name (initials or nickname)", text: $addWriterFolderName)
+                .textFieldStyle(.roundedBorder)
+                .help("e.g. IC, JM, or Goldie")
+            HStack(spacing: 12) {
+                Button("Back") {
+                    isAddingNewWriter = false
+                }
+                Button("Add") {
+                    Task { await addWriterSubtask(name: addWriterName.trimmingCharacters(in: .whitespaces), folderName: addWriterFolderName.trimmingCharacters(in: .whitespaces)) }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(addWriterName.trimmingCharacters(in: .whitespaces).isEmpty || addWriterFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private func loadSavedWriters() {
+        var fromServer: [(name: String, folderName: String)] = []
+        if let config = config {
+            fromServer = config.loadWritersFromServer()
+        }
+        if fromServer.isEmpty {
+            var seen = Set<String>()
+            let defaults = AppSettings.defaultComposerInitials
+            let custom = settingsManager?.currentSettings.composerInitials ?? [:]
+            let display = (settingsManager?.currentSettings.displayNameForInitials ?? [:])
+                .merging(AppSettings.defaultDisplayNameForInitials) { _, preset in preset }
+            let effectiveInitials = defaults.merging(custom) { _, user in user }
+            for (name, folder) in effectiveInitials where !name.isEmpty && !folder.isEmpty && !seen.contains(name.lowercased()) {
+                fromServer.append((name, folder))
+                seen.insert(name.lowercased())
+            }
+            for (folder, name) in display where !folder.isEmpty && !name.isEmpty && !seen.contains(name.lowercased()) {
+                fromServer.append((name, folder))
+                seen.insert(name.lowercased())
+            }
+            if !fromServer.isEmpty, let config = config {
+                for w in fromServer { config.saveWriterToServer(name: w.name, folderName: w.folderName) }
+            }
+        }
+        savedWriters = fromServer.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var editDemosFolderNameSheet: some View {
+        VStack(spacing: 16) {
+            Text("Edit docket folder name")
+                .font(.headline)
+            Text("Folder under Music Demos (e.g. 26014_Coors).")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            TextField("e.g. 26014_Coors", text: $demosFolderNameEditText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 260)
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    isEditingDemosFolderName = false
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    let trimmed = demosFolderNameEditText.trimmingCharacters(in: .whitespaces)
+                    demosDocketFolder = trimmed
+                    UserDefaults.standard.set(trimmed.isEmpty ? nil : trimmed, forKey: Self.demosDocketUserDefaultsKeyPrefix + taskGid)
+                    refreshComposerFolderContents()
+                    isEditingDemosFolderName = false
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 340)
+        .onAppear {
+            demosFolderNameEditText = demosDocketFolder
+        }
+    }
+
     private var editDisplayNameForInitialsSheet: some View {
         VStack(spacing: 16) {
-            Text("Edit name for folder")
+            Text("Edit display name")
                 .font(.headline)
             if let initials = editDisplayNameForInitialsKey {
                 Text("Display name for \"\(initials)\" (used as row title and when creating Asana subtasks).")
@@ -781,9 +1087,32 @@ struct AsanaTaskDetailView: View {
                 let subtaskComposerNames = Set(subtasks.compactMap { $0.assignee?.name ?? $0.name }.filter { !$0.isEmpty })
                 let knownFolderOnlyKeys = composerFolderContents.keys.filter { knownComposerNames.contains($0) && !subtaskComposerNames.contains($0) }.sorted()
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(subtasksSectionTitle)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.secondary)
+                    HStack {
+                        Text(subtasksSectionTitle)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("Add writer…") {
+                            addWriterName = ""
+                            isAddingWriter = true
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11))
+                        .foregroundColor(.accentColor)
+                    }
+                    if taskKind == .demos, !writersNeedingInitials.isEmpty {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text("\(writersNeedingInitials.count) writer(s) need initials set before folders can be created: \(writersNeedingInitials.joined(separator: ", ")).")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
                     VStack(spacing: 4) {
                         ForEach(subtasks, id: \.gid) { st in
                             subtaskRow(st)
@@ -910,9 +1239,36 @@ struct AsanaTaskDetailView: View {
                     Text("Folder: \(folderName)")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
+                } else if !composerName.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
+                        Text("Needs initials")
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
+                        Button("Set…") {
+                            composerInitialsPromptName = composerName
+                            composerInitialsPromptEntered = ""
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 10))
+                    }
                 }
             }
             Spacer()
+            if !files.isEmpty {
+                HStack(spacing: 3) {
+                    ForEach(files, id: \.self) { filename in
+                        Circle()
+                            .fill(colorForTrackColorName(trackColor(composerName: composerName, filename: filename)))
+                            .frame(width: 8, height: 8)
+                    }
+                }
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
             Button("Add files…") {
                 addFilesViaFinder(composerName: composerName)
             }
@@ -922,15 +1278,17 @@ struct AsanaTaskDetailView: View {
         .padding(8)
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Edit folder name…") {
+            Button("Edit folder initials…") {
                 editFolderNameComposer = composerName
                 editFolderNameEntered = composerFolderName(for: composerName)
             }
+            .help("Folder shorthand used in Music Demos path (e.g. JS, IC)")
             if !folderName.isEmpty {
-                Button("Edit name for folder…") {
+                Button("Edit display name…") {
                     editDisplayNameForInitialsKey = folderName
                     editDisplayNameForInitialsEntered = displayNameForInitials(for: folderName)
                 }
+                .help("Name shown as row title and when creating Asana subtasks")
             }
         }
         .onDrop(of: [.fileURL, .audio], isTargeted: nil) { providers in
@@ -942,44 +1300,48 @@ struct AsanaTaskDetailView: View {
                 .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         } else {
-            DisclosureGroup(isExpanded: Binding(
-                get: { isExpanded },
-                set: { if $0 { expandedWriterNames.insert(composerName) } else { expandedWriterNames.remove(composerName) } }
-            )) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(files, id: \.self) { filename in
-                        HStack(spacing: 8) {
-                            Toggle(isOn: Binding(
-                                get: { isTrackInUse(composerName: composerName, filename: filename) },
-                                set: { setTrackInUse(composerName: composerName, filename: filename, inUse: $0) }
-                            )) {
-                                Text(filename)
-                                    .font(.system(size: 11))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            .toggleStyle(.checkbox)
-                            Button {
-                                trackColorPopoverTarget = TrackColorPopoverTarget(composerName: composerName, filename: filename)
-                            } label: {
-                                Circle()
-                                    .fill(colorForTrackColorName(trackColor(composerName: composerName, filename: filename)))
-                                    .frame(width: 14, height: 14)
-                                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.3), lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                            .fixedSize()
-                        }
-                        .padding(.vertical, 2)
-                        .padding(.leading, 8)
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if isExpanded { expandedWriterNames.remove(composerName) } else { expandedWriterNames.insert(composerName) }
                     }
+                } label: {
+                    writerRow
                 }
-                .padding(.vertical, 6)
-                .padding(.leading, 4)
-            } label: {
-                writerRow
+                .buttonStyle(.plain)
+                if isExpanded {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(files, id: \.self) { filename in
+                            HStack(spacing: 8) {
+                                Toggle(isOn: Binding(
+                                    get: { isTrackInUse(composerName: composerName, filename: filename) },
+                                    set: { setTrackInUse(composerName: composerName, filename: filename, inUse: $0) }
+                                )) {
+                                    Text(filename)
+                                        .font(.system(size: 11))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                .toggleStyle(.checkbox)
+                                Button {
+                                    trackColorPopoverTarget = TrackColorPopoverTarget(composerName: composerName, filename: filename)
+                                } label: {
+                                    Circle()
+                                        .fill(colorForTrackColorName(trackColor(composerName: composerName, filename: filename)))
+                                        .frame(width: 14, height: 14)
+                                        .overlay(Circle().strokeBorder(Color.primary.opacity(0.3), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                                .fixedSize()
+                            }
+                            .padding(.vertical, 2)
+                            .padding(.leading, 8)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.leading, 4)
+                }
             }
-            .padding(8)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
@@ -1112,6 +1474,18 @@ struct AsanaTaskDetailView: View {
                 }
             }
             Spacer()
+            if !files.isEmpty {
+                HStack(spacing: 3) {
+                    ForEach(files, id: \.self) { filename in
+                        Circle()
+                            .fill(colorForTrackColorName(trackColor(composerName: composerName, filename: filename)))
+                            .frame(width: 8, height: 8)
+                    }
+                }
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
             Button("Add files…") {
                 addFilesViaFinder(composerName: composerName, folderNameOverride: folderName.isEmpty ? nil : folderName)
             }
@@ -1121,14 +1495,16 @@ struct AsanaTaskDetailView: View {
         .padding(8)
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Edit folder name…") {
+            Button("Edit folder initials…") {
                 editFolderNameComposer = composerName
                 editFolderNameEntered = folderName
             }
-            Button("Edit name for folder…") {
+            .help("Folder shorthand used in Music Demos path (e.g. JS, IC)")
+            Button("Edit display name…") {
                 editDisplayNameForInitialsKey = folderName
                 editDisplayNameForInitialsEntered = composerName
             }
+            .help("Name shown as row title and when creating Asana subtasks")
         }
         .onDrop(of: [.fileURL, .audio], isTargeted: nil) { providers in
             handleDrop(providers: providers, composerName: composerName, folderNameOverride: folderName.isEmpty ? nil : folderName)
@@ -1138,44 +1514,48 @@ struct AsanaTaskDetailView: View {
                 .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         } else {
-            DisclosureGroup(isExpanded: Binding(
-                get: { isExpanded },
-                set: { if $0 { expandedWriterNames.insert(composerName) } else { expandedWriterNames.remove(composerName) } }
-            )) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(files, id: \.self) { filename in
-                        HStack(spacing: 8) {
-                            Toggle(isOn: Binding(
-                                get: { isTrackInUse(composerName: composerName, filename: filename) },
-                                set: { setTrackInUse(composerName: composerName, filename: filename, inUse: $0, folderNameOverride: folderName.isEmpty ? nil : folderName) }
-                            )) {
-                                Text(filename)
-                                    .font(.system(size: 11))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            .toggleStyle(.checkbox)
-                            Button {
-                                trackColorPopoverTarget = TrackColorPopoverTarget(composerName: composerName, filename: filename)
-                            } label: {
-                                Circle()
-                                    .fill(colorForTrackColorName(trackColor(composerName: composerName, filename: filename)))
-                                    .frame(width: 14, height: 14)
-                                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.3), lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                            .fixedSize()
-                        }
-                        .padding(.vertical, 2)
-                        .padding(.leading, 8)
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if isExpanded { expandedWriterNames.remove(composerName) } else { expandedWriterNames.insert(composerName) }
                     }
+                } label: {
+                    writerRow
                 }
-                .padding(.vertical, 6)
-                .padding(.leading, 4)
-            } label: {
-                writerRow
+                .buttonStyle(.plain)
+                if isExpanded {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(files, id: \.self) { filename in
+                            HStack(spacing: 8) {
+                                Toggle(isOn: Binding(
+                                    get: { isTrackInUse(composerName: composerName, filename: filename) },
+                                    set: { setTrackInUse(composerName: composerName, filename: filename, inUse: $0, folderNameOverride: folderName.isEmpty ? nil : folderName) }
+                                )) {
+                                    Text(filename)
+                                        .font(.system(size: 11))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                .toggleStyle(.checkbox)
+                                Button {
+                                    trackColorPopoverTarget = TrackColorPopoverTarget(composerName: composerName, filename: filename)
+                                } label: {
+                                    Circle()
+                                        .fill(colorForTrackColorName(trackColor(composerName: composerName, filename: filename)))
+                                        .frame(width: 14, height: 14)
+                                        .overlay(Circle().strokeBorder(Color.primary.opacity(0.3), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                                .fixedSize()
+                            }
+                            .padding(.vertical, 2)
+                            .padding(.leading, 8)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.leading, 4)
+                }
             }
-            .padding(8)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
@@ -1200,6 +1580,18 @@ struct AsanaTaskDetailView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
+            if !files.isEmpty {
+                HStack(spacing: 3) {
+                    ForEach(files, id: \.self) { filename in
+                        Circle()
+                            .fill(colorForTrackColorName(trackColor(composerName: folderKey, filename: filename)))
+                            .frame(width: 8, height: 8)
+                    }
+                }
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
             Button("Add files…") {
                 addFilesViaFinder(composerName: folderKey, folderNameOverride: folderKey)
             }
@@ -1209,14 +1601,16 @@ struct AsanaTaskDetailView: View {
         .padding(8)
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Edit folder name…") {
+            Button("Edit folder initials…") {
                 editFolderNameComposer = folderKey
                 editFolderNameEntered = composerFolderName(for: folderKey).isEmpty ? folderKey : composerFolderName(for: folderKey)
             }
-            Button("Edit name for folder…") {
+            .help("Folder shorthand used in Music Demos path (e.g. JS, IC)")
+            Button("Edit display name…") {
                 editDisplayNameForInitialsKey = folderKey
                 editDisplayNameForInitialsEntered = displayNameForInitials(for: folderKey)
             }
+            .help("Name shown as row title and when creating Asana subtasks")
         }
         .onDrop(of: [.fileURL, .audio], isTargeted: nil) { providers in
             handleDrop(providers: providers, composerName: folderKey, folderNameOverride: folderKey)
@@ -1227,44 +1621,48 @@ struct AsanaTaskDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .draggable(OtherFolderDragPayload.dragString(for: folderKey))
         } else {
-            DisclosureGroup(isExpanded: Binding(
-                get: { isExpanded },
-                set: { if $0 { expandedWriterNames.insert(folderKey) } else { expandedWriterNames.remove(folderKey) } }
-            )) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(files, id: \.self) { filename in
-                        HStack(spacing: 8) {
-                            Toggle(isOn: Binding(
-                                get: { isTrackInUse(composerName: folderKey, filename: filename) },
-                                set: { setTrackInUse(composerName: folderKey, filename: filename, inUse: $0, folderNameOverride: folderKey) }
-                            )) {
-                                Text(filename)
-                                    .font(.system(size: 11))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            .toggleStyle(.checkbox)
-                            Button {
-                                trackColorPopoverTarget = TrackColorPopoverTarget(composerName: folderKey, filename: filename)
-                            } label: {
-                                Circle()
-                                    .fill(colorForTrackColorName(trackColor(composerName: folderKey, filename: filename)))
-                                    .frame(width: 14, height: 14)
-                                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.3), lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                            .fixedSize()
-                        }
-                        .padding(.vertical, 2)
-                        .padding(.leading, 8)
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if isExpanded { expandedWriterNames.remove(folderKey) } else { expandedWriterNames.insert(folderKey) }
                     }
+                } label: {
+                    writerRow
                 }
-                .padding(.vertical, 6)
-                .padding(.leading, 4)
-            } label: {
-                writerRow
+                .buttonStyle(.plain)
+                if isExpanded {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(files, id: \.self) { filename in
+                            HStack(spacing: 8) {
+                                Toggle(isOn: Binding(
+                                    get: { isTrackInUse(composerName: folderKey, filename: filename) },
+                                    set: { setTrackInUse(composerName: folderKey, filename: filename, inUse: $0, folderNameOverride: folderKey) }
+                                )) {
+                                    Text(filename)
+                                        .font(.system(size: 11))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                .toggleStyle(.checkbox)
+                                Button {
+                                    trackColorPopoverTarget = TrackColorPopoverTarget(composerName: folderKey, filename: filename)
+                                } label: {
+                                    Circle()
+                                        .fill(colorForTrackColorName(trackColor(composerName: folderKey, filename: filename)))
+                                        .frame(width: 14, height: 14)
+                                        .overlay(Circle().strokeBorder(Color.primary.opacity(0.3), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                                .fixedSize()
+                            }
+                            .padding(.vertical, 2)
+                            .padding(.leading, 8)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.leading, 4)
+                }
             }
-            .padding(8)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .draggable(OtherFolderDragPayload.dragString(for: folderKey))
@@ -1324,14 +1722,6 @@ struct AsanaTaskDetailView: View {
         return f.date(from: s)
     }
 
-    /// Linked if same calendar day and same docket/project (same parent GID or shared project membership).
-    private func isSameDocketOrProject(demos: AsanaTask, post: AsanaTask) -> Bool {
-        if let p1 = demos.parent?.gid, let p2 = post.parent?.gid, p1 == p2 { return true }
-        let proj1 = Set(demos.memberships?.compactMap { $0.project?.gid } ?? [])
-        let proj2 = Set(post.memberships?.compactMap { $0.project?.gid } ?? [])
-        return !proj1.isDisjoint(with: proj2)
-    }
-
     private func loadTaskAndSubtasks() {
         isLoading = true
         loadError = nil
@@ -1346,23 +1736,26 @@ struct AsanaTaskDetailView: View {
                 async let taskResult = asanaService.fetchTask(taskGid: taskGid)
                 async let subtasksResult = asanaService.fetchSubtasks(taskGid: taskGid)
                 let (t, st) = try await (taskResult, subtasksResult)
+                let isPost = t.name.lowercased().contains("post")
                 await MainActor.run {
                     task = t
                     subtasks = st
                     isLoading = false
                     refreshComposerFolderContents()
+                    if isPost {
+                        editableTaskDescription = effectiveDescription(from: t)
+                    } else {
+                        editableTaskDescription = ""
+                    }
                 }
                 let isDemos = (t.name.lowercased().contains("demos") || t.name.lowercased().contains("demo ") || t.name.lowercased().contains("submit"))
-                // Resolve linked Post task: same day + same docket/project (from cache)
+                // Resolve linked Post task (uses DemosPostLinkStore for manual overrides)
                 if isDemos, let cache = await MainActor.run(body: { cache }) {
                     let demosDue = String((t.effectiveDueDate ?? "").prefix(10))
                     let candidates = await MainActor.run { cache.cachedTasksTwoWeeks }
                     let sameDay = candidates.filter { ($0.effectiveDueDate ?? "").prefix(10) == demosDue }
-                    if let postTask = sameDay.first(where: { other in
-                        other.gid != t.gid
-                            && other.name.lowercased().contains("post")
-                            && isSameDocketOrProject(demos: t, post: other)
-                    }) {
+                    let postTasks = sameDay.filter { $0.name.lowercased().contains("post") }
+                    if let postTask = DemosPostLinkStore.resolveLinkedPost(demos: t, sameDayPosts: postTasks) {
                         let fullPost = try? await asanaService.fetchTask(taskGid: postTask.gid)
                         if let full = fullPost {
                             let (descWithoutLegend, legendPart) = Self.parsePostNotesForLegend(full.notes ?? full.html_notes ?? "")
@@ -1380,8 +1773,8 @@ struct AsanaTaskDetailView: View {
                         }
                     }
                 }
-                // Auto-fill docket folder for Demos tasks when not already set (from Asana parent/custom fields/name)
-                if isDemos, cfg != nil, sm != nil {
+                // Auto-fill docket folder for Demos tasks when not already set (from Asana project/parent/custom fields/name)
+                if isDemos, let cfg = cfg, sm != nil {
                     let currentFolder = await MainActor.run { demosDocketFolder }
                     guard currentFolder.isEmpty else { return }
                     if let resolved = try? await asanaService.resolveDocketFolder(
@@ -1389,6 +1782,11 @@ struct AsanaTaskDetailView: View {
                         docketField: sm?.currentSettings.asanaDocketField,
                         jobNameField: sm?.currentSettings.asanaJobNameField
                     ) {
+                        // Create the {docket}_{jobName} folder under Music Demos if it doesn't exist
+                        let year = t.effectiveDueDate.flatMap { parseShortDate(String($0.prefix(10))) }
+                            .map { Calendar.current.component(.year, from: $0) }
+                            ?? Calendar.current.component(.year, from: Date())
+                        try? cfg.ensureMusicDemosDocketFolder(docketFolderName: resolved, forYear: year)
                         await MainActor.run {
                             demosDocketFolder = resolved
                             UserDefaults.standard.set(resolved, forKey: Self.demosDocketUserDefaultsKeyPrefix + taskGid)
@@ -1433,6 +1831,13 @@ struct AsanaTaskDetailView: View {
         return lines.joined(separator: "\n")
     }
     
+    private func createDemosFolder() {
+        guard let config = config, !demosDocketFolder.isEmpty, let t = task else { return }
+        let dueDate = t.effectiveDueDate.flatMap { parseShortDate(String($0.prefix(10))) } ?? Date()
+        _ = try? config.getOrCreateDemosDateFolder(docketFolderName: demosDocketFolder, date: dueDate)
+        refreshComposerFolderContents()
+    }
+
     private func browseForDemosDocketFolder() {
         guard let config = config else { return }
         let year = task?.effectiveDueDate.flatMap { parseShortDate(String($0.prefix(10))) }
@@ -1486,6 +1891,14 @@ struct AsanaTaskDetailView: View {
     }
 
     /// Set of names we treat as "known" composers (have initials or are a display name for some initial). Used to link folders and avoid duplicate Other rows.
+    /// Subtask writers (assignee name or task name) that don't have initials/nickname set yet.
+    private var writersNeedingInitials: [String] {
+        guard taskKind == .demos else { return [] }
+        return subtasks
+            .compactMap { $0.assignee?.name ?? $0.name }
+            .filter { !$0.isEmpty && composerFolderName(for: $0).isEmpty }
+    }
+
     private var knownComposerNames: Set<String> {
         let fromInitials = settingsManager?.currentSettings.composerInitials ?? [:]
         let fromDisplay = settingsManager?.currentSettings.displayNameForInitials ?? [:]
@@ -1496,6 +1909,7 @@ struct AsanaTaskDetailView: View {
 
     private func saveComposerInitials(name: String, initials: String) {
         guard let sm = settingsManager else { return }
+        config?.saveWriterToServer(name: name, folderName: initials)
         var settings = sm.currentSettings
         var map = settings.composerInitials ?? [:]
         map[name] = initials
@@ -1517,6 +1931,44 @@ struct AsanaTaskDetailView: View {
         settings.displayNameForInitials = map.isEmpty ? nil : map
         sm.currentSettings = settings
         sm.saveCurrentProfile()
+    }
+
+    /// Create an Asana subtask for a writer (from list selection or "Add new writer" form).
+    private func addWriterSubtask(name: String, folderName: String) async {
+        guard !name.isEmpty, !folderName.isEmpty else { return }
+        await MainActor.run {
+            isAddingWriter = false
+            isAddingNewWriter = false
+            isCreatingSubtask = true
+            createSubtaskError = nil
+        }
+        do {
+            config?.saveWriterToServer(name: name, folderName: folderName)
+            saveComposerInitials(name: name, initials: folderName)
+            saveDisplayNameForInitials(initials: folderName, name: name)
+            _ = try await asanaService.createSubtask(parentTaskGid: taskGid, name: name)
+            // Create the composer folder on disk so it's ready for file drops
+            if let config = config, !demosDocketFolder.isEmpty, let t = task {
+                let dueDate = t.effectiveDueDate.flatMap { parseShortDate(String($0.prefix(10))) } ?? Date()
+                if let dateFolder = try? config.getOrCreateDemosDateFolder(docketFolderName: demosDocketFolder, date: dueDate) {
+                    let composerDir = dateFolder.appendingPathComponent(folderName)
+                    let fm = FileManager.default
+                    if !fm.fileExists(atPath: composerDir.path) {
+                        try? fm.createDirectory(at: composerDir, withIntermediateDirectories: true, attributes: nil)
+                    }
+                }
+            }
+            await MainActor.run {
+                isCreatingSubtask = false
+                loadTaskAndSubtasks()
+                refreshComposerFolderContents()
+            }
+        } catch {
+            await MainActor.run {
+                isCreatingSubtask = false
+                createSubtaskError = error.localizedDescription
+            }
+        }
     }
 
     /// Create an Asana subtask from a dropped "Other folder" (e.g. "Goldie"); then refresh so it appears under Who's submitting.
@@ -1621,8 +2073,14 @@ struct AsanaTaskDetailView: View {
     }
 
     private func refreshComposerFolderContents() {
-        guard let config = config, !demosDocketFolder.isEmpty, let t = task else {
+        guard let config = config, let t = task else {
             composerFolderContents = [:]
+            demosFolderMissing = false
+            return
+        }
+        guard !demosDocketFolder.isEmpty else {
+            composerFolderContents = [:]
+            demosFolderMissing = false
             return
         }
         let dueDate = t.effectiveDueDate.flatMap { s in parseShortDate(String(s.prefix(10))) } ?? Date()
@@ -1630,38 +2088,49 @@ struct AsanaTaskDetailView: View {
         var inUseFromDisk: [String: Set<String>] = [:]
         let fm = FileManager.default
         let subtaskComposerNames = Set(subtasks.compactMap { $0.assignee?.name ?? $0.name }.filter { !$0.isEmpty })
-        do {
-            let dateFolder = try config.getOrCreateDemosDateFolder(docketFolderName: demosDocketFolder, date: dueDate)
-            guard let subdirs = try? fm.contentsOfDirectory(at: dateFolder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
-                composerFolderContents = [:]
-                return
+        // Use read-only lookup — never create folders when refreshing
+        guard let dateFolder = config.getDemosDateFolderIfExists(docketFolderName: demosDocketFolder, date: dueDate) else {
+            composerFolderContents = [:]
+            demosFolderMissing = true
+            return
+        }
+        demosFolderMissing = false
+        // Auto-create writer folders for subtasks that have designated initials/nickname
+        for composerName in subtaskComposerNames {
+            let folderName = composerFolderName(for: composerName)
+            if !folderName.isEmpty {
+                let composerDir = dateFolder.appendingPathComponent(folderName)
+                if !fm.fileExists(atPath: composerDir.path) {
+                    _ = try? fm.createDirectory(at: composerDir, withIntermediateDirectories: true, attributes: nil)
+                }
             }
-            for subdir in subdirs {
-                var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: subdir.path, isDirectory: &isDir), isDir.boolValue else { continue }
-                let folderName = subdir.lastPathComponent
-                if let fileURLs = try? fm.contentsOfDirectory(at: subdir, includingPropertiesForKeys: nil) {
-                    let files = fileURLs.map { $0.lastPathComponent }.sorted()
-                    let key: String
-                    if let match = subtaskComposerNames.first(where: { composerFolderName(for: $0) == folderName }) {
-                        key = match
-                    } else if !displayNameForInitials(for: folderName).isEmpty {
-                        key = displayNameForInitials(for: folderName)
-                    } else {
-                        key = folderName
-                    }
-                    contents[key] = files
-                    for url in fileURLs where !url.hasDirectoryPath {
-                        let filename = url.lastPathComponent
-                        if Self.fileHasGreyTag(at: url) {
-                            inUseFromDisk[key, default: []].insert(filename)
-                        }
+        }
+        guard let subdirs = try? fm.contentsOfDirectory(at: dateFolder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
+            composerFolderContents = [:]
+            return
+        }
+        for subdir in subdirs {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: subdir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let folderName = subdir.lastPathComponent
+            if let fileURLs = try? fm.contentsOfDirectory(at: subdir, includingPropertiesForKeys: nil) {
+                let files = fileURLs.map { $0.lastPathComponent }.sorted()
+                let key: String
+                if let match = subtaskComposerNames.first(where: { composerFolderName(for: $0) == folderName }) {
+                    key = match
+                } else if !displayNameForInitials(for: folderName).isEmpty {
+                    key = displayNameForInitials(for: folderName)
+                } else {
+                    key = folderName
+                }
+                contents[key] = files
+                for url in fileURLs where !url.hasDirectoryPath {
+                    let filename = url.lastPathComponent
+                    if Self.fileHasGreyTag(at: url) {
+                        inUseFromDisk[key, default: []].insert(filename)
                     }
                 }
             }
-        } catch {
-            composerFolderContents = [:]
-            return
         }
         composerFolderContents = contents
         trackInUse = inUseFromDisk
@@ -1875,6 +2344,25 @@ struct AsanaTaskDetailView: View {
             tags.removeAll { $0 == inUseTagName }
         }
         try? nsurl.setResourceValue(tags, forKey: .tagNamesKey)
+    }
+}
+
+// MARK: - Add writer sheet with conditional presentation sizing
+
+private struct AddWriterSheetWithSizing<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        if #available(macOS 15.0, *) {
+            content
+                .presentationSizing(.fitted)
+        } else {
+            content
+        }
     }
 }
 
