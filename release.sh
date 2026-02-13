@@ -40,6 +40,8 @@ mkdir -p "$RELEASE_DIR"
 # Update version (syncs Info.plist and Xcode project)
 echo -e "${BLUE}📝 Updating version...${NC}"
 BUILD_NUMBER=$(echo "$VERSION" | awk -F. '{printf "%d", $1*100 + $2*10 + $3}')
+# 1.0 must be >= 103 for Sparkle (0.9.12 was 102)
+[ "$VERSION" = "1.0" ] && [ "$BUILD_NUMBER" -lt 103 ] && BUILD_NUMBER=103
 
 # Validate BUILD_NUMBER is numeric
 if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
