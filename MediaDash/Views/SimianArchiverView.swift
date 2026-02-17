@@ -440,6 +440,11 @@ struct SimianArchiverView: View {
                         Text("Downloaded \(formatBytesForProgress(archiveManager.downloadedBytes)) of \(formatBytesForProgress(archiveManager.totalBytes))")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    } else {
+                        ProgressView()
+                        Text("Preparing downloads…")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                     
                 }
@@ -448,6 +453,13 @@ struct SimianArchiverView: View {
                 Button("Cancel Archive") {
                     archiveManager.cancel()
                 }
+            }
+            
+            if !archiveManager.isRunning, !archiveManager.statusMessage.isEmpty {
+                Text(archiveManager.statusMessage)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             
             if let archiveError = archiveManager.errorMessage {
@@ -660,10 +672,12 @@ struct SimianArchiverView: View {
             for (id, url) in destinationByProjectId {
                 archiveLocations[id] = url
             }
+            let estimatedTotal = projs.reduce(Int64(0)) { $0 + (projectInfos[$1.id]?.projectSizeBytes ?? 0) }
             archiveManager.startArchive(
                 projects: projs,
                 destinationByProjectId: destinationByProjectId,
-                simianService: simianService
+                simianService: simianService,
+                estimatedTotalBytes: estimatedTotal > 0 ? estimatedTotal : nil
             ) { ids in
                 archivedProjectIds = archivedProjectIds.union(ids)
             }
@@ -705,10 +719,12 @@ struct SimianArchiverView: View {
             for project in projects {
                 archiveLocations[project.id] = destinationURL
             }
+            let estimatedTotal = projects.reduce(Int64(0)) { $0 + (projectInfos[$1.id]?.projectSizeBytes ?? 0) }
             archiveManager.startArchive(
                 projects: projects,
                 destinationURL: destinationURL,
-                simianService: simianService
+                simianService: simianService,
+                estimatedTotalBytes: estimatedTotal > 0 ? estimatedTotal : nil
             )
         }
     }

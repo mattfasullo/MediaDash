@@ -1,6 +1,12 @@
 import Foundation
 import Combine
 
+/// Thrown when the user cancels archiving; carries partial results for the UI.
+private struct ArchiveCancelledWithPartialResults: Error {
+    let successIds: [String]
+    let failures: [(projectId: String, projectName: String, errorMessage: String)]
+}
+
 private actor DownloadLogWriter {
     private let logURL: URL
     
@@ -41,14 +47,16 @@ final class SimianArchiveManager: ObservableObject {
     
     private var archiveTask: Task<Void, Never>?
     
-    func startArchive(projects: [SimianProject], destinationURL: URL, simianService: SimianService) {
+    func startArchive(projects: [SimianProject], destinationURL: URL, simianService: SimianService, estimatedTotalBytes: Int64? = nil) {
         let map = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, destinationURL) })
-        startArchive(projects: projects, destinationByProjectId: map, simianService: simianService)
+        startArchive(projects: projects, destinationByProjectId: map, simianService: simianService, estimatedTotalBytes: estimatedTotalBytes)
     }
 
     /// Archive projects to per-project destinations (e.g. GM DATA BACKUPS by year). Each project ID must be a key in destinationByProjectId.
-    /// - Parameter onSuccess: Called on main actor with archived project IDs when the run completes successfully (optional).
-    func startArchive(projects: [SimianProject], destinationByProjectId: [String: URL], simianService: SimianService, onSuccess: (([String]) -> Void)? = nil) {
+    /// - Parameters:
+    ///   - estimatedTotalBytes: If known (e.g. from project list), show progress bar from the start.
+    ///   - onSuccess: Called on main actor with archived project IDs when the run completes successfully (optional).
+    func startArchive(projects: [SimianProject], destinationByProjectId: [String: URL], simianService: SimianService, estimatedTotalBytes: Int64? = nil, onSuccess: (([String]) -> Void)? = nil) {
         cancel()
         
         archiveTask = Task {
@@ -62,7 +70,7 @@ final class SimianArchiveManager: ObservableObject {
                 completedFiles = 0
                 totalFiles = 0
                 downloadedBytes = 0
-                totalBytes = 0
+                totalBytes = estimatedTotalBytes ?? 0
                 scannedFolders = 0
                 currentFolderPath = nil
                 currentProjectNames = []
@@ -86,10 +94,26 @@ final class SimianArchiveManager: ObservableObject {
                         onSuccess?(successIds)
                     }
                 }
+            } catch let err as ArchiveCancelledWithPartialResults {
+                await MainActor.run {
+                    isRunning = false
+                    errorMessage = nil
+                    let n = err.successIds.count
+                    let total = projects.count
+                    if n > 0 {
+                        statusMessage = "Archiving cancelled. \(n) of \(total) projects completed."
+                        if !err.successIds.isEmpty {
+                            onSuccess?(err.successIds)
+                        }
+                    } else {
+                        statusMessage = "Archiving cancelled."
+                    }
+                }
             } catch is CancellationError {
                 await MainActor.run {
-                    statusMessage = "Archive cancelled."
                     isRunning = false
+                    errorMessage = nil
+                    statusMessage = "Archiving cancelled."
                 }
             } catch {
                 await MainActor.run {
@@ -147,13 +171,17 @@ final class SimianArchiveManager: ObservableObject {
                 enqueueNext()
             }
             
-            while let result = try await group.next() {
-                if let error = result.2 {
-                    failures.append((result.0, result.1, error.localizedDescription))
-                } else {
-                    successIds.append(result.0)
+            do {
+                while let result = try await group.next() {
+                    if let error = result.2 {
+                        failures.append((result.0, result.1, error.localizedDescription))
+                    } else {
+                        successIds.append(result.0)
+                    }
+                    enqueueNext()
                 }
-                enqueueNext()
+            } catch is CancellationError {
+                throw ArchiveCancelledWithPartialResults(successIds: successIds, failures: failures)
             }
         }
         return (successIds, failures)
@@ -171,8 +199,6 @@ final class SimianArchiveManager: ObservableObject {
             statusMessage = "Downloading project archive\(currentProjectNames.count > 1 ? "s" : "")..."
             completedFiles = 0
             totalFiles = 0
-            downloadedBytes = 0
-            totalBytes = 0
             scannedFolders = 0
             currentFolderPath = nil
         }
