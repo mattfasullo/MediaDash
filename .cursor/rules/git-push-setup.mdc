@@ -1,0 +1,18 @@
+---
+description: Enable git push from Cursor by using GitHub CLI for credentials
+alwaysApply: false
+---
+
+# Git push from Cursor
+
+`git push` from the Cursor agent fails with "could not read Username for 'https://github.com': Device not configured" because there is no TTY for interactive credential prompts.
+
+To allow the agent to push, use **GitHub CLI** as the Git credential helper so credentials are provided non-interactively:
+
+1. Install GitHub CLI: `brew install gh`
+2. Log in once (in Terminal): `gh auth login` — choose HTTPS, authenticate with browser or token
+3. Wire Git to use gh for GitHub: `gh auth setup-git`
+
+After that, when the agent runs `git push origin main` (with network permissions), Git will use `gh` to get a token and the push will succeed.
+
+If push still fails, suggest the user run the steps above and retry.

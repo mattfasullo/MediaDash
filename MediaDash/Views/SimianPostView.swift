@@ -46,6 +46,21 @@ struct SimianPostView: View {
     @State private var uploadTotal = 0
     @State private var uploadFileName = ""
 
+    // Rename sheet: folder or file
+    @State private var showRenameSheet = false
+    @State private var renameIsFolder = true
+    @State private var renameItemId = ""
+    @State private var renameParentFolderId: String?
+    @State private var renameCurrentName = ""
+    @State private var renameNewName = ""
+
+    // Delete confirmation: folder or file
+    @State private var showDeleteConfirmation = false
+    @State private var pendingDeleteIsFolder = true
+    @State private var pendingDeleteItemId = ""
+    @State private var pendingDeleteItemName = ""
+    @State private var pendingDeleteParentFolderId: String?
+
     @FocusState private var isSearchFocused: Bool
     @FocusState private var isListFocused: Bool
 
@@ -127,6 +142,162 @@ struct SimianPostView: View {
         .onChange(of: settingsManager.currentSettings.simianAPIBaseURL) { _, _ in
             updateSimianServiceConfiguration()
         }
+        .sheet(isPresented: $showRenameSheet) {
+            renameSheet
+        }
+        .alert("Remove from Simian?", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove", role: .destructive) { performPendingDelete() }
+        } message: {
+            let name = pendingDeleteItemName.isEmpty ? (pendingDeleteIsFolder ? "this folder" : "this file") : pendingDeleteItemName
+            Text(pendingDeleteIsFolder
+                 ? "“\(name)” and its contents will be removed from Simian. This cannot be undone."
+                 : "“\(name)” will be removed from Simian. This cannot be undone.")
+        }
+    }
+
+    private var renameSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(renameIsFolder ? "Rename Folder" : "Rename File")
+                .font(.headline)
+            TextField("Name", text: $renameNewName)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") { showRenameSheet = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Rename") { submitRename() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(renameNewName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 320)
+        .onAppear { renameNewName = renameCurrentName }
+    }
+
+    private func submitRename() {
+        let newName = renameNewName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty, let projectId = selectedProjectId else { return }
+        showRenameSheet = false
+        Task {
+            do {
+                if renameIsFolder {
+                    try await simianService.renameFolder(projectId: projectId, folderId: renameItemId, newName: newName)
+                    await MainActor.run {
+                        applyFolderRename(folderId: renameItemId, parentFolderId: renameParentFolderId, newName: newName)
+                    }
+                } else {
+                    try await simianService.renameFile(projectId: projectId, fileId: renameItemId, newName: newName)
+                    await MainActor.run {
+                        applyFileRename(fileId: renameItemId, parentFolderId: renameParentFolderId, newName: newName)
+                    }
+                }
+                await MainActor.run {
+                    statusMessage = renameIsFolder ? "Folder renamed" : "File renamed"
+                    statusIsError = false
+                }
+            } catch {
+                await MainActor.run {
+                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    statusIsError = true
+                }
+            }
+        }
+    }
+
+    private func applyFolderRename(folderId: String, parentFolderId: String?, newName: String) {
+        if let parentId = parentFolderId, !parentId.isEmpty {
+            if var children = folderChildrenCache[parentId] {
+                if let idx = children.firstIndex(where: { $0.id == folderId }) {
+                    let old = children[idx]
+                    children[idx] = SimianFolder(id: old.id, name: newName, parentId: old.parentId)
+                    folderChildrenCache[parentId] = children
+                }
+            }
+        } else {
+            if let idx = currentFolders.firstIndex(where: { $0.id == folderId }) {
+                let old = currentFolders[idx]
+                currentFolders[idx] = SimianFolder(id: old.id, name: newName, parentId: old.parentId)
+            }
+        }
+    }
+
+    private func applyFileRename(fileId: String, parentFolderId: String?, newName: String) {
+        guard let parentId = parentFolderId else { return }
+        if var files = folderFilesCache[parentId],
+           let idx = files.firstIndex(where: { $0.id == fileId }) {
+            let old = files[idx]
+            files[idx] = SimianFile(id: old.id, title: newName, fileType: old.fileType, mediaURL: old.mediaURL, folderId: old.folderId, projectId: old.projectId)
+            folderFilesCache[parentId] = files
+        }
+    }
+
+    private func performPendingDelete() {
+        guard let projectId = selectedProjectId else { return }
+        let isFolder = pendingDeleteIsFolder
+        let itemId = pendingDeleteItemId
+        let parentId = pendingDeleteParentFolderId
+        showDeleteConfirmation = false
+        Task {
+            do {
+                if isFolder {
+                    try await simianService.deleteFolder(projectId: projectId, folderId: itemId)
+                    await MainActor.run {
+                        applyFolderDeletion(folderId: itemId, parentFolderId: parentId)
+                        expandedFolderIds.remove(itemId)
+                        folderChildrenCache.removeValue(forKey: itemId)
+                        folderFilesCache.removeValue(forKey: itemId)
+                        if selectedDestinationFolderId == itemId {
+                            selectedDestinationFolderId = nil
+                            selectedDestinationPath = nil
+                        }
+                        statusMessage = "Folder removed"
+                        statusIsError = false
+                    }
+                } else {
+                    try await simianService.deleteFile(projectId: projectId, fileId: itemId)
+                    await MainActor.run {
+                        applyFileDeletion(fileId: itemId, parentFolderId: parentId)
+                        statusMessage = "File removed"
+                        statusIsError = false
+                    }
+                }
+                await MainActor.run { refreshCurrentView() }
+            } catch {
+                await MainActor.run {
+                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    statusIsError = true
+                }
+            }
+        }
+    }
+
+    private func applyFolderDeletion(folderId: String, parentFolderId: String?) {
+        if let pid = parentFolderId, !pid.isEmpty {
+            folderChildrenCache[pid] = folderChildrenCache[pid]?.filter { $0.id != folderId } ?? []
+        } else {
+            currentFolders = currentFolders.filter { $0.id != folderId }
+        }
+    }
+
+    private func applyFileDeletion(fileId: String, parentFolderId: String?) {
+        guard let pid = parentFolderId else { return }
+        folderFilesCache[pid] = folderFilesCache[pid]?.filter { $0.id != fileId } ?? []
+    }
+
+    /// Refresh what's on screen: project list or current folder tree
+    private func refreshCurrentView() {
+        if let projectId = selectedProjectId {
+            folderChildrenCache.removeAll()
+            folderFilesCache.removeAll()
+            loadFolders(projectId: projectId, parentFolderId: currentParentFolderId)
+            for folderId in expandedFolderIds {
+                loadFolderChildren(projectId: projectId, folderId: folderId)
+            }
+        } else {
+            loadProjects()
+        }
     }
 
     private func unavailableView(message: String) -> some View {
@@ -202,6 +373,13 @@ struct SimianPostView: View {
                 .onChange(of: projectSortOrder) { _, _ in
                     loadProjectInfosIfNeeded()
                 }
+
+                Button(action: { refreshCurrentView() }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14))
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh project list")
 
                 if isLoadingProjectInfos {
                     ProgressView().scaleEffect(0.7)
@@ -297,6 +475,15 @@ struct SimianPostView: View {
                 Text(projectName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button(action: { refreshCurrentView() }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh folders and files")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -637,6 +824,21 @@ struct SimianPostView: View {
             onCopyLink: {
                 copyFolderLink(projectId: projectId, folderId: folder.id)
             },
+            onRename: {
+                renameIsFolder = true
+                renameItemId = folder.id
+                renameParentFolderId = parentFolderId
+                renameCurrentName = folder.name
+                renameNewName = folder.name
+                showRenameSheet = true
+            },
+            onDelete: {
+                pendingDeleteIsFolder = true
+                pendingDeleteItemId = folder.id
+                pendingDeleteItemName = folder.name
+                pendingDeleteParentFolderId = parentFolderId
+                showDeleteConfirmation = true
+            },
             onReorder: { draggedFolderId in
                 reorderFolder(projectId: projectId, folderId: draggedFolderId, parentFolderId: parentFolderId, dropBeforeFolderId: folder.id)
             },
@@ -651,6 +853,21 @@ struct SimianPostView: View {
             file: file,
             parentFolderId: parentFolderId,
             depth: depth,
+            onRename: {
+                renameIsFolder = false
+                renameItemId = file.id
+                renameParentFolderId = parentFolderId
+                renameCurrentName = file.title
+                renameNewName = file.title
+                showRenameSheet = true
+            },
+            onDelete: {
+                pendingDeleteIsFolder = false
+                pendingDeleteItemId = file.id
+                pendingDeleteItemName = file.title
+                pendingDeleteParentFolderId = parentFolderId
+                showDeleteConfirmation = true
+            },
             onReorder: { draggedFileId in
                 reorderFile(projectId: selectedProjectId ?? "", fileId: draggedFileId, parentFolderId: parentFolderId, dropBeforeFileId: file.id)
             },
@@ -1065,6 +1282,8 @@ private struct FolderTreeRowContentView: View {
     let onDoubleTap: () -> Void
     let onDrop: ([NSItemProvider]) -> Bool
     let onCopyLink: () -> Void
+    let onRename: () -> Void
+    let onDelete: () -> Void
     let onReorder: (String) -> Void
     let canReorder: Bool
 
@@ -1161,7 +1380,10 @@ private struct FolderTreeRowContentView: View {
             }
             .draggable(canReorder ? dragPayload : "simian|none|||")
             .contextMenu {
+                Button("Rename…", action: onRename)
                 Button("Copy Link", action: onCopyLink)
+                Divider()
+                Button("Remove from Simian…", role: .destructive, action: onDelete)
             }
         }
     }
@@ -1173,6 +1395,8 @@ private struct FileTreeRowContentView: View {
     let file: SimianFile
     let parentFolderId: String?
     let depth: Int
+    let onRename: () -> Void
+    let onDelete: () -> Void
     let onReorder: (String) -> Void
     let canReorder: Bool
 
@@ -1217,6 +1441,11 @@ private struct FileTreeRowContentView: View {
             return true
         }
         .draggable(canReorder ? dragPayload : "simian|none|||")
+        .contextMenu {
+            Button("Rename…", action: onRename)
+            Divider()
+            Button("Remove from Simian…", role: .destructive, action: onDelete)
+        }
     }
 }
 

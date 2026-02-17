@@ -21,11 +21,10 @@ final class SimianPostWindowManager: NSObject, ObservableObject, NSWindowDelegat
     }
 
     func show(settingsManager: SettingsManager, sessionManager: SessionManager, manager: MediaManager) {
+        // Always open a fresh window: close existing one if present so state is reset
         if let existingWindow = simianPostWindow {
-            existingWindow.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            isVisible = true
-            return
+            existingWindow.close()
+            simianPostWindow = nil
         }
 
         let rootView = SimianPostView()

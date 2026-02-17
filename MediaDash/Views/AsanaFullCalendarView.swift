@@ -482,7 +482,6 @@ struct AsanaFullCalendarView: View {
     }
 
     private func mediaTaskRowContent(task: AsanaTask) -> some View {
-        let color = taskColor(task)
         let completed = task.completed == true
         return HStack {
             HStack(spacing: 6) {

@@ -1,6 +1,12 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Right-hand panel mode: folder preview (default) or checklist.
+enum PrepRightViewMode: String, CaseIterable {
+    case folderPreview = "Folder Preview"
+    case checklist = "Checklist"
+}
+
 struct ManualPrepSheet: View {
     @ObservedObject var manager: MediaManager
     @Binding var isPresented: Bool
@@ -8,11 +14,17 @@ struct ManualPrepSheet: View {
     let wpDate: Date
     let prepDate: Date
     
+    @State private var prepRightViewMode: PrepRightViewMode = .folderPreview
+    @State private var fileClassificationOverrides: [UUID: String] = [:]
+    @State private var customClassifications: [String] = []
+    
     @State private var checklistText: String = ""
     @State private var items: [PrepChecklistItem] = []
     @State private var showFilePickerForItem: PrepChecklistItem?
     @State private var tempSelection: Set<UUID> = []
     @State private var draggedFileId: UUID?
+    @State private var showAddClassificationSheet = false
+    @State private var newClassificationName = ""
     
     var body: some View {
         VStack(spacing: 0) {
@@ -22,7 +34,10 @@ struct ManualPrepSheet: View {
             Divider()
             footer
         }
-        .sheet(item: $showFilePickerForItem) { item in
+        .sheet(item: $showFilePickerForItem, onDismiss: {
+            showFilePickerForItem = nil
+            tempSelection.removeAll()
+        }) { item in
             ChecklistFilePickerSheet(
                 files: manager.selectedFiles,
                 selection: $tempSelection,
@@ -32,6 +47,40 @@ struct ManualPrepSheet: View {
                 }
             )
         }
+        .sheet(isPresented: $showAddClassificationSheet, onDismiss: {
+            newClassificationName = ""
+        }) {
+            addClassificationSheet
+        }
+    }
+    
+    private var addClassificationSheet: some View {
+        VStack(spacing: 16) {
+            Text("New Classification")
+                .font(.headline)
+            TextField("Folder name", text: $newClassificationName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 260)
+            HStack {
+                Button("Cancel") {
+                    newClassificationName = ""
+                    showAddClassificationSheet = false
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    let name = newClassificationName.trimmingCharacters(in: .whitespaces)
+                    if !name.isEmpty, !allClassifications.contains(name) {
+                        customClassifications.append(name)
+                    }
+                    newClassificationName = ""
+                    showAddClassificationSheet = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(newClassificationName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 300)
     }
     
     private var header: some View {
@@ -55,8 +104,35 @@ struct ManualPrepSheet: View {
         HStack(spacing: 0) {
             stagedFilesPanel
             Divider()
-            checklistPanel
+            rightPanel
         }
+    }
+    
+    private var rightPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Picker("View", selection: $prepRightViewMode) {
+                    ForEach(PrepRightViewMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 160)
+                .labelsHidden()
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            
+            switch prepRightViewMode {
+            case .folderPreview:
+                folderPreviewPanel
+            case .checklist:
+                checklistPanel
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     
     private var stagedFilesPanel: some View {
@@ -96,20 +172,37 @@ struct ManualPrepSheet: View {
                         
                         Spacer()
                         
-                        // Show assigned items count
-                        let assignedCount = items.filter { $0.assignedFileIds.contains(file.id) }.count
-                        if assignedCount > 0 {
-                            Text("\(assignedCount)")
+                        // Show classification (folder preview) or checklist assignment count
+                        if prepRightViewMode == .folderPreview, let cat = fileClassificationOverrides[file.id] {
+                            Text(cat)
                                 .font(.caption2)
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Color.accentColor)
+                                .background(Color.orange)
                                 .cornerRadius(4)
+                        } else {
+                            let assignedCount = items.filter { $0.assignedFileIds.contains(file.id) }.count
+                            if assignedCount > 0 {
+                                Text("\(assignedCount)")
+                                    .font(.caption2)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.accentColor)
+                                    .cornerRadius(4)
+                            }
                         }
                     }
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
+                    .contextMenu {
+                        if prepRightViewMode == .folderPreview, fileClassificationOverrides[file.id] != nil {
+                            Button("Clear classification") {
+                                fileClassificationOverrides.removeValue(forKey: file.id)
+                            }
+                        }
+                    }
                     .onDrag {
                         draggedFileId = file.id
                         return NSItemProvider(object: file.id.uuidString as NSString)
@@ -120,6 +213,130 @@ struct ManualPrepSheet: View {
         }
         .padding()
         .frame(minWidth: 280, idealWidth: 320)
+    }
+    
+    // MARK: - Folder Preview (default right panel)
+    
+    private var standardClassificationNames: [String] {
+        let s = manager.config.settings
+        return [s.pictureFolderName, s.aafOmfFolderName, s.musicFolderName, "STINGS", "VO REFS", "MNEMONIC", s.otherFolderName]
+    }
+    
+    private var allClassifications: [String] {
+        let seen = Set(standardClassificationNames)
+        let extra = customClassifications.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !seen.contains($0) }
+        return standardClassificationNames + extra
+    }
+    
+    private func autoCategory(for url: URL) -> String {
+        let s = manager.config.settings
+        let ext = url.pathExtension.lowercased()
+        if s.pictureExtensions.contains(ext) { return s.pictureFolderName }
+        if s.musicExtensions.contains(ext) { return s.musicFolderName }
+        if s.aafOmfExtensions.contains(ext) { return s.aafOmfFolderName }
+        return s.otherFolderName
+    }
+    
+    /// (flatFileURL, sourceId, resolvedCategory) for preview
+    private var flattenedPreview: [(url: URL, sourceId: UUID, category: String)] {
+        var result: [(url: URL, sourceId: UUID, category: String)] = []
+        for file in manager.selectedFiles {
+            let flatURLs = MediaLogic.getAllFiles(at: file.url)
+            for flatURL in flatURLs {
+                let category = fileClassificationOverrides[file.id] ?? autoCategory(for: flatURL)
+                result.append((flatURL, file.id, category))
+            }
+        }
+        return result
+    }
+    
+    private func filesInCategory(_ category: String) -> [(url: URL, sourceId: UUID)] {
+        flattenedPreview
+            .filter { $0.category == category }
+            .map { ($0.url, $0.sourceId) }
+    }
+    
+    private var folderPreviewPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Drag files from the left to classify. Others are auto-classified by type.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            List {
+                ForEach(allClassifications, id: \.self) { classification in
+                    folderPreviewRow(classification: classification)
+                }
+                Section {
+                    addClassificationRow
+                }
+            }
+            .listStyle(.inset)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    
+    private func folderPreviewRow(classification: String) -> some View {
+        let files = filesInCategory(classification)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "folder.fill")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                Text(classification)
+                    .font(.system(size: 13, weight: .medium))
+                Spacer()
+                Text("\(files.count) file\(files.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            if !files.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(files.prefix(8).enumerated()), id: \.element.url.path) { _, pair in
+                        Text(pair.url.lastPathComponent)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                    if files.count > 8 {
+                        Text("+ \(files.count - 8) more")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onDrop(of: [.text], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { string, _ in
+                if let uuidString = string as? String, let uuid = UUID(uuidString: uuidString) {
+                    DispatchQueue.main.async {
+                        fileClassificationOverrides[uuid] = classification
+                    }
+                }
+            }
+            return true
+        }
+    }
+    
+    private var addClassificationRow: some View {
+        HStack {
+            Image(systemName: "plus.circle")
+                .foregroundColor(.accentColor)
+            Text("Add classification…")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .onTapGesture {
+            addNewClassification()
+        }
+    }
+    
+    private func addNewClassification() {
+        newClassificationName = ""
+        showAddClassificationSheet = true
     }
     
     private var checklistPanel: some View {
@@ -256,7 +473,17 @@ struct ManualPrepSheet: View {
             Spacer()
             
             VStack(alignment: .trailing, spacing: 2) {
-                if items.isEmpty {
+                if prepRightViewMode == .folderPreview {
+                    if fileClassificationOverrides.isEmpty {
+                        Text("Files will be auto-classified by type")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("\(fileClassificationOverrides.count) manual classification\(fileClassificationOverrides.count == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                } else if items.isEmpty {
                     Text("Files will be organized by type")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -309,8 +536,15 @@ struct ManualPrepSheet: View {
     }
     
     private func runPrep() {
-        // Create session if we have checklist items with assignments
-        if !items.isEmpty {
+        // Folder preview overrides: fileId -> classification folder name (only used classifications get folders when files are copied)
+        if !fileClassificationOverrides.isEmpty {
+            manager.pendingPrepFileOverrides = fileClassificationOverrides
+        } else {
+            manager.pendingPrepFileOverrides = nil
+        }
+        
+        // Checklist session (when user switched to Checklist view and parsed/assigned items)
+        if prepRightViewMode == .checklist, !items.isEmpty {
             let session = PrepChecklistSession(
                 docket: docket,
                 items: items,
@@ -323,7 +557,6 @@ struct ManualPrepSheet: View {
         
         isPresented = false
         
-        // Run the prep job
         manager.runJob(
             type: .prep,
             docket: docket,

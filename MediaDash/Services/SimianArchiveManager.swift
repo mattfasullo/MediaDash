@@ -25,7 +25,8 @@ final class SimianArchiveManager: ObservableObject {
     @Published var isRunning = false
     @Published var errorMessage: String?
     @Published var statusMessage: String = ""
-    @Published var currentProjectName: String?
+    /// Names of projects currently being downloaded (up to 3 at a time). Shown together so the UI doesn’t flicker.
+    @Published var currentProjectNames: Set<String> = []
     @Published var currentFileName: String?
     @Published var completedProjects: Int = 0
     @Published var totalProjects: Int = 0
@@ -35,16 +36,26 @@ final class SimianArchiveManager: ObservableObject {
     @Published var totalBytes: Int64 = 0
     @Published var scannedFolders: Int = 0
     @Published var currentFolderPath: String?
+    /// After a run that had failures: (projectId, projectName, errorMessage). Nil when starting or when run had no failures.
+    @Published var lastRunFailures: [(projectId: String, projectName: String, errorMessage: String)]?
     
     private var archiveTask: Task<Void, Never>?
     
     func startArchive(projects: [SimianProject], destinationURL: URL, simianService: SimianService) {
+        let map = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, destinationURL) })
+        startArchive(projects: projects, destinationByProjectId: map, simianService: simianService)
+    }
+
+    /// Archive projects to per-project destinations (e.g. GM DATA BACKUPS by year). Each project ID must be a key in destinationByProjectId.
+    /// - Parameter onSuccess: Called on main actor with archived project IDs when the run completes successfully (optional).
+    func startArchive(projects: [SimianProject], destinationByProjectId: [String: URL], simianService: SimianService, onSuccess: (([String]) -> Void)? = nil) {
         cancel()
         
         archiveTask = Task {
             await MainActor.run {
                 isRunning = true
                 errorMessage = nil
+                lastRunFailures = nil
                 statusMessage = "Preparing archive..."
                 completedProjects = 0
                 totalProjects = projects.count
@@ -54,13 +65,26 @@ final class SimianArchiveManager: ObservableObject {
                 totalBytes = 0
                 scannedFolders = 0
                 currentFolderPath = nil
+                currentProjectNames = []
             }
             
+            let sleepAssertion = ProcessInfo.processInfo.beginActivity(options: .idleSystemSleepDisabled, reason: "Archiving Simian projects")
+            defer { ProcessInfo.processInfo.endActivity(sleepAssertion) }
+            
             do {
-                try await archiveProjects(projects, destinationURL: destinationURL, simianService: simianService)
+                let (successIds, failures) = try await archiveProjects(projects, destinationByProjectId: destinationByProjectId, simianService: simianService)
                 await MainActor.run {
-                    statusMessage = "Archive complete."
                     isRunning = false
+                    if failures.isEmpty {
+                        statusMessage = "Archive complete."
+                        lastRunFailures = nil
+                    } else {
+                        statusMessage = "Archive complete with \(failures.count) failure(s)."
+                        lastRunFailures = failures
+                    }
+                    if !successIds.isEmpty {
+                        onSuccess?(successIds)
+                    }
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -82,25 +106,39 @@ final class SimianArchiveManager: ObservableObject {
         archiveTask = nil
     }
     
-    private func archiveProjects(_ projects: [SimianProject], destinationURL: URL, simianService: SimianService) async throws {
-        let logURL = destinationURL.appendingPathComponent("SimianArchiver_Downloads.txt")
-        let logWriter = DownloadLogWriter(logURL: logURL)
+    /// Returns (successful project IDs, failed items for lastRunFailures). One project failing does not stop the rest.
+    private func archiveProjects(_ projects: [SimianProject], destinationByProjectId: [String: URL], simianService: SimianService) async throws -> (successIds: [String], failures: [(projectId: String, projectName: String, errorMessage: String)]) {
+        let uniqueDestinations = Set(destinationByProjectId.values)
+        var logWriters: [URL: DownloadLogWriter] = [:]
+        for url in uniqueDestinations {
+            let logURL = url.appendingPathComponent("SimianArchiver_Downloads.txt")
+            logWriters[url] = DownloadLogWriter(logURL: logURL)
+        }
         let maxConcurrentDownloads = 3
         var index = 0
+        var successIds: [String] = []
+        var failures: [(projectId: String, projectName: String, errorMessage: String)] = []
         
-        try await withThrowingTaskGroup(of: Void.self) { group in
+        try await withThrowingTaskGroup(of: (String, String, Error?).self) { group in
             func enqueueNext() {
                 guard index < projects.count else { return }
                 let project = projects[index]
                 index += 1
+                guard let destinationURL = destinationByProjectId[project.id],
+                      let logWriter = logWriters[destinationURL] else { return }
                 group.addTask { [weak self] in
-                    guard let self else { return }
-                    try await self.archiveProject(
-                        project,
-                        destinationURL: destinationURL,
-                        simianService: simianService,
-                        logWriter: logWriter
-                    )
+                    guard let self else { return (project.id, project.name, nil as Error?) }
+                    do {
+                        try await self.archiveProject(
+                            project,
+                            destinationURL: destinationURL,
+                            simianService: simianService,
+                            logWriter: logWriter
+                        )
+                        return (project.id, project.name, nil)
+                    } catch {
+                        return (project.id, project.name, error)
+                    }
                 }
             }
             
@@ -109,10 +147,16 @@ final class SimianArchiveManager: ObservableObject {
                 enqueueNext()
             }
             
-            while let _ = try await group.next() {
+            while let result = try await group.next() {
+                if let error = result.2 {
+                    failures.append((result.0, result.1, error.localizedDescription))
+                } else {
+                    successIds.append(result.0)
+                }
                 enqueueNext()
             }
         }
+        return (successIds, failures)
     }
 
     private func archiveProject(
@@ -123,14 +167,19 @@ final class SimianArchiveManager: ObservableObject {
     ) async throws {
         try Task.checkCancellation()
         await MainActor.run {
-            currentProjectName = project.name
-            statusMessage = "Fetching project contents..."
+            currentProjectNames.insert(project.name)
+            statusMessage = "Downloading project archive\(currentProjectNames.count > 1 ? "s" : "")..."
             completedFiles = 0
             totalFiles = 0
             downloadedBytes = 0
             totalBytes = 0
             scannedFolders = 0
             currentFolderPath = nil
+        }
+        defer {
+            Task { @MainActor in
+                currentProjectNames.remove(project.name)
+            }
         }
         
         // #region agent log
@@ -161,11 +210,6 @@ final class SimianArchiveManager: ObservableObject {
         let zipName = "\(Self.sanitizeFileName(project.name))_\(project.id).zip"
         let zipURL = destinationURL.appendingPathComponent(zipName)
         do {
-            await MainActor.run {
-                currentProjectName = project.name
-                statusMessage = "Downloading project archive..."
-            }
-            
             // #region agent log
             do {
                 let logData: [String: Any] = [
@@ -196,7 +240,6 @@ final class SimianArchiveManager: ObservableObject {
             ) { [weak self] downloaded, total in
                 Task { @MainActor in
                     guard let self else { return }
-                    self.currentProjectName = project.name
                     self.downloadedBytes = downloaded
                     if let total, total > 0 {
                         self.totalBytes = total

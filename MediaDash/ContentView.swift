@@ -254,7 +254,7 @@ struct ContentView: View {
                 settingsManager: settingsManager,
                 sessionManager: sessionManager,
                 showSearchSheet: $showSearchSheet,
-                initialSearchText: initialSearchText,
+                initialSearchText: $initialSearchText,
                 showDocketSelectionSheet: $showDocketSelectionSheet,
                 pendingJobType: $pendingJobType,
                 showManualPrepSheet: $showManualPrepSheet,
@@ -1554,7 +1554,10 @@ struct DocketSearchView: View {
                 }
             }
         }
-        .sheet(isPresented: $showNewDocketSheet) {
+        .sheet(isPresented: $showNewDocketSheet, onDismiss: {
+            prefillDocketNumber = nil
+            prefillJobName = nil
+        }) {
             NewDocketView(
                 isPresented: $showNewDocketSheet,
                 selectedDocket: $selectedDocket,
@@ -1575,13 +1578,10 @@ struct DocketSearchView: View {
             )
             .sheetSizeStabilizer()
             .id("\(prefillDocketNumber ?? "nil")_\(prefillJobName ?? "nil")") // Force recreation when prefill values change
-            .onDisappear {
-                // Clear prefill values when sheet closes
-                prefillDocketNumber = nil
-                prefillJobName = nil
-            }
         }
-        .sheet(isPresented: $showAsanaSearchSheet) {
+        .sheet(isPresented: $showAsanaSearchSheet, onDismiss: {
+            searchText = ""
+        }) {
             if let cacheManager = cacheManager {
                 QuickDocketSearchView(
                     isPresented: $showAsanaSearchSheet,
@@ -4103,7 +4103,7 @@ struct SheetsModifier: ViewModifier {
     @ObservedObject var settingsManager: SettingsManager
     @ObservedObject var sessionManager: SessionManager
     @Binding var showSearchSheet: Bool
-    let initialSearchText: String
+    @Binding var initialSearchText: String
     @Binding var showDocketSelectionSheet: Bool
     @Binding var pendingJobType: JobType?
     @Binding var showManualPrepSheet: Bool
@@ -4119,7 +4119,9 @@ struct SheetsModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: $showNewDocketSheet) {
+            .sheet(isPresented: $showNewDocketSheet, onDismiss: {
+                // Reset so next open is fresh
+            }) {
                 NewDocketView(
                     isPresented: $showNewDocketSheet,
                     selectedDocket: $selectedDocket,
@@ -4129,11 +4131,16 @@ struct SheetsModifier: ViewModifier {
                 .compactSheetContent()
                 .sheetBorder()
             }
-            .sheet(isPresented: $showSearchSheet) {
+            .sheet(isPresented: $showSearchSheet, onDismiss: {
+                initialSearchText = ""
+            }) {
                 SearchView(manager: manager, settingsManager: settingsManager, isPresented: $showSearchSheet, initialText: initialSearchText)
                     .sheetBorder()
             }
-            .sheet(isPresented: $showDocketSelectionSheet) {
+            .sheet(isPresented: $showDocketSelectionSheet, onDismiss: {
+                pendingJobType = nil
+                pendingFileThenPrep = false
+            }) {
                 DocketSearchView(
                     manager: manager,
                     settingsManager: settingsManager,
@@ -4164,7 +4171,9 @@ struct SheetsModifier: ViewModifier {
                 )
                 .sheetBorder()
             }
-            .sheet(isPresented: $showManualPrepSheet) {
+            .sheet(isPresented: $showManualPrepSheet, onDismiss: {
+                // ManualPrepSheet is recreated with fresh state on next open
+            }) {
                 ManualPrepSheet(
                     manager: manager,
                     isPresented: $showManualPrepSheet,
@@ -4174,11 +4183,15 @@ struct SheetsModifier: ViewModifier {
                 )
                 .sheetBorder()
             }
-            .sheet(isPresented: $showQuickSearchSheet) {
+            .sheet(isPresented: $showQuickSearchSheet, onDismiss: {
+                initialSearchText = ""
+            }) {
                 QuickDocketSearchView(isPresented: $showQuickSearchSheet, initialText: initialSearchText, settingsManager: settingsManager, cacheManager: cacheManager)
                     .sheetBorder()
             }
-            .sheet(isPresented: $showDownloadDemosTaskPicker) {
+            .sheet(isPresented: $showDownloadDemosTaskPicker, onDismiss: {
+                // Fresh state on next open
+            }) {
                 DownloadDemosTaskPickerSheet(
                     isPresented: $showDownloadDemosTaskPicker,
                     cacheManager: cacheManager,
@@ -4186,15 +4199,21 @@ struct SheetsModifier: ViewModifier {
                 )
                 .sheetBorder()
             }
-            .sheet(isPresented: $manager.showPrepSummary) {
+            .sheet(isPresented: $manager.showPrepSummary, onDismiss: {
+                // Prep summary is one-off
+            }) {
                 PrepSummaryView(summary: manager.prepSummary, isPresented: $manager.showPrepSummary)
                     .sheetBorder()
             }
-            .sheet(isPresented: $showVideoConverterSheet) {
+            .sheet(isPresented: $showVideoConverterSheet, onDismiss: {
+                // Video converter fresh on next open
+            }) {
                 VideoConverterView(manager: manager)
                     .sheetBorder()
             }
-            .sheet(isPresented: $manager.showOMFAAFValidator) {
+            .sheet(isPresented: $manager.showOMFAAFValidator, onDismiss: {
+                // Validator is one-off
+            }) {
                 if let fileURL = manager.omfAafFileToValidate,
                    let validator = manager.omfAafValidator {
                     OMFAAFValidatorView(validator: validator, fileURL: fileURL)

@@ -105,7 +105,6 @@ struct DemosPostLinkStore {
 
     /// Find the linked Post task for a Demos task. Respects manual overrides.
     static func resolveLinkedPost(demos: AsanaTask, sameDayPosts: [AsanaTask]) -> AsanaTask? {
-        let demosDue = String((demos.effectiveDueDate ?? "").prefix(10))
         let demosId = docketIdentifierFromTaskName(demos.name)
         let postCandidates = sameDayPosts.filter { other in
             guard other.gid != demos.gid, other.name.lowercased().contains("post") else { return false }

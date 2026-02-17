@@ -214,7 +214,13 @@ class KeychainService {
             "asana_access_token",
             "asana_refresh_token",
             "asana_shared_access_token",
-            "asana_shared_refresh_token"
+            "asana_shared_refresh_token",
+
+            // Simian
+            "simian_username",
+            "simian_password",
+            "simian_shared_username",
+            "simian_shared_password"
         ]
 
         var migratedCount = 0

@@ -1397,6 +1397,7 @@ class SimianService: ObservableObject {
         to destinationURL: URL,
         progress: ((Int64, Int64?) -> Void)? = nil
     ) async throws {
+        try Task.checkCancellation()
         guard let baseURLString = baseURL, let base = URL(string: baseURLString) else {
             throw SimianError.notConfigured
         }
@@ -1449,6 +1450,8 @@ class SimianService: ObservableObject {
             progress?(0, estimatedBytes)
         }
         
+        try Task.checkCancellation()
+        
         // #region agent log
         do {
             let logData: [String: Any] = [
@@ -1492,10 +1495,15 @@ class SimianService: ObservableObject {
                 )
                 defer { downloadSession.finishTasksAndInvalidate() }
                 
-                let result: ArchiveDownloadResult = try await withCheckedThrowingContinuation { continuation in
-                    downloadDelegate.attachContinuation(continuation)
-                    let task = downloadSession.downloadTask(with: request)
-                    task.resume()
+                let taskHolder = DownloadTaskHolder()
+                let result: ArchiveDownloadResult = try await withTaskCancellationHandler {
+                    try await withCheckedThrowingContinuation { continuation in
+                        downloadDelegate.attachContinuation(continuation)
+                        taskHolder.task = downloadSession.downloadTask(with: request)
+                        taskHolder.task?.resume()
+                    }
+                } onCancel: {
+                    taskHolder.task?.cancel()
                 }
                 guard let httpResponse = result.response as? HTTPURLResponse else {
                     throw SimianError.apiError("Archive download failed: \(archiveURL.lastPathComponent)")
@@ -1672,6 +1680,152 @@ class SimianService: ObservableObject {
         try await createFolder(projectId: projectId, folderName: folderName, parentFolderId: parentFolderId)
     }
 
+    /// Rename a folder
+    func renameFolder(projectId: String, folderId: String, newName: String) async throws {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("rename_folder").appendingPathComponent(projectId)
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "folder_id": folderId,
+            "name": newName
+        ]
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
+            throw SimianError.apiError("Failed to rename folder: \(msg)")
+        }
+    }
+
+    /// Rename a file
+    func renameFile(projectId: String, fileId: String, newName: String) async throws {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("rename_file").appendingPathComponent(projectId)
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "file_id": fileId,
+            "name": newName
+        ]
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
+            throw SimianError.apiError("Failed to rename file: \(msg)")
+        }
+    }
+
+    /// Delete a folder (and its contents) from a project
+    func deleteFolder(projectId: String, folderId: String) async throws {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("delete_folder").appendingPathComponent(projectId)
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "folder_id": folderId
+        ]
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
+            throw SimianError.apiError("Failed to delete folder: \(msg)")
+        }
+    }
+
+    /// Delete a file from a project
+    func deleteFile(projectId: String, fileId: String) async throws {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("delete_file").appendingPathComponent(projectId)
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "file_id": fileId
+        ]
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
+            throw SimianError.apiError("Failed to delete file: \(msg)")
+        }
+    }
+
+    /// Delete an entire project from Simian. Use with care — this is irreversible.
+    func deleteProject(projectId: String) async throws {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("delete_project").appendingPathComponent(projectId)
+        var request = URLRequest(url: endpointURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey
+        ]
+        request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
+            throw SimianError.apiError("Failed to delete project: \(msg)")
+        }
+    }
+
     /// Move a file to a different folder
     func moveFile(projectId: String, fileId: String, folderId: String) async throws {
         try await ensureAuthenticated()
@@ -1790,7 +1944,8 @@ class SimianService: ObservableObject {
         let params: [String: String] = [
             "auth_token": authToken,
             "auth_key": authKey,
-            "folder_id": folderId
+            "folder_id": folderId,
+            "present_opt_download": "true"
         ]
         request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
             .joined(separator: "&")
@@ -2717,7 +2872,7 @@ struct SimianProjectInfo: Identifiable, Hashable {
     let lastAccess: String?
     let projectSize: String?
     
-    func dateValue(for field: SimianProjectDateField) -> Date? {
+    nonisolated func dateValue(for field: SimianProjectDateField) -> Date? {
         let rawValue: String?
         switch field {
         case .uploadDate:
@@ -2740,7 +2895,7 @@ struct SimianProjectInfo: Identifiable, Hashable {
         return SimianService.parseMediaSize(projectSize)
     }
     
-    private static func parseDate(_ rawValue: String) -> Date? {
+    private nonisolated static func parseDate(_ rawValue: String) -> Date? {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             return nil
@@ -2924,6 +3079,11 @@ extension SimianService {
 private struct ArchiveDownloadResult {
     let tempURL: URL
     let response: URLResponse?
+}
+
+/// Holds the download task so cancellation handler can reference it without capturing a var (Swift 6).
+private final class DownloadTaskHolder: @unchecked Sendable {
+    nonisolated(unsafe) var task: URLSessionDownloadTask?
 }
 
 private final class ArchiveDownloadDelegate: NSObject, URLSessionDownloadDelegate {
