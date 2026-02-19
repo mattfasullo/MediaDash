@@ -27,6 +27,9 @@ private actor DownloadLogWriter {
     }
 }
 
+/// Minimum size (bytes) for a ZIP to be considered a valid archive. Smaller files are treated as failed/truncated (e.g. error response saved as file).
+private let kMinValidArchiveSizeBytes: Int64 = 1024 * 1024 // 1 MB
+
 final class SimianArchiveManager: ObservableObject {
     @Published var isRunning = false
     @Published var errorMessage: String?
@@ -304,6 +307,12 @@ final class SimianArchiveManager: ObservableObject {
                 }
                 return nil
             }()
+            if let size = fileSizeBytes, size < kMinValidArchiveSizeBytes {
+                try? FileManager.default.removeItem(at: zipURL)
+                throw NSError(domain: "SimianArchiveManager", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "Archive incomplete: file is only \(size) bytes (expected a full project archive). The download may have failed or been truncated."
+                ])
+            }
             let logLine = Self.buildDownloadLogLine(
                 projectName: project.name,
                 projectId: project.id,

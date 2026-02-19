@@ -22,16 +22,16 @@ struct DocketSyncResult {
 class AsanaService: ObservableObject {
     @Published var isFetching = false
     @Published var lastError: String?
-    
+
     private let baseURL = "https://app.asana.com/api/1.0"
     private var accessToken: String?
     private var isRefreshing = false
-    
+
     /// Rate limit tracking: when we can resume making requests after a 429
     private var rateLimitResumeTime: Date?
     /// Track consecutive rate limits to detect persistent issues
     private var consecutiveRateLimits = 0
-    
+
     /// Get refresh token from keychain (shared or personal)
     private var refreshToken: String? {
         get {
@@ -45,14 +45,14 @@ class AsanaService: ObservableObject {
             }
         }
     }
-    
+
     /// Initialize with access token
     init(accessToken: String? = nil) {
         // Check shared key first (for Grayson employees), then personal key
         self.accessToken = accessToken ?? SharedKeychainService.getAsanaAccessToken()
         // Refresh token is loaded lazily via computed property when needed
     }
-    
+
     /// Set access token and optionally refresh token
     /// Note: This stores to personal Keychain. Shared keys are set separately by admins.
     func setAccessToken(_ token: String, refreshToken: String? = nil) {
@@ -64,7 +64,7 @@ class AsanaService: ObservableObject {
             self.refreshToken = refreshToken
         }
     }
-    
+
     /// Clear access token and refresh token
     func clearAccessToken() {
         self.accessToken = nil
@@ -278,6 +278,30 @@ class AsanaService: ObservableObject {
         throw lastError ?? AsanaError.apiError("Request failed after \(maxRetries) attempts")
     }
     
+    /// Fetch users in a workspace (for Director etc. dropdowns). Requires workspace to be set.
+    func fetchWorkspaceUsers(workspaceID: String) async throws -> [AsanaUser] {
+        var all: [AsanaUser] = []
+        var offset: String? = nil
+        let limit = 100
+        repeat {
+            var components = URLComponents(string: "\(baseURL)/workspaces/\(workspaceID)/users")!
+            components.queryItems = [
+                URLQueryItem(name: "opt_fields", value: "gid,name,email"),
+                URLQueryItem(name: "limit", value: "\(limit)")
+            ]
+            if let o = offset { components.queryItems?.append(URLQueryItem(name: "offset", value: o)) }
+            guard let url = components.url else { break }
+            var request = URLRequest(url: url)
+            let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
+            guard httpResponse.statusCode == 200 else { break }
+            let wrapper = try? JSONDecoder().decode(AsanaDataWrapper<[AsanaUser]>.self, from: data)
+            guard let dataList = wrapper?.data else { break }
+            all.append(contentsOf: dataList)
+            offset = wrapper?.nextPage?.offset
+        } while offset != nil
+        return all
+    }
+
     /// Fetch workspaces
     func fetchWorkspaces() async throws -> [AsanaWorkspace] {
         let url = URL(string: "\(baseURL)/workspaces")!
@@ -373,6 +397,112 @@ class AsanaService: ObservableObject {
         }
         
         return finalProjects
+    }
+    
+    /// Fetch a single project by GID (for producer flow when selecting from docket list)
+    func fetchProject(projectGid: String) async throws -> AsanaProject {
+        guard accessToken != nil else { throw AsanaError.notAuthenticated }
+        var components = URLComponents(string: "\(baseURL)/projects/\(projectGid)")!
+        components.queryItems = [URLQueryItem(name: "opt_fields", value: "gid,name,archived,created_by,owner,notes,color,due_date,public,team,custom_field_settings")]
+        guard let fullURL = components.url else { throw AsanaError.invalidURL }
+        var req = URLRequest(url: fullURL)
+        let (data, httpResponse) = try await makeAuthenticatedRequest(&req)
+        guard httpResponse.statusCode == 200 else {
+            let msg = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AsanaError.apiError("HTTP \(httpResponse.statusCode): \(msg)")
+        }
+        let wrapper = try JSONDecoder().decode(AsanaDataWrapper<AsanaProject>.self, from: data)
+        return wrapper.data
+    }
+    
+    /// Fetch sections in a project (e.g. POSTINGS, SESSIONS, ELEMENTS)
+    func fetchSections(projectID: String) async throws -> [AsanaSection] {
+        guard accessToken != nil else { throw AsanaError.notAuthenticated }
+        var all: [AsanaSection] = []
+        var offset: String? = nil
+        let limit = 100
+        repeat {
+            var components = URLComponents(string: "\(baseURL)/projects/\(projectID)/sections")!
+            var queryItems: [URLQueryItem] = [
+                URLQueryItem(name: "opt_fields", value: "gid,name"),
+                URLQueryItem(name: "limit", value: "\(limit)")
+            ]
+            if let o = offset { queryItems.append(URLQueryItem(name: "offset", value: o)) }
+            components.queryItems = queryItems
+            guard let url = components.url else { throw AsanaError.invalidURL }
+            var request = URLRequest(url: url)
+            let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
+            guard httpResponse.statusCode == 200 else {
+                let msg = String(data: data, encoding: .utf8) ?? "Unknown error"
+                throw AsanaError.apiError("HTTP \(httpResponse.statusCode): \(msg)")
+            }
+            let wrapper = try JSONDecoder().decode(AsanaDataWrapper<[AsanaSection]>.self, from: data)
+            all.append(contentsOf: wrapper.data)
+            offset = wrapper.nextPage?.offset
+        } while offset != nil
+        return all
+    }
+    
+    /// Fetch tasks in a section (e.g. tasks under POSTINGS)
+    func fetchTasksForSection(sectionID: String) async throws -> [AsanaTask] {
+        guard accessToken != nil else { throw AsanaError.notAuthenticated }
+        var all: [AsanaTask] = []
+        var offset: String? = nil
+        let limit = 100
+        repeat {
+            var components = URLComponents(string: "\(baseURL)/sections/\(sectionID)/tasks")!
+            var queryItems: [URLQueryItem] = [
+                URLQueryItem(name: "opt_fields", value: "gid,name,notes,html_notes,custom_fields,custom_fields.name,custom_fields.display_value,completed,due_on,due_at,assignee,assignee.name,tags,tags.name,tags.color,created_by,created_by.name"),
+                URLQueryItem(name: "limit", value: "\(limit)")
+            ]
+            if let o = offset { queryItems.append(URLQueryItem(name: "offset", value: o)) }
+            components.queryItems = queryItems
+            guard let url = components.url else { throw AsanaError.invalidURL }
+            var request = URLRequest(url: url)
+            let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
+            guard httpResponse.statusCode == 200 else {
+                let msg = String(data: data, encoding: .utf8) ?? "Unknown error"
+                throw AsanaError.apiError("HTTP \(httpResponse.statusCode): \(msg)")
+            }
+            let wrapper = try JSONDecoder().decode(AsanaDataWrapper<[AsanaTask]>.self, from: data)
+            all.append(contentsOf: wrapper.data)
+            offset = wrapper.nextPage?.offset
+        } while offset != nil
+        return all
+    }
+    
+    /// Search for projects by docket number or name (matches project name containing query)
+    func searchProjects(workspaceID: String, query: String) async throws -> [AsanaProject] {
+        let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: 500)
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return Array(projects.prefix(50)) }
+        let filtered = projects.filter { $0.name.lowercased().contains(q) }
+        return Array(filtered.prefix(50))
+    }
+    
+    /// Find an Asana project for a docket when metadata is missing (e.g. from cache). Tries docket number and job name so the producer doesn't need the media team.
+    func findProjectForDocket(workspaceID: String, docketNumber: String, jobName: String) async throws -> AsanaProject? {
+        let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: 1000)
+        let numLower = docketNumber.trimmingCharacters(in: .whitespaces).lowercased()
+        let jobLower = jobName.trimmingCharacters(in: .whitespaces).lowercased()
+        // Prefer: project name contains docket number (e.g. "25164" or "25164_Sleep Country")
+        if !numLower.isEmpty {
+            if let match = projects.first(where: { $0.name.lowercased().contains(numLower) }) {
+                return match
+            }
+        }
+        // Then: project name contains job name or a significant part (e.g. "Sleep Country")
+        if !jobLower.isEmpty {
+            let jobWords = jobLower.split(separator: " ").map(String.init)
+            let query = jobWords.prefix(3).joined(separator: " ")
+            if !query.isEmpty, let match = projects.first(where: { $0.name.lowercased().contains(query) }) {
+                return match
+            }
+            if let match = projects.first(where: { $0.name.lowercased().contains(jobLower) }) {
+                return match
+            }
+        }
+        return nil
     }
     
     /// Fetch tasks from a workspace or project
@@ -581,9 +711,10 @@ class AsanaService: ObservableObject {
     /// - Parameters:
     ///   - workspaceID: The workspace ID to search in
     ///   - daysAhead: Number of days ahead to search (default 7 to cover 5 business days + weekends)
+    ///   - daysBack: Number of previous days to include for lookback workflows
     /// - Returns: Array of session tasks with due dates in the specified range
-    func searchUpcomingSessions(workspaceID: String?, daysAhead: Int = 7) async throws -> [AsanaTask] {
-        print("📅 [AsanaService] searchUpcomingSessions() - searching for sessions in next \(daysAhead) days")
+    func searchUpcomingSessions(workspaceID: String?, daysAhead: Int = 7, daysBack: Int = 0) async throws -> [AsanaTask] {
+        print("📅 [AsanaService] searchUpcomingSessions() - searching sessions from \(daysBack) days back through next \(daysAhead) days")
         
         guard accessToken != nil else {
             throw AsanaError.notAuthenticated
@@ -607,14 +738,15 @@ class AsanaService: ObservableObject {
         
         let limit = 100 // Asana's max is 100 per page
         
-        // Calculate date range: today to daysAhead days from now
+        // Calculate date range: lookback to daysAhead days from today.
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         
-        // Use yesterday for the 'after' parameter since Asana's due_on.after is EXCLUSIVE
-        // This ensures we include tasks due today
-        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
-              let endDate = calendar.date(byAdding: .day, value: daysAhead, to: today) else {
+        // due_on.after is EXCLUSIVE. To include N lookback days, move start by (N + 1).
+        let normalizedDaysBack = max(0, daysBack)
+        let normalizedDaysAhead = max(0, daysAhead)
+        guard let startExclusive = calendar.date(byAdding: .day, value: -(normalizedDaysBack + 1), to: today),
+              let endDate = calendar.date(byAdding: .day, value: normalizedDaysAhead, to: today) else {
             throw AsanaError.apiError("Failed to calculate date range")
         }
         
@@ -624,10 +756,10 @@ class AsanaService: ObservableObject {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
         dateFormatter.timeZone = TimeZone.current
-        let yesterdayString = dateFormatter.string(from: yesterday)
+        let startExclusiveString = dateFormatter.string(from: startExclusive)
         let endDateString = dateFormatter.string(from: endDate)
         
-        print("📅 [AsanaService] Searching sessions with due_on.after=\(yesterdayString) (includes today) to \(endDateString)")
+        print("📅 [AsanaService] Searching sessions with due_on.after=\(startExclusiveString) to due_on.before=\(endDateString)")
         
         var allSessions: [AsanaTask] = []
         var offset: String? = nil
@@ -638,7 +770,7 @@ class AsanaService: ObservableObject {
                 URLQueryItem(name: "opt_fields", value: "gid,name,due_on,due_at,memberships,memberships.project,memberships.project.name,custom_fields,modified_at,created_at,completed,parent,assignee,assignee.name,tags,tags.name,tags.color"),
                 URLQueryItem(name: "limit", value: "\(limit)"),
                 URLQueryItem(name: "text", value: "SESSION"),  // Search for tasks with "SESSION" in name
-                URLQueryItem(name: "due_on.after", value: yesterdayString),  // Exclusive, so use yesterday to include today
+                URLQueryItem(name: "due_on.after", value: startExclusiveString),
                 URLQueryItem(name: "due_on.before", value: endDateString),
                 URLQueryItem(name: "is_subtask", value: "false"),  // Only parent tasks, not subtasks
                 URLQueryItem(name: "sort_by", value: "due_date"),  // Valid values: completed_at, created_at, due_date, likes, modified_at, relevance
@@ -697,9 +829,9 @@ class AsanaService: ObservableObject {
         return allSessions
     }
 
-    /// Search for all tasks (not just sessions) with due dates in the next N days.
+    /// Search for all tasks (not just sessions) with due dates in a lookback + forward window.
     /// Used by the full calendar view to show tasks, sessions, etc. per day.
-    func searchTasksByDueDate(workspaceID: String?, daysAhead: Int = 14) async throws -> [AsanaTask] {
+    func searchTasksByDueDate(workspaceID: String?, daysAhead: Int = 14, daysBack: Int = 0) async throws -> [AsanaTask] {
         guard accessToken != nil else { throw AsanaError.notAuthenticated }
         var finalWorkspaceID = workspaceID
         if finalWorkspaceID == nil {
@@ -710,14 +842,16 @@ class AsanaService: ObservableObject {
         guard let wid = finalWorkspaceID else { throw AsanaError.apiError("No workspace ID") }
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
-              let endDate = calendar.date(byAdding: .day, value: daysAhead, to: today) else {
+        let normalizedDaysBack = max(0, daysBack)
+        let normalizedDaysAhead = max(0, daysAhead)
+        guard let startExclusive = calendar.date(byAdding: .day, value: -(normalizedDaysBack + 1), to: today),
+              let endDate = calendar.date(byAdding: .day, value: normalizedDaysAhead, to: today) else {
             throw AsanaError.apiError("Failed to calculate date range")
         }
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd"
         df.timeZone = TimeZone.current
-        let yesterdayString = df.string(from: yesterday)
+        let startExclusiveString = df.string(from: startExclusive)
         let endDateString = df.string(from: endDate)
         var all: [AsanaTask] = []
         var offset: String? = nil
@@ -726,7 +860,7 @@ class AsanaService: ObservableObject {
             var queryItems: [URLQueryItem] = [
                 URLQueryItem(name: "opt_fields", value: "gid,name,due_on,due_at,memberships,memberships.project,memberships.project.gid,custom_fields,modified_at,created_at,completed,parent,assignee,assignee.name,tags,tags.name,tags.color"),
                 URLQueryItem(name: "limit", value: "100"),
-                URLQueryItem(name: "due_on.after", value: yesterdayString),
+                URLQueryItem(name: "due_on.after", value: startExclusiveString),
                 URLQueryItem(name: "due_on.before", value: endDateString),
                 URLQueryItem(name: "is_subtask", value: "false"),
                 URLQueryItem(name: "sort_by", value: "due_date"),
@@ -758,7 +892,7 @@ class AsanaService: ObservableObject {
         
         var components = URLComponents(string: "\(baseURL)/tasks/\(taskGid)")!
         components.queryItems = [
-            URLQueryItem(name: "opt_fields", value: "gid,name,notes,html_notes,due_on,due_at,modified_at,created_at,parent,parent.name,custom_fields,custom_fields.name,custom_fields.display_value,memberships,memberships.project,memberships.project.name,completed")
+            URLQueryItem(name: "opt_fields", value: "gid,name,notes,html_notes,due_on,due_at,modified_at,created_at,parent,parent.name,custom_fields,custom_fields.name,custom_fields.display_value,memberships,memberships.project,memberships.project.gid,memberships.project.name,assignee,assignee.name,created_by,created_by.name,tags,tags.name,tags.color,completed")
         ]
         
         guard let url = components.url else {
@@ -1010,6 +1144,7 @@ class AsanaService: ObservableObject {
         // Note: Even if projectID is specified in settings, we ignore it and fetch from all projects
         // to provide company-wide calendar access
         var allTasks: [AsanaTask] = []
+        var taskGidToProjectGid: [String: String] = [:] // task GID -> project GID (we know this from fetch-by-project)
         var projectMetadataMap: [String: ProjectMetadata] = [:] // project GID -> ProjectMetadata
         
         // Track sync metadata for DocketSyncResult
@@ -1228,8 +1363,9 @@ class AsanaService: ObservableObject {
                     
                     // Process results as they complete and add new tasks to maintain concurrency
                     while let result = try await group.next() {
-                        // Collect tasks (even empty arrays on error)
+                        // Collect tasks (even empty arrays on error) and record which project each task came from
                         allTasks.append(contentsOf: result.tasks)
+                        for t in result.tasks { taskGidToProjectGid[t.gid] = result.project.gid }
                         await processResult(result)
                         activeTasks -= 1
                         
@@ -1279,6 +1415,7 @@ class AsanaService: ObservableObject {
                         do {
                             let tasks = try await self.fetchTasks(workspaceID: workspaceID, projectID: project.gid, maxTasks: nil, modifiedSince: modifiedSince)
                             allTasks.append(contentsOf: tasks)
+                            for t in tasks { taskGidToProjectGid[t.gid] = project.gid }
                             retrySuccessCount += 1
                             retryTaskCount += tasks.count
                             print("✅ [SYNC] Retry succeeded for '\(project.name)': \(tasks.count) tasks")
@@ -1319,16 +1456,36 @@ class AsanaService: ObservableObject {
             let parseResult = parseDocketFromString(task.name)
             
             if let docket = parseResult.docket {
-                // Get project metadata from task's memberships
+                // Get project metadata: we know the project from our fetch-by-project (taskGidToProjectGid), so use that first; fall back to task.memberships if needed
                 var projectMetadata: ProjectMetadata? = nil
-                if let memberships = task.memberships {
+                if let projectGid = taskGidToProjectGid[task.gid], let metadata = projectMetadataMap[projectGid] {
+                    discoveredDocketBearingProjects.insert(projectGid)
+                    projectMetadata = metadata
+                    // Optionally enhance with task custom fields
+                    if let customFields = task.custom_fields, !customFields.isEmpty {
+                        var taskCustomFields = metadata.customFields
+                        for field in customFields {
+                            if let value = field.display_value, !value.isEmpty {
+                                taskCustomFields[field.name] = value
+                            }
+                        }
+                        projectMetadata = ProjectMetadata(
+                            projectGid: metadata.projectGid,
+                            projectName: metadata.projectName,
+                            createdBy: metadata.createdBy,
+                            owner: metadata.owner,
+                            notes: metadata.notes,
+                            color: metadata.color,
+                            dueDate: metadata.dueDate,
+                            team: metadata.team,
+                            customFields: taskCustomFields
+                        )
+                    }
+                } else if let memberships = task.memberships {
                     for membership in memberships {
                         if let projectGid = membership.project?.gid {
-                            // Track that this project has dockets
                             discoveredDocketBearingProjects.insert(projectGid)
-                            
                             if let metadata = projectMetadataMap[projectGid] {
-                                // Enhance metadata with custom field values from the task
                                 if let customFields = task.custom_fields {
                                     var taskCustomFields = metadata.customFields
                                     for field in customFields {
@@ -1336,7 +1493,6 @@ class AsanaService: ObservableObject {
                                             taskCustomFields[field.name] = value
                                         }
                                     }
-                                    // Create updated metadata with task-specific custom field values
                                     projectMetadata = ProjectMetadata(
                                         projectGid: metadata.projectGid,
                                         projectName: metadata.projectName,
@@ -1351,7 +1507,7 @@ class AsanaService: ObservableObject {
                                 } else {
                                     projectMetadata = metadata
                                 }
-                                break // Use first project found
+                                break
                             }
                         }
                     }
@@ -1369,6 +1525,7 @@ class AsanaService: ObservableObject {
                     subtasks: nil, // Will be populated in second pass
                     projectMetadata: projectMetadata,
                     dueDate: task.effectiveDueDate,
+                    taskGid: task.gid,
                     completed: task.completed
                 )
                 tasksWithDockets[task.gid] = (task: task, docketInfo: docketInfo)
@@ -1418,6 +1575,7 @@ class AsanaService: ObservableObject {
                 subtasks: subtasks.isEmpty ? nil : subtasks,
                 projectMetadata: taskData.docketInfo.projectMetadata,
                 dueDate: taskData.docketInfo.dueDate,
+                taskGid: taskData.task.gid,
                 completed: taskData.docketInfo.completed
             )
             finalDockets.append(finalDocket)
@@ -1591,6 +1749,13 @@ struct AsanaWorkspace: Codable, Identifiable {
     var id: String { gid }
 }
 
+struct AsanaSection: Codable, Identifiable {
+    let gid: String
+    let name: String?
+    
+    var id: String { gid }
+}
+
 struct AsanaProject: Codable, Identifiable {
     let gid: String
     let name: String
@@ -1680,6 +1845,7 @@ struct AsanaTask: Codable, Identifiable {
     let parent: AsanaParent?
     let memberships: [AsanaMembership]?
     let assignee: AsanaAssignee?
+    let created_by: AsanaUser?
     /// Task tags (e.g. studio: "A - Blue", "B - Green", "C - Red", "M4 - Fuchsia").
     let tags: [AsanaTag]?
     /// Task description/notes (e.g. session checklist from Asana). Plain text.
@@ -1716,6 +1882,7 @@ struct AsanaTask: Codable, Identifiable {
         case parent
         case memberships
         case assignee
+        case created_by
         case tags
         case notes
         case html_notes
@@ -1732,6 +1899,7 @@ struct AsanaTask: Codable, Identifiable {
         parent = try container.decodeIfPresent(AsanaParent.self, forKey: .parent)
         memberships = try container.decodeIfPresent([AsanaMembership].self, forKey: .memberships)
         assignee = try container.decodeIfPresent(AsanaAssignee.self, forKey: .assignee)
+        created_by = try container.decodeIfPresent(AsanaUser.self, forKey: .created_by)
         tags = try container.decodeIfPresent([AsanaTag].self, forKey: .tags)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         html_notes = try container.decodeIfPresent(String.self, forKey: .html_notes)
@@ -1879,4 +2047,3 @@ enum AsanaError: LocalizedError {
         }
     }
 }
-

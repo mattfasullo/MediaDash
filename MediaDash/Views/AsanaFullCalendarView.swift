@@ -2,13 +2,16 @@
 //  AsanaFullCalendarView.swift
 //  MediaDash
 //
-//  Full 2-week Asana calendar: grid view. Click a day to expand; collapsible Sessions, Media Tasks, Tasks. Filter and tag colors.
+//  Full Asana calendar: 2-week forward view with 2-day lookback.
+//  Click a day to expand; collapsible Sessions, Media Tasks, Tasks. Filter and tag colors.
 //
 
 import SwiftUI
 import AppKit
 
-private let fullCalendarDays = 14
+private let fullCalendarLookbackDays = 2
+private let fullCalendarFutureDays = 14
+private let fullCalendarAutoLinkDayTolerance = 2
 private let gridColumns = 7
 
 struct TaskDetailSheetItem: Identifiable {
@@ -63,8 +66,10 @@ struct AsanaFullCalendarView: View {
 
     private var calendarDays: [Date] {
         let cal = Calendar.current
-        let start = cal.startOfDay(for: Date())
-        return (0..<fullCalendarDays).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+        let today = cal.startOfDay(for: Date())
+        let start = cal.date(byAdding: .day, value: -fullCalendarLookbackDays, to: today) ?? today
+        let totalDays = fullCalendarLookbackDays + fullCalendarFutureDays
+        return (0..<totalDays).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
     }
 
     private func tasks(for date: Date) -> [AsanaTask] {
@@ -97,6 +102,36 @@ struct AsanaFullCalendarView: View {
 
     private func otherTasksExcludingMedia(for date: Date) -> [AsanaTask] {
         otherTasks(for: date).filter { !isMediaTask($0) }
+    }
+
+    private func dueDate(for task: AsanaTask) -> Date? {
+        let key = DemosPostLinkStore.dueDateKey(task)
+        guard !key.isEmpty else { return nil }
+        return Self.dateOnlyFormatter.date(from: key)
+    }
+
+    private func allMediaTasksInCalendarWindow() -> [AsanaTask] {
+        cacheManager.cachedTasksTwoWeeks.filter { task in
+            task.parent == nil && isMediaTask(task)
+        }
+    }
+
+    private func sortedByDueDateThenName(_ tasks: [AsanaTask]) -> [AsanaTask] {
+        tasks.sorted { lhs, rhs in
+            let lhsDate = dueDate(for: lhs) ?? .distantFuture
+            let rhsDate = dueDate(for: rhs) ?? .distantFuture
+            if lhsDate != rhsDate { return lhsDate < rhsDate }
+            let order = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if order != .orderedSame { return order == .orderedAscending }
+            return lhs.gid < rhs.gid
+        }
+    }
+
+    private func taskDateLabel(_ task: AsanaTask) -> String {
+        if let date = dueDate(for: task) {
+            return Self.dayHeaderFormatter.string(from: date)
+        }
+        return "No due date"
     }
 
     private func filteredCount(for date: Date) -> Int {
@@ -166,7 +201,7 @@ struct AsanaFullCalendarView: View {
         HStack {
             Image(systemName: "calendar")
                 .font(.system(size: 18, weight: .medium))
-            Text("Asana Calendar — 2 weeks")
+            Text("Asana Calendar")
                 .font(.system(size: 16, weight: .semibold))
             Spacer()
             Button(action: {
@@ -386,7 +421,14 @@ struct AsanaFullCalendarView: View {
 
     @ViewBuilder
     private func mediaTasksSection(_ mediaList: [AsanaTask]) -> some View {
-        let (pairs, linkedPostGids) = DemosPostLinkStore.linkedPairsForDay(mediaList)
+        let dayDemosTasks = mediaList.filter { DemosPostLinkStore.isDemosTask($0) }
+        let crossDayPostCandidates = allMediaTasksInCalendarWindow()
+            .filter { DemosPostLinkStore.isPostTask($0) }
+        let (pairs, linkedPostGids) = DemosPostLinkStore.linkedPairs(
+            demosTasks: dayDemosTasks,
+            postTasks: crossDayPostCandidates,
+            maxDayDistance: fullCalendarAutoLinkDayTolerance
+        )
         let linkedDemosGids = Set(pairs.map { $0.0.gid })
         let standaloneDemos = mediaList.filter { DemosPostLinkStore.isDemosTask($0) && !linkedDemosGids.contains($0.gid) }
         let standalonePosts = mediaList.filter { DemosPostLinkStore.isPostTask($0) && !linkedPostGids.contains($0.gid) }
@@ -398,10 +440,10 @@ struct AsanaFullCalendarView: View {
                 linkedPairRow(demos: demos, post: post)
             }
             ForEach(standaloneDemos, id: \.gid) { task in
-                mediaTaskRowWithLinkMenu(task: task, mediaList: mediaList)
+                mediaTaskRowWithLinkMenu(task: task)
             }
             ForEach(standalonePosts, id: \.gid) { task in
-                mediaTaskRowWithLinkMenu(task: task, mediaList: mediaList)
+                mediaTaskRowWithLinkMenu(task: task)
             }
             ForEach(otherMedia, id: \.gid) { task in
                 taskRow(task)
@@ -446,21 +488,25 @@ struct AsanaFullCalendarView: View {
         }
     }
 
-    private func mediaTaskRowWithLinkMenu(task: AsanaTask, mediaList: [AsanaTask]) -> some View {
-        let posts = mediaList.filter { DemosPostLinkStore.isPostTask($0) }
-        let demos = mediaList.filter { DemosPostLinkStore.isDemosTask($0) }
+    private func mediaTaskRowWithLinkMenu(task: AsanaTask) -> some View {
+        let posts = sortedByDueDateThenName(
+            allMediaTasksInCalendarWindow().filter { DemosPostLinkStore.isPostTask($0) }
+        )
+        let demos = sortedByDueDateThenName(
+            allMediaTasksInCalendarWindow().filter { DemosPostLinkStore.isDemosTask($0) }
+        )
         return taskRow(task)
             .contextMenu {
                 if DemosPostLinkStore.isDemosTask(task) {
                     ForEach(posts.filter { $0.gid != task.gid }, id: \.gid) { post in
-                        Button("Link to \(post.name)") {
+                        Button("Link to \(post.name) (\(taskDateLabel(post)))") {
                             DemosPostLinkStore.addManualLink(demosGid: task.gid, postGid: post.gid)
                             manualLinkVersion += 1
                         }
                     }
                 } else if DemosPostLinkStore.isPostTask(task) {
                     ForEach(demos.filter { $0.gid != task.gid }, id: \.gid) { demosTask in
-                        Button("Link to \(demosTask.name)") {
+                        Button("Link to \(demosTask.name) (\(taskDateLabel(demosTask)))") {
                             DemosPostLinkStore.addManualLink(demosGid: demosTask.gid, postGid: task.gid)
                             manualLinkVersion += 1
                         }

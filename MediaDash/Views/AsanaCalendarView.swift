@@ -2,7 +2,7 @@
 //  AsanaCalendarView.swift
 //  MediaDash
 //
-//  Asana calendar: sessions from today through the next 5 business days.
+//  Asana calendar: 2-day lookback plus today through the next 5 business days.
 //
 
 import SwiftUI
@@ -31,7 +31,8 @@ struct AsanaCalendarView: View {
     
     @State private var isLoadingSessions = false
     
-    private static let calendarDays = 6 // today + 5 business days
+    private static let lookbackDays = 2
+    private static let upcomingBusinessDays = 6 // today + 5 business days
     private static let dateOnlyFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
@@ -49,31 +50,12 @@ struct AsanaCalendarView: View {
     private var calendarSections: [CalendarDaySection] {
         let calendar = Calendar.current
         let startOfToday = calendar.startOfDay(for: Date())
-        var sections: [CalendarDaySection] = []
-        
-        // Get sessions from cache
         let sessions = cacheManager.cachedSessions
-        
-        // Build calendar days, skipping weekends (Saturday = 7, Sunday = 1 in weekday)
-        var dayOffset = 0
-        var businessDaysAdded = 0
-        
-        while businessDaysAdded < Self.calendarDays {
-            guard let dayDate = calendar.date(byAdding: .day, value: dayOffset, to: startOfToday) else {
-                dayOffset += 1
-                continue
-            }
-            
-            let weekday = calendar.component(.weekday, from: dayDate)
-            // Skip Saturday (7) and Sunday (1)
-            if weekday == 7 || weekday == 1 {
-                dayOffset += 1
-                continue
-            }
-            
+
+        func section(for dayDate: Date) -> CalendarDaySection {
             let dateKey = Self.dateOnlyFormatter.string(from: dayDate)
             let dayLabel = Self.dayHeaderFormatter.string(from: dayDate)
-            let isToday = dayOffset == 0
+            let isToday = calendar.isDate(dayDate, inSameDayAs: startOfToday)
             
             // Filter sessions for this date and convert to DocketInfo for display
             let sessionsForDate = sessions.filter { session in
@@ -128,13 +110,36 @@ struct AsanaCalendarView: View {
                 )
             }
             
-            sections.append(CalendarDaySection(
+            return CalendarDaySection(
                 date: dayDate,
                 dayLabel: dayLabel,
                 isToday: isToday,
                 dockets: dockets
-            ))
-            
+            )
+        }
+
+        var sections: [CalendarDaySection] = []
+
+        // Explicit lookback section: always include the previous two calendar days.
+        for daysBack in stride(from: Self.lookbackDays, through: 1, by: -1) {
+            guard let dayDate = calendar.date(byAdding: .day, value: -daysBack, to: startOfToday) else { continue }
+            sections.append(section(for: dayDate))
+        }
+        
+        // Existing forward window: today + next business days (skip weekends).
+        var dayOffset = 0
+        var businessDaysAdded = 0
+        while businessDaysAdded < Self.upcomingBusinessDays {
+            guard let dayDate = calendar.date(byAdding: .day, value: dayOffset, to: startOfToday) else {
+                dayOffset += 1
+                continue
+            }
+            let weekday = calendar.component(.weekday, from: dayDate)
+            if weekday == 7 || weekday == 1 {
+                dayOffset += 1
+                continue
+            }
+            sections.append(section(for: dayDate))
             businessDaysAdded += 1
             dayOffset += 1
         }

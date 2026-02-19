@@ -31,11 +31,16 @@ struct GatekeeperView: View {
                     .preferredColorScheme(appearance.colorScheme)
 
             case .loggedIn(let profile):
-                AuthenticatedRootView(
-                    sessionManager: sessionManager,
-                    profile: profile
-                )
-                .preferredColorScheme(profile.settings.appearance.colorScheme)
+                if profile.settings.userRole == .producer {
+                    ProducerRootView(sessionManager: sessionManager, profile: profile)
+                        .preferredColorScheme(profile.settings.appearance.colorScheme)
+                } else {
+                    AuthenticatedRootView(
+                        sessionManager: sessionManager,
+                        profile: profile
+                    )
+                    .preferredColorScheme(profile.settings.appearance.colorScheme)
+                }
                 }
             }
         }

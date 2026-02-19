@@ -2,7 +2,7 @@
 //  AsanaFullCalendarWindowManager.swift
 //  MediaDash
 //
-//  Opens the full 2-week Asana calendar in a separate window.
+//  Opens the full Asana calendar (2-week forward + 2-day lookback) in a separate window.
 //
 
 import SwiftUI
@@ -46,7 +46,7 @@ final class AsanaFullCalendarWindowManager: NSObject, ObservableObject, NSWindow
             backing: .buffered,
             defer: false
         )
-        window.title = "Asana Calendar — 2 weeks"
+        window.title = "Asana Calendar"
         window.contentView = hostingView
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)

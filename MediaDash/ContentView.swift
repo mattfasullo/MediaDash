@@ -1303,7 +1303,7 @@ struct DocketSearchView: View {
     @Binding var isPresented: Bool
     @Binding var selectedDocket: String
     var jobType: JobType = .workPicture
-    var onConfirm: () -> Void
+    var onConfirm: (String) -> Void
     var cacheManager: AsanaCacheManager?
 
     @State private var searchText = ""
@@ -1570,7 +1570,7 @@ struct DocketSearchView: View {
                     prefillDocketNumber = nil
                     prefillJobName = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        onConfirm()
+                        onConfirm(selectedDocket)
                     }
                 },
                 initialDocketNumber: prefillDocketNumber,
@@ -1743,7 +1743,7 @@ struct DocketSearchView: View {
             isPresented = false
             // Delay slightly to ensure sheet closes before job runs
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                onConfirm()
+                onConfirm(docket)
             }
         }
     }
@@ -1773,7 +1773,7 @@ struct DocketSearchView: View {
                 } else {
                     isPresented = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        onConfirm()
+                        onConfirm(docket)
                     }
                 }
             }
@@ -1786,7 +1786,7 @@ struct DocketSearchView: View {
         showExistingPrepAlert = false
         isPresented = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            onConfirm()
+            onConfirm(selectedDocket)
         }
     }
 
@@ -1794,7 +1794,7 @@ struct DocketSearchView: View {
         showExistingPrepAlert = false
         isPresented = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            onConfirm()
+            onConfirm(selectedDocket)
         }
     }
 
@@ -4141,31 +4141,35 @@ struct SheetsModifier: ViewModifier {
                 pendingJobType = nil
                 pendingFileThenPrep = false
             }) {
+                let selectedJobType = pendingJobType ?? .workPicture
+                let shouldFileThenPrep = pendingFileThenPrep
+
                 DocketSearchView(
                     manager: manager,
                     settingsManager: settingsManager,
                     isPresented: $showDocketSelectionSheet,
                     selectedDocket: $selectedDocket,
-                    jobType: pendingJobType ?? .workPicture,
-                    onConfirm: {
-                        if pendingFileThenPrep {
-                            onFileThenPrepConfirm(selectedDocket)
+                    jobType: selectedJobType,
+                    onConfirm: { docket in
+                        if shouldFileThenPrep {
+                            onFileThenPrepConfirm(docket)
                             showDocketSelectionSheet = false
                             return
                         }
-                        if let type = pendingJobType {
-                            if type == .prep {
-                                showManualPrepSheet = true
-                            } else {
-                                manager.runJob(
-                                    type: type,
-                                    docket: selectedDocket,
-                                    wpDate: wpDate,
-                                    prepDate: prepDate
-                                )
-                            }
-                            pendingJobType = nil
+
+                        if selectedJobType == .prep {
+                            selectedDocket = docket
+                            showManualPrepSheet = true
+                        } else {
+                            manager.runJob(
+                                type: selectedJobType,
+                                docket: docket,
+                                wpDate: wpDate,
+                                prepDate: prepDate
+                            )
                         }
+
+                        pendingJobType = nil
                     },
                     cacheManager: cacheManager
                 )
@@ -4497,10 +4501,11 @@ struct WorkspaceMenuButton: View {
     let profile: WorkspaceProfile
     @ObservedObject var sessionManager: SessionManager
     @State private var isHovered = false
+    @State private var showLogoutConfirmation = false
     
     var body: some View {
         Button(role: .destructive) {
-            sessionManager.logout()
+            showLogoutConfirmation = true
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "rectangle.portrait.and.arrow.right")
@@ -4530,6 +4535,14 @@ struct WorkspaceMenuButton: View {
         .onHover { hovering in
             isHovered = hovering
             }
+        .confirmationDialog("Log Out", isPresented: $showLogoutConfirmation, titleVisibility: .visible) {
+            Button("Log Out", role: .destructive) {
+                sessionManager.logout()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You can sign in again as this or another account (media or producer).")
+        }
     }
 }
 
@@ -4539,4 +4552,3 @@ struct WorkspaceMenuButton: View {
 #Preview {
     ContentView()
 }
-

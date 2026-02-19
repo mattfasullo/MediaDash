@@ -31,6 +31,9 @@ struct SharedKeychainService {
         case simianUsername
         case simianPassword
 
+        // Airtable
+        case airtableAPIKey
+
         var keychainKey: String {
             switch self {
             case .gmailAccessToken: return "gmail_shared_access_token"
@@ -39,6 +42,7 @@ struct SharedKeychainService {
             case .asanaRefreshToken: return "asana_shared_refresh_token"
             case .simianUsername: return "simian_shared_username"
             case .simianPassword: return "simian_shared_password"
+            case .airtableAPIKey: return "airtable_shared_api_key"
             }
         }
     }
@@ -171,6 +175,11 @@ struct SharedKeychainService {
     /// Get Simian password (shared or personal)
     static func getSimianPassword() -> String? {
         return getKey(shared: .simianPassword, personalKey: "simian_password")
+    }
+    
+    /// Get Airtable API key (shared or personal)
+    static func getAirtableAPIKey() -> String? {
+        return getKey(shared: .airtableAPIKey, personalKey: "airtable_api_key")
     }
     
 }

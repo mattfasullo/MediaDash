@@ -2,7 +2,7 @@
 //  AsanaCalendarWindowManager.swift
 //  MediaDash
 //
-//  Opens the Asana Calendar in a separate, movable window (today + 5 days).
+//  Opens the Asana Calendar in a separate, movable window (2-day lookback + upcoming days).
 //
 
 import SwiftUI

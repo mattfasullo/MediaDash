@@ -238,7 +238,7 @@ class SessionManager: ObservableObject {
     }
 
     // Log in with username (loads settings from shared storage)
-    func loginWithUsername(_ username: String) async {
+    func loginWithUsername(_ username: String, initialUserRole: UserRole? = nil) async {
         let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !cleanUsername.isEmpty else { return }
         
@@ -269,9 +269,18 @@ class SessionManager: ObservableObject {
             }
         }
         
-        // Create user profile with loaded or default settings
-        let profile = WorkspaceProfile.user(username: cleanUsername, settings: loadedSettings)
-            login(with: profile)
+        // Create user profile with loaded or default settings; when initialUserRole is provided, always apply it so the sign-in uses the chosen type
+        var settingsToUse: AppSettings
+        if let loaded = loadedSettings {
+            settingsToUse = loaded
+        } else {
+            settingsToUse = AppSettings.default
+        }
+        if let role = initialUserRole {
+            settingsToUse.userRole = role
+        }
+        let profile = WorkspaceProfile.user(username: cleanUsername, settings: settingsToUse)
+        login(with: profile)
         
         // Try to save to shared storage (will fail gracefully if unavailable)
         if let sharedCacheURL = profile.settings.sharedCacheURL, !sharedCacheURL.isEmpty {
@@ -285,9 +294,18 @@ class SessionManager: ObservableObject {
         }
     }
 
-    // Create a local workspace (not synced)
-    func createLocalWorkspace(name: String) {
-        let profile = WorkspaceProfile.local(name: name)
+    // Create a local workspace (not synced); optional userRole sets account type (media vs producer)
+    func createLocalWorkspace(name: String, userRole: UserRole? = nil) {
+        var settings = AppSettings.default
+        if let role = userRole {
+            settings.userRole = role
+        }
+        let profile = WorkspaceProfile(
+            name: name,
+            username: nil,
+            settings: settings,
+            isLocal: true
+        )
         login(with: profile)
     }
 

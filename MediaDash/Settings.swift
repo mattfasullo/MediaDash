@@ -2,6 +2,35 @@ import Foundation
 import SwiftUI
 import Combine
 
+// MARK: - User Role
+
+enum UserRole: String, Codable, CaseIterable {
+    case mediaTeamMember = "Media Team Member"
+    case producer = "Producer"
+    
+    var displayName: String {
+        return self.rawValue
+    }
+    
+    var description: String {
+        switch self {
+        case .mediaTeamMember:
+            return "I'm part of the media team"
+        case .producer:
+            return "I'm a producer"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .mediaTeamMember:
+            return "person.2.fill"
+        case .producer:
+            return "person.fill"
+        }
+    }
+}
+
 // MARK: - Window Mode (User Preference)
 
 enum WindowMode: String, Codable, CaseIterable {
@@ -438,6 +467,9 @@ enum AppTheme: String, Codable, CaseIterable {
 
 struct AppSettings: Codable, Equatable {
     var profileName: String
+    
+    // User Role
+    var userRole: UserRole? // Optional for backward compatibility with existing users
 
     // Path Settings
     var serverBasePath: String
@@ -529,6 +561,27 @@ struct AppSettings: Codable, Equatable {
     var asanaDocketField: String? // Custom field name for docket number (if using custom fields)
     var asanaJobNameField: String? // Custom field name for job name (if using custom fields)
     
+    // Airtable Integration (for producers to sync Asana data)
+    var airtableBaseID: String? // Airtable base ID
+    var airtableTableID: String? // Airtable table ID
+    // API key stored in Keychain, not in settings
+    
+    // Airtable Field Mappings (maps DocketInfo fields to Airtable field names)
+    var airtableDocketNumberField: String // Field name in Airtable for docket number (used as lookup key)
+    var airtableJobNameField: String // Field name in Airtable for job name
+    var airtableFullNameField: String? // Field name in Airtable for full name
+    var airtableDueDateField: String? // Field name in Airtable for due date
+    var airtableClientField: String? // Field name in Airtable for client
+    var airtableProducerField: String? // Field name in Airtable for producer
+    var airtableStudioField: String? // Field name in Airtable for studio
+    var airtableCompletedField: String? // Field name in Airtable for completed status
+    var airtableLastUpdatedField: String? // Field name in Airtable for last updated timestamp
+    var airtableBriefField: String? // Field name for brief/description (e.g. "Brief")
+    var airtableMusicTypeField: String? // Field name for music type (e.g. "Music Type")
+    /// Comma-separated Asana tag names that represent Music Type (e.g. "Original Music, Stock Music, Licensed Music"). Used when pushing to Airtable.
+    var airtableMusicTypeTags: String?
+    var airtableProjectTitleField: String? // Override for project title column (e.g. "A Project Title"); if nil, uses airtableJobNameField
+    
     // Shared Cache (optional - if set, will fetch from shared cache instead of syncing locally)
     var sharedCacheURL: String?
     var useSharedCache: Bool
@@ -614,6 +667,7 @@ struct AppSettings: Codable, Equatable {
     static var `default`: AppSettings {
         AppSettings(
             profileName: "Default",
+            userRole: nil, // Will be set during onboarding
             serverBasePath: "/Volumes/Grayson Assets/GM",
             sessionsBasePath: "/Volumes/Grayson Assets/SESSIONS",
             serverConnectionURL: "192.168.200.200",
@@ -668,6 +722,21 @@ struct AppSettings: Codable, Equatable {
             asanaClientSecret: nil,
             asanaDocketField: nil,
             asanaJobNameField: nil,
+            airtableBaseID: nil,
+            airtableTableID: nil,
+            airtableDocketNumberField: "Docket",
+            airtableJobNameField: "Project Title",
+            airtableFullNameField: "Full Name",
+            airtableDueDateField: "Due Date",
+            airtableClientField: "Client",
+            airtableProducerField: "Producer",
+            airtableStudioField: "Studio",
+            airtableCompletedField: "Completed",
+            airtableLastUpdatedField: "Last Updated",
+            airtableBriefField: "Brief",
+            airtableMusicTypeField: "Music Type",
+            airtableMusicTypeTags: "Original Music, Stock Music, Licensed Music",
+            airtableProjectTitleField: nil,
             sharedCacheURL: "/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache",
             useSharedCache: true,
             gmailEnabled: true,

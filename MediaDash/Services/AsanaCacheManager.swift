@@ -13,27 +13,29 @@ class AsanaCacheManager: ObservableObject {
     @Published var syncProgress: Double = 0  // 0.0 to 1.0
     @Published var syncPhase: String = ""    // Human-readable phase description
     @Published var cachedDockets: [DocketInfo] = []
-    @Published var cachedSessions: [AsanaTask] = []  // Upcoming sessions for Prep (today + 5 business days)
+    @Published var cachedSessions: [AsanaTask] = []  // Session Prep window (2-day lookback + upcoming business days)
     @Published var lastSessionSyncDate: Date?
-    /// Sessions for the full 2-week calendar view (next 14 calendar days).
+    /// Sessions for the full calendar view (2-day lookback + next 14 calendar days).
     @Published var cachedSessionsTwoWeeks: [AsanaTask] = []
     @Published var lastSessionTwoWeeksSyncDate: Date?
-    /// All tasks (sessions + other) for the full 2-week calendar (next 14 days).
+    /// All tasks (sessions + other) for the full calendar (2-day lookback + next 14 days).
     @Published var cachedTasksTwoWeeks: [AsanaTask] = []
     @Published var lastTasksTwoWeeksSyncDate: Date?
-    
+
     // Track the last reported progress to ensure monotonic increase
     private var lastReportedProgress: Double = 0
-    
+
     // Cache file name - used for reading from shared cache location
     private let cacheFileName = "mediadash_docket_cache.json"
-    
+    /// Server-stored map: docket fullName → project GID (so we don't need a full sync when reopening a docket)
+    private let docketProjectMapFileName = "mediadash_docket_project_map.json"
+
     // Store current settings for cache access
     private var sharedCacheURL: String?
     private var useSharedCache: Bool = false
     private var serverBasePath: String?
     private var serverConnectionURL: String?
-    
+
     // Periodic status check timer
     // Note: Using nonisolated(unsafe) to allow cleanup from deinit.
     // This is safe because timers are only invalidated (not created) from nonisolated context.
@@ -570,6 +572,12 @@ class AsanaCacheManager: ObservableObject {
         }
     }
     
+    /// URL for the server-stored docket→project GID map (same directory as cache file)
+    nonisolated func getDocketProjectMapFileURL(from urlString: String) -> URL {
+        let cacheFileURL = getFileURL(from: urlString)
+        return cacheFileURL.deletingLastPathComponent().appendingPathComponent(docketProjectMapFileName)
+    }
+    
     /// Load cached dockets from shared cache only
     /// MediaDash relies solely on the shared cache - no local cache is maintained
     func loadCachedDockets() -> [DocketInfo] {
@@ -987,49 +995,49 @@ class AsanaCacheManager: ObservableObject {
         }
     }
     
-    /// Sync upcoming sessions for Prep view (today + 5 business days; ~7 calendar days).
+    /// Sync Session Prep window (2-day lookback + 5 business days ahead; ~9 calendar days).
     func syncUpcomingSessions(workspaceID: String?) async throws {
         guard asanaService.isAuthenticated else {
             print("⚠️ [Sessions] Not authenticated, skipping session sync")
             return
         }
-        print("📅 [Sessions] Syncing upcoming sessions (7 days)...")
+        print("📅 [Sessions] Syncing session prep window (2-day lookback + upcoming days)...")
         do {
-            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 7)
+            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 7, daysBack: 2)
             self.cachedSessions = sessions
             self.lastSessionSyncDate = Date()
-            print("📅 [Sessions] Synced \(sessions.count) upcoming sessions")
+            print("📅 [Sessions] Synced \(sessions.count) session prep tasks")
         } catch {
             print("⚠️ [Sessions] Failed to sync sessions: \(error.localizedDescription)")
         }
     }
 
-    /// Sync sessions for the full 2-week calendar view (next 14 calendar days).
+    /// Sync sessions for the full calendar view (2-day lookback + next 14 calendar days).
     func syncSessionsTwoWeeks(workspaceID: String?) async throws {
         guard asanaService.isAuthenticated else {
             print("⚠️ [Sessions] Not authenticated, skipping 2-week session sync")
             return
         }
-        print("📅 [Sessions] Syncing sessions for 2-week calendar...")
+        print("📅 [Sessions] Syncing sessions for full calendar window...")
         do {
-            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 14)
+            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 14, daysBack: 2)
             self.cachedSessionsTwoWeeks = sessions
             self.lastSessionTwoWeeksSyncDate = Date()
-            print("📅 [Sessions] Synced \(sessions.count) sessions for 2-week calendar")
+            print("📅 [Sessions] Synced \(sessions.count) sessions for full calendar window")
         } catch {
             print("⚠️ [Sessions] Failed to sync 2-week sessions: \(error.localizedDescription)")
         }
     }
 
-    /// Sync all tasks (not just sessions) for the full 2-week calendar (next 14 days).
+    /// Sync all tasks (not just sessions) for the full calendar (2-day lookback + next 14 days).
     func syncTasksTwoWeeks(workspaceID: String?) async throws {
         guard asanaService.isAuthenticated else { return }
-        print("📅 [Calendar] Syncing all tasks for 2-week calendar...")
+        print("📅 [Calendar] Syncing all tasks for full calendar window...")
         do {
-            let tasks = try await asanaService.searchTasksByDueDate(workspaceID: workspaceID, daysAhead: 14)
+            let tasks = try await asanaService.searchTasksByDueDate(workspaceID: workspaceID, daysAhead: 14, daysBack: 2)
             self.cachedTasksTwoWeeks = tasks
             self.lastTasksTwoWeeksSyncDate = Date()
-            print("📅 [Calendar] Synced \(tasks.count) tasks for 2-week calendar")
+            print("📅 [Calendar] Synced \(tasks.count) tasks for full calendar window")
         } catch {
             print("⚠️ [Calendar] Failed to sync 2-week tasks: \(error.localizedDescription)")
         }
@@ -1054,14 +1062,58 @@ class AsanaCacheManager: ObservableObject {
                 return
             }
             
-            if lastSyncDate != cached.lastSync || cachedDockets.count != cached.dockets.count {
-                cachedDockets = cached.dockets
+            var dockets = cached.dockets
+            if let map = loadDocketProjectMapSync(sharedURL: sharedURL), !map.isEmpty {
+                dockets = dockets.map { docket in
+                    guard docket.projectMetadata == nil,
+                          let gid = map[docket.fullName] else { return docket }
+                    let meta = ProjectMetadata(projectGid: gid, projectName: nil, createdBy: nil, owner: nil, notes: nil, color: nil, dueDate: nil, team: nil, customFields: [:])
+                    return DocketInfo(id: docket.id, number: docket.number, jobName: docket.jobName, fullName: docket.fullName, updatedAt: docket.updatedAt, createdAt: docket.createdAt, metadataType: docket.metadataType, subtasks: docket.subtasks, projectMetadata: meta, dueDate: docket.dueDate, taskGid: docket.taskGid, studio: docket.studio, studioColor: docket.studioColor, completed: docket.completed)
+                }
             }
+            cachedDockets = dockets
             lastSyncDate = cached.lastSync
             updateCacheStatus()
         } catch {
             updateCacheStatus()
         }
+    }
+    
+    /// Load docket fullName → project GID map from server (same directory as cache). Returns nil if unavailable.
+    private func loadDocketProjectMapSync(sharedURL: String) -> [String: String]? {
+        let mapURL = getDocketProjectMapFileURL(from: sharedURL)
+        guard let data = try? Data(contentsOf: mapURL),
+              let map = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return nil
+        }
+        return map
+    }
+    
+    /// Persist a docket→project GID mapping on the server so reopening this docket doesn't require a full sync.
+    /// Call this when a producer (or any flow) resolves a project for a docket. Safe to call if server is read-only (no-op).
+    func saveDocketProjectMapping(fullName: String, projectGid: String) {
+        guard useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty else { return }
+        let mapURL = getDocketProjectMapFileURL(from: sharedURL)
+        let parentDir = mapURL.deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: parentDir.path) else { return }
+        Task {
+            var map = await loadDocketProjectMapAsync(mapURL: mapURL)
+            map[fullName] = projectGid
+            guard let data = try? JSONEncoder().encode(map) else { return }
+            do {
+                try data.write(to: mapURL)
+            } catch {
+                // Server may be read-only; ignore
+            }
+        }
+    }
+    
+    private nonisolated func loadDocketProjectMapAsync(mapURL: URL) async -> [String: String] {
+        guard let data = try? Data(contentsOf: mapURL),
+              let map = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return map
     }
     
     /// Save dockets to shared cache file (public for manual seeding)

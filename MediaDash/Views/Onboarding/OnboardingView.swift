@@ -5,14 +5,16 @@ import AppKit
 
 enum OnboardingStep: Int, CaseIterable {
     case welcome = 0
-    case serverPath = 1
-    case docketSource = 2
-    case integrations = 3
-    case complete = 4
+    case userRole = 1
+    case serverPath = 2
+    case docketSource = 3
+    case integrations = 4
+    case complete = 5
     
     var title: String {
         switch self {
         case .welcome: return "Welcome to MediaDash"
+        case .userRole: return "Tell Us About Yourself"
         case .serverPath: return "Configure Your Workspace"
         case .docketSource: return "Connect Your Dockets"
         case .integrations: return "Optional Integrations"
@@ -23,6 +25,7 @@ enum OnboardingStep: Int, CaseIterable {
     var subtitle: String {
         switch self {
         case .welcome: return "Professional media management, streamlined"
+        case .userRole: return "Are you a media team member or a producer?"
         case .serverPath: return "Set up your server paths"
         case .docketSource: return "Choose where your docket data lives"
         case .integrations: return "Supercharge your workflow"
@@ -33,6 +36,7 @@ enum OnboardingStep: Int, CaseIterable {
     var icon: String {
         switch self {
         case .welcome: return "sparkles"
+        case .userRole: return "person.fill.questionmark"
         case .serverPath: return "folder.badge.gearshape"
         case .docketSource: return "doc.text.magnifyingglass"
         case .integrations: return "link.circle"
@@ -48,6 +52,7 @@ struct OnboardingView: View {
     @ObservedObject var settingsManager: SettingsManager
     
     @State private var currentStep: OnboardingStep = .welcome
+    @State private var selectedUserRole: UserRole? = nil
     @State private var serverBasePath: String = ""
     @State private var sessionsBasePath: String = ""
     @State private var selectedDocketSource: DocketSource = .asana
@@ -92,6 +97,7 @@ struct OnboardingView: View {
         .frame(width: 700, height: 550)
         .onAppear {
             // Load current settings
+            selectedUserRole = settingsManager.currentSettings.userRole
             serverBasePath = settingsManager.currentSettings.serverBasePath
             sessionsBasePath = settingsManager.currentSettings.sessionsBasePath
             selectedDocketSource = settingsManager.currentSettings.docketSource
@@ -184,6 +190,8 @@ struct OnboardingView: View {
         switch currentStep {
         case .welcome:
             welcomeContent
+        case .userRole:
+            userRoleContent
         case .serverPath:
             serverPathContent
         case .docketSource:
@@ -220,6 +228,21 @@ struct OnboardingView: View {
             }
         }
         .padding(.top, 20)
+    }
+    
+    // MARK: - User Role Content
+    
+    private var userRoleContent: some View {
+        VStack(spacing: 24) {
+            ForEach(UserRole.allCases, id: \.self) { role in
+                UserRoleCard(
+                    role: role,
+                    isSelected: selectedUserRole == role,
+                    action: { selectedUserRole = role }
+                )
+            }
+        }
+        .frame(width: 450)
     }
     
     // MARK: - Server Path Content
@@ -302,13 +325,27 @@ struct OnboardingView: View {
                 .foregroundColor(.secondary)
             
             VStack(alignment: .leading, spacing: 8) {
-                SummaryRow(label: "Server Path", value: serverBasePath.isEmpty ? "Not set" : shortenPath(serverBasePath))
-                SummaryRow(label: "Docket Source", value: selectedDocketSource.displayName)
-                if enableGmail {
-                    SummaryRow(label: "Gmail", value: "Enabled (configure in Settings)")
+                if let role = selectedUserRole {
+                    SummaryRow(label: "Role", value: role.displayName)
                 }
-                if enableAsana {
-                    SummaryRow(label: "Asana", value: "Enabled (configure in Settings)")
+                
+                // Only show server path and docket source for media team members
+                if selectedUserRole != .producer {
+                    SummaryRow(label: "Server Path", value: serverBasePath.isEmpty ? "Not set" : shortenPath(serverBasePath))
+                    SummaryRow(label: "Docket Source", value: selectedDocketSource.displayName)
+                }
+                
+                // Show Asana configuration for producers
+                if selectedUserRole == .producer {
+                    SummaryRow(label: "Asana", value: enableAsana ? "Enabled (configure in Settings)" : "Not configured")
+                    SummaryRow(label: "Airtable", value: "Configure in Settings")
+                } else {
+                    if enableGmail {
+                        SummaryRow(label: "Gmail", value: "Enabled (configure in Settings)")
+                    }
+                    if enableAsana {
+                        SummaryRow(label: "Asana", value: "Enabled (configure in Settings)")
+                    }
                 }
             }
             .padding()
@@ -328,8 +365,26 @@ struct OnboardingView: View {
                         animateContent = false
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        if let previousStep = OnboardingStep(rawValue: currentStep.rawValue - 1) {
-                            currentStep = previousStep
+                        var previousStep: OnboardingStep?
+                        
+                        // For producers, skip serverPath and docketSource when going back
+                        if selectedUserRole == .producer {
+                            switch currentStep {
+                            case .userRole:
+                                previousStep = .welcome
+                            case .integrations:
+                                previousStep = .userRole
+                            case .complete:
+                                previousStep = .integrations
+                            default:
+                                previousStep = OnboardingStep(rawValue: currentStep.rawValue - 1)
+                            }
+                        } else {
+                            previousStep = OnboardingStep(rawValue: currentStep.rawValue - 1)
+                        }
+                        
+                        if let step = previousStep {
+                            currentStep = step
                         }
                         withAnimation(.spring(response: 0.4)) {
                             animateContent = true
@@ -354,6 +409,7 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .disabled(currentStep == .userRole && selectedUserRole == nil)
             }
         }
     }
@@ -369,8 +425,31 @@ struct OnboardingView: View {
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            if let nextStep = OnboardingStep(rawValue: currentStep.rawValue + 1) {
-                currentStep = nextStep
+            var nextStep: OnboardingStep?
+            
+            // For producers, skip serverPath and docketSource steps
+            if selectedUserRole == .producer {
+                switch currentStep {
+                case .welcome:
+                    nextStep = .userRole
+                case .userRole:
+                    // Skip serverPath and docketSource, go straight to integrations
+                    nextStep = .integrations
+                case .integrations:
+                    nextStep = .complete
+                case .complete:
+                    nextStep = nil
+                default:
+                    // Shouldn't reach here for producers, but fallback to next step
+                    nextStep = OnboardingStep(rawValue: currentStep.rawValue + 1)
+                }
+            } else {
+                // Media team members go through all steps
+                nextStep = OnboardingStep(rawValue: currentStep.rawValue + 1)
+            }
+            
+            if let step = nextStep {
+                currentStep = step
             }
             withAnimation(.spring(response: 0.4)) {
                 animateContent = true
@@ -382,6 +461,10 @@ struct OnboardingView: View {
         var settings = settingsManager.currentSettings
         
         switch currentStep {
+        case .userRole:
+            if let role = selectedUserRole {
+                settings.userRole = role
+            }
         case .serverPath:
             settings.serverBasePath = serverBasePath
             settings.sessionsBasePath = sessionsBasePath
@@ -623,6 +706,49 @@ struct SummaryRow: View {
             Text(value)
                 .font(.system(size: 13, weight: .medium))
         }
+    }
+}
+
+struct UserRoleCard: View {
+    let role: UserRole
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Image(systemName: role.icon)
+                    .font(.system(size: 24))
+                    .foregroundColor(isSelected ? .blue : .secondary)
+                    .frame(width: 40)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(role.displayName)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.primary)
+                    
+                    Text(role.description)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundColor(isSelected ? .blue : .gray.opacity(0.4))
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? Color.blue.opacity(0.1) : Color.gray.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -14,6 +14,8 @@ struct LoginView: View {
     @State private var profileToDelete: WorkspaceProfile?
     @State private var showDeleteConfirmation = false
     @State private var deleteConfirmationText = ""
+    @State private var newUserRole: UserRole = .mediaTeamMember
+    @State private var showGuestRoleSheet = false
     
     private var existingProfiles: [WorkspaceProfile] {
         sessionManager.getAllUserProfiles()
@@ -75,6 +77,17 @@ struct LoginView: View {
             Button("OK") { showError = false }
         } message: {
             Text(errorMessage)
+        }
+        .sheet(isPresented: $showGuestRoleSheet) {
+            GuestRoleSheet(
+                onSelect: { role in
+                    sessionManager.createLocalWorkspace(name: "Guest", userRole: role)
+                    showGuestRoleSheet = false
+                },
+                onCancel: {
+                    showGuestRoleSheet = false
+                }
+            )
         }
         .alert("Delete User", isPresented: $showDeleteConfirmation) {
             TextField("Type 'delete' to confirm", text: $deleteConfirmationText)
@@ -144,7 +157,7 @@ struct LoginView: View {
                             if allUsers.isEmpty && !isServerConnected {
                                 // No users and server not connected - show guest option
                                 GuestAccountButton(isLoggingIn: isLoggingIn) {
-                                    useGuestAccount()
+                                    showGuestRoleSheet = true
                                 }
                             } else {
                                 // Show all users (server users first, then local-only profiles)
@@ -188,7 +201,7 @@ struct LoginView: View {
                                         .padding(.vertical, 4)
                                     
                                     GuestAccountButton(isLoggingIn: isLoggingIn) {
-                                        useGuestAccount()
+                                        showGuestRoleSheet = true
                                     }
                                 }
                             }
@@ -200,17 +213,30 @@ struct LoginView: View {
 
             if showCreateNew {
                 // Show create new profile form
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Username or Email")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    TextField("Enter your username or email", text: $username)
-                        .textFieldStyle(.roundedBorder)
-                        .textContentType(.username)
-                        .disabled(isLoggingIn)
-                        .onSubmit {
-                            attemptUserLogin()
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Username or Email")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("Enter your username or email", text: $username)
+                            .textFieldStyle(.roundedBorder)
+                            .textContentType(.username)
+                            .disabled(isLoggingIn)
+                            .onSubmit {
+                                attemptUserLogin()
+                            }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Account type")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Picker("Account type", selection: $newUserRole) {
+                            Text("Media Team Member").tag(UserRole.mediaTeamMember)
+                            Text("Producer").tag(UserRole.producer)
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
                 }
             }
 
@@ -382,25 +408,13 @@ struct LoginView: View {
         }
     }
     
-    private func useGuestAccount() {
-        isLoggingIn = true
-        
-        Task {
-            sessionManager.createLocalWorkspace(name: "Guest")
-            
-            await MainActor.run {
-                isLoggingIn = false
-            }
-        }
-    }
-
     private func attemptUserLogin() {
         guard !username.isEmpty else { return }
         
         isLoggingIn = true
         
         Task {
-            await sessionManager.loginWithUsername(username)
+            await sessionManager.loginWithUsername(username, initialUserRole: newUserRole)
             
             await MainActor.run {
                 isLoggingIn = false
@@ -568,6 +582,54 @@ struct ProfileButton: View {
         .onHover { hovering in
             isHovered = hovering
         }
+    }
+}
+
+// MARK: - Guest Role Sheet
+
+struct GuestRoleSheet: View {
+    let onSelect: (UserRole) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Text("Choose account type")
+                .font(.headline)
+            Text("Guest account will be local only (no sync).")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
+            HStack(spacing: 16) {
+                ForEach(UserRole.allCases, id: \.self) { role in
+                    Button {
+                        onSelect(role)
+                    } label: {
+                        VStack(spacing: 8) {
+                            Image(systemName: role.icon)
+                                .font(.title)
+                            Text(role.displayName)
+                                .font(.subheadline)
+                            Text(role.description)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
+
+            Button("Cancel", role: .cancel, action: onCancel)
+                .padding(.top, 8)
+        }
+        .padding(32)
+        .frame(width: 400)
     }
 }
 

@@ -1,6 +1,34 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Airtable URL Parser
+
+enum AirtableURLParser {
+    /// Parse Airtable base URL or table URL to extract base ID (app...) and optional table ID (tbl...).
+    /// e.g. https://airtable.com/appAbc123/tblXyz789 or https://airtable.com/appAbc123
+    static func parse(_ urlString: String) -> (baseID: String?, tableID: String?) {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed.hasPrefix("http") ? trimmed : "https://" + trimmed),
+              url.host?.contains("airtable") == true else {
+            return (nil, nil)
+        }
+        let path = url.path
+        let components = path.split(separator: "/").map(String.init)
+        var baseID: String?
+        var tableID: String?
+        for comp in components {
+            if comp.hasPrefix("app") && comp.count > 3 {
+                baseID = comp
+            } else if comp.hasPrefix("tbl") && comp.count > 3 {
+                tableID = comp
+                break
+            }
+        }
+        return (baseID, tableID)
+    }
+}
+
 // MARK: - Settings Card
 
 struct SettingsCard<Content: View>: View {
@@ -167,6 +195,13 @@ struct SettingsView: View {
         self._settings = State(initialValue: settingsManager.currentSettings)
     }
     
+    private var isProducer: Bool {
+        if case .loggedIn(let profile) = sessionManager.authenticationState {
+            return profile.settings.userRole == .producer
+        }
+        return false
+    }
+    
     private func connectToAsana() {
         guard OAuthConfig.isAsanaConfigured else {
             connectionError = "Asana OAuth credentials not configured. Please update OAuthConfig.swift with your credentials."
@@ -307,14 +342,27 @@ struct SettingsView: View {
                     // Theme Selection
                     ThemeSelectionSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
 
-                    // Path Settings
-                    PathSettingsSection(
-                        settings: $settings,
-                        hasUnsavedChanges: $hasUnsavedChanges
-                    )
+                    // Producer Quick Setup (one-click style)
+                    if isProducer {
+                        ProducerQuickSetupCard(
+                            settings: $settings,
+                            hasUnsavedChanges: $hasUnsavedChanges,
+                            isConnecting: isConnecting,
+                            connectionError: connectionError,
+                            onConnectAsana: connectToAsana
+                        )
+                    }
+
+                    // Path Settings (media only)
+                    if !isProducer {
+                        PathSettingsSection(
+                            settings: $settings,
+                            hasUnsavedChanges: $hasUnsavedChanges
+                        )
+                    }
                     
-                    // Asana Integration (only shown when Asana is selected)
-                    if settings.docketSource == .asana {
+                    // Asana Integration (always for producer; when Asana selected for media)
+                    if settings.docketSource == .asana || isProducer {
                         AsanaIntegrationSection(
                             settings: $settings,
                             hasUnsavedChanges: $hasUnsavedChanges,
@@ -324,27 +372,36 @@ struct SettingsView: View {
                         )
                     }
 
-                    // Gmail Integration Section
-                    GmailIntegrationSection(
-                        settings: $settings,
-                        hasUnsavedChanges: $hasUnsavedChanges,
-                        oauthService: oauthService
-                    )
+                    // Airtable Integration (producer only)
+                    if isProducer {
+                        AirtableIntegrationSection(
+                            settings: $settings,
+                            hasUnsavedChanges: $hasUnsavedChanges
+                        )
+                    }
 
+                    // Gmail Integration Section (media only)
+                    if !isProducer {
+                        GmailIntegrationSection(
+                            settings: $settings,
+                            hasUnsavedChanges: $hasUnsavedChanges,
+                            oauthService: oauthService
+                        )
 
-                    // Simian Integration Section
-                    SimianIntegrationSection(
-                        settings: $settings,
-                        hasUnsavedChanges: $hasUnsavedChanges
-                    )
+                        // Simian Integration Section
+                        SimianIntegrationSection(
+                            settings: $settings,
+                            hasUnsavedChanges: $hasUnsavedChanges
+                        )
 
                         // CSV Column Mapping (only shown when CSV is selected)
                         if settings.docketSource == .csv {
                             CSVColumnMappingSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
                         }
 
-                    // General Options (Search, Workflow, etc.)
-                    GeneralOptionsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                        // General Options (Search, Workflow, etc.)
+                        GeneralOptionsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+                    }
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
@@ -416,6 +473,163 @@ struct SettingsView: View {
             if let profile = profileToDelete {
                 Text("Are you sure you want to delete the '\(profile)' profile?")
             }
+        }
+    }
+}
+
+// MARK: - Producer Quick Setup Card
+
+struct ProducerQuickSetupCard: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+    let isConnecting: Bool
+    let connectionError: String?
+    let onConnectAsana: () -> Void
+
+    @State private var airtableTokenInput = ""
+    @State private var airtableURLInput = ""
+    @State private var airtableTokenSaved = false
+
+    private var isAsanaConnected: Bool {
+        SharedKeychainService.getAsanaAccessToken() != nil && !(SharedKeychainService.getAsanaAccessToken() ?? "").isEmpty
+    }
+    private var isAirtableConfigured: Bool {
+        let hasKey = SharedKeychainService.getAirtableAPIKey() != nil && !(SharedKeychainService.getAirtableAPIKey() ?? "").isEmpty
+        let hasBase = (settings.airtableBaseID ?? "").isEmpty == false
+        let hasTable = (settings.airtableTableID ?? "").isEmpty == false
+        return hasKey && hasBase && hasTable
+    }
+
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Image(systemName: "bolt.circle.fill")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 22))
+                    Text("Quick setup")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+                Text("Connect Asana and Airtable in two steps—like signing in with Google.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+
+                // Step 1: Asana
+                HStack(alignment: .top, spacing: 16) {
+                    ZStack {
+                        Circle().fill(isAsanaConnected ? Color.green : Color.orange).frame(width: 28, height: 28)
+                        Text("1").font(.system(size: 14, weight: .bold)).foregroundColor(.white)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Asana")
+                            .font(.system(size: 14, weight: .medium))
+                        if isAsanaConnected {
+                            HStack(spacing: 6) {
+                                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                                Text("Connected").font(.system(size: 13)).foregroundColor(.secondary)
+                            }
+                        } else {
+                            Button(action: onConnectAsana) {
+                                HStack {
+                                    if isConnecting { ProgressView().scaleEffect(0.8) }
+                                    else { Image(systemName: "link") }
+                                    Text(isConnecting ? "Connecting…" : "Connect to Asana")
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isConnecting || !OAuthConfig.isAsanaConfigured)
+                            if let err = connectionError {
+                                Text(err).font(.caption).foregroundColor(.red)
+                            }
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .background(Color.primary.opacity(0.04))
+                .cornerRadius(8)
+
+                // Step 2: Airtable
+                HStack(alignment: .top, spacing: 16) {
+                    ZStack {
+                        Circle().fill(isAirtableConfigured ? Color.green : Color.orange).frame(width: 28, height: 28)
+                        Text("2").font(.system(size: 14, weight: .bold)).foregroundColor(.white)
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Airtable")
+                            .font(.system(size: 14, weight: .medium))
+                        if isAirtableConfigured {
+                            HStack(spacing: 6) {
+                                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                                Text("Connected").font(.system(size: 13)).foregroundColor(.secondary)
+                            }
+                        } else {
+                            Button(action: openAirtableTokenPage) {
+                                HStack {
+                                    Image(systemName: "safari")
+                                    Text("Open Airtable to get your token")
+                                }
+                                .font(.system(size: 13))
+                            }
+                            .buttonStyle(.bordered)
+                            SecureField("Paste your Airtable token here", text: $airtableTokenInput)
+                                .textFieldStyle(.roundedBorder)
+                            HStack(spacing: 8) {
+                                Button("Save token") {
+                                    saveAirtableToken()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(airtableTokenInput.isEmpty)
+                            }
+                            Text("Paste your Airtable table URL to fill Base & Table ID")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            TextField("https://airtable.com/app.../tbl...", text: $airtableURLInput)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit { applyAirtableURL() }
+                            Button("Fill from URL") {
+                                applyAirtableURL()
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(airtableURLInput.isEmpty)
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .background(Color.primary.opacity(0.04))
+                .cornerRadius(8)
+            }
+        }
+    }
+
+    private func openAirtableTokenPage() {
+        if let url = URL(string: "https://airtable.com/create/tokens") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func saveAirtableToken() {
+        guard !airtableTokenInput.isEmpty else { return }
+        _ = KeychainService.store(key: "airtable_api_key", value: airtableTokenInput)
+        if SharedKeychainService.isCurrentUserGraysonEmployee() {
+            _ = SharedKeychainService.setSharedKey(airtableTokenInput, for: .airtableAPIKey)
+        }
+        airtableTokenInput = ""
+        airtableTokenSaved = true
+    }
+
+    private func applyAirtableURL() {
+        let (baseID, tableID) = AirtableURLParser.parse(airtableURLInput)
+        if let base = baseID {
+            settings.airtableBaseID = base
+            hasUnsavedChanges = true
+        }
+        if let table = tableID {
+            settings.airtableTableID = table
+            hasUnsavedChanges = true
         }
     }
 }
@@ -1869,6 +2083,181 @@ struct AsanaIntegrationSection: View {
                     forceSyncError = "Failed: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+}
+
+// MARK: - Airtable Integration Section (Producer)
+
+struct AirtableIntegrationSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+    @State private var apiKeyInput = ""
+    @State private var showApiKeyField = false
+    @State private var tableURLInput = ""
+
+    private var hasStoredApiKey: Bool {
+        SharedKeychainService.getAirtableAPIKey() != nil && !(SharedKeychainService.getAirtableAPIKey() ?? "").isEmpty
+    }
+
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Image(systemName: "tablecells")
+                        .foregroundColor(.green)
+                        .font(.system(size: 18))
+                    Text("Airtable Integration")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+                Text("Connect your Airtable base to push Asana task data (e.g. Brief, Music Type) to rows matched by docket.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                Text("Your base can have multiple tables. Choose which table to import to by pasting that table’s URL below, or use the table picker in the producer task view.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    // Paste URL to fill Base & Table ID
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Paste your Airtable table URL to set Base & Table (open the table in Airtable and copy the URL)")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            TextField("https://airtable.com/app.../tbl...", text: $tableURLInput)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Fill") {
+                                let (base, table) = AirtableURLParser.parse(tableURLInput)
+                                if let b = base { settings.airtableBaseID = b; hasUnsavedChanges = true }
+                                if let t = table { settings.airtableTableID = t; hasUnsavedChanges = true }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(tableURLInput.isEmpty)
+                        }
+                    }
+                    // Base ID & Table ID
+                    HStack(alignment: .top, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Base ID")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            TextField("e.g. appXXXXXXXXXXXXXX", text: Binding(
+                                get: { settings.airtableBaseID ?? "" },
+                                set: { settings.airtableBaseID = $0.isEmpty ? nil : $0; hasUnsavedChanges = true }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Table ID")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            TextField("e.g. tblXXXXXXXXXXXXXX", text: Binding(
+                                get: { settings.airtableTableID ?? "" },
+                                set: { settings.airtableTableID = $0.isEmpty ? nil : $0; hasUnsavedChanges = true }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+                    }
+
+                    // API Key
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("API Key")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        if showApiKeyField {
+                            SecureField("Paste your Airtable API key", text: $apiKeyInput)
+                                .textFieldStyle(.roundedBorder)
+                            HStack(spacing: 8) {
+                                Button("Save key") {
+                                    if !apiKeyInput.isEmpty {
+                                        _ = KeychainService.store(key: "airtable_api_key", value: apiKeyInput)
+                                        if SharedKeychainService.isCurrentUserGraysonEmployee() {
+                                            _ = SharedKeychainService.setSharedKey(apiKeyInput, for: .airtableAPIKey)
+                                        }
+                                        apiKeyInput = ""
+                                        showApiKeyField = false
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                Button("Cancel") {
+                                    apiKeyInput = ""
+                                    showApiKeyField = false
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        } else {
+                            HStack(spacing: 8) {
+                                if hasStoredApiKey {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundColor(.green)
+                                        Text("API key configured")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Button(hasStoredApiKey ? "Replace API key" : "Add API key") {
+                                    showApiKeyField = true
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+
+                    Divider().padding(.vertical, 4)
+
+                    // Field names (used when pushing from Asana to Airtable)
+                    Text("Airtable column names")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("Match your Airtable table’s column names. Used to find/update rows by docket and to push Brief / Music Type.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        fieldRow("Docket (lookup)", binding: Binding(
+                            get: { settings.airtableDocketNumberField },
+                            set: { settings.airtableDocketNumberField = $0; hasUnsavedChanges = true }
+                        ), placeholder: "Docket")
+                        fieldRow("Job / project title", binding: Binding(
+                            get: { settings.airtableJobNameField },
+                            set: { settings.airtableJobNameField = $0; hasUnsavedChanges = true }
+                        ), placeholder: "Project Title")
+                        fieldRow("Brief", binding: Binding(
+                            get: { settings.airtableBriefField ?? "" },
+                            set: { settings.airtableBriefField = $0.isEmpty ? nil : $0; hasUnsavedChanges = true }
+                        ), placeholder: "Brief")
+                        fieldRow("Music Type", binding: Binding(
+                            get: { settings.airtableMusicTypeField ?? "" },
+                            set: { settings.airtableMusicTypeField = $0.isEmpty ? nil : $0; hasUnsavedChanges = true }
+                        ), placeholder: "Music Type")
+                        fieldRow("Project title (override)", binding: Binding(
+                            get: { settings.airtableProjectTitleField ?? "" },
+                            set: { settings.airtableProjectTitleField = $0.isEmpty ? nil : $0; hasUnsavedChanges = true }
+                        ), placeholder: "Optional; if blank uses Job name")
+
+                        DisclosureGroup("Advanced") {
+                            fieldRow("Music Type tags (Asana)", binding: Binding(
+                                get: { settings.airtableMusicTypeTags ?? "Original Music, Stock Music, Licensed Music" },
+                                set: { settings.airtableMusicTypeTags = $0.isEmpty ? nil : $0; hasUnsavedChanges = true }
+                            ), placeholder: "Original Music, Stock Music, Licensed Music")
+                            Text("Comma-separated Asana tag names used as Music Type when pushing to Airtable. Task’s first matching tag is sent.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func fieldRow(_ label: String, binding: Binding<String>, placeholder: String) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .frame(width: 160, alignment: .leading)
+            TextField(placeholder, text: binding)
+                .textFieldStyle(.roundedBorder)
         }
     }
 }

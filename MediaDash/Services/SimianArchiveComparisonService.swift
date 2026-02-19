@@ -1,7 +1,11 @@
 import Foundation
 
+/// Minimum size (bytes) for a ZIP to count as archived. Smaller files are likely failed/truncated downloads and are excluded so the project stays "Not archived".
+private let kMinValidArchiveSizeBytes: Int64 = 1024 * 1024 // 1 MB
+
 /// Scans GM year folders' DATA BACKUPS for Simian archive ZIPs and reports which project IDs are already archived.
 /// Archive filenames follow: `{sanitizedProjectName}_{projectId}.zip`
+/// ZIPs smaller than kMinValidArchiveSizeBytes are ignored (incomplete/error downloads).
 struct SimianArchiveComparisonService {
 
     let serverBasePath: String
@@ -88,7 +92,7 @@ struct SimianArchiveComparisonService {
         for backupsURL in dataBackupsURLs() {
             guard let contents = try? fm.contentsOfDirectory(
                 at: backupsURL,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
                 options: [.skipsHiddenFiles]
             ) else { continue }
 
@@ -100,6 +104,10 @@ struct SimianArchiveComparisonService {
                 let projectId = String(baseName[baseName.index(after: lastUnderscore)...])
                 guard !projectId.isEmpty, projectId.allSatisfy(\.isNumber) else { continue }
 
+                let fileSize: Int64? = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init)
+                if let size = fileSize, size < kMinValidArchiveSizeBytes {
+                    continue // Skip tiny/corrupt archives so project is not marked archived
+                }
                 archivedIds.insert(projectId)
                 locations[projectId, default: []].append(fileURL)
             }

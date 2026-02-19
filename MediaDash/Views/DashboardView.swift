@@ -454,6 +454,7 @@ struct DashboardProfileButton: View {
     
     @State private var isHovered = false
     @State private var showMenu = false
+    @State private var showLogoutConfirmation = false
     
     private var initials: String {
         let components = profile.name.components(separatedBy: " ")
@@ -504,7 +505,7 @@ struct DashboardProfileButton: View {
                 
                 Button(action: {
                     showMenu = false
-                    sessionManager.logout()
+                    showLogoutConfirmation = true
                 }) {
                     HStack {
                         Image(systemName: "rectangle.portrait.and.arrow.right")
@@ -516,6 +517,14 @@ struct DashboardProfileButton: View {
             }
             .padding(14)
             .frame(width: 220)
+        }
+        .confirmationDialog("Log Out", isPresented: $showLogoutConfirmation, titleVisibility: .visible) {
+            Button("Log Out", role: .destructive) {
+                sessionManager.logout()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You can sign in again as this or another account (media or producer).")
         }
     }
 }

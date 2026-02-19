@@ -23,7 +23,7 @@ struct AsanaTaskDetailView: View {
     let onDismiss: () -> Void
     var config: AppConfig?
     var settingsManager: SettingsManager?
-    /// When provided and the opened task is Demos, used to find the linked Post task (same day + same docket/project).
+    /// When provided and the opened task is Demos, used to find the linked Post task (same docket/project; can span nearby days).
     var cacheManager: AsanaCacheManager?
 
     @State private var task: AsanaTask?
@@ -42,6 +42,7 @@ struct AsanaTaskDetailView: View {
     @State private var newFolderPromptName: String = ""
     @State private var promptedNewFolderKeys: Set<String> = []
     @State private var demosDropError: String?
+    @State private var demosDropMessage: String?  // e.g. "Demo already in folder"
     @State private var demosFolderMissing: Bool = false
     @State private var isEditingDemosFolderName: Bool = false
     @State private var demosFolderNameEditText: String = ""
@@ -341,6 +342,16 @@ struct AsanaTaskDetailView: View {
         } message: {
             if let err = demosDropError {
                 Text(err)
+            }
+        }
+        .alert("Demos", isPresented: Binding(
+            get: { demosDropMessage != nil },
+            set: { if !$0 { demosDropMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { demosDropMessage = nil }
+        } message: {
+            if let msg = demosDropMessage {
+                Text(msg)
             }
         }
     }
@@ -1749,13 +1760,11 @@ struct AsanaTaskDetailView: View {
                     }
                 }
                 let isDemos = (t.name.lowercased().contains("demos") || t.name.lowercased().contains("demo ") || t.name.lowercased().contains("submit"))
-                // Resolve linked Post task (uses DemosPostLinkStore for manual overrides)
+                // Resolve linked Post task (uses DemosPostLinkStore for manual overrides and nearby cross-day matching)
                 if isDemos, let cache = await MainActor.run(body: { cache }) {
-                    let demosDue = String((t.effectiveDueDate ?? "").prefix(10))
                     let candidates = await MainActor.run { cache.cachedTasksTwoWeeks }
-                    let sameDay = candidates.filter { ($0.effectiveDueDate ?? "").prefix(10) == demosDue }
-                    let postTasks = sameDay.filter { $0.name.lowercased().contains("post") }
-                    if let postTask = DemosPostLinkStore.resolveLinkedPost(demos: t, sameDayPosts: postTasks) {
+                    let postTasks = candidates.filter { $0.name.lowercased().contains("post") }
+                    if let postTask = DemosPostLinkStore.resolveLinkedPost(demos: t, postCandidates: postTasks, maxDayDistance: 2) {
                         let fullPost = try? await asanaService.fetchTask(taskGid: postTask.gid)
                         if let full = fullPost {
                             let (descWithoutLegend, legendPart) = Self.parsePostNotesForLegend(full.notes ?? full.html_notes ?? "")
@@ -2013,6 +2022,15 @@ struct AsanaTaskDetailView: View {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let fileURL = url else { return }
                     let dest = composerDir.appendingPathComponent(fileURL.lastPathComponent)
+                    let srcPath = fileURL.standardizedFileURL.path
+                    let destPath = dest.standardizedFileURL.path
+                    let srcParentPath = fileURL.deletingLastPathComponent().standardizedFileURL.path
+                    let composerPath = composerDir.standardizedFileURL.path
+                    // Same file, or file is already inside this writer's folder — never remove/copy (would delete the file)
+                    if srcPath == destPath || srcParentPath == composerPath {
+                        DispatchQueue.main.async { demosDropMessage = "Demo already in folder" }
+                        return
+                    }
                     do {
                         if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
                         try fm.copyItem(at: fileURL, to: dest)
@@ -2060,10 +2078,25 @@ struct AsanaTaskDetailView: View {
             }
             let custom = settingsManager?.currentSettings.composerInitials ?? [:]
             let wasDerived = folderNameOverride == nil && !custom.keys.contains(composerName)
+            var alreadyInFolderCount = 0
             for url in panel.urls where url.isFileURL {
                 let dest = composerDir.appendingPathComponent(url.lastPathComponent)
+                let srcPath = url.standardizedFileURL.path
+                let destPath = dest.standardizedFileURL.path
+                let srcParentPath = url.deletingLastPathComponent().standardizedFileURL.path
+                let composerPath = composerDir.standardizedFileURL.path
+                // Same file or already in this writer's folder — never remove (would delete the file)
+                if srcPath == destPath || srcParentPath == composerPath {
+                    alreadyInFolderCount += 1
+                    continue
+                }
                 if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
                 try? fm.copyItem(at: url, to: dest)
+            }
+            if alreadyInFolderCount > 0 {
+                demosDropMessage = alreadyInFolderCount == 1
+                    ? "Demo already in folder"
+                    : "\(alreadyInFolderCount) demos already in folder"
             }
             if wasDerived { saveComposerInitials(name: composerName, initials: folderName) }
             refreshComposerFolderContents()
