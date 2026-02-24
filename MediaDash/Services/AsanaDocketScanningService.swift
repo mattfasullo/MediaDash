@@ -28,11 +28,6 @@ class AsanaDocketScanningService: ObservableObject {
             return
         }
 
-        guard let workspaceID = settings.asanaWorkspaceID, !workspaceID.isEmpty else {
-            lastError = "Asana workspace not configured"
-            return
-        }
-
         guard let cacheManager = asanaCacheManager else {
             lastError = "Asana cache not available"
             return
@@ -41,6 +36,25 @@ class AsanaDocketScanningService: ObservableObject {
         guard cacheManager.service.isAuthenticated else {
             lastError = "Asana is not authenticated"
             return
+        }
+
+        // Resolve workspace: use Settings if set, otherwise fetch workspaces via OAuth and use the first (same as rest of app).
+        let workspaceID: String
+        let raw = settings.asanaWorkspaceID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !raw.isEmpty {
+            workspaceID = raw
+        } else {
+            do {
+                let workspaces = try await cacheManager.service.fetchWorkspaces()
+                guard let first = workspaces.first else {
+                    lastError = "No Asana workspaces found"
+                    return
+                }
+                workspaceID = first.gid
+            } catch {
+                lastError = "Could not load workspaces: \(error.localizedDescription)"
+                return
+            }
         }
 
         isScanning = true

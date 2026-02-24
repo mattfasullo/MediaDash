@@ -260,12 +260,9 @@ struct NotificationCenterView: View {
     private var asanaStatusBannerContent: some View {
         Group {
             let hasAsanaToken = SharedKeychainService.getAsanaAccessToken() != nil
-            let hasWorkspaceID = settingsManager.currentSettings.asanaWorkspaceID != nil && !(settingsManager.currentSettings.asanaWorkspaceID?.isEmpty ?? true)
-            
+
             if !hasAsanaToken {
                 asanaNotConnectedBanner
-            } else if !hasWorkspaceID {
-                asanaWorkspaceNotSelectedBanner
             } else if let error = asanaDocketScanningService.lastError {
                 asanaErrorBanner(message: error)
             }
@@ -276,13 +273,6 @@ struct NotificationCenterView: View {
         asanaBanner(
             title: "Asana Not Connected",
             subtitle: "Connect Asana in Settings to detect dockets from Asana projects"
-        )
-    }
-    
-    private var asanaWorkspaceNotSelectedBanner: some View {
-        asanaBanner(
-            title: "Asana Workspace Not Selected",
-            subtitle: "In Settings → Asana → Advanced, set Workspace ID to the workspace that contains your docket projects"
         )
     }
     
@@ -447,12 +437,9 @@ struct NotificationCenterView: View {
     private var asanaModeContent: some View {
         Group {
             let hasAsanaToken = SharedKeychainService.getAsanaAccessToken() != nil
-            let hasWorkspaceID = settingsManager.currentSettings.asanaWorkspaceID != nil && !(settingsManager.currentSettings.asanaWorkspaceID?.isEmpty ?? true)
-            
+
             if !hasAsanaToken {
                 asanaNotConnectedEmptyState
-            } else if !hasWorkspaceID {
-                asanaWorkspaceNotSelectedEmptyState
             } else if asanaDocketScanningService.isScanning {
                 asanaScanningState
             } else if mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
@@ -467,13 +454,6 @@ struct NotificationCenterView: View {
         asanaEmptyState(
             title: "Asana Not Connected",
             subtitle: "Connect Asana in Settings to detect new dockets from Asana projects"
-        )
-    }
-    
-    private var asanaWorkspaceNotSelectedEmptyState: some View {
-        asanaEmptyState(
-            title: "Asana Workspace Not Selected",
-            subtitle: "In Settings → Asana → Advanced, set Workspace ID to the workspace that contains your docket projects."
         )
     }
     
