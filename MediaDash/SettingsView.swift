@@ -1459,12 +1459,39 @@ struct AsanaIntegrationSection: View {
                     connectionError = nil
                     print("✅ [Asana Health] Connection verified - token is valid")
                 }
-            } catch {
+            } catch let error as AsanaError {
+                // Only mark as expired on actual authentication errors
+                let isAuthError = if case .notAuthenticated = error {
+                    true
+                } else if case .apiError(let message) = error {
+                    message.contains("401") || message.contains("403") || message.contains("401") || message.contains("Unauthorized")
+                } else {
+                    false
+                }
+                
                 await MainActor.run {
-                    connectionHealth = .expired
+                    if isAuthError {
+                        connectionHealth = .expired
+                        connectionError = "Token expired or invalid. Please click 'Connect' to re-authenticate."
+                        print("❌ [Asana Health] Authentication error - token expired")
+                    } else {
+                        // For transient errors (network, timeout, etc), keep the previous healthy state
+                        // so a temporary glitch doesn't falsely disconnect the user
+                        if connectionHealth != .healthy {
+                            connectionHealth = .unknown
+                        }
+                        print("⚠️ [Asana Health] Transient error (not auth-related): \(error.localizedDescription)")
+                        // Don't override connectionError to avoid confusing the user with false alarms
+                    }
                     lastHealthCheck = Date()
-                    connectionError = "Token expired or invalid. Please click 'Connect' to re-authenticate."
-                    print("❌ [Asana Health] Connection failed - token expired or invalid: \(error.localizedDescription)")
+                }
+            } catch {
+                // For non-Asana errors (URLSession, encoding, etc), treat as transient
+                await MainActor.run {
+                    if connectionHealth != .healthy {
+                        connectionHealth = .unknown
+                    }
+                    print("⚠️ [Asana Health] Transient error: \(error.localizedDescription)")
                 }
             }
         }
@@ -3665,6 +3692,13 @@ struct SimianIntegrationSection: View {
                 let fetchedTemplates = try await simianService.getTemplates()
                 await MainActor.run {
                     templates = fetchedTemplates
+                    // If no template is set and we find the standard "O_NEW PROJECT TEMPLATE", set it as default
+                    let currentId = settings.simianProjectTemplate?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if currentId == nil || currentId?.isEmpty == true,
+                       let defaultTemplate = SimianTemplate.defaultTemplate(from: fetchedTemplates) {
+                        settings.simianProjectTemplate = defaultTemplate.id
+                        hasUnsavedChanges = true
+                    }
                     isLoadingTemplates = false
                 }
             } catch {
@@ -3847,9 +3881,12 @@ struct CacheVisualizationView: View {
                     if cacheManager.isSyncing {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 6) {
+                                if cacheManager.isSyncHost {
+                                    Circle().fill(Color.green).frame(width: 6, height: 6)
+                                }
                                 ProgressView(value: cacheManager.syncProgress > 0 ? cacheManager.syncProgress : nil)
                                     .scaleEffect(0.7)
-                                Text(cacheManager.syncPhase.isEmpty ? "External service syncing shared cache..." : cacheManager.syncPhase)
+                                Text(settingsSyncPhaseText)
                                     .font(.system(size: 11))
                                     .foregroundColor(.secondary)
                                 if cacheManager.syncProgress > 0 {
@@ -3858,7 +3895,7 @@ struct CacheVisualizationView: View {
                                         .foregroundColor(.secondary.opacity(0.7))
                                 }
                             }
-                            Text("The external service is updating the shared cache. This may take several minutes.")
+                            Text(cacheManager.isSyncHost ? "This app is updating the shared cache." : "The external service is updating the shared cache. This may take several minutes.")
                                 .font(.system(size: 10))
                                 .foregroundColor(.secondary.opacity(0.8))
                                 .italic()
@@ -3887,6 +3924,14 @@ struct CacheVisualizationView: View {
                 }
             }
         }
+    }
+    
+    private var settingsSyncPhaseText: String {
+        let phase = cacheManager.syncPhase.isEmpty ? "External service syncing shared cache..." : cacheManager.syncPhase
+        if let name = cacheManager.syncHostDeviceName, !name.isEmpty {
+            return "\(phase) (\(name))"
+        }
+        return phase
     }
     
     private func formatDate(_ date: Date) -> String {

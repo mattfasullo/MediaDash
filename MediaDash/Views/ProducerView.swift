@@ -8,6 +8,22 @@ enum TaskListFilterKind: String, CaseIterable {
     case createdBy = "Created by"
 }
 
+enum ProducerProjectSortMode: String, CaseIterable, Identifiable {
+    case lastModified = "Last Modified"
+    case creationTime = "Creation Time"
+    
+    var id: String { rawValue }
+    
+    var asanaSortField: AsanaProjectSortField {
+        switch self {
+        case .lastModified:
+            return .lastModified
+        case .creationTime:
+            return .creationTime
+        }
+    }
+}
+
 // MARK: - Producer View (Search → Project → Section → Task → Push to Airtable)
 
 struct ProducerView: View {
@@ -25,8 +41,11 @@ struct ProducerView: View {
     @State private var statusMessage: String?
     @State private var allDockets: [DocketInfo] = []
     @State private var filteredDockets: [DocketInfo] = []
+    @State private var projectSortMode: ProducerProjectSortMode = .lastModified
     @State private var isLoadingDockets = false
     @State private var docketsLoadError: String?
+    @State private var isInSearchResultsMode = false
+    @State private var didLoadInitialProjects = false
     @State private var selectedProject: AsanaProject?
     @State private var sections: [AsanaSection] = []
     @State private var selectedSection: AsanaSection?
@@ -112,9 +131,16 @@ struct ProducerView: View {
         .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
+            // Only load data if user is logged in and configured for producer role
+            guard isConfigured else { return }
+            
             loadAirtableTablesIfNeeded()
             loadAirtableColumnsIfNeeded()
             tryLoadDocketsFromCache()
+            loadInitialRecentProjectsIfNeeded()
+        }
+        .onReceive(Foundation.NotificationCenter.default.publisher(for: .producerOpenRecentProject)) { notification in
+            handleOpenRecentProjectNotification(notification)
         }
     }
 
@@ -244,9 +270,34 @@ struct ProducerView: View {
     private var producerSearchBar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
+                // Back button appears only when showing search results
+                if isInSearchResultsMode {
+                    Button(action: goBackToBrowse) {
+                        Image(systemName: "chevron.left")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Back to Recent Projects")
+                }
+                
                 TextField("Search by docket or project name...", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { runSearch() }
+                
+                // Sort picker is hidden when viewing search results
+                if !isInSearchResultsMode {
+                    Picker("Sort", selection: $projectSortMode) {
+                        ForEach(ProducerProjectSortMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 170)
+                    .onChange(of: projectSortMode) { _, _ in
+                        handleProjectSortModeChange()
+                    }
+                }
+                
                 Button("Search") { runSearch() }
                     .disabled(searchText.isEmpty || isSearching || isLoadingDockets || needsWorkspaceSelection)
             }
@@ -325,12 +376,12 @@ struct ProducerView: View {
         let projectGid = docket.projectMetadata?.projectGid
         if let gid = projectGid {
             statusMessage = "Loading project..."
-            loadProjectAndSections(projectGid: gid)
+            loadProjectAndSections(projectGid: gid, sourceDocket: docket)
             return
         }
         
         // Fallback 1: docket from cache may lack projectMetadata — if we have the underlying task GID, resolve the project from task memberships
-        guard let workspaceID = settings.asanaWorkspaceID else {
+        guard let workspaceID = settings.asanaWorkspaceID, !workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             searchError = "Set Asana workspace in Settings."
             isSearching = false
             return
@@ -343,7 +394,7 @@ struct ProducerView: View {
                     if let projectGid = task.memberships?.compactMap({ $0.project?.gid }).first {
                         await MainActor.run {
                             persistResolvedProject(docket: docket, projectGid: projectGid)
-                            loadProjectAndSections(projectGid: projectGid)
+                            loadProjectAndSections(projectGid: projectGid, sourceDocket: docket)
                         }
                         return
                     }
@@ -351,55 +402,16 @@ struct ProducerView: View {
                 
                 // Fallback 2: find project by docket number / job name in this workspace
                 await MainActor.run { statusMessage = "Searching for project..." }
-                var match = try await asanaService.findProjectForDocket(
+                let match = try await asanaService.findProjectForDocket(
                     workspaceID: workspaceID,
                     docketNumber: docket.number,
                     jobName: docket.jobName
                 )
                 
-                // Fallback 3: cache entry is stale — sync dockets from Asana once, then resolve from the fresh list (no user action required)
-                if match == nil {
-                    await MainActor.run { statusMessage = "Syncing dockets from Asana to find project..." }
-                    let result = try await asanaService.fetchDockets(
-                        workspaceID: workspaceID,
-                        projectID: settings.asanaProjectID,
-                        docketField: settings.asanaDocketField,
-                        jobNameField: settings.asanaJobNameField,
-                        modifiedSince: nil,
-                        knownDocketBearingProjects: nil,
-                        forceDiscovery: false,
-                        progressCallback: { progress, phase in
-                            Task { @MainActor in
-                                statusMessage = phase
-                            }
-                        }
-                    )
-                    await MainActor.run {
-                        allDockets = result.dockets
-                        applyProducerSearchFilter(query: searchText.trimmingCharacters(in: .whitespaces))
-                        statusMessage = "Found project, loading..."
-                    }
-                    let sameDocket = result.dockets.first { $0.number == docket.number && $0.jobName == docket.jobName }
-                        ?? result.dockets.first { $0.number == docket.number }
-                    if let gid = sameDocket?.projectMetadata?.projectGid {
-                        await MainActor.run {
-                            persistResolvedProject(docket: docket, projectGid: gid)
-                            loadProjectAndSections(projectGid: gid)
-                        }
-                        return
-                    }
-                    await MainActor.run { statusMessage = "Searching for project..." }
-                    match = try await asanaService.findProjectForDocket(
-                        workspaceID: workspaceID,
-                        docketNumber: docket.number,
-                        jobName: docket.jobName
-                    )
-                }
-                
                 if let m = match {
                     await MainActor.run {
                         persistResolvedProject(docket: docket, projectGid: m.gid)
-                        loadProjectAndSections(projectGid: m.gid)
+                        loadProjectAndSections(projectGid: m.gid, sourceDocket: docket)
                     }
                 } else {
                     await MainActor.run {
@@ -429,12 +441,13 @@ struct ProducerView: View {
         applyProducerSearchFilter(query: searchText.trimmingCharacters(in: .whitespaces))
     }
     
-    private func loadProjectAndSections(projectGid: String) {
+    private func loadProjectAndSections(projectGid: String, sourceDocket: DocketInfo? = nil) {
         Task {
             do {
                 await MainActor.run { statusMessage = "Loading project..." }
                 let project = try await asanaService.fetchProject(projectGid: projectGid)
                 await MainActor.run {
+                    recordRecentProject(project: project, sourceDocket: sourceDocket)
                     selectedProject = project
                     statusMessage = "Loading sections..."
                 }
@@ -451,6 +464,100 @@ struct ProducerView: View {
                 }
             }
         }
+    }
+    
+    private func handleOpenRecentProjectNotification(_ notification: Foundation.Notification) {
+        guard let userInfo = notification.userInfo else { return }
+        guard let projectGid = userInfo["projectGid"] as? String, !projectGid.isEmpty else { return }
+        
+        let fullName = (userInfo["fullName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? projectGid
+        let docketNumber = (userInfo["docketNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let jobName = (userInfo["jobName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        searchError = nil
+        statusMessage = nil
+        docketsLoadError = nil
+        selectedProject = nil
+        sections = []
+        selectedSection = nil
+        sectionTasks = []
+        selectedTask = nil
+        taskDetail = nil
+        isSearching = true
+        
+        let parsed = asanaService.parseDocketFromString(fullName)
+        let normalizedDocket = {
+            let value = docketNumber ?? ""
+            if !value.isEmpty { return value }
+            return parsed.docket ?? "—"
+        }()
+        let normalizedJob = {
+            let value = jobName ?? ""
+            if !value.isEmpty { return value }
+            return parsed.jobName
+        }()
+        
+        let meta = ProjectMetadata(projectGid: projectGid, projectName: fullName, createdBy: nil, owner: nil, notes: nil, color: nil, dueDate: nil, team: nil, customFields: [:])
+        let recentDocket = DocketInfo(
+            number: normalizedDocket,
+            jobName: normalizedJob,
+            fullName: fullName,
+            updatedAt: nil,
+            createdAt: nil,
+            metadataType: parsed.metadataType,
+            subtasks: nil,
+            projectMetadata: meta,
+            dueDate: nil,
+            taskGid: nil,
+            studio: nil,
+            studioColor: nil,
+            completed: nil
+        )
+        mergeSearchedProjects([recentDocket])
+        applyProducerSearchFilter(query: searchText.trimmingCharacters(in: .whitespaces))
+        
+        loadProjectAndSections(projectGid: projectGid, sourceDocket: recentDocket)
+    }
+    
+    private func recordRecentProject(project: AsanaProject, sourceDocket: DocketInfo?) {
+        let parsed = asanaService.parseDocketFromString(project.name)
+        let sourceNumber = sourceDocket?.number.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sourceJob = sourceDocket?.jobName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        
+        let number: String?
+        if !sourceNumber.isEmpty, sourceNumber != "—" {
+            number = sourceNumber
+        } else {
+            number = parsed.docket
+        }
+        
+        let job: String?
+        if !sourceJob.isEmpty {
+            job = sourceJob
+        } else if !parsed.jobName.isEmpty {
+            job = parsed.jobName
+        } else {
+            job = nil
+        }
+        
+        var s = settingsManager.currentSettings
+        var recents = s.producerRecentProjects ?? []
+        recents.removeAll { $0.projectGid == project.gid }
+        recents.insert(
+            ProducerRecentProject(
+                projectGid: project.gid,
+                fullName: project.name,
+                docketNumber: number,
+                jobName: job,
+                lastOpenedAt: Date()
+            ),
+            at: 0
+        )
+        if recents.count > 25 {
+            recents = Array(recents.prefix(25))
+        }
+        s.producerRecentProjects = recents
+        settingsManager.currentSettings = s
     }
     
     private var workspaceSelectorView: some View {
@@ -1372,9 +1479,9 @@ struct ProducerView: View {
         }
     }
     
-    /// Search using the same approach as media team: use shared cache when available (instant), else fetch from API (slow)
-    private func runSearch() {
-        guard let workspaceID = settings.asanaWorkspaceID else {
+    /// Search producer projects with targeted Asana queries (no workspace-wide docket sync).
+    private func runSearch(forceRefreshRecent: Bool = false) {
+        guard let workspaceID = settings.asanaWorkspaceID, !workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             searchError = "Set Asana workspace in Settings."
             return
         }
@@ -1390,45 +1497,39 @@ struct ProducerView: View {
         
         let query = searchText.trimmingCharacters(in: .whitespaces)
         
-        // Same as media team: try shared cache first (instant). Only hit API if cache empty.
+        // Use the same shared cache as the media team view.
         if allDockets.isEmpty {
             tryLoadDocketsFromCache()
         }
         
-        if !allDockets.isEmpty {
-            // We have dockets (from cache or just loaded) — filter only, no API call
+        // Apply sort and filter to cache (Creation Time or Last Modified, same data source as media team).
+        applyProducerSearchFilter(query: query)
+        
+        if query.isEmpty {
+            if forceRefreshRecent {
+                applyProducerSearchFilter(query: query)
+            }
             isSearching = false
             isLoadingDockets = false
-            applyProducerSearchFilter(query: query)
+            isInSearchResultsMode = false
             return
         }
         
-        // No cache: fetch from API (slow, same as first-time media sync)
+        // Explicit search: run Asana project search and merge into local list.
+        isInSearchResultsMode = true
         isSearching = true
         isLoadingDockets = true
-        statusMessage = "Loading dockets from Asana..."
+        statusMessage = "Searching Asana for \"\(query)\"..."
         Task {
             do {
-                let result = try await asanaService.fetchDockets(
-                    workspaceID: workspaceID,
-                    projectID: settings.asanaProjectID,
-                    docketField: settings.asanaDocketField,
-                    jobNameField: settings.asanaJobNameField,
-                    modifiedSince: nil,
-                    knownDocketBearingProjects: nil,
-                    forceDiscovery: false,
-                    progressCallback: { progress, phase in
-                        Task { @MainActor in
-                            statusMessage = phase
-                        }
-                    }
-                )
+                let projects = try await asanaService.searchProjects(workspaceID: workspaceID, query: query, maxResults: 50)
+                let incomingDockets = projects.map { docketInfo(from: $0) }
                 await MainActor.run {
-                    allDockets = result.dockets
+                    mergeSearchedProjects(incomingDockets)
                     isLoadingDockets = false
                     isSearching = false
                     statusMessage = nil
-                    applyProducerSearchFilter(query: query)
+                    applyProducerSearchFilter(query: searchText.trimmingCharacters(in: .whitespaces))
                 }
             } catch {
                 await MainActor.run {
@@ -1441,36 +1542,201 @@ struct ProducerView: View {
         }
     }
     
-    /// Filter and sort dockets exactly like media team searchAsana (number, fullName, jobName; numeric prefix)
-    private func applyProducerSearchFilter(query: String) {
-        let searchLower = query.lowercased()
-        if searchLower.isEmpty {
-            filteredDockets = allDockets.sorted(by: producerDocketSort)
-            return
-        }
-        let isNumericQuery = query.allSatisfy { $0.isNumber }
-        let matched = allDockets.filter { docket in
-            if isNumericQuery {
-                return docket.fullName.lowercased().contains(searchLower) ||
-                    docket.number.lowercased().hasPrefix(searchLower) ||
-                    docket.jobName.lowercased().contains(searchLower)
-            } else {
-                return docket.fullName.lowercased().contains(searchLower) ||
-                    docket.number.lowercased().contains(searchLower) ||
-                    docket.jobName.lowercased().contains(searchLower)
-            }
-        }
-        filteredDockets = matched.sorted(by: producerDocketSort)
+    /// Load initial producer list from the same cache as the media team view.
+    private func loadInitialRecentProjectsIfNeeded() {
+        guard !didLoadInitialProjects else { return }
+        guard isConfigured, !needsWorkspaceSelection else { return }
+        didLoadInitialProjects = true
+        tryLoadDocketsFromCache()
+        applyProducerSearchFilter(query: searchText.trimmingCharacters(in: .whitespaces))
     }
     
-    private func producerDocketSort(_ d1: DocketInfo, _ d2: DocketInfo) -> Bool {
+    private func docketInfo(from project: AsanaProject) -> DocketInfo {
+        let parsed = asanaService.parseDocketFromString(project.name)
+        let projectMetadata = asanaService.createProjectMetadata(from: project)
+        return DocketInfo(
+            number: parsed.docket ?? "—",
+            jobName: parsed.jobName,
+            fullName: project.name,
+            updatedAt: parseAsanaTimestamp(project.modified_at),
+            createdAt: parseAsanaTimestamp(project.created_at),
+            metadataType: parsed.metadataType,
+            subtasks: nil,
+            projectMetadata: projectMetadata,
+            dueDate: project.due_date,
+            taskGid: nil,
+            studio: nil,
+            studioColor: nil,
+            completed: nil
+        )
+    }
+    
+    private func mergeSearchedProjects(_ incoming: [DocketInfo]) {
+        for docket in incoming {
+            if let idx = allDockets.firstIndex(where: { $0.fullName == docket.fullName }) {
+                allDockets[idx] = mergeDockets(existing: allDockets[idx], incoming: docket)
+            } else {
+                allDockets.append(docket)
+            }
+        }
+    }
+    
+    private func mergeDockets(existing: DocketInfo, incoming: DocketInfo) -> DocketInfo {
+        let existingNumber = existing.number.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedNumber = (existingNumber.isEmpty || existingNumber == "—") ? incoming.number : existing.number
+        let resolvedUpdatedAt = latestDate(existing.updatedAt, incoming.updatedAt)
+        
+        return DocketInfo(
+            id: existing.id,
+            number: resolvedNumber,
+            jobName: existing.jobName.isEmpty ? incoming.jobName : existing.jobName,
+            fullName: existing.fullName,
+            updatedAt: resolvedUpdatedAt,
+            createdAt: existing.createdAt ?? incoming.createdAt,
+            metadataType: existing.metadataType ?? incoming.metadataType,
+            subtasks: existing.subtasks ?? incoming.subtasks,
+            projectMetadata: existing.projectMetadata ?? incoming.projectMetadata,
+            dueDate: existing.dueDate ?? incoming.dueDate,
+            taskGid: existing.taskGid ?? incoming.taskGid,
+            studio: existing.studio ?? incoming.studio,
+            studioColor: existing.studioColor ?? incoming.studioColor,
+            completed: existing.completed ?? incoming.completed
+        )
+    }
+    
+    private func latestDate(_ lhs: Date?, _ rhs: Date?) -> Date? {
+        switch (lhs, rhs) {
+        case let (.some(left), .some(right)):
+            return max(left, right)
+        case let (.some(left), .none):
+            return left
+        case let (.none, .some(right)):
+            return right
+        case (.none, .none):
+            return nil
+        }
+    }
+    
+    private func handleProjectSortModeChange() {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // When switching to Creation Time with empty search, fetch from API so the list matches Asana's "Browse projects" by creation time.
+        if projectSortMode == .creationTime && query.isEmpty {
+            runSearch(forceRefreshRecent: true)
+            return
+        }
+        // Otherwise re‑apply filter/sort on the existing data (Last Modified or search results).
+        applyProducerSearchFilter(query: query)
+    }
+    
+    /// Go back from search results to the initial recent projects browse view.
+    private func goBackToBrowse() {
+        searchText = ""
+        searchError = nil
+        statusMessage = nil
+        isSearching = false
+        isLoadingDockets = false
+        isInSearchResultsMode = false
+        selectedProject = nil
+        selectedSection = nil
+        sectionTasks = []
+        selectedTask = nil
+        taskDetail = nil
+        applyProducerSearchFilter(query: "")
+    }
+    
+    private func parseAsanaTimestamp(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = formatter.date(from: value) {
+            return parsed
+        }
+        
+        // Fallback without fractional seconds
+        let fallback = ISO8601DateFormatter()
+        fallback.formatOptions = [.withInternetDateTime]
+        if let parsed = fallback.date(from: value) {
+            return parsed
+        }
+        
+        // Last resort: try basic date parsing
+        let basicFormatter = DateFormatter()
+        basicFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        return basicFormatter.date(from: value)
+    }
+    
+    /// Filter and sort dockets for producer search/default list.
+    private func applyProducerSearchFilter(query: String) {
+        // Filtering and sorting may iterate over hundreds or thousands of
+        // items; do the work off the main actor so the UI stays responsive.
+        // Capture necessary state locally so the coroutine doesn't race with
+        // future mutations.
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sortMode = projectSortMode
+        let all = allDockets
+
+        Task.detached(priority: .userInitiated) {
+            let searchLower = q.lowercased()
+            let result: [DocketInfo]
+
+            if searchLower.isEmpty {
+                result = Array(all.sorted(by: { ProducerView.producerDocketSort($0, $1, sortMode: sortMode) }).prefix(10))
+            } else {
+                let isNumericQuery = q.allSatisfy { $0.isNumber }
+                let matched = all.filter { docket in
+                    // compute lowercase once per docket
+                    let full = docket.fullName.lowercased()
+                    let num = docket.number.lowercased()
+                    let job = docket.jobName.lowercased()
+
+                    if isNumericQuery {
+                        return full.contains(searchLower) ||
+                            num.hasPrefix(searchLower) ||
+                            job.contains(searchLower)
+                    } else {
+                        return full.contains(searchLower) ||
+                            num.contains(searchLower) ||
+                            job.contains(searchLower)
+                    }
+                }
+                result = matched.sorted(by: { ProducerView.producerDocketSort($0, $1, sortMode: sortMode) })
+            }
+
+            await MainActor.run {
+                self.filteredDockets = result
+            }
+        }
+    }
+    
+    /// Comparison routine that can be invoked off the main actor by
+    /// passing in an explicit sort mode.  The original method always read
+    /// `projectSortMode` which forced callers to hop back to the main actor
+    /// before sorting; the new variant lets the background task cache the
+    /// sorting parameter up front.
+    // Sorting routine is stateless and may be called from background tasks,
+    // so make it a static, nonisolated helper to avoid actor hops.
+    private nonisolated static func producerDocketSort(_ d1: DocketInfo, _ d2: DocketInfo, sortMode: ProducerProjectSortMode) -> Bool {
+        let date1: Date
+        let date2: Date
+        switch sortMode {
+        case .lastModified:
+            date1 = d1.updatedAt ?? d1.createdAt ?? .distantPast
+            date2 = d2.updatedAt ?? d2.createdAt ?? .distantPast
+        case .creationTime:
+            date1 = d1.createdAt ?? d1.updatedAt ?? .distantPast
+            date2 = d2.createdAt ?? d2.updatedAt ?? .distantPast
+        }
+        if date1 != date2 { return date1 > date2 }
+        
         if let n1 = Int(d1.number.filter { $0.isNumber }),
            let n2 = Int(d2.number.filter { $0.isNumber }) {
             if n1 == n2 { return d1.jobName < d2.jobName }
             return n1 > n2
         }
-        if d1.number == d2.number { return d1.jobName < d2.jobName }
-        return d1.number > d2.number
+        if d1.number != d2.number { return d1.number > d2.number }
+        return d1.fullName.localizedCaseInsensitiveCompare(d2.fullName) == .orderedAscending
     }
     
     /// Task list filtered by current filter (tag, assignee, created by)

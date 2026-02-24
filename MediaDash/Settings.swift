@@ -236,6 +236,33 @@ enum DocketSource: String, Codable, CaseIterable {
     }
 }
 
+// MARK: - New Docket Detection Mode
+
+enum NewDocketDetectionMode: String, Codable, CaseIterable {
+    case email = "Email"
+    case asanaProjects = "Asana Projects"
+    
+    var displayName: String {
+        self.rawValue
+    }
+    
+    var icon: String {
+        switch self {
+        case .email: return "envelope.fill"
+        case .asanaProjects: return "list.bullet.rectangle.fill"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .email:
+            return "Detect new dockets from incoming emails"
+        case .asanaProjects:
+            return "Detect new dockets from recently created Asana projects"
+        }
+    }
+}
+
 // MARK: - Search Settings
 
 enum SearchFolder: String, Codable, CaseIterable {
@@ -463,6 +490,18 @@ enum AppTheme: String, Codable, CaseIterable {
     }
 }
 
+// MARK: - Producer Recent History
+
+struct ProducerRecentProject: Codable, Equatable, Hashable, Identifiable {
+    let projectGid: String
+    let fullName: String
+    let docketNumber: String?
+    let jobName: String?
+    let lastOpenedAt: Date
+    
+    var id: String { projectGid }
+}
+
 // MARK: - Settings Model
 
 struct AppSettings: Codable, Equatable {
@@ -582,6 +621,9 @@ struct AppSettings: Codable, Equatable {
     var airtableMusicTypeTags: String?
     var airtableProjectTitleField: String? // Override for project title column (e.g. "A Project Title"); if nil, uses airtableJobNameField
     
+    // Producer UI
+    var producerRecentProjects: [ProducerRecentProject]?
+    
     // Shared Cache (optional - if set, will fetch from shared cache instead of syncing locally)
     var sharedCacheURL: String?
     var useSharedCache: Bool
@@ -602,6 +644,7 @@ struct AppSettings: Codable, Equatable {
     
     // Notification Window Settings
     var notificationWindowLocked: Bool // Whether notification window follows main window
+    var newDocketDetectionMode: NewDocketDetectionMode? // Email vs Asana Projects for detecting new dockets
     
     // Browser Preference
     var defaultBrowser: BrowserPreference // Default browser for opening email links
@@ -737,13 +780,14 @@ struct AppSettings: Codable, Equatable {
             airtableMusicTypeField: "Music Type",
             airtableMusicTypeTags: "Original Music, Stock Music, Licensed Music",
             airtableProjectTitleField: nil,
+            producerRecentProjects: [],
             sharedCacheURL: "/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache",
             useSharedCache: true,
             gmailEnabled: true,
             gmailQuery: "",
             gmailPollInterval: 300, // 5 minutes
             docketParsingPatterns: [],
-            simianEnabled: false,
+            simianEnabled: true,
             simianAPIBaseURL: "https://graysonmusic.gosimian.com/api/prjacc",
             simianProjectTemplate: nil,
             simianProjectManagers: [
@@ -753,6 +797,7 @@ struct AppSettings: Codable, Equatable {
                 "nicholas@graysonmusicgroup.com"
             ],
             notificationWindowLocked: true, // Default to locked (follows main window)
+            newDocketDetectionMode: .email, // Default to email-based detection
             defaultBrowser: .chrome, // Default to Chrome
             showDebugFeatures: false, // Debug features hidden by default
             companyMediaEmail: "media@graysonmusicgroup.com", // Default company media email

@@ -13,8 +13,8 @@ struct ServiceSetupStatus {
 
 // MARK: - Services Setup Prompt Sheet
 
-/// Shown on app launch when Gmail, Asana, or Simian are enabled but not connected.
-/// Users can open Settings to connect, or decline and see a warning about what won't work.
+/// Shown on app launch when Gmail, Asana, or Simian are disabled and/or not connected.
+/// Users can open Settings to enable/connect, or decline and see a warning about what won't work.
 struct ServicesSetupPromptSheet: View {
     @Binding var isPresented: Bool
     var onOpenSettings: () -> Void
@@ -49,9 +49,9 @@ struct ServicesSetupPromptSheet: View {
                 Image(systemName: "link.circle.fill")
                     .font(.system(size: 44))
                     .foregroundStyle(.blue)
-                Text("Connect Your Integrations")
+                Text("Review Integrations")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Some features are enabled but not connected. Connect now to get the full experience.")
+                Text("Some integrations are disabled or not connected. Enable and connect them to get the full experience.")
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -129,7 +129,11 @@ struct ServicesSetupPromptSheet: View {
                 HStack {
                     Text(status.name)
                         .font(.system(size: 14, weight: .medium))
-                    if status.needsSetup {
+                    if !status.isEnabled {
+                        Text("Disabled")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                    } else if status.needsSetup {
                         Text("Not connected")
                             .font(.system(size: 11))
                             .foregroundColor(.orange)
@@ -166,7 +170,6 @@ enum ServicesSetupPromptBuilder {
     /// Build connection status for all three services.
     static func buildStatus(
         settings: AppSettings,
-        emailScanningService: EmailScanningService,
         simianService: SimianService
     ) -> (gmail: ServiceSetupStatus, asana: ServiceSetupStatus, simian: ServiceSetupStatus) {
         let gmail = ServiceSetupStatus(
@@ -174,7 +177,7 @@ enum ServicesSetupPromptBuilder {
             icon: "envelope.fill",
             isEnabled: settings.gmailEnabled,
             isConnected: settings.gmailEnabled && (SharedKeychainService.getGmailAccessToken() != nil && !(SharedKeychainService.getGmailAccessToken() ?? "").isEmpty),
-            needsSetup: settings.gmailEnabled && !(SharedKeychainService.getGmailAccessToken() != nil && !(SharedKeychainService.getGmailAccessToken() ?? "").isEmpty),
+            needsSetup: !settings.gmailEnabled || (settings.gmailEnabled && !(SharedKeychainService.getGmailAccessToken() != nil && !(SharedKeychainService.getGmailAccessToken() ?? "").isEmpty)),
             disabledFunctions: [
                 "Email scanning for new dockets",
                 "File delivery notifications",
@@ -183,12 +186,13 @@ enum ServicesSetupPromptBuilder {
         )
         
         let asanaConnected = SharedKeychainService.getAsanaAccessToken() != nil
+        let asanaEnabled = settings.docketSource == .asana
         let asana = ServiceSetupStatus(
             name: "Asana",
             icon: "checklist",
-            isEnabled: settings.docketSource == .asana,
-            isConnected: settings.docketSource == .asana && asanaConnected,
-            needsSetup: settings.docketSource == .asana && !asanaConnected,
+            isEnabled: asanaEnabled,
+            isConnected: asanaEnabled && asanaConnected,
+            needsSetup: !asanaEnabled || (asanaEnabled && !asanaConnected),
             disabledFunctions: [
                 "Docket and job list sync",
                 "Job info in prep flow",
@@ -196,12 +200,16 @@ enum ServicesSetupPromptBuilder {
             ]
         )
         
+        // Simian credentials live in Keychain (SharedKeychainService), not in AppSettings
+        let simianHasCredentials = SharedKeychainService.getSimianUsername() != nil && SharedKeychainService.getSimianPassword() != nil
+        let simianHasBaseURL = (settings.simianAPIBaseURL ?? "").isEmpty == false
         let simian = ServiceSetupStatus(
             name: "Simian",
             icon: "archivebox.fill",
             isEnabled: settings.simianEnabled,
-            isConnected: settings.simianEnabled && simianService.isConfigured,
-            needsSetup: settings.simianEnabled && !simianService.isConfigured,
+            isConnected: settings.simianEnabled && simianHasBaseURL && simianHasCredentials,
+            needsSetup: !settings.simianEnabled || 
+                (settings.simianEnabled && (!simianHasBaseURL || !simianHasCredentials)),
             disabledFunctions: [
                 "Simian project creation from notifications"
             ]
@@ -210,15 +218,25 @@ enum ServicesSetupPromptBuilder {
         return (gmail, asana, simian)
     }
     
-    /// Returns true if we should show the prompt (any service enabled but not connected).
+    /// Returns true if we should show the prompt.
+    /// Rules:
+    /// - Always prompt when any integration is disabled (Simian is ignored for producer accounts).
+    /// - Prompt for missing connections unless user selected "Don't show again".
+    /// - When `isProducer` is true, Simian is not required and won't trigger the prompt.
     static func shouldShowPrompt(
         settings: AppSettings,
-        emailScanningService: EmailScanningService,
         simianService: SimianService,
-        dontShowAgain: Bool
+        dontShowAgain: Bool,
+        isProducer: Bool = false
     ) -> Bool {
+        let (gmail, asana, simian) = buildStatus(settings: settings, simianService: simianService)
+        let simianMatters = !isProducer
+        let hasDisabledIntegrations = !gmail.isEnabled || !asana.isEnabled || (simianMatters && !simian.isEnabled)
+        if hasDisabledIntegrations {
+            return true
+        }
+
         guard !dontShowAgain else { return false }
-        let (gmail, asana, simian) = buildStatus(settings: settings, emailScanningService: emailScanningService, simianService: simianService)
-        return gmail.needsSetup || asana.needsSetup || simian.needsSetup
+        return gmail.needsSetup || asana.needsSetup || (simianMatters && simian.needsSetup)
     }
 }

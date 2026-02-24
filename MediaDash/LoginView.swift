@@ -29,7 +29,7 @@ struct LoginView: View {
         let baseLogo = Image("HeaderLogo")
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(height: 120)
+            .frame(height: 56)
         
         if colorScheme == .light {
             return AnyView(baseLogo.colorInvert())
@@ -50,7 +50,7 @@ struct LoginView: View {
                 // Logo Section
                 logoImage
                     .shadow(radius: 10)
-                    .padding(.bottom, 50)
+                    .padding(.bottom, 20)
 
                 // Login Card
                 VStack(spacing: 0) {
@@ -60,7 +60,7 @@ struct LoginView: View {
                     }
                     .padding(32)
                     .frame(width: 500)
-                    .frame(minHeight: 300, maxHeight: 600)
+                    .frame(minHeight: 320, maxHeight: 680)
                 }
                 .background(Color(nsColor: .windowBackgroundColor))
                 .cornerRadius(12)
@@ -208,7 +208,7 @@ struct LoginView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 350)
+                .frame(maxHeight: 480)
             }
 
             if showCreateNew {

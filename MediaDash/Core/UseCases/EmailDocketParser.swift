@@ -41,7 +41,7 @@ struct EmailDocketParser {
     private static var defaultPatterns: [String] {
         [
             // Pattern 1: "25484-US" format (docket number with country code)
-            #"(\d{5,}-[A-Z]{2})"#,
+            #"(\d{5,}-[A-Z]{2,3})"#,
             // Pattern 2: "Docket: 12345 Job: JobName"
             #"Docket[:\s]+(\d+)\s+Job[:\s]+(.+?)(?:\s|$|,|\.)"#,
             // Pattern 3: "New Docket 12345 - JobName" or "NEW DOCKET 12345 - JobName"
@@ -103,11 +103,14 @@ struct EmailDocketParser {
         
         let combinedText = "\(subjectText)\n\(bodyText)"
         
-        // A new-docket email is defined by ALL THREE: (1) contains "new", (2) contains "docket", (3) contains a valid docket number
+        // Accept explicit "new docket" language OR strong docket context near the top of the message.
         let searchText = combinedText.lowercased()
         let hasNewAndDocket = searchText.contains("new") && searchText.contains("docket")
+        let hasEarlyDocketLine = hasDocketStyleLineNearTop(in: bodyText)
+        let hasDocketKeywordWithNumber = hasDocketKeywordNumberPattern(in: searchText)
+        let hasDocketIntent = hasNewAndDocket || hasEarlyDocketLine || hasDocketKeywordWithNumber
         // #region agent log
-        _parserLog("hasNewAndDocket", ["hasNewAndDocket": hasNewAndDocket, "hasNew": searchText.contains("new"), "hasDocket": searchText.contains("docket"), "searchTextLen": searchText.count], "H1")
+        _parserLog("docketIntentSignals", ["hasNewAndDocket": hasNewAndDocket, "hasEarlyDocketLine": hasEarlyDocketLine, "hasDocketKeywordWithNumber": hasDocketKeywordWithNumber, "hasDocketIntent": hasDocketIntent, "searchTextLen": searchText.count], "H1")
         // #endregion
         
         // First, try to extract docket number from body (like "25484-US")
@@ -117,7 +120,7 @@ struct EmailDocketParser {
         // FIRST: Try to find docket number and job name on the first line of body (most common case)
         // Pattern: "25489 12 Days of Connection" or "25489 Job Name" or "26053-US Ferring - IVF"
         // Supports optional -XX country code (e.g. -US, -CA) between docket number and job name
-        let firstLinePattern = #"^(\d{5}(?:-[A-Z]{2})?)\s+(.+?)(?:\s*$|\n|\.)"#
+        let firstLinePattern = #"^(\d{5}(?:-[A-Z]{2,3})?)\s+(.+?)(?:\s*$|\n|\.)"#
         if let regex = try? NSRegularExpression(pattern: firstLinePattern, options: [.anchorsMatchLines]),
            let match = regex.firstMatch(in: bodyText, range: NSRange(bodyText.startIndex..., in: bodyText)),
            match.numberOfRanges >= 3 {
@@ -205,7 +208,7 @@ struct EmailDocketParser {
             // Remove "Fwd:" or "Re:" prefixes
             jobName = jobName.replacingOccurrences(of: #"^(?:Fwd?|Re):\s*"#, with: "", options: .regularExpression)
             // Remove docket number if present
-            jobName = jobName.replacingOccurrences(of: #"\d{5,}(?:-[A-Z]{2})?"#, with: "", options: .regularExpression)
+            jobName = jobName.replacingOccurrences(of: #"\d{5,}(?:-[A-Z]{2,3})?"#, with: "", options: .regularExpression)
             jobName = jobName.trimmingCharacters(in: .whitespacesAndNewlines)
             
             if !jobName.isEmpty {
@@ -242,9 +245,9 @@ struct EmailDocketParser {
             }
             
             // #region agent log
-            if !hasNewAndDocket { _parserLog("rejected path", ["path": "body_subject_combination", "reason": "hasNewAndDocket false", "docketNumber": docketNumber], "H2") }
+            if !hasDocketIntent { _parserLog("rejected path", ["path": "body_subject_combination", "reason": "hasDocketIntent false", "docketNumber": docketNumber], "H2") }
             // #endregion
-            guard hasNewAndDocket else { return nil }
+            guard hasDocketIntent else { return nil }
             _parserLog("parsed ok", ["method": "body_subject_combination", "docketNumber": docketNumber], "H2")
             return ParsedDocket(
                 docketNumber: docketNumber,
@@ -305,9 +308,9 @@ struct EmailDocketParser {
                 }
                 
                 // #region agent log
-                if !hasNewAndDocket { _parserLog("rejected path", ["path": "pattern_match", "reason": "hasNewAndDocket false", "docketNumber": parsed.docketNumber], "H2") }
+                if !hasDocketIntent { _parserLog("rejected path", ["path": "pattern_match", "reason": "hasDocketIntent false", "docketNumber": parsed.docketNumber], "H2") }
                 // #endregion
-                guard hasNewAndDocket else { continue }
+                guard hasDocketIntent else { continue }
                 _parserLog("parsed ok", ["method": "pattern_match", "docketNumber": parsed.docketNumber], "H2")
                 return ParsedDocket(
                     docketNumber: parsed.docketNumber,
@@ -330,7 +333,7 @@ struct EmailDocketParser {
             let foundInEmail = subjectText.contains(parsed.docketNumber) || bodyText.contains(parsed.docketNumber)
             
             // Validate: docket number must have valid year format and be found in email
-            if isValidYearBasedDocket(parsed.docketNumber) && foundInEmail && hasNewAndDocket {
+            if isValidYearBasedDocket(parsed.docketNumber) && foundInEmail && hasDocketIntent {
                 return ParsedDocket(
                     docketNumber: parsed.docketNumber,
                     jobName: parsed.jobName,
@@ -355,15 +358,14 @@ struct EmailDocketParser {
             }
         }
 
-        // Final fallback: only when email has BOTH "new" and "docket" (any order), search for a docket number.
-        // All three define a new-docket email: "new" + "docket" + valid docket number.
-        if hasNewAndDocket {
+        // Final fallback: only when we have intent signals, search for a docket number.
+        if hasDocketIntent {
             // #region agent log
             _parserLog("fallback enter", ["searchTextLen": searchText.count], "H3")
             // #endregion
             // Search for docket numbers (5+ digits, optionally with country code) anywhere in subject or body
             // Also match 4+ digit numbers at word boundaries (some dockets might be 4 digits)
-            let docketPattern = #"\b(\d{4,}(?:-[A-Z]{2})?)\b"#
+            let docketPattern = #"\b(\d{4,}(?:-[A-Z]{2,3})?)\b"#
             var foundDocketNumber: String?
             var jobName: String? // Declare jobName early so we can use it in the first-line check
             
@@ -378,7 +380,7 @@ struct EmailDocketParser {
             // If not found in subject, try body (search all matches, prefer 5+ digit numbers)
             // FIRST: Check first line of body for "25489 Job Name" or "26053-US Ferring - IVF" pattern
             if foundDocketNumber == nil {
-                let firstLinePattern = #"^(\d{5}(?:-[A-Z]{2})?)\s+(.+?)(?:\s*$|\n|\.)"#
+                let firstLinePattern = #"^(\d{5}(?:-[A-Z]{2,3})?)\s+(.+?)(?:\s*$|\n|\.)"#
                 if let regex = try? NSRegularExpression(pattern: firstLinePattern, options: [.anchorsMatchLines]),
                    let match = regex.firstMatch(in: bodyText, range: NSRange(bodyText.startIndex..., in: bodyText)),
                    match.numberOfRanges >= 3 {
@@ -457,7 +459,7 @@ struct EmailDocketParser {
             // Remove any remaining "Fwd:" or "Re:" in the middle
             subjectJobName = subjectJobName.replacingOccurrences(of: #"\s*(?:Fwd?|Re):\s*"#, with: " ", options: .regularExpression)
             // Remove docket number patterns (5+ digits, optionally with country code)
-            subjectJobName = subjectJobName.replacingOccurrences(of: #"\b\d{5,}(?:-[A-Z]{2})?\b"#, with: "", options: .regularExpression)
+            subjectJobName = subjectJobName.replacingOccurrences(of: #"\b\d{5,}(?:-[A-Z]{2,3})?\b"#, with: "", options: .regularExpression)
             subjectJobName = subjectJobName.trimmingCharacters(in: .whitespacesAndNewlines)
             
             // Take only the first line if there are multiple lines
@@ -589,7 +591,7 @@ struct EmailDocketParser {
                 }
             }
             
-            // Require a valid docket number: all three (new + docket + number) define a new-docket email
+            // Require a valid docket number
             guard foundDocketNumber != nil else {
                 // #region agent log
                 _parserLog("fallback exit", ["reason": "foundDocketNumber nil"], "H4")
@@ -615,7 +617,7 @@ struct EmailDocketParser {
             )
         }
         // #region agent log
-        _parserLog("parse nil end", ["hasNewAndDocket": hasNewAndDocket, "reason": "no match or fallback not entered"], "H1")
+        _parserLog("parse nil end", ["hasNewAndDocket": hasNewAndDocket, "hasDocketIntent": hasDocketIntent, "reason": "no match or fallback not entered"], "H1")
         // #endregion
         return nil
     }
@@ -661,9 +663,19 @@ struct EmailDocketParser {
             jobName = value2
         }
         
-        // Validate docket number (should be numeric)
-        guard docketNumber.rangeOfCharacter(from: CharacterSet.decimalDigits.inverted) == nil else {
+        // Validate docket number: 5+ digits, optionally with 2-3 letter country suffix (e.g. -US, -CAN)
+        let components = docketNumber.split(separator: "-", omittingEmptySubsequences: false)
+        guard components.count <= 2,
+              let numericPart = components.first,
+              numericPart.count >= 5,
+              numericPart.allSatisfy({ $0.isNumber }) else {
             return nil
+        }
+        if components.count == 2 {
+            let suffix = components[1]
+            guard (2...3).contains(suffix.count), suffix.allSatisfy({ $0.isLetter }) else {
+                return nil
+            }
         }
         
         // Validate job name (should not be empty and reasonable length)
@@ -692,6 +704,29 @@ struct EmailDocketParser {
         }
         
         return nil
+    }
+
+    /// Strong context signal: one of the first lines starts with "26060 Job Name"
+    /// This catches forwarded docket emails that omit explicit "new docket" wording.
+    private func hasDocketStyleLineNearTop(in body: String, maxNonEmptyLines: Int = 8) -> Bool {
+        let lines = body
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(maxNonEmptyLines)
+
+        let pattern = #"^\d{5}(?:-[A-Z]{2,3})?\s+.{3,}$"#
+        return lines.contains { line in
+            line.range(of: pattern, options: .regularExpression) != nil
+        }
+    }
+
+    /// Secondary context signal: "docket ... 26060" appears in the message.
+    private func hasDocketKeywordNumberPattern(in lowercasedText: String) -> Bool {
+        lowercasedText.range(
+            of: #"docket[^0-9]{0,20}\d{5}(?:-[a-z]{2,3})?"#,
+            options: .regularExpression
+        ) != nil
     }
     
     /// Get valid year prefixes for docket numbers based on current date
@@ -756,5 +791,4 @@ struct EmailDocketParser {
     }
     
 }
-
 

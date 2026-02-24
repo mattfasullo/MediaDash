@@ -2852,6 +2852,18 @@ struct SimianUser: Identifiable, Hashable {
 struct SimianTemplate: Identifiable, Hashable {
     let id: String
     let name: String
+    
+    /// The standard default template name (e.g. "O_NEW PROJECT TEMPLATE"). When MediaDash finds this in the template list, it is used as the default.
+    static let defaultTemplateName = "O_NEW PROJECT TEMPLATE"
+    
+    /// Returns the default project template from the list when present (exact match for "O_NEW PROJECT TEMPLATE", or first containing "NEW PROJECT TEMPLATE").
+    static func defaultTemplate(from templates: [SimianTemplate]) -> SimianTemplate? {
+        let upper = defaultTemplateName.uppercased()
+        if let exact = templates.first(where: { $0.name.trimmingCharacters(in: .whitespaces).uppercased() == upper }) {
+            return exact
+        }
+        return templates.first(where: { $0.name.uppercased().contains("NEW PROJECT TEMPLATE") })
+    }
 }
 
 // MARK: - Project Models

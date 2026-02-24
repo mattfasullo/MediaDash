@@ -12,6 +12,8 @@ class AsanaCacheManager: ObservableObject {
     @Published var cacheStatus: CacheStatus = .unknown
     @Published var syncProgress: Double = 0  // 0.0 to 1.0
     @Published var syncPhase: String = ""    // Human-readable phase description
+    @Published var isSyncHost: Bool = false  // True when this instance holds the sync lock
+    @Published var syncHostDeviceName: String? = nil  // When observing, name from progress file
     @Published var cachedDockets: [DocketInfo] = []
     @Published var cachedSessions: [AsanaTask] = []  // Session Prep window (2-day lookback + upcoming business days)
     @Published var lastSessionSyncDate: Date?
@@ -747,6 +749,50 @@ class AsanaCacheManager: ObservableObject {
         return Date().timeIntervalSince(last) > Double(maxAgeMinutes * 60)
     }
     
+    /// Poll sync lock until gone or stale; refresh cache and clear sync state when done. Run when we did not acquire the lock.
+    private func runSyncObserverLoop(sharedCacheURL: String) async {
+        let pollInterval: UInt64 = 2_500_000_000  // 2.5 s in nanoseconds
+        while true {
+            try? await Task.sleep(nanoseconds: pollInterval)
+            let present = await Task.detached(priority: .utility) {
+                SyncCoordination.isSyncLockPresent(sharedCacheURL: sharedCacheURL)
+            }.value
+            if !present {
+                await MainActor.run {
+                    refreshCachedDocketsFromDisk()
+                    isSyncing = false
+                    syncProgress = 0
+                    syncPhase = ""
+                    syncHostDeviceName = nil
+                }
+                return
+            }
+            let result = await Task.detached(priority: .utility) {
+                SyncCoordination.readSyncProgress(sharedCacheURL: sharedCacheURL)
+            }.value
+            if let (_, isStale) = result, isStale {
+                await Task.detached(priority: .utility) {
+                    SyncCoordination.removeStaleLock(sharedCacheURL: sharedCacheURL)
+                }.value
+                await MainActor.run {
+                    refreshCachedDocketsFromDisk()
+                    isSyncing = false
+                    syncProgress = 0
+                    syncPhase = ""
+                    syncHostDeviceName = nil
+                }
+                return
+            }
+            if let (payload, _) = result {
+                await MainActor.run {
+                    syncProgress = payload.progress
+                    syncPhase = payload.phase
+                    syncHostDeviceName = payload.hostDeviceName
+                }
+            }
+        }
+    }
+    
     /// Fetch from shared cache if fresh, otherwise sync from Asana API so Job Info always has recent data
     func syncWithAsana(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?, sharedCacheURL: String?, useSharedCache: Bool) async throws {
         isSyncing = true
@@ -758,10 +804,18 @@ class AsanaCacheManager: ObservableObject {
         self.sharedCacheURL = sharedCacheURL
         self.useSharedCache = useSharedCache
         
+        var weAreSyncHost = false
+        var sharedURLForLock: String? = nil
+        
         defer {
+            if weAreSyncHost, let url = sharedURLForLock {
+                Task.detached(priority: .utility) { SyncCoordination.releaseSyncLock(sharedCacheURL: url) }
+            }
             isSyncing = false
             syncProgress = 0
             syncPhase = ""
+            syncHostDeviceName = nil
+            isSyncHost = false
         }
         
         // If shared cache is configured and recently updated (within 60 min), use it without calling API
@@ -842,6 +896,42 @@ class AsanaCacheManager: ObservableObject {
             throw AsanaError.notAuthenticated
         }
         
+        // Sync coordination: when using shared cache, only one instance runs sync; others observe progress.
+        // If we can't acquire (someone else has lock) we observe; if lock isn't present (read-only or stale removed) we run sync anyway.
+        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+            let deviceName = Host.current().localizedName ?? "This Mac"
+            let acquired = await Task.detached(priority: .utility) {
+                SyncCoordination.tryAcquireSyncLock(sharedCacheURL: sharedURL, hostDeviceName: deviceName)
+            }.value
+            if !acquired {
+                let lockPresent = await Task.detached(priority: .utility) {
+                    SyncCoordination.isSyncLockPresent(sharedCacheURL: sharedURL)
+                }.value
+                if lockPresent {
+                    isSyncHost = false
+                    let progressResult = await Task.detached(priority: .utility) {
+                        SyncCoordination.readSyncProgress(sharedCacheURL: sharedURL)
+                    }.value
+                    if let (payload, _) = progressResult {
+                        syncProgress = payload.progress
+                        syncPhase = payload.phase
+                        syncHostDeviceName = payload.hostDeviceName
+                    } else {
+                        syncPhase = "Syncing..."
+                        syncHostDeviceName = nil
+                    }
+                    await runSyncObserverLoop(sharedCacheURL: sharedURL)
+                    return
+                }
+                // Lock not present: we couldn't create it (e.g. read-only share) or we just removed stale — run sync anyway (progress writes will no-op if needed)
+            } else {
+                weAreSyncHost = true
+                sharedURLForLock = sharedURL
+                isSyncHost = true
+                syncHostDeviceName = nil
+            }
+        }
+        
         // Prefer incremental sync: load existing cache and only fetch tasks modified since last sync
         var existingDockets: [DocketInfo] = []
         var existingLastSync: Date?
@@ -914,6 +1004,12 @@ class AsanaCacheManager: ObservableObject {
                         self?.syncProgress = progress
                         self?.syncPhase = phase
                     }
+                    if weAreSyncHost, let url = sharedURLForLock {
+                        let name = Host.current().localizedName ?? "This Mac"
+                        Task.detached(priority: .utility) {
+                            SyncCoordination.writeSyncProgress(sharedCacheURL: url, progress: progress, phase: phase, hostDeviceName: name)
+                        }
+                    }
                 }
             )
             
@@ -979,6 +1075,12 @@ class AsanaCacheManager: ObservableObject {
                         Task { @MainActor in
                             self?.syncProgress = progress
                             self?.syncPhase = phase
+                        }
+                        if weAreSyncHost, let url = sharedURLForLock {
+                            let name = Host.current().localizedName ?? "This Mac"
+                            Task.detached(priority: .utility) {
+                                SyncCoordination.writeSyncProgress(sharedCacheURL: url, progress: progress, phase: phase, hostDeviceName: name)
+                            }
                         }
                     }
                 )
@@ -1381,10 +1483,49 @@ class AsanaCacheManager: ObservableObject {
         syncError = nil
         syncProgress = 0
         syncPhase = "Fetching from Asana (full discovery)..."
+        var weAreSyncHost = false
+        var sharedURLForLock: String? = nil
         defer {
+            if weAreSyncHost, let url = sharedURLForLock {
+                Task.detached(priority: .utility) { SyncCoordination.releaseSyncLock(sharedCacheURL: url) }
+            }
             isSyncing = false
             syncProgress = 0
             syncPhase = ""
+            syncHostDeviceName = nil
+            isSyncHost = false
+        }
+        if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
+            let deviceName = Host.current().localizedName ?? "This Mac"
+            let acquired = await Task.detached(priority: .utility) {
+                SyncCoordination.tryAcquireSyncLock(sharedCacheURL: sharedURL, hostDeviceName: deviceName)
+            }.value
+            if !acquired {
+                let lockPresent = await Task.detached(priority: .utility) {
+                    SyncCoordination.isSyncLockPresent(sharedCacheURL: sharedURL)
+                }.value
+                if lockPresent {
+                    isSyncHost = false
+                    let progressResult = await Task.detached(priority: .utility) {
+                        SyncCoordination.readSyncProgress(sharedCacheURL: sharedURL)
+                    }.value
+                    if let (payload, _) = progressResult {
+                        syncProgress = payload.progress
+                        syncPhase = payload.phase
+                        syncHostDeviceName = payload.hostDeviceName
+                    } else {
+                        syncPhase = "Syncing..."
+                        syncHostDeviceName = nil
+                    }
+                    await runSyncObserverLoop(sharedCacheURL: sharedURL)
+                    return
+                }
+            } else {
+                weAreSyncHost = true
+                sharedURLForLock = sharedURL
+                isSyncHost = true
+                syncHostDeviceName = nil
+            }
         }
         let syncResult = try await asanaService.fetchDockets(
             workspaceID: workspaceID,
@@ -1398,6 +1539,12 @@ class AsanaCacheManager: ObservableObject {
                 Task { @MainActor in
                     self?.syncProgress = progress
                     self?.syncPhase = phase
+                }
+                if weAreSyncHost, let url = sharedURLForLock {
+                    let name = Host.current().localizedName ?? "This Mac"
+                    Task.detached(priority: .utility) {
+                        SyncCoordination.writeSyncProgress(sharedCacheURL: url, progress: progress, phase: phase, hostDeviceName: name)
+                    }
                 }
             }
         )

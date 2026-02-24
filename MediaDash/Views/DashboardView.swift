@@ -910,6 +910,9 @@ struct RecentDocketsView: View {
                 HStack(spacing: 8) {
                     // Show sync progress if syncing
                     if let cache = cacheManager, cache.isSyncing {
+                        if cache.isSyncHost {
+                            Circle().fill(Color.green).frame(width: 6, height: 6)
+                        }
                         if cache.syncProgress > 0 {
                             ProgressView(value: cache.syncProgress)
                                 .progressViewStyle(.linear)
@@ -1296,6 +1299,14 @@ struct DashboardStagingArea: View {
         }
     }
     
+    private func dashboardSyncPhaseText(cache: AsanaCacheManager) -> String {
+        let phase = cache.syncPhase.isEmpty ? "Syncing from Asana..." : cache.syncPhase
+        if let name = cache.syncHostDeviceName, !name.isEmpty {
+            return "\(phase) (\(name))"
+        }
+        return phase
+    }
+    
     private var dashboardStatusBar: some View {
         HStack {
             // Left side - Scanning and Asana sync indicators
@@ -1317,6 +1328,9 @@ struct DashboardStagingArea: View {
                 
                 if let cache = cacheManager, cache.isSyncing {
                     HStack(spacing: 8) {
+                        if cache.isSyncHost {
+                            Circle().fill(Color.green).frame(width: 6, height: 6)
+                        }
                         if cache.syncProgress > 0 {
                             ProgressView(value: cache.syncProgress)
                                 .progressViewStyle(.linear)
@@ -1329,7 +1343,7 @@ struct DashboardStagingArea: View {
                                 .scaleEffect(0.6)
                                 .frame(width: 12, height: 12)
                         }
-                        Text(cache.syncPhase.isEmpty ? "Syncing from Asana..." : cache.syncPhase)
+                        Text(dashboardSyncPhaseText(cache: cache))
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.blue)
                             .lineLimit(1)

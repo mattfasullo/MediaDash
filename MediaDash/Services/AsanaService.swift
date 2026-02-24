@@ -14,6 +14,11 @@ struct DocketSyncResult {
     let projectsQueried: Int
 }
 
+enum AsanaProjectSortField {
+    case lastModified
+    case creationTime
+}
+
 /// Service for interacting with Asana API
 /// 
 /// **MOSTLY READ-ONLY**: This service performs read operations (GET) and one write used for
@@ -334,7 +339,7 @@ class AsanaService: ObservableObject {
             var components = URLComponents(string: "\(baseURL)/projects")!
             var queryItems: [URLQueryItem] = [
                 URLQueryItem(name: "workspace", value: workspaceID),
-                URLQueryItem(name: "opt_fields", value: "gid,name,archived,created_by,owner,notes,color,due_date,public,team,custom_field_settings"),
+                URLQueryItem(name: "opt_fields", value: "gid,name,archived,created_by,owner,notes,color,due_date,public,team,custom_field_settings,modified_at,created_at"),
                 URLQueryItem(name: "limit", value: "\(limit)"),
                 // Filter archived projects server-side to reduce data transfer and API processing
                 URLQueryItem(name: "archived", value: "false")
@@ -403,7 +408,7 @@ class AsanaService: ObservableObject {
     func fetchProject(projectGid: String) async throws -> AsanaProject {
         guard accessToken != nil else { throw AsanaError.notAuthenticated }
         var components = URLComponents(string: "\(baseURL)/projects/\(projectGid)")!
-        components.queryItems = [URLQueryItem(name: "opt_fields", value: "gid,name,archived,created_by,owner,notes,color,due_date,public,team,custom_field_settings")]
+        components.queryItems = [URLQueryItem(name: "opt_fields", value: "gid,name,archived,created_by,owner,notes,color,due_date,public,team,custom_field_settings,modified_at,created_at")]
         guard let fullURL = components.url else { throw AsanaError.invalidURL }
         var req = URLRequest(url: fullURL)
         let (data, httpResponse) = try await makeAuthenticatedRequest(&req)
@@ -471,37 +476,150 @@ class AsanaService: ObservableObject {
         return all
     }
     
-    /// Search for projects by docket number or name (matches project name containing query)
-    func searchProjects(workspaceID: String, query: String) async throws -> [AsanaProject] {
-        let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: 500)
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return Array(projects.prefix(50)) }
-        let filtered = projects.filter { $0.name.lowercased().contains(q) }
-        return Array(filtered.prefix(50))
+    /// Search projects using Asana typeahead so queries stay targeted (no full workspace scan).
+    func searchProjects(workspaceID: String, query: String, maxResults: Int = 25) async throws -> [AsanaProject] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+        
+        let clampedResults = max(1, min(maxResults, 50))
+        var components = URLComponents(string: "\(baseURL)/workspaces/\(workspaceID)/typeahead")!
+        components.queryItems = [
+            URLQueryItem(name: "resource_type", value: "project"),
+            URLQueryItem(name: "query", value: q),
+            URLQueryItem(name: "count", value: "\(clampedResults)")
+        ]
+        
+        guard let url = components.url else { throw AsanaError.invalidURL }
+        
+        var request = URLRequest(url: url)
+        let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
+        
+        if httpResponse.statusCode == 401 {
+            throw AsanaError.notAuthenticated
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AsanaError.apiError("HTTP \(httpResponse.statusCode): \(errorMessage)")
+        }
+        
+        let wrapper = try JSONDecoder().decode(AsanaDataWrapper<[AsanaTypeaheadItem]>.self, from: data)
+        var seen = Set<String>()
+        let uniqueResults = wrapper.data.filter { seen.insert($0.gid).inserted }
+        
+        return uniqueResults.compactMap { item in
+            guard let name = item.name, !name.isEmpty else { return nil }
+            return AsanaProject(
+                gid: item.gid,
+                name: name,
+                archived: false,
+                created_by: nil,
+                owner: nil,
+                notes: nil,
+                color: nil,
+                due_date: nil,
+                isPublic: nil,
+                team: nil,
+                custom_field_settings: nil,
+                modified_at: item.modified_at,
+                created_at: nil
+            )
+        }
+    }
+    
+    /// Fetch top projects for producer default list, sorted by modified or created time.
+    func fetchRecentProjects(workspaceID: String, limit: Int = 10, sortField: AsanaProjectSortField = .lastModified) async throws -> [AsanaProject] {
+        let clampedLimit = max(1, min(limit, 50))
+        let candidates = try await fetchProjects(workspaceID: workspaceID, maxProjects: 200)
+        
+        let datedCandidates = candidates.map { project in
+            (
+                project: project,
+                modifiedAt: parseAsanaTimestamp(project.modified_at),
+                createdAt: parseAsanaTimestamp(project.created_at)
+            )
+        }
+        
+        let sorted = datedCandidates.sorted { lhs, rhs in
+            let lhsPrimary: Date
+            let rhsPrimary: Date
+            let lhsSecondary: Date
+            let rhsSecondary: Date
+            
+            switch sortField {
+            case .lastModified:
+                lhsPrimary = lhs.modifiedAt ?? lhs.createdAt ?? .distantPast
+                rhsPrimary = rhs.modifiedAt ?? rhs.createdAt ?? .distantPast
+                lhsSecondary = lhs.createdAt ?? .distantPast
+                rhsSecondary = rhs.createdAt ?? .distantPast
+            case .creationTime:
+                lhsPrimary = lhs.createdAt ?? lhs.modifiedAt ?? .distantPast
+                rhsPrimary = rhs.createdAt ?? rhs.modifiedAt ?? .distantPast
+                lhsSecondary = lhs.modifiedAt ?? .distantPast
+                rhsSecondary = rhs.modifiedAt ?? .distantPast
+            }
+            
+            if lhsPrimary != rhsPrimary { return lhsPrimary > rhsPrimary }
+            if lhsSecondary != rhsSecondary { return lhsSecondary > rhsSecondary }
+            return lhs.project.name.localizedCaseInsensitiveCompare(rhs.project.name) == .orderedAscending
+        }
+        
+        return Array(sorted.prefix(clampedLimit).map(\.project))
+    }
+    
+    private func parseAsanaTimestamp(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = formatter.date(from: value) {
+            return parsed
+        }
+        
+        let fallback = ISO8601DateFormatter()
+        fallback.formatOptions = [.withInternetDateTime]
+        return fallback.date(from: value)
     }
     
     /// Find an Asana project for a docket when metadata is missing (e.g. from cache). Tries docket number and job name so the producer doesn't need the media team.
     func findProjectForDocket(workspaceID: String, docketNumber: String, jobName: String) async throws -> AsanaProject? {
-        let projects = try await fetchProjects(workspaceID: workspaceID, maxProjects: 1000)
         let numLower = docketNumber.trimmingCharacters(in: .whitespaces).lowercased()
         let jobLower = jobName.trimmingCharacters(in: .whitespaces).lowercased()
-        // Prefer: project name contains docket number (e.g. "25164" or "25164_Sleep Country")
+        
+        // Prefer: targeted query by docket number (e.g. "25164" or "25164-US").
         if !numLower.isEmpty {
-            if let match = projects.first(where: { $0.name.lowercased().contains(numLower) }) {
+            let numberMatches = try await searchProjects(workspaceID: workspaceID, query: numLower, maxResults: 25)
+            if let match = numberMatches.first(where: { $0.name.lowercased().contains(numLower) }) {
                 return match
             }
+            if let first = numberMatches.first {
+                return first
+            }
         }
-        // Then: project name contains job name or a significant part (e.g. "Sleep Country")
+        
+        // Then try a targeted job-name query (full + shortened variant).
         if !jobLower.isEmpty {
+            var queries: [String] = []
             let jobWords = jobLower.split(separator: " ").map(String.init)
-            let query = jobWords.prefix(3).joined(separator: " ")
-            if !query.isEmpty, let match = projects.first(where: { $0.name.lowercased().contains(query) }) {
-                return match
+            let shortened = jobWords.prefix(4).joined(separator: " ")
+            if !shortened.isEmpty {
+                queries.append(shortened)
             }
-            if let match = projects.first(where: { $0.name.lowercased().contains(jobLower) }) {
-                return match
+            if !queries.contains(jobLower) {
+                queries.append(jobLower)
+            }
+            
+            for query in queries {
+                let matches = try await searchProjects(workspaceID: workspaceID, query: query, maxResults: 25)
+                if let exact = matches.first(where: { $0.name.lowercased().contains(jobLower) }) {
+                    return exact
+                }
+                if let first = matches.first {
+                    return first
+                }
             }
         }
+        
         return nil
     }
     
@@ -1756,6 +1874,12 @@ struct AsanaSection: Codable, Identifiable {
     var id: String { gid }
 }
 
+private struct AsanaTypeaheadItem: Codable {
+    let gid: String
+    let name: String?
+    let modified_at: String?
+}
+
 struct AsanaProject: Codable, Identifiable {
     let gid: String
     let name: String
@@ -1768,6 +1892,8 @@ struct AsanaProject: Codable, Identifiable {
     let isPublic: Bool?
     let team: AsanaTeam?
     let custom_field_settings: [AsanaCustomFieldSetting]?
+    let modified_at: String?
+    let created_at: String?
     
     var id: String { gid }
     
@@ -1783,6 +1909,8 @@ struct AsanaProject: Codable, Identifiable {
         case isPublic = "public"
         case team
         case custom_field_settings
+        case modified_at
+        case created_at
     }
 }
 

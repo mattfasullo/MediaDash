@@ -92,71 +92,145 @@ struct AppConfig: Sendable {
 
     // MARK: - Writers (Shared Server Store)
 
-    /// Writers file lives in MediaDash_Cache folder (sharedCacheURL) when configured; otherwise at server base/_MediaDash.
-    private nonisolated var writersFileURL: URL {
-        if let sharedURL = settings.sharedCacheURL, !sharedURL.isEmpty,
-           !sharedURL.hasPrefix("http://"), !sharedURL.hasPrefix("https://") {
-            let sharedPath = sharedURL.hasPrefix("file://") ? String(sharedURL.dropFirst(7)) : sharedURL
-            let cacheURL = URL(fileURLWithPath: sharedPath)
-            return cacheURL.appendingPathComponent("writers.json")
+    private nonisolated var normalizedSharedCachePath: String? {
+        guard let raw = settings.sharedCacheURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              !raw.hasPrefix("http://"),
+              !raw.hasPrefix("https://") else {
+            return nil
         }
+        return raw.hasPrefix("file://") ? String(raw.dropFirst(7)) : raw
+    }
+
+    private nonisolated var serverWritersFileURL: URL {
         let base = URL(fileURLWithPath: settings.serverBasePath)
         return base.appendingPathComponent("_MediaDash", isDirectory: true).appendingPathComponent("writers.json")
     }
 
-    private nonisolated var writersBasePathExists: Bool {
-        if let sharedURL = settings.sharedCacheURL, !sharedURL.isEmpty,
-           !sharedURL.hasPrefix("http://"), !sharedURL.hasPrefix("https://") {
-            let sharedPath = sharedURL.hasPrefix("file://") ? String(sharedURL.dropFirst(7)) : sharedURL
-            let cacheURL = URL(fileURLWithPath: sharedPath)
-            return FileManager.default.fileExists(atPath: cacheURL.path)
+    private nonisolated var sharedWritersFileURL: URL? {
+        guard let sharedPath = normalizedSharedCachePath else { return nil }
+        return URL(fileURLWithPath: sharedPath).appendingPathComponent("writers.json")
+    }
+
+    /// Prefer shared cache when reachable; otherwise fall back to server base/_MediaDash.
+    private nonisolated var writersFileURL: URL {
+        let fm = FileManager.default
+        if let sharedURL = sharedWritersFileURL {
+            let sharedBase = sharedURL.deletingLastPathComponent()
+            if fm.fileExists(atPath: sharedBase.path) {
+                return sharedURL
+            }
         }
-        return FileManager.default.fileExists(atPath: settings.serverBasePath)
+        return serverWritersFileURL
+    }
+
+    private nonisolated var writersBasePathExists: Bool {
+        let fm = FileManager.default
+        if let sharedURL = sharedWritersFileURL {
+            let sharedBase = sharedURL.deletingLastPathComponent()
+            if fm.fileExists(atPath: sharedBase.path) {
+                return true
+            }
+        }
+        return fm.fileExists(atPath: settings.serverBasePath)
     }
 
     /// Load saved writers from server. Returns empty array if file doesn't exist or isn't readable.
     nonisolated func loadWritersFromServer() -> [(name: String, folderName: String)] {
-        let url = writersFileURL
-        let fm = FileManager.default
-        migrateWritersFromOldLocationIfNeeded(to: url)
-        guard fm.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else {
-            return []
+        let primaryURL = writersFileURL
+        migrateWritersFromOldLocationIfNeeded(to: primaryURL)
+        if let writers = loadWriters(at: primaryURL) {
+            return writers
         }
-        return array.compactMap { dict -> (String, String)? in
-            guard let name = dict["name"], let folder = dict["folderName"], !name.isEmpty, !folder.isEmpty else { return nil }
-            return (name, folder)
-        }
+        let fallbackURL = serverWritersFileURL
+        guard fallbackURL.path != primaryURL.path else { return [] }
+        return loadWriters(at: fallbackURL) ?? []
     }
 
     /// Migrate writers.json from old location (server base) to new location (Misc.) if needed.
     private nonisolated func migrateWritersFromOldLocationIfNeeded(to newURL: URL) {
-        guard settings.sharedCacheURL != nil else { return }
-        let oldURL = URL(fileURLWithPath: settings.serverBasePath)
-            .appendingPathComponent("_MediaDash", isDirectory: true).appendingPathComponent("writers.json")
+        guard let sharedURL = sharedWritersFileURL, sharedURL.path == newURL.path else { return }
+        let oldURL = serverWritersFileURL
+        guard oldURL.path != newURL.path else { return }
         let fm = FileManager.default
         guard !fm.fileExists(atPath: newURL.path), fm.fileExists(atPath: oldURL.path) else { return }
         try? fm.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
         try? fm.copyItem(at: oldURL, to: newURL)
     }
 
+    private nonisolated func loadWriters(at url: URL) -> [(name: String, folderName: String)]? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) else {
+            return nil
+        }
+
+        var writers: [(name: String, folderName: String)] = []
+        if let array = json as? [[String: Any]] {
+            for dict in array {
+                let name = writerValue(dict["name"] as? String)
+                let folder = writerValue(
+                    (dict["folderName"] as? String)
+                    ?? (dict["initials"] as? String)
+                    ?? (dict["folder"] as? String)
+                    ?? (dict["nickname"] as? String)
+                )
+                guard !name.isEmpty, !folder.isEmpty else { continue }
+                writers.append((name: name, folderName: folder))
+            }
+        } else if let map = json as? [String: String] {
+            for (name, folder) in map {
+                let cleanedName = writerValue(name)
+                let cleanedFolder = writerValue(folder)
+                guard !cleanedName.isEmpty, !cleanedFolder.isEmpty else { continue }
+                writers.append((name: cleanedName, folderName: cleanedFolder))
+            }
+        } else {
+            return nil
+        }
+
+        var deduped: [(name: String, folderName: String)] = []
+        for writer in writers {
+            if let idx = deduped.firstIndex(where: { $0.name.caseInsensitiveCompare(writer.name) == .orderedSame }) {
+                deduped[idx] = writer
+            } else {
+                deduped.append(writer)
+            }
+        }
+        return deduped
+    }
+
+    private nonisolated func writerValue(_ value: String?) -> String {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
     /// Append or update a writer in the server list. Merges with existing (updates if name matches).
     nonisolated func saveWriterToServer(name: String, folderName: String) {
+        let cleanedName = writerValue(name)
+        let cleanedFolderName = writerValue(folderName)
+        guard !cleanedName.isEmpty, !cleanedFolderName.isEmpty else { return }
+
         let url = writersFileURL
         let fm = FileManager.default
         let dir = url.deletingLastPathComponent()
-        guard writersBasePathExists else { return }
+        guard writersBasePathExists else {
+            print("⚠️ [Writers] Save skipped: shared cache and server base paths are unavailable.")
+            return
+        }
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
         var writers = loadWritersFromServer()
-        if let idx = writers.firstIndex(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
-            writers[idx] = (name, folderName)
+        if let idx = writers.firstIndex(where: { $0.name.caseInsensitiveCompare(cleanedName) == .orderedSame }) {
+            writers[idx] = (cleanedName, cleanedFolderName)
         } else {
-            writers.append((name, folderName))
+            writers.append((cleanedName, cleanedFolderName))
         }
-        let array = writers.map { ["name": $0.name, "folderName": $0.folderName] }
-        if let data = try? JSONSerialization.data(withJSONObject: array) {
-            try? data.write(to: url, options: .atomic)
+        let array = writers.map { ["name": $0.name, "folderName": $0.folderName, "initials": $0.folderName] }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: array)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            print("⚠️ [Writers] Failed to write \(url.path): \(error.localizedDescription)")
         }
     }
 

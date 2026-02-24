@@ -1,6 +1,10 @@
 import SwiftUI
 import AppKit
 
+extension Foundation.Notification.Name {
+    static let producerOpenRecentProject = Foundation.Notification.Name("ProducerOpenRecentProject")
+}
+
 /// Minimal authenticated root for Producer role.
 /// Same layout as media: sidebar + main content, Settings overlay top-right.
 struct ProducerRootView: View {
@@ -9,8 +13,12 @@ struct ProducerRootView: View {
 
     @StateObject private var settingsManager: SettingsManager
     @StateObject private var asanaCacheManager = AsanaCacheManager()
+    @StateObject private var simianService = SimianService()
     @State private var showSettingsSheet = false
+    @State private var showRecentHistory = false
     @State private var showAirtableTablePicker = false
+    @State private var showServicesSetupPrompt = false
+    @State private var hasEvaluatedServicesPrompt = false
 
     init(sessionManager: SessionManager, profile: WorkspaceProfile) {
         self.sessionManager = sessionManager
@@ -26,8 +34,21 @@ struct ProducerRootView: View {
                     sessionManager: sessionManager,
                     asanaCacheManager: asanaCacheManager,
                     showSettingsSheet: $showSettingsSheet,
+                    showRecentHistory: $showRecentHistory,
                     showAirtableTablePicker: $showAirtableTablePicker
-                )
+                ) { recent in
+                    showRecentHistory = false
+                    Foundation.NotificationCenter.default.post(
+                        name: .producerOpenRecentProject,
+                        object: nil,
+                        userInfo: [
+                            "projectGid": recent.projectGid,
+                            "fullName": recent.fullName,
+                            "docketNumber": recent.docketNumber ?? "",
+                            "jobName": recent.jobName ?? ""
+                        ]
+                    )
+                }
                 .environmentObject(settingsManager)
 
                 ProducerView()
@@ -39,6 +60,15 @@ struct ProducerRootView: View {
             .onAppear {
                 settingsManager.currentSettings = profile.settings
                 configureProducerCache()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    evaluateServicesPromptIfNeeded()
+                }
+            }
+            .onChange(of: sessionManager.authenticationState) { _, newState in
+                // Clean up cache manager if user logs out
+                if case .loggedOut = newState {
+                    asanaCacheManager.shutdown()
+                }
             }
             .onChange(of: settingsManager.currentSettings) { _, newSettings in
                 sessionManager.updateProfile(settings: newSettings)
@@ -68,6 +98,24 @@ struct ProducerRootView: View {
             .padding(.trailing, 8)
             .zIndex(1000)
         }
+        .sheet(isPresented: $showServicesSetupPrompt) {
+            let (gmail, asana, simian) = ServicesSetupPromptBuilder.buildStatus(
+                settings: settingsManager.currentSettings,
+                simianService: simianService
+            )
+            ServicesSetupPromptSheet(
+                isPresented: $showServicesSetupPrompt,
+                onOpenSettings: {
+                    Foundation.NotificationCenter.default.post(
+                        name: Foundation.Notification.Name("OpenSettings"),
+                        object: nil
+                    )
+                },
+                gmailStatus: gmail,
+                asanaStatus: asana,
+                simianStatus: simian
+            )
+        }
     }
 
     private func configureProducerCache() {
@@ -84,6 +132,32 @@ struct ProducerRootView: View {
             docketField: s.asanaDocketField,
             jobNameField: s.asanaJobNameField
         )
+
+        // Keep Simian service config in sync so setup prompt can accurately detect connection state.
+        if s.simianEnabled,
+           let baseURL = s.simianAPIBaseURL,
+           !baseURL.isEmpty {
+            simianService.setBaseURL(baseURL)
+            if let username = s.simianUsername,
+               let password = s.simianPassword {
+                simianService.setCredentials(username: username, password: password)
+            }
+        }
+    }
+
+    private func evaluateServicesPromptIfNeeded() {
+        guard !hasEvaluatedServicesPrompt else { return }
+        hasEvaluatedServicesPrompt = true
+
+        let dontShowAgain = UserDefaults.standard.bool(forKey: "servicesPromptDontShowAgain")
+        if ServicesSetupPromptBuilder.shouldShowPrompt(
+            settings: settingsManager.currentSettings,
+            simianService: simianService,
+            dontShowAgain: dontShowAgain,
+            isProducer: true
+        ) {
+            showServicesSetupPrompt = true
+        }
     }
 }
 
@@ -94,7 +168,9 @@ struct ProducerSidebarView: View {
     @ObservedObject var sessionManager: SessionManager
     @ObservedObject var asanaCacheManager: AsanaCacheManager
     @Binding var showSettingsSheet: Bool
+    @Binding var showRecentHistory: Bool
     @Binding var showAirtableTablePicker: Bool
+    let onSelectRecentProject: (ProducerRecentProject) -> Void
     @EnvironmentObject var settingsManager: SettingsManager
 
     private var currentTheme: AppTheme {
@@ -120,6 +196,22 @@ struct ProducerSidebarView: View {
             .popover(isPresented: $showAirtableTablePicker, arrowEdge: .leading) {
                 ProducerAirtableTablePickerSheet(isPresented: $showAirtableTablePicker)
                     .environmentObject(settingsManager)
+            }
+            
+            IconRailButton(
+                icon: "clock.arrow.circlepath",
+                label: "Recent",
+                badge: nil,
+                isActive: showRecentHistory
+            ) {
+                showRecentHistory.toggle()
+            }
+            .popover(isPresented: $showRecentHistory, arrowEdge: .leading) {
+                ProducerRecentHistorySheet(
+                    isPresented: $showRecentHistory,
+                    onSelectRecentProject: onSelectRecentProject
+                )
+                .environmentObject(settingsManager)
             }
 
             Spacer()
@@ -234,10 +326,79 @@ private struct ProducerAirtableTablePickerSheet: View {
     }
 }
 
+private struct ProducerRecentHistorySheet: View {
+    @Binding var isPresented: Bool
+    let onSelectRecentProject: (ProducerRecentProject) -> Void
+    @EnvironmentObject var settingsManager: SettingsManager
+    
+    private var recentProjects: [ProducerRecentProject] {
+        (settingsManager.currentSettings.producerRecentProjects ?? [])
+            .sorted { $0.lastOpenedAt > $1.lastOpenedAt }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Recent projects")
+                .font(.headline)
+            
+            if recentProjects.isEmpty {
+                Text("No recent projects yet. Open a project and it will appear here.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                List(recentProjects) { entry in
+                    Button {
+                        onSelectRecentProject(entry)
+                        isPresented = false
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(entry.fullName)
+                                .font(.system(size: 12, weight: .medium))
+                                .lineLimit(2)
+                            Text(secondaryLine(for: entry))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .listStyle(.inset)
+                .scrollContentBackground(.visible)
+            }
+        }
+        .padding(14)
+        .frame(width: 340, height: 300)
+    }
+    
+    private func secondaryLine(for entry: ProducerRecentProject) -> String {
+        let docket = entry.docketNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let job = entry.jobName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let base: String
+        if !docket.isEmpty && !job.isEmpty {
+            base = "\(docket) · \(job)"
+        } else if !docket.isEmpty {
+            base = docket
+        } else if !job.isEmpty {
+            base = job
+        } else {
+            base = "Project"
+        }
+        return "\(base) · \(formatRelativeDate(entry.lastOpenedAt))"
+    }
+    
+    private func formatRelativeDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
 #Preview {
     ProducerRootView(
         sessionManager: SessionManager(),
         profile: WorkspaceProfile.local(name: "Producer")
     )
 }
-

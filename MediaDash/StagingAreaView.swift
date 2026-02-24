@@ -25,6 +25,14 @@ struct StagingAreaView: View {
         manager.selectedFiles.reduce(0) { $0 + $1.fileCount }
     }
     
+    private var stagingSyncPhaseText: String {
+        let phase = cacheManager.syncPhase.isEmpty ? "Syncing from Asana..." : cacheManager.syncPhase
+        if let name = cacheManager.syncHostDeviceName, !name.isEmpty {
+            return "\(phase) (\(name))"
+        }
+        return phase
+    }
+    
     // Fixed padding for compact mode
     private var contentPadding: CGFloat {
         return 20
@@ -259,6 +267,9 @@ struct StagingAreaView: View {
                     
                     if cacheManager.isSyncing {
                         HStack(spacing: 8) {
+                            if cacheManager.isSyncHost {
+                                Circle().fill(Color.green).frame(width: 6, height: 6)
+                            }
                             if cacheManager.syncProgress > 0 {
                                 ProgressView(value: cacheManager.syncProgress)
                                     .progressViewStyle(.linear)
@@ -271,7 +282,7 @@ struct StagingAreaView: View {
                                     .scaleEffect(0.6)
                                     .frame(width: 12, height: 12)
                             }
-                            Text(cacheManager.syncPhase.isEmpty ? "Syncing from Asana..." : cacheManager.syncPhase)
+                            Text(stagingSyncPhaseText)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.blue)
                                 .lineLimit(1)

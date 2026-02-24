@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import Combine
 
 struct SheetBorderModifier: ViewModifier {
     func body(content: Content) -> some View {
@@ -22,10 +21,9 @@ struct SheetBorderModifier: ViewModifier {
 /// Uses minimum size (not fixed size) so sheets remain resizable and draggable:
 /// 1. Captures the initial size when the sheet first appears as the minimum
 /// 2. Applies minWidth/minHeight so the sheet cannot shrink below that
-/// 3. Allows the sheet to be resized larger; monitoring app activation for re-layout
+/// 3. Allows the sheet to be resized larger without re-laying out on app activation
 struct SheetSizeStabilizer: ViewModifier {
     @State private var capturedMinSize: CGSize?
-    @State private var refreshToken = UUID()
     
     func body(content: Content) -> some View {
         Group {
@@ -40,18 +38,15 @@ struct SheetSizeStabilizer: ViewModifier {
                                 .onAppear {
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                                         if capturedMinSize == nil {
-                                            capturedMinSize = geometry.size
+                                            let size = geometry.size
+                                            if size.width > 1, size.height > 1 {
+                                                capturedMinSize = size
+                                            }
                                         }
                                     }
                                 }
                         }
                     )
-            }
-        }
-        .id(refreshToken)
-        .onReceive(Foundation.NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            if capturedMinSize != nil {
-                refreshToken = UUID()
             }
         }
     }
@@ -81,4 +76,3 @@ extension View {
         fixedSize(horizontal: true, vertical: true)
     }
 }
-

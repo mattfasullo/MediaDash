@@ -149,9 +149,12 @@ struct SimianProjectCreationDialog: View {
                 let fetchedTemplates = try await simianService.getTemplates()
                 await MainActor.run {
                     templates = fetchedTemplates
-                    // Optionally set default template from settings if it matches
+                    // Use template from settings if set and found; otherwise use standard default (e.g. O_NEW PROJECT TEMPLATE) when available
                     if let defaultTemplateId = settingsManager.currentSettings.simianProjectTemplate,
-                       let defaultTemplate = fetchedTemplates.first(where: { $0.id == defaultTemplateId }) {
+                       !defaultTemplateId.isEmpty,
+                       let template = fetchedTemplates.first(where: { $0.id == defaultTemplateId }) {
+                        selectedTemplate = template
+                    } else if let defaultTemplate = SimianTemplate.defaultTemplate(from: fetchedTemplates) {
                         selectedTemplate = defaultTemplate
                     }
                     isLoadingTemplates = false

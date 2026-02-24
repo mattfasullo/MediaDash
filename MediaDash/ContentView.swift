@@ -75,6 +75,7 @@ struct ContentView: View {
     @FocusState private var mainViewFocused: Bool
     @EnvironmentObject var notificationCenter: NotificationCenter
     @EnvironmentObject var emailScanningService: EmailScanningService
+    @EnvironmentObject var asanaDocketScanningService: AsanaDocketScanningService
 
     // Task handle for hourly cache sync
     @State private var hourlySyncTask: Task<Void, Never>?
@@ -176,6 +177,12 @@ struct ContentView: View {
             }
             .onChange(of: focusedButton) { _, newValue in
                 MainWindowKeyboardFocus.shared.focusedButton = newValue
+            }
+            .onChange(of: sessionManager.authenticationState) { _, newState in
+                // Clean up cache manager if user logs out
+                if case .loggedOut = newState {
+                    cacheManager.shutdown()
+                }
             }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("CreateTestDocketNotification"))) { _ in
                 // Backup listener in ContentView - create test notification directly
@@ -297,6 +304,7 @@ struct ContentView: View {
                         NotificationCenterView(
                             notificationCenter: notificationCenter,
                             emailScanningService: emailScanningService,
+                            asanaDocketScanningService: asanaDocketScanningService,
                             mediaManager: manager,
                             settingsManager: settingsManager,
                             isExpanded: $showNotificationCenter,
@@ -2756,9 +2764,12 @@ struct QuickDocketSearchView: View {
         if cacheManager.isSyncing {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
+                    if cacheManager.isSyncHost {
+                        Circle().fill(Color.green).frame(width: 6, height: 6)
+                    }
                     ProgressView(value: cacheManager.syncProgress > 0 ? cacheManager.syncProgress : nil)
                         .scaleEffect(0.7)
-                    Text(cacheManager.syncPhase.isEmpty ? "Syncing from Asana..." : cacheManager.syncPhase)
+                    Text(syncStatusPhaseText)
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
@@ -2778,6 +2789,14 @@ struct QuickDocketSearchView: View {
             .padding(.vertical, 6)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
         }
+    }
+    
+    private var syncStatusPhaseText: String {
+        let phase = cacheManager.syncPhase.isEmpty ? "Syncing from Asana..." : cacheManager.syncPhase
+        if let name = cacheManager.syncHostDeviceName, !name.isEmpty {
+            return "\(phase) (\(name))"
+        }
+        return phase
     }
     
     private var resultsListSection: some View {
@@ -4481,6 +4500,74 @@ struct EmailRefreshButton: View {
             }
             
             // Status message
+            if let status = statusMessage {
+                Text(status)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
+                    .animation(.easeInOut, value: statusMessage)
+            }
+        }
+        .onDisappear {
+            statusTimer?.invalidate()
+        }
+    }
+}
+
+// MARK: - Asana Refresh Button
+
+struct AsanaRefreshButton: View {
+    @ObservedObject var asanaDocketScanningService: AsanaDocketScanningService
+    var notificationCenter: NotificationCenter? = nil
+    @State private var isHovered = false
+    @State private var statusMessage: String?
+    @State private var statusTimer: Timer?
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(action: {
+                guard !asanaDocketScanningService.isScanning else { return }
+                statusMessage = nil
+                
+                let beforeCount = notificationCenter?.notifications.filter { $0.status == .pending }.count ?? 0
+                
+                Task { @MainActor in
+                    await asanaDocketScanningService.scanForNewDockets()
+                    
+                    let afterCount = notificationCenter?.notifications.filter { $0.status == .pending }.count ?? 0
+                    let newCount = afterCount - beforeCount
+                    
+                    if newCount > 0 {
+                        statusMessage = "Found \(newCount) new docket\(newCount == 1 ? "" : "s")"
+                    } else {
+                        statusMessage = "Up to date"
+                    }
+                    
+                    statusTimer?.invalidate()
+                    statusTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                        statusMessage = nil
+                    }
+                }
+            }) {
+                ZStack {
+                    Circle()
+                        .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
+                        .frame(width: 24, height: 24)
+                    
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .rotationEffect(.degrees(asanaDocketScanningService.isScanning ? 360 : 0))
+                        .animation(asanaDocketScanningService.isScanning ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: asanaDocketScanningService.isScanning)
+                }
+            }
+            .buttonStyle(.plain)
+            .help(statusMessage ?? "Refresh Asana projects")
+            .disabled(asanaDocketScanningService.isScanning)
+            .onHover { hovering in
+                isHovered = hovering
+            }
+            
             if let status = statusMessage {
                 Text(status)
                     .font(.system(size: 10))

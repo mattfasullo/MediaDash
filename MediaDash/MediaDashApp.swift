@@ -139,6 +139,11 @@ enum WindowConfiguration {
     /// Configures a window with the standard MediaDash appearance and behavior.
     /// Main app window: not resizable. Other windows: resizable with a minimum size.
     static func configureWindow(_ window: NSWindow) {
+        if isSheetWindow(window) {
+            configureSheetWindow(window)
+            return
+        }
+
         let isMainAppWindow = (window === mainAppWindow)
         var styleMask = window.styleMask
         if isMainAppWindow {
@@ -150,9 +155,9 @@ enum WindowConfiguration {
         }
         window.styleMask = styleMask
 
-        // Delegate enforces minimum size only (allows any size >= minSize)
-        if window.delegate == nil || !(window.delegate is MinSizeWindowDelegate) {
-            window.delegate = MinSizeWindowDelegate.shared
+        // Delegate enforces minimum size only (allows any size >= minSize).
+        // Never overwrite unrelated delegates.
+        if window.delegate == nil || window.delegate is MinSizeWindowDelegate {
             MinSizeWindowDelegate.shared.registerWindow(window)
         }
 
@@ -208,6 +213,18 @@ enum WindowConfiguration {
         // Force window to update
         window.invalidateShadow()
     }
+
+    private static func isSheetWindow(_ window: NSWindow) -> Bool {
+        window.sheetParent != nil || window.styleMask.contains(.docModalWindow)
+    }
+
+    private static func configureSheetWindow(_ window: NSWindow) {
+        // SwiftUI sheets should size from their content and avoid app-window min-size rules.
+        MinSizeWindowDelegate.shared.unregisterWindow(window)
+        removeFullscreenObservers(for: window)
+        window.minSize = NSSize(width: 1, height: 1)
+        window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+    }
 }
 
 // MARK: - Fullscreen Observer Management
@@ -221,7 +238,7 @@ func setupFullscreenObserverForDashboard(_ window: NSWindow) {
     let windowId = ObjectIdentifier(window)
 
     // Remove any existing observers for this window
-    if let existingObservers = fullscreenObservers[windowId] {
+    if let existingObservers = fullscreenObservers.removeValue(forKey: windowId) {
         for observer in existingObservers {
             Foundation.NotificationCenter.default.removeObserver(observer)
         }
@@ -273,6 +290,15 @@ func setupFullscreenObserverForDashboard(_ window: NSWindow) {
     fullscreenObservers[windowId] = observers
 }
 
+func removeFullscreenObservers(for window: NSWindow) {
+    let windowId = ObjectIdentifier(window)
+    if let existingObservers = fullscreenObservers.removeValue(forKey: windowId) {
+        for observer in existingObservers {
+            Foundation.NotificationCenter.default.removeObserver(observer)
+        }
+    }
+}
+
 // Window delegate that enforces minimum size only (allows resizing above minimum)
 class MinSizeWindowDelegate: NSObject, NSWindowDelegate {
     static let shared = MinSizeWindowDelegate()
@@ -281,7 +307,16 @@ class MinSizeWindowDelegate: NSObject, NSWindowDelegate {
     func registerWindow(_ window: NSWindow) {
         if !registeredWindows.contains(where: { $0 === window }) {
             registeredWindows.append(window)
+        }
+        if window.delegate == nil || window.delegate is MinSizeWindowDelegate {
             window.delegate = self
+        }
+    }
+
+    func unregisterWindow(_ window: NSWindow) {
+        registeredWindows.removeAll { $0 === window }
+        if window.delegate is MinSizeWindowDelegate {
+            window.delegate = nil
         }
     }
     

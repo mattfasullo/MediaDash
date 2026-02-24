@@ -78,6 +78,7 @@ struct AuthenticatedRootView: View {
     @StateObject private var asanaCacheManager = AsanaCacheManager()
     @StateObject private var grabbedIndicatorService = GrabbedIndicatorService()
     @StateObject private var simianService = SimianService()
+    @StateObject private var asanaDocketScanningService = AsanaDocketScanningService()
     
     @State private var showSplashScreen = true
     @State private var initializationComplete = false
@@ -146,6 +147,7 @@ struct AuthenticatedRootView: View {
                 .environmentObject(sessionManager)
                 .environmentObject(emailScanningService)
                 .environmentObject(notificationCenter)
+                .environmentObject(asanaDocketScanningService)
                 .opacity(showSplashScreen ? 0 : 1)
             
             // Show splash screen on top during initialization
@@ -159,7 +161,6 @@ struct AuthenticatedRootView: View {
         .sheet(isPresented: $showServicesSetupPrompt) {
             let (gmail, asana, simian) = ServicesSetupPromptBuilder.buildStatus(
                 settings: settingsManager.currentSettings,
-                emailScanningService: emailScanningService,
                 simianService: simianService
             )
             ServicesSetupPromptSheet(
@@ -185,6 +186,12 @@ struct AuthenticatedRootView: View {
                 emailScanningService.asanaCacheManager = asanaCacheManager
                 emailScanningService.simianService = simianService
                 
+                // Wire up Asana docket scanning service
+                asanaDocketScanningService.settingsManager = settingsManager
+                asanaDocketScanningService.notificationCenter = notificationCenter
+                asanaDocketScanningService.mediaManager = manager
+                asanaDocketScanningService.asanaCacheManager = asanaCacheManager
+                
                 // Configure Simian service from settings
                 if settingsManager.currentSettings.simianEnabled,
                    let baseURL = settingsManager.currentSettings.simianAPIBaseURL,
@@ -194,6 +201,7 @@ struct AuthenticatedRootView: View {
                        let password = settingsManager.currentSettings.simianPassword {
                         simianService.setCredentials(username: username, password: password)
                     }
+                    asanaDocketScanningService.simianService = simianService
                 }
                 
                 // Update grabbed indicator service references
@@ -263,8 +271,11 @@ struct AuthenticatedRootView: View {
                         #endif
                         emailScanningService.gmailService.setAccessToken(accessToken, refreshToken: refreshToken)
                         
-                        // Start scanning - token will auto-refresh if expired
-                        emailScanningService.startScanning()
+                        // Only start periodic email scanning if detection mode is email (saves API usage in Asana mode)
+                        let currentDetectionMode = settingsManager.currentSettings.newDocketDetectionMode ?? .email
+                        if currentDetectionMode == .email {
+                            emailScanningService.startScanning()
+                        }
                     } else {
                         #if DEBUG
                         print("GmailService: No access token found in Keychain")
@@ -585,7 +596,6 @@ struct AuthenticatedRootView: View {
                     let dontShowAgain = UserDefaults.standard.bool(forKey: "servicesPromptDontShowAgain")
                     if ServicesSetupPromptBuilder.shouldShowPrompt(
                         settings: settingsManager.currentSettings,
-                        emailScanningService: emailScanningService,
                         simianService: simianService,
                         dontShowAgain: dontShowAgain
                     ) {
