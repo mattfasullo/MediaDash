@@ -86,7 +86,6 @@ class FloatingProgressManager: ObservableObject {
     @Published var currentFile: String = ""
     @Published var filesProcessed: Int = 0
     @Published var totalFiles: Int = 0
-    @Published var isExpanded: Bool = false
 
     // Bytes tracking
     @Published var bytesCopied: Int64 = 0
@@ -423,64 +422,6 @@ class FloatingProgressWindowManager {
         constrainWindowToScreen(window)
     }
 
-    func updateWindowSize(expanded: Bool) {
-        guard let window = progressWindow else { return }
-
-        let newWidth: CGFloat = expanded ? 220 : 56
-        let newHeight: CGFloat = expanded ? 140 : 56
-
-        // Get screen bounds
-        let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
-        guard let screen = screen else { return }
-        
-        let screenFrame = screen.visibleFrame
-        let padding: CGFloat = 20
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.25
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-
-            var newFrame = window.frame
-            let oldMaxX = newFrame.maxX
-            let oldMinY = newFrame.minY
-
-            // Calculate new position keeping bottom-right corner anchored
-            var newX = oldMaxX - newWidth
-            var newY = oldMinY
-
-            // Ensure window stays within screen bounds
-            // Clamp X: window must be fully visible horizontally
-            newX = max(screenFrame.minX + padding, min(newX, screenFrame.maxX - newWidth - padding))
-
-            // Clamp Y: window must be fully visible vertically
-            // If expanding upward would push it off screen, adjust Y downward
-            let maxY = screenFrame.maxY - newHeight - padding
-            let minY = screenFrame.minY + padding
-            newY = max(minY, min(newY, maxY))
-
-            // If the window would go off the right edge, move it left
-            if newX + newWidth > screenFrame.maxX - padding {
-                newX = screenFrame.maxX - newWidth - padding
-            }
-
-            // If the window would go off the top edge, move it down
-            if newY + newHeight > screenFrame.maxY - padding {
-                newY = screenFrame.maxY - newHeight - padding
-            }
-
-            newFrame.origin = NSPoint(x: newX, y: newY)
-            newFrame.size = NSSize(width: newWidth, height: newHeight)
-
-            window.animator().setFrame(newFrame, display: true)
-        } completionHandler: { [weak self] in
-            // After animation, double-check bounds
-            guard let self = self else { return }
-            Task { @MainActor [self] in
-                self.constrainWindowToScreen(window)
-            }
-        }
-    }
-    
     func constrainWindowToScreen(_ window: NSWindow) {
         guard let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first else {
             return
@@ -521,25 +462,12 @@ class FloatingProgressWindowManager {
 
 struct FloatingProgressView: View {
     @EnvironmentObject var manager: FloatingProgressManager
-    @State private var isHovering = false
 
     var body: some View {
-        Group {
-            if manager.isExpanded || isHovering {
-                expandedView
-            } else {
-                circularView
-            }
-        }
-        .onHover { hovering in
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                isHovering = hovering
-            }
-            FloatingProgressWindowManager.shared.updateWindowSize(expanded: hovering || manager.isExpanded)
-        }
+        circularView
     }
 
-    // MARK: - Circular View (Collapsed)
+    // MARK: - Circular View
 
     private var circularView: some View {
         ZStack {
@@ -579,102 +507,6 @@ struct FloatingProgressView: View {
             }
         }
         .frame(width: 56, height: 56)
-        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-    }
-
-    // MARK: - Expanded View
-
-    private var expandedView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Header
-            HStack {
-                Image(systemName: manager.operation.icon)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(manager.operation.color)
-
-                Text(manager.operation.displayName)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.primary)
-
-                Spacer()
-
-                Text("\(Int(manager.progress * 100))%")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
-
-            // Progress bar
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.gray.opacity(0.3))
-
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(manager.operation.color)
-                        .frame(width: geometry.size.width * manager.progress)
-                        .animation(.linear(duration: 0.2), value: manager.progress)
-                }
-            }
-            .frame(height: 6)
-
-            // Bytes progress and transfer rate
-            if manager.totalBytes > 0 {
-                HStack {
-                    // Bytes copied / total
-                    Text("\(manager.formattedBytesCopied) / \(manager.formattedTotalBytes)")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundColor(.primary.opacity(0.8))
-
-                    Spacer()
-
-                    // Transfer rate
-                    HStack(spacing: 3) {
-                        Image(systemName: "arrow.up.arrow.down")
-                            .font(.system(size: 8))
-                            .foregroundColor(manager.operation.color.opacity(0.8))
-                        Text(manager.formattedTransferRate)
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundColor(manager.operation.color)
-                    }
-                }
-            }
-
-            // Current file (if any)
-            if !manager.currentFile.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "doc.fill")
-                        .font(.system(size: 8))
-                        .foregroundColor(.secondary.opacity(0.7))
-                    Text(manager.currentFile)
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary.opacity(0.8))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-
-            // File count (if tracking)
-            if manager.totalFiles > 0 {
-                HStack(spacing: 4) {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 8))
-                        .foregroundColor(.secondary.opacity(0.6))
-                    Text("\(manager.filesProcessed) of \(manager.totalFiles) files")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary.opacity(0.6))
-                }
-            }
-        }
-        .padding(12)
-        .frame(width: 220, height: 140)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                )
-        )
         .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
     }
 }

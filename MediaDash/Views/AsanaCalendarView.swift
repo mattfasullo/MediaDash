@@ -30,6 +30,8 @@ struct AsanaCalendarView: View {
     var onPrepElements: ((DocketInfo) -> Void)?
     
     @State private var isLoadingSessions = false
+    /// When false, previous two days are hidden; arrow to the left of today expands them.
+    @State private var showLookbackDays = false
     
     private static let lookbackDays = 2
     private static let upcomingBusinessDays = 6 // today + 5 business days
@@ -146,33 +148,24 @@ struct AsanaCalendarView: View {
         return sections
     }
     
-    /// Extract docket number from session name (e.g., "SESSION - 21419 Client" -> "21419")
+    private var lookbackSections: [CalendarDaySection] {
+        Array(calendarSections.prefix(Self.lookbackDays))
+    }
+    
+    private var forwardSections: [CalendarDaySection] {
+        Array(calendarSections.dropFirst(Self.lookbackDays))
+    }
+    
+    /// Extract docket number from session name (e.g., "SESSION - 21419 Client" -> "21419").
+    /// Only 5 digits or 5 digits + "-US" (or similar suffix) are valid; avoids matching years like 2026.
     private func extractDocketNumber(from name: String) -> String? {
-        // First try: Pattern for 5 digits (standard), optionally followed by -XX suffix (like -US, -CA)
-        let standardPattern = #"\d{5}(?:-[A-Z]{1,3})?"#
-        if let regex = try? NSRegularExpression(pattern: standardPattern, options: []) {
-            let nsString = name as NSString
-            let range = NSRange(location: 0, length: nsString.length)
-            if let match = regex.firstMatch(in: name, options: [], range: range),
-               let swiftRange = Range(match.range, in: name) {
-                return String(name[swiftRange])
-            }
+        let pattern = #"\d{5}(?:-[A-Z]{1,3})?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
+              let match = regex.firstMatch(in: name, options: [], range: NSRange(name.startIndex..., in: name)),
+              let range = Range(match.range, in: name) else {
+            return nil
         }
-        
-        // Fallback: Try 4-6 digits (more flexible for edge cases)
-        let flexiblePattern = #"\d{4,6}(?:-[A-Z]{1,3})?"#
-        if let regex = try? NSRegularExpression(pattern: flexiblePattern, options: []) {
-            let nsString = name as NSString
-            let range = NSRange(location: 0, length: nsString.length)
-            if let match = regex.firstMatch(in: name, options: [], range: range),
-               let swiftRange = Range(match.range, in: name) {
-                let found = String(name[swiftRange])
-                // Prefer 5-digit matches, but accept 4-6 if that's all we find
-                return found
-            }
-        }
-        
-        return nil
+        return String(name[range])
     }
     
     /// Try to extract docket number from custom fields if not found in name
@@ -181,29 +174,14 @@ struct AsanaCalendarView: View {
         let docketFieldNames = ["Docket", "Docket Number", "Docket #", "Docket#", "Job Number", "Job #"]
         for fieldName in docketFieldNames {
             if let value = session.getCustomFieldValue(name: fieldName), !value.isEmpty {
-                // Extract just the number part if it contains other text
+                // Extract 5-digit (or 5 + suffix) only
                 if let number = extractDocketNumber(from: value) {
                     return number
                 }
-                // If it's already just a number (5 digits with optional suffix), return it
-                if value.range(of: #"^\d{5}(?:-[A-Z]{1,3})?$"#, options: .regularExpression) != nil {
-                    return value
-                }
-                // Also check for any sequence of 4-6 digits (more flexible)
-                if let flexibleMatch = value.range(of: #"\d{4,6}(?:-[A-Z]{1,3})?"#, options: .regularExpression) {
-                    return String(value[flexibleMatch])
-                }
-                // If the value looks like it might be a docket number (starts with digits), try to extract it
+                // If it's already just a valid docket (5 digits with optional -US etc), return it
                 let trimmed = value.trimmingCharacters(in: .whitespaces)
-                if trimmed.range(of: #"^\d"#, options: .regularExpression) != nil {
-                    // Extract first sequence of digits
-                    if let digitMatch = trimmed.range(of: #"\d+"#, options: .regularExpression) {
-                        let digits = String(trimmed[digitMatch])
-                        // If it's 4-6 digits, use it
-                        if digits.count >= 4 && digits.count <= 6 {
-                            return digits
-                        }
-                    }
+                if trimmed.range(of: #"^\d{5}(?:-[A-Z]{1,3})?$"#, options: .regularExpression) != nil {
+                    return trimmed
                 }
             }
         }
@@ -217,13 +195,9 @@ struct AsanaCalendarView: View {
                 if fieldNameLower.contains("name") || fieldNameLower.contains("description") || fieldNameLower.contains("note") {
                     continue
                 }
-                // Check if value looks like a docket number
+                // Only accept 5-digit (or 5 + suffix) docket numbers
                 if let number = extractDocketNumber(from: value) {
                     return number
-                }
-                // Check for 4-6 digit sequences
-                if let flexibleMatch = value.range(of: #"\d{4,6}(?:-[A-Z]{1,3})?"#, options: .regularExpression) {
-                    return String(value[flexibleMatch])
                 }
             }
         }
@@ -285,7 +259,26 @@ struct AsanaCalendarView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 20) {
-                        ForEach(calendarSections) { section in
+                        // Small arrow to expand/collapse previous 2 days (to the left of today)
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showLookbackDays.toggle()
+                            }
+                        }) {
+                            Image(systemName: showLookbackDays ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .padding(4)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        
+                        if showLookbackDays {
+                            ForEach(lookbackSections) { section in
+                                daySectionView(section)
+                            }
+                        }
+                        ForEach(forwardSections) { section in
                             daySectionView(section)
                         }
                     }

@@ -137,7 +137,19 @@ if [ ! -f "./sign_update" ]; then
     exit 1
 fi
 
-SIGN_OUTPUT=$(./sign_update "$RELEASE_DIR/$APP_NAME.zip" 2>&1)
+# Use key file if set (for agent/CI) or from .sparkle_key_path (quote path for spaces)
+if [ -n "$SPARKLE_PRIVATE_KEY_FILE" ] && [ -f "$SPARKLE_PRIVATE_KEY_FILE" ]; then
+    SIGN_OUTPUT=$(./sign_update --ed-key-file "$SPARKLE_PRIVATE_KEY_FILE" "$RELEASE_DIR/$APP_NAME.zip" 2>&1)
+elif [ -f .sparkle_key_path ]; then
+    KEY_PATH=$(tr -d '\n\r' < .sparkle_key_path)
+    if [ -n "$KEY_PATH" ] && [ -f "$KEY_PATH" ]; then
+        SIGN_OUTPUT=$(./sign_update --ed-key-file "$KEY_PATH" "$RELEASE_DIR/$APP_NAME.zip" 2>&1)
+    else
+        SIGN_OUTPUT=$(./sign_update "$RELEASE_DIR/$APP_NAME.zip" 2>&1)
+    fi
+else
+    SIGN_OUTPUT=$(./sign_update "$RELEASE_DIR/$APP_NAME.zip" 2>&1)
+fi
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ ERROR: Signing failed!${NC}"
     echo "$SIGN_OUTPUT"

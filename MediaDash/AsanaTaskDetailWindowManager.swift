@@ -4,17 +4,22 @@
 //
 //  Opens the Asana task detail in a separate, resizable window so size stays
 //  consistent and the user can drag and resize it.
+//  Re-opening the same task brings the existing window to front instead of duplicating.
 //
 
 import SwiftUI
 import AppKit
 
+private struct TaskWindowInfo {
+    let window: NSWindow
+    var onDismiss: (() -> Void)?
+}
+
 @MainActor
 final class AsanaTaskDetailWindowManager: NSObject, NSWindowDelegate {
     static let shared = AsanaTaskDetailWindowManager()
 
-    private var taskWindow: NSWindow?
-    private var onDismiss: (() -> Void)?
+    private var windowsByTaskGid: [String: TaskWindowInfo] = [:]
 
     private override init() {
         super.init()
@@ -28,14 +33,21 @@ final class AsanaTaskDetailWindowManager: NSObject, NSWindowDelegate {
         cacheManager: AsanaCacheManager,
         onDismiss: @escaping () -> Void
     ) {
-        self.onDismiss = onDismiss
+        let gid = item.taskGid
+
+        // If we already have a window for this task, bring it to front instead of opening a duplicate.
+        if let info = windowsByTaskGid[gid] {
+            info.window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
 
         let rootView = AsanaTaskDetailView(
             taskGid: item.taskGid,
             taskName: item.taskName,
             asanaService: asanaService,
             onDismiss: { [weak self] in
-                self?.close()
+                self?.close(taskGid: gid)
             },
             config: config,
             settingsManager: settingsManager,
@@ -53,6 +65,7 @@ final class AsanaTaskDetailWindowManager: NSObject, NSWindowDelegate {
             defer: false
         )
         window.title = item.taskName ?? "Task"
+        window.identifier = NSUserInterfaceItemIdentifier(gid)
         window.contentViewController = hostingController
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 400)
@@ -62,18 +75,25 @@ final class AsanaTaskDetailWindowManager: NSObject, NSWindowDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
 
-        taskWindow = window
+        windowsByTaskGid[gid] = TaskWindowInfo(window: window, onDismiss: onDismiss)
     }
 
-    func close() {
-        taskWindow?.close()
+    func close(taskGid: String? = nil) {
+        if let gid = taskGid {
+            windowsByTaskGid[gid]?.window.close()
+        } else {
+            windowsByTaskGid.values.forEach { $0.window.close() }
+        }
     }
 
     nonisolated func windowWillClose(_ notification: Foundation.Notification) {
+        guard let window = notification.object as? NSWindow else { return }
         Task { @MainActor in
-            onDismiss?()
-            onDismiss = nil
-            taskWindow = nil
+            let gid = window.identifier?.rawValue
+            if let gid = gid, let info = self.windowsByTaskGid[gid] {
+                info.onDismiss?()
+                self.windowsByTaskGid.removeValue(forKey: gid)
+            }
         }
     }
 }

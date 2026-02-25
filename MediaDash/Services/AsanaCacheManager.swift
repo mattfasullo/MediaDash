@@ -1114,34 +1114,34 @@ class AsanaCacheManager: ObservableObject {
         }
     }
 
-    /// Sync sessions for the full calendar view (2-day lookback + next 14 calendar days).
+    /// Sync sessions for the full calendar view (4 weeks from Sunday of current week).
     func syncSessionsTwoWeeks(workspaceID: String?) async throws {
         guard asanaService.isAuthenticated else {
-            print("⚠️ [Sessions] Not authenticated, skipping 2-week session sync")
+            print("⚠️ [Sessions] Not authenticated, skipping 4-week session sync")
             return
         }
-        print("📅 [Sessions] Syncing sessions for full calendar window...")
+        print("📅 [Sessions] Syncing sessions for full calendar window (4 weeks)...")
         do {
-            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 14, daysBack: 2)
+            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 28, daysBack: 6)
             self.cachedSessionsTwoWeeks = sessions
             self.lastSessionTwoWeeksSyncDate = Date()
             print("📅 [Sessions] Synced \(sessions.count) sessions for full calendar window")
         } catch {
-            print("⚠️ [Sessions] Failed to sync 2-week sessions: \(error.localizedDescription)")
+            print("⚠️ [Sessions] Failed to sync 4-week sessions: \(error.localizedDescription)")
         }
     }
 
-    /// Sync all tasks (not just sessions) for the full calendar (2-day lookback + next 14 days).
+    /// Sync all tasks for the full calendar (4 weeks from Sunday of current week).
     func syncTasksTwoWeeks(workspaceID: String?) async throws {
         guard asanaService.isAuthenticated else { return }
-        print("📅 [Calendar] Syncing all tasks for full calendar window...")
+        print("📅 [Calendar] Syncing all tasks for full calendar window (4 weeks)...")
         do {
-            let tasks = try await asanaService.searchTasksByDueDate(workspaceID: workspaceID, daysAhead: 14, daysBack: 2)
+            let tasks = try await asanaService.searchTasksByDueDate(workspaceID: workspaceID, daysAhead: 28, daysBack: 6)
             self.cachedTasksTwoWeeks = tasks
             self.lastTasksTwoWeeksSyncDate = Date()
             print("📅 [Calendar] Synced \(tasks.count) tasks for full calendar window")
         } catch {
-            print("⚠️ [Calendar] Failed to sync 2-week tasks: \(error.localizedDescription)")
+            print("⚠️ [Calendar] Failed to sync 4-week tasks: \(error.localizedDescription)")
         }
     }
     

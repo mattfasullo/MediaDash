@@ -61,6 +61,16 @@ struct SimianPostView: View {
     @State private var pendingDeleteItemName = ""
     @State private var pendingDeleteParentFolderId: String?
 
+    // New folder: parent folder id (nil = project root)
+    @State private var showNewFolderSheet = false
+    @State private var newFolderParentId: String?
+    @State private var newFolderName = ""
+    @State private var isCreatingFolder = false
+    @State private var newFolderError: String?
+
+    /// Keyboard focus in folder tree: 0 = project root, 1..<count = flatTreeList indices. Nil when in project list or tree empty.
+    @State private var keyboardFocusTreeIndex: Int?
+
     @FocusState private var isSearchFocused: Bool
     @FocusState private var isListFocused: Bool
 
@@ -145,6 +155,9 @@ struct SimianPostView: View {
         .sheet(isPresented: $showRenameSheet) {
             renameSheet
         }
+        .sheet(isPresented: $showNewFolderSheet) {
+            newFolderSheet
+        }
         .alert("Remove from Simian?", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { performPendingDelete() }
@@ -154,6 +167,28 @@ struct SimianPostView: View {
                  ? "“\(name)” and its contents will be removed from Simian. This cannot be undone."
                  : "“\(name)” will be removed from Simian. This cannot be undone.")
         }
+        .onKeyPress(.upArrow) { handleKeyUp() }
+        .onKeyPress(.downArrow) { handleKeyDown() }
+        .onKeyPress(.leftArrow) { handleKeyLeft() }
+        .onKeyPress(.rightArrow) { handleKeyRight() }
+        .onKeyPress(.return) { handleKeyReturn() }
+        .onKeyPress(.space) { handleKeyReturn() }
+        .onKeyPress(.escape) { handleKeyEscape() }
+        .keyboardNavigationHandler(handleKey: { event in
+            let keyCode = Int(event.keyCode)
+            let result: KeyPress.Result
+            switch keyCode {
+            case 126: result = handleKeyUp()
+            case 125: result = handleKeyDown()
+            case 123: result = handleKeyLeft()
+            case 124: result = handleKeyRight()
+            case 36: result = handleKeyReturn()
+            case 49: result = handleKeyReturn()
+            case 53: result = handleKeyEscape()
+            default: result = .ignored
+            }
+            return result == .handled
+        })
     }
 
     private var renameSheet: some View {
@@ -174,6 +209,70 @@ struct SimianPostView: View {
         .padding(24)
         .frame(width: 320)
         .onAppear { renameNewName = renameCurrentName }
+    }
+
+    private var newFolderSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("New Folder")
+                .font(.headline)
+            TextField("Folder name", text: $newFolderName)
+                .textFieldStyle(.roundedBorder)
+            if let err = newFolderError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    showNewFolderSheet = false
+                    newFolderError = nil
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Create") { submitNewFolder() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCreatingFolder)
+            }
+        }
+        .padding(24)
+        .frame(width: 320)
+        .onAppear {
+            newFolderName = ""
+            newFolderError = nil
+        }
+    }
+
+    private func submitNewFolder() {
+        let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let projectId = selectedProjectId else { return }
+        isCreatingFolder = true
+        newFolderError = nil
+        let parentId = newFolderParentId
+        Task {
+            do {
+                _ = try await simianService.createFolderPublic(projectId: projectId, folderName: name, parentFolderId: parentId)
+                await MainActor.run {
+                    isCreatingFolder = false
+                    showNewFolderSheet = false
+                    newFolderName = ""
+                    newFolderError = nil
+                    if parentId == nil {
+                        loadFolders(projectId: projectId, parentFolderId: nil)
+                    } else {
+                        folderChildrenCache.removeValue(forKey: parentId!)
+                        expandedFolderIds.insert(parentId!)
+                        loadFolderChildren(projectId: projectId, folderId: parentId!)
+                    }
+                    statusMessage = "Folder created"
+                    statusIsError = false
+                }
+            } catch {
+                await MainActor.run {
+                    isCreatingFolder = false
+                    newFolderError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+        }
     }
 
     private func submitRename() {
@@ -427,6 +526,7 @@ struct SimianPostView: View {
                             folderChildrenCache.removeAll()
                             folderFilesCache.removeAll()
                             loadFolders(projectId: project.id, parentFolderId: nil)
+                            keyboardFocusTreeIndex = 0
                         }) { isHovered in
                             HStack {
                                 Image(systemName: "folder.fill")
@@ -435,7 +535,7 @@ struct SimianPostView: View {
                                     .font(.system(size: 14))
                                 Spacer()
                             }
-                            .padding(.vertical, 6)
+                            .padding(.vertical, 2)
                             .contentShape(Rectangle())
                             .background(isHovered ? Color.blue.opacity(0.1) : Color.clear)
                         }
@@ -462,6 +562,7 @@ struct SimianPostView: View {
                     expandedFolderIds.removeAll()
                     folderChildrenCache.removeAll()
                     folderFilesCache.removeAll()
+                    keyboardFocusTreeIndex = nil
                 }) {
                     Label("Back to projects", systemImage: "chevron.left")
                         .font(.caption)
@@ -500,52 +601,71 @@ struct SimianPostView: View {
                 .padding()
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Click a folder to select it as the upload destination. Click the chevron to expand and see subfolders.")
+                    Text("Click a folder to select it as the upload destination. Drop files on a folder to upload there directly. Use arrow keys: ↑↓ move, → expand / enter folder, ← collapse / parent.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 4)
 
-                    List {
-                        // Project root - always selectable
-                        ProjectRootRowView(
-                            isSelected: selectedDestinationFolderId == nil,
-                            onTap: {
-                                selectedDestinationFolderId = nil
-                                selectedDestinationPath = nil
-                            },
-                            onDrop: { providers in
-                                handleFileDrop(providers: providers, destination: (nil, nil))
-                            }
-                        )
-                        .contextMenu {
-                            Button("Copy Link") {
-                                if let url = SimianService.folderLinkURL(projectId: projectId, folderId: nil) {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
-                                    statusMessage = "Project link copied"
-                                    statusIsError = false
+                    let treeList = flatTreeList(projectId: projectId)
+                    let effectiveTreeFocusIndex = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
+                    ScrollViewReader { proxy in
+                        List {
+                            // Project root - always selectable
+                            ProjectRootRowView(
+                                isSelected: selectedDestinationFolderId == nil,
+                                isKeyboardFocused: effectiveTreeFocusIndex == 0,
+                                onTap: {
+                                    selectedDestinationFolderId = nil
+                                    selectedDestinationPath = nil
+                                    keyboardFocusTreeIndex = 0
+                                },
+                                onDrop: { providers in
+                                    handleFileDrop(providers: providers, destination: (nil, nil))
+                                }
+                            )
+                            .id("project-root")
+                            .contextMenu {
+                                Button("New Folder") {
+                                    newFolderParentId = nil
+                                    newFolderName = ""
+                                    showNewFolderSheet = true
+                                }
+                                Button("Copy Link") {
+                                    if let url = SimianService.folderLinkURL(projectId: projectId, folderId: nil) {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                                        statusMessage = "Project link copied"
+                                        statusIsError = false
+                                    }
                                 }
                             }
-                        }
 
-                        // Tree of folders and files (folders expandable, click to select)
-                        let treeList = flatTreeList(projectId: projectId)
-                        ForEach(treeList) { item in
-                            switch item {
-                            case .folder(let f, let d, let p, let parentId):
-                                folderTreeRow(projectId: projectId, folder: f, depth: d, path: p, parentFolderId: parentId, siblings: folderSiblings(parentId: parentId), treeList: treeList)
-                            case .file(let file, let d, let p, let parentId):
-                                fileTreeRow(file: file, depth: d, path: p, parentFolderId: parentId, siblings: fileSiblings(parentFolderId: parentId), treeList: treeList)
+                            // Tree of folders and files (folders expandable, click to select)
+                            ForEach(Array(treeList.enumerated()), id: \.element.id) { offset, item in
+                                let treeIndex = offset + 1
+                                Group {
+                                    switch item {
+                                case .folder(let f, let d, let p, let parentId):
+                                    folderTreeRow(projectId: projectId, folder: f, depth: d, path: p, parentFolderId: parentId, siblings: folderSiblings(parentId: parentId), treeList: treeList, treeIndex: treeIndex, isKeyboardFocused: effectiveTreeFocusIndex == treeIndex)
+                                    case .file(let file, let d, let p, let parentId):
+                                        fileTreeRow(file: file, depth: d, path: p, parentFolderId: parentId, siblings: fileSiblings(parentFolderId: parentId), treeList: treeList, isKeyboardFocused: effectiveTreeFocusIndex == treeIndex)
+                                    }
+                                }
+                                .id(item.id)
+                            }
+                            if treeList.count >= maxTotalTreeRows {
+                                Text("(Showing first \(maxTotalTreeRows) folders — right-click any folder for link to open in Simian)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.vertical, 4)
                             }
                         }
-                        if treeList.count >= maxTotalTreeRows {
-                            Text("(Showing first \(maxTotalTreeRows) folders — right-click any folder for link to open in Simian)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .padding(.vertical, 4)
+                        .listStyle(.inset(alternatesRowBackgrounds: true))
+                        .onChange(of: keyboardFocusTreeIndex) { _, newIndex in
+                            guard let idx = newIndex, let id = treeRowId(projectId: projectId, index: idx) else { return }
+                            proxy.scrollTo(id, anchor: .center)
                         }
                     }
-                    .listStyle(.inset(alternatesRowBackgrounds: true))
                 }
             }
         }
@@ -777,12 +897,68 @@ struct SimianPostView: View {
         return result
     }
 
+    /// Total tree row count: 1 (root) + flatTreeList.count. Used for keyboard index bounds.
+    private func treeRowCount(projectId: String) -> Int {
+        1 + flatTreeList(projectId: projectId).count
+    }
+
+    /// Resolve keyboard focus index to root or tree item. Index 0 = project root; index i >= 1 = treeList[i-1].
+    private func treeItemAtIndex(projectId: String, index: Int) -> (isRoot: Bool, item: SimianTreeItem?)? {
+        let tree = flatTreeList(projectId: projectId)
+        if index == 0 { return (true, nil) }
+        let i = index - 1
+        guard i < tree.count else { return nil }
+        return (false, tree[i])
+    }
+
+    /// Index of the parent row for the row at `index`. Root (index 0) has no parent. For folder/file, parent is the folder row with matching parentFolderId.
+    private func parentTreeIndex(projectId: String, index: Int) -> Int? {
+        guard index > 0 else { return nil }
+        let tree = flatTreeList(projectId: projectId)
+        let i = index - 1
+        guard i < tree.count else { return nil }
+        let parentFolderId: String?
+        switch tree[i] {
+        case .folder(_, _, _, let pid): parentFolderId = pid
+        case .file(_, _, _, let pid): parentFolderId = pid
+        }
+        if parentFolderId == nil { return 0 }
+        guard let parentId = parentFolderId else { return 0 }
+        for j in (0..<i).reversed() {
+            if case .folder(let f, _, _, _) = tree[j], f.id == parentId {
+                return j + 1
+            }
+        }
+        return 0
+    }
+
+    /// Stable id for the row at `index` (for ScrollViewReader.scrollTo). Index 0 = "project-root".
+    private func treeRowId(projectId: String, index: Int) -> String? {
+        if index == 0 { return "project-root" }
+        let tree = flatTreeList(projectId: projectId)
+        let i = index - 1
+        guard i < tree.count else { return nil }
+        return tree[i].id
+    }
+
+    /// Resolve current destination to tree focus index. Returns 0 for root, or index of folder row with selectedDestinationFolderId.
+    private func destinationToTreeFocusIndex(projectId: String) -> Int {
+        guard selectedDestinationFolderId != nil else { return 0 }
+        let tree = flatTreeList(projectId: projectId)
+        guard let fid = selectedDestinationFolderId else { return 0 }
+        for (idx, item) in tree.enumerated() {
+            if case .folder(let f, _, _, _) = item, f.id == fid { return idx + 1 }
+        }
+        return 0
+    }
+
     /// Single folder row in the tree: expand chevron + clickable row to select + draggable for reorder
-    private func folderTreeRow(projectId: String, folder: SimianFolder, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFolder], treeList: [SimianTreeItem]) -> some View {
+    private func folderTreeRow(projectId: String, folder: SimianFolder, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFolder], treeList: [SimianTreeItem], treeIndex: Int, isKeyboardFocused: Bool = false) -> some View {
         let isExpanded = expandedFolderIds.contains(folder.id)
         let isLoading = loadingFolderIds.contains(folder.id)
         let hasOrMayHaveChildren = folderChildrenCache[folder.id] != nil || !isExpanded
         let isSelected = selectedDestinationFolderId == folder.id
+        let nextFolderId = siblings.firstIndex(where: { $0.id == folder.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
 
         return FolderTreeRowContentView(
             projectId: projectId,
@@ -792,6 +968,7 @@ struct SimianPostView: View {
             isLoading: isLoading,
             hasOrMayHaveChildren: hasOrMayHaveChildren,
             isSelected: isSelected,
+            isKeyboardFocused: isKeyboardFocused,
             depth: depth,
             folderName: folder.name,
             onChevronTap: {
@@ -807,6 +984,7 @@ struct SimianPostView: View {
             onRowTap: {
                 selectedDestinationFolderId = folder.id
                 selectedDestinationPath = path
+                keyboardFocusTreeIndex = treeIndex
             },
             onDoubleTap: {
                 if isExpanded {
@@ -839,20 +1017,32 @@ struct SimianPostView: View {
                 pendingDeleteParentFolderId = parentFolderId
                 showDeleteConfirmation = true
             },
+            onNewFolder: {
+                newFolderParentId = folder.id
+                newFolderName = ""
+                showNewFolderSheet = true
+            },
             onReorder: { draggedFolderId in
                 reorderFolder(projectId: projectId, folderId: draggedFolderId, parentFolderId: parentFolderId, dropBeforeFolderId: folder.id)
             },
-            canReorder: siblings.count > 1
+            onReorderInsertBefore: { dropBeforeFolderId, draggedFolderId in
+                reorderFolder(projectId: projectId, folderId: draggedFolderId, parentFolderId: parentFolderId, dropBeforeFolderId: dropBeforeFolderId)
+            },
+            canReorder: siblings.count > 1,
+            nextFolderId: nextFolderId
         )
     }
 
     /// File row (display only; draggable for reorder)
-    private func fileTreeRow(file: SimianFile, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFile], treeList: [SimianTreeItem]) -> some View {
-        FileTreeRowContentView(
+    private func fileTreeRow(file: SimianFile, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFile], treeList: [SimianTreeItem], isKeyboardFocused: Bool = false) -> some View {
+        let nextFileId = siblings.firstIndex(where: { $0.id == file.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
+        return FileTreeRowContentView(
             projectId: selectedProjectId ?? "",
             file: file,
             parentFolderId: parentFolderId,
             depth: depth,
+            isKeyboardFocused: isKeyboardFocused,
+            nextFileId: nextFileId,
             onRename: {
                 renameIsFolder = false
                 renameItemId = file.id
@@ -868,21 +1058,25 @@ struct SimianPostView: View {
                 pendingDeleteParentFolderId = parentFolderId
                 showDeleteConfirmation = true
             },
-            onReorder: { draggedFileId in
-                reorderFile(projectId: selectedProjectId ?? "", fileId: draggedFileId, parentFolderId: parentFolderId, dropBeforeFileId: file.id)
+            onReorderInsertBefore: { dropBeforeFileId, draggedFileId in
+                reorderFile(projectId: selectedProjectId ?? "", fileId: draggedFileId, parentFolderId: parentFolderId, dropBeforeFileId: dropBeforeFileId)
             },
             canReorder: siblings.count > 1
         )
     }
 
-    private func reorderFolder(projectId: String, folderId: String, parentFolderId: String?, dropBeforeFolderId: String) {
+    private func reorderFolder(projectId: String, folderId: String, parentFolderId: String?, dropBeforeFolderId: String?) {
         let siblings = folderSiblings(parentId: parentFolderId)
-        guard let fromIdx = siblings.firstIndex(where: { $0.id == folderId }),
-              let toIdx = siblings.firstIndex(where: { $0.id == dropBeforeFolderId }),
-              fromIdx != toIdx else { return }
+        guard let fromIdx = siblings.firstIndex(where: { $0.id == folderId }) else { return }
         var reordered = siblings
         reordered.remove(at: fromIdx)
-        let newIdx = reordered.firstIndex(where: { $0.id == dropBeforeFolderId }) ?? toIdx
+        let newIdx: Int
+        if let beforeId = dropBeforeFolderId, let toIdx = reordered.firstIndex(where: { $0.id == beforeId }) {
+            newIdx = toIdx
+        } else {
+            newIdx = reordered.count
+        }
+        guard fromIdx != newIdx else { return }
         reordered.insert(siblings[fromIdx], at: newIdx)
         let ids = reordered.map { $0.id }
         Task {
@@ -906,15 +1100,19 @@ struct SimianPostView: View {
         }
     }
 
-    private func reorderFile(projectId: String, fileId: String, parentFolderId: String?, dropBeforeFileId: String) {
+    private func reorderFile(projectId: String, fileId: String, parentFolderId: String?, dropBeforeFileId: String?) {
         guard let pid = parentFolderId else { return }
         let siblings = fileSiblings(parentFolderId: pid)
-        guard let fromIdx = siblings.firstIndex(where: { $0.id == fileId }),
-              let toIdx = siblings.firstIndex(where: { $0.id == dropBeforeFileId }),
-              fromIdx != toIdx else { return }
+        guard let fromIdx = siblings.firstIndex(where: { $0.id == fileId }) else { return }
         var reordered = siblings
         reordered.remove(at: fromIdx)
-        let newIdx = reordered.firstIndex(where: { $0.id == dropBeforeFileId }) ?? toIdx
+        let newIdx: Int
+        if let beforeId = dropBeforeFileId, let toIdx = reordered.firstIndex(where: { $0.id == beforeId }) {
+            newIdx = toIdx
+        } else {
+            newIdx = reordered.count
+        }
+        guard fromIdx != newIdx else { return }
         reordered.insert(siblings[fromIdx], at: newIdx)
         let ids = reordered.map { $0.id }
         Task {
@@ -1024,11 +1222,193 @@ struct SimianPostView: View {
         }
     }
 
-    /// destination: nil = don't change; (nil, nil) = project root; (id, path) = that folder
+    // MARK: - Keyboard navigation (Finder-like)
+
+    private func shouldIgnoreKeyPress() -> Bool {
+        if isSearchFocused { return true }
+        if let window = NSApp.keyWindow, KeyboardNavigationCoordinator.isEditingText(in: window) { return true }
+        return false
+    }
+
+    private func handleKeyUp() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        if selectedProjectId == nil {
+            // Project list: move selection up
+            let list = filteredProjects
+            guard !list.isEmpty else { return .handled }
+            let currentId = selectedProjectId
+            let idx = currentId.flatMap { id in list.firstIndex(where: { $0.id == id }) } ?? -1
+            let newIdx = max(0, idx - 1)
+            let project = list[newIdx]
+            selectedProjectId = project.id
+            selectedProjectName = project.name
+            return .handled
+        }
+        // Folder tree: move focus up
+        guard let projectId = selectedProjectId else { return .handled }
+        let count = treeRowCount(projectId: projectId)
+        guard count > 0 else { return .handled }
+        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
+        keyboardFocusTreeIndex = current
+        let newIdx = max(0, current - 1)
+        keyboardFocusTreeIndex = newIdx
+        applyDestinationFromTreeIndex(projectId: projectId, index: newIdx)
+        return .handled
+    }
+
+    private func handleKeyDown() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        if selectedProjectId == nil {
+            // Project list: move selection down or select first
+            let list = filteredProjects
+            guard !list.isEmpty else { return .handled }
+            let currentId = selectedProjectId
+            let idx = currentId.flatMap { id in list.firstIndex(where: { $0.id == id }) }
+            let newIdx: Int
+            if let i = idx {
+                newIdx = min(list.count - 1, i + 1)
+            } else {
+                newIdx = 0
+            }
+            let project = list[newIdx]
+            selectedProjectId = project.id
+            selectedProjectName = project.name
+            return .handled
+        }
+        // Folder tree: move focus down
+        guard let projectId = selectedProjectId else { return .handled }
+        let count = treeRowCount(projectId: projectId)
+        guard count > 0 else { return .handled }
+        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
+        keyboardFocusTreeIndex = current
+        let newIdx = min(count - 1, current + 1)
+        keyboardFocusTreeIndex = newIdx
+        applyDestinationFromTreeIndex(projectId: projectId, index: newIdx)
+        return .handled
+    }
+
+    private func handleKeyLeft() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        guard let projectId = selectedProjectId else { return .ignored }
+        let count = treeRowCount(projectId: projectId)
+        guard count > 0 else { return .handled }
+        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
+        keyboardFocusTreeIndex = current
+        guard let info = treeItemAtIndex(projectId: projectId, index: current) else { return .handled }
+        if !info.isRoot, let item = info.item, case .folder(let f, _, _, _) = item, expandedFolderIds.contains(f.id) {
+            expandedFolderIds.remove(f.id)
+            keyboardFocusTreeIndex = current
+        } else if let parentIdx = parentTreeIndex(projectId: projectId, index: current) {
+            keyboardFocusTreeIndex = parentIdx
+            applyDestinationFromTreeIndex(projectId: projectId, index: parentIdx)
+        }
+        return .handled
+    }
+
+    private func handleKeyRight() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        guard let projectId = selectedProjectId else { return .ignored }
+        let count = treeRowCount(projectId: projectId)
+        guard count > 0 else { return .handled }
+        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
+        keyboardFocusTreeIndex = current
+        guard let info = treeItemAtIndex(projectId: projectId, index: current) else { return .handled }
+        if info.isRoot {
+            return .handled
+        }
+        guard let item = info.item else { return .handled }
+        if case .folder(let f, _, _, _) = item {
+            let isExpanded = expandedFolderIds.contains(f.id)
+            if !isExpanded {
+                expandedFolderIds.insert(f.id)
+                if folderChildrenCache[f.id] == nil {
+                    loadFolderChildren(projectId: projectId, folderId: f.id)
+                }
+                keyboardFocusTreeIndex = current
+            } else {
+                let nextIdx = current + 1
+                if nextIdx < count {
+                    keyboardFocusTreeIndex = nextIdx
+                    applyDestinationFromTreeIndex(projectId: projectId, index: nextIdx)
+                }
+            }
+        }
+        return .handled
+    }
+
+    private func handleKeyReturn() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        if selectedProjectId == nil {
+            // Project list: open selected project (or first if none selected)
+            let list = filteredProjects
+            guard !list.isEmpty else { return .handled }
+            let id = selectedProjectId ?? list[0].id
+            let name = selectedProjectName ?? list.first(where: { $0.id == id })?.name ?? ""
+            selectedProjectId = id
+            selectedProjectName = name
+            folderBreadcrumb = []
+            selectedDestinationFolderId = nil
+            selectedDestinationPath = nil
+            expandedFolderIds.removeAll()
+            folderChildrenCache.removeAll()
+            folderFilesCache.removeAll()
+            loadFolders(projectId: id, parentFolderId: nil)
+            keyboardFocusTreeIndex = 0
+            return .handled
+        }
+        // Folder tree: set destination from focused row (if folder or root)
+        guard let projectId = selectedProjectId else { return .handled }
+        let count = treeRowCount(projectId: projectId)
+        guard count > 0 else { return .handled }
+        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
+        keyboardFocusTreeIndex = current
+        applyDestinationFromTreeIndex(projectId: projectId, index: current)
+        return .handled
+    }
+
+    private func handleKeyEscape() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        if selectedProjectId != nil {
+            selectedProjectId = nil
+            selectedProjectName = nil
+            folderBreadcrumb = []
+            currentFolders = []
+            selectedDestinationFolderId = nil
+            selectedDestinationPath = nil
+            expandedFolderIds.removeAll()
+            folderChildrenCache.removeAll()
+            folderFilesCache.removeAll()
+            keyboardFocusTreeIndex = nil
+            return .handled
+        }
+        return .ignored
+    }
+
+    /// Update selectedDestinationFolderId and selectedDestinationPath from the tree row at index (only when row is root or folder).
+    private func applyDestinationFromTreeIndex(projectId: String, index: Int) {
+        guard let info = treeItemAtIndex(projectId: projectId, index: index) else { return }
+        if info.isRoot {
+            selectedDestinationFolderId = nil
+            selectedDestinationPath = nil
+            return
+        }
+        if case .folder(let f, _, let path, _) = info.item! {
+            selectedDestinationFolderId = f.id
+            selectedDestinationPath = path
+        }
+    }
+
+    /// destination: nil = don't change / add to staging; (nil, nil) = project root; (id, path) = that folder. When destination is set, upload dropped files directly there (no staging).
     private func handleFileDrop(providers: [NSItemProvider], destination: (folderId: String?, path: String?)?) -> Bool {
         if let dest = destination {
             selectedDestinationFolderId = dest.folderId
             selectedDestinationPath = dest.path ?? ""
+            guard let projectId = selectedProjectId else { return true }
+            loadURLsFromProviders(providers) { [self] urls in
+                guard !urls.isEmpty else { return }
+                uploadDroppedFiles(projectId: projectId, folderId: dest.folderId, fileURLs: urls)
+            }
+            return true
         }
         for provider in providers {
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -1047,6 +1427,92 @@ struct SimianPostView: View {
             }
         }
         return true
+    }
+
+    /// Load all file URLs from drag providers, then call completion on main queue with the collected URLs.
+    private func loadURLsFromProviders(_ providers: [NSItemProvider], completion: @escaping ([URL]) -> Void) {
+        var urls: [URL] = []
+        let group = DispatchGroup()
+        for provider in providers {
+            guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { continue }
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
+                    urls.append(url)
+                }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            completion(urls)
+        }
+    }
+
+    /// Upload dropped files directly to the given folder (no staging). Uses same logic as performPost.
+    private func uploadDroppedFiles(projectId: String, folderId: String?, fileURLs: [URL]) {
+        let itemsToUpload = fileURLs.map { FileItem(url: $0) }
+        let totalFiles = itemsToUpload.reduce(0) { $0 + $1.fileCount }
+        isUploading = true
+        statusMessage = "Uploading…"
+        statusIsError = false
+        uploadTotal = totalFiles
+        uploadCurrent = 0
+        uploadFileName = ""
+
+        Task {
+            do {
+                let progressCounter = ProgressCounter()
+                for fileItem in itemsToUpload {
+                    let existingFolders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: folderId)
+                    let existingNames = existingFolders.map { $0.name }
+
+                    if fileItem.isDirectory {
+                        try await uploadFolderWithStructure(
+                            projectId: projectId,
+                            destinationFolderId: folderId,
+                            localFolderURL: fileItem.url,
+                            existingFolderNames: existingNames,
+                            uploadProgress: { fileName in
+                                progressCounter.increment()
+                                Task { @MainActor in
+                                    uploadCurrent = progressCounter.value
+                                    uploadTotal = totalFiles
+                                    uploadFileName = fileName
+                                }
+                            }
+                        )
+                    } else {
+                        progressCounter.increment()
+                        await MainActor.run {
+                            uploadCurrent = progressCounter.value
+                            uploadTotal = totalFiles
+                            uploadFileName = fileItem.name
+                        }
+                        _ = try await simianService.uploadFile(projectId: projectId, folderId: folderId, fileURL: fileItem.url)
+                    }
+                }
+
+                await MainActor.run {
+                    isUploading = false
+                    let destSummary = folderId == nil ? "project root" : "folder"
+                    statusMessage = "Uploaded \(progressCounter.value) file(s) to \(destSummary)."
+                    statusIsError = false
+                    if selectedProjectId == projectId {
+                        if let destId = folderId {
+                            folderChildrenCache.removeValue(forKey: destId)
+                            folderFilesCache.removeValue(forKey: destId)
+                        }
+                        loadFolders(projectId: projectId, parentFolderId: currentParentFolderId)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isUploading = false
+                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    statusIsError = true
+                }
+            }
+        }
     }
 
     /// Count total files for progress (recursive)
@@ -1225,9 +1691,45 @@ private func parseSimianDrag(_ str: String) -> (type: String, projectId: String,
     return (parts[1], parts[2], parts[3].isEmpty ? nil : parts[3], parts[4])
 }
 
+/// Thin drop zone that shows a horizontal line when a reorder drag is over it. Used between rows to indicate "insert before" or "insert after".
+private struct ReorderLineView: View {
+    let expectedType: String // "folder" or "file"
+    let validateParent: (String?) -> Bool
+    let onDrop: (String) -> Void
+    @Binding var isTargeted: Bool
+
+    private let lineHeight: CGFloat = 2
+    private let hitHeight: CGFloat = 4
+
+    var body: some View {
+        ZStack {
+            Color.clear.frame(height: hitHeight)
+            if isTargeted {
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(height: lineHeight)
+            }
+        }
+        .frame(height: hitHeight)
+        .onDrop(of: [.text], isTargeted: $isTargeted) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { obj, _ in
+                guard let ns = obj as? NSString else { return }
+                let str = String(ns)
+                guard let parsed = parseSimianDrag(str),
+                      parsed.type == expectedType,
+                      validateParent(parsed.parentId) else { return }
+                DispatchQueue.main.async { onDrop(parsed.itemId) }
+            }
+            return true
+        }
+    }
+}
+
 // Project root row with hover and drop-target visual feedback
 private struct ProjectRootRowView: View {
     let isSelected: Bool
+    var isKeyboardFocused: Bool = false
     let onTap: () -> Void
     let onDrop: ([NSItemProvider]) -> Bool
 
@@ -1236,6 +1738,7 @@ private struct ProjectRootRowView: View {
 
     private var rowBackground: Color {
         if isDropTargeted { return Color.accentColor.opacity(0.3) }
+        if isKeyboardFocused { return Color.accentColor.opacity(0.25) }
         if isSelected { return Color.accentColor.opacity(0.2) }
         if isHovered { return Color.primary.opacity(0.06) }
         return Color.clear
@@ -1255,10 +1758,16 @@ private struct ProjectRootRowView: View {
                         .foregroundStyle(Color.accentColor)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .background(rowBackground)
+            .overlay {
+                if isSelected || isKeyboardFocused {
+                    RoundedRectangle(cornerRadius: 3)
+                        .stroke(Color.accentColor.opacity(0.6), lineWidth: 1)
+                }
+            }
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -1275,6 +1784,7 @@ private struct FolderTreeRowContentView: View {
     let isLoading: Bool
     let hasOrMayHaveChildren: Bool
     let isSelected: Bool
+    var isKeyboardFocused: Bool = false
     let depth: Int
     let folderName: String
     let onChevronTap: () -> Void
@@ -1284,12 +1794,17 @@ private struct FolderTreeRowContentView: View {
     let onCopyLink: () -> Void
     let onRename: () -> Void
     let onDelete: () -> Void
+    let onNewFolder: () -> Void
     let onReorder: (String) -> Void
+    let onReorderInsertBefore: (String?, String) -> Void
     let canReorder: Bool
+    let nextFolderId: String?
 
     @State private var isHovered = false
     @State private var isDropTargeted = false
     @State private var isReorderTargeted = false
+    @State private var isLineAboveTargeted = false
+    @State private var isLineBelowTargeted = false
     @State private var pendingSingleTap: DispatchWorkItem?
 
     private var dragPayload: String {
@@ -1298,36 +1813,50 @@ private struct FolderTreeRowContentView: View {
 
     private var safeDepth: Int { min(depth, 30) }
 
+    private func validateParent(_ parsedParentId: String?) -> Bool {
+        (parsedParentId ?? "") == (parentFolderId ?? "")
+    }
+
     private var rowBackground: Color {
         if isReorderTargeted { return Color.orange.opacity(0.3) }
         if isDropTargeted { return Color.accentColor.opacity(0.3) }
+        if isKeyboardFocused { return Color.accentColor.opacity(0.25) }
         if isSelected { return Color.accentColor.opacity(0.2) }
         if isHovered { return Color.primary.opacity(0.06) }
         return Color.clear
     }
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<safeDepth, id: \.self) { _ in
-                Rectangle().fill(Color.clear).frame(width: 12)
+        VStack(spacing: 0) {
+            if canReorder {
+                ReorderLineView(
+                    expectedType: "folder",
+                    validateParent: validateParent,
+                    onDrop: { draggedId in onReorderInsertBefore(folderId, draggedId) },
+                    isTargeted: $isLineAboveTargeted
+                )
             }
-            Button(action: onChevronTap) {
-                Group {
-                    if isLoading {
-                        ProgressView().scaleEffect(0.6)
-                    } else if hasOrMayHaveChildren {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 16, height: 16)
-                    } else {
-                        Rectangle().fill(Color.clear).frame(width: 16, height: 16)
+            HStack(spacing: 4) {
+                ForEach(0..<safeDepth, id: \.self) { _ in
+                    Rectangle().fill(Color.clear).frame(width: 12)
+                }
+                Button(action: onChevronTap) {
+                    Group {
+                        if isLoading {
+                            ProgressView().scaleEffect(0.6)
+                        } else if hasOrMayHaveChildren {
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16, height: 16)
+                        } else {
+                            Rectangle().fill(Color.clear).frame(width: 16, height: 16)
+                        }
                     }
                 }
-            }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
 
-            Button(action: {
+                Button(action: {
                 if let prior = pendingSingleTap {
                     prior.cancel()
                     pendingSingleTap = nil
@@ -1359,9 +1888,15 @@ private struct FolderTreeRowContentView: View {
                             .foregroundStyle(.orange)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 2)
                 .contentShape(Rectangle())
                 .background(rowBackground)
+                .overlay {
+                    if isSelected || isKeyboardFocused {
+                        RoundedRectangle(cornerRadius: 3)
+                            .stroke(Color.accentColor.opacity(0.6), lineWidth: 1)
+                    }
+                }
             }
             .buttonStyle(.plain)
             .onHover { isHovered = $0 }
@@ -1380,65 +1915,89 @@ private struct FolderTreeRowContentView: View {
             }
             .draggable(canReorder ? dragPayload : "simian|none|||")
             .contextMenu {
+                Button("New Folder", action: onNewFolder)
                 Button("Rename…", action: onRename)
                 Button("Copy Link", action: onCopyLink)
                 Divider()
                 Button("Remove from Simian…", role: .destructive, action: onDelete)
             }
+            }
+            if canReorder {
+                ReorderLineView(
+                    expectedType: "folder",
+                    validateParent: validateParent,
+                    onDrop: { draggedId in onReorderInsertBefore(nextFolderId, draggedId) },
+                    isTargeted: $isLineBelowTargeted
+                )
+            }
         }
     }
 }
 
-// File row with reorder support
+// File row with reorder support (line indicators between files, no full-row highlight)
 private struct FileTreeRowContentView: View {
     let projectId: String
     let file: SimianFile
     let parentFolderId: String?
     let depth: Int
+    var isKeyboardFocused: Bool = false
+    let nextFileId: String? // Next file in same folder (for "insert after" line); nil = last file
     let onRename: () -> Void
     let onDelete: () -> Void
-    let onReorder: (String) -> Void
+    let onReorderInsertBefore: (String?, String) -> Void // (dropBeforeFileId, draggedFileId); nil = insert at end
     let canReorder: Bool
 
-    @State private var isReorderTargeted = false
+    @State private var isLineAboveTargeted = false
+    @State private var isLineBelowTargeted = false
 
     private var safeDepth: Int { min(depth, 30) }
     private var dragPayload: String { "simian|file|\(projectId)|\(parentFolderId ?? "")|\(file.id)" }
 
+    private func validateParent(_ parsedParentId: String?) -> Bool {
+        (parsedParentId ?? "") == (parentFolderId ?? "")
+    }
+
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<safeDepth, id: \.self) { _ in
-                Rectangle().fill(Color.clear).frame(width: 12)
+        VStack(spacing: 0) {
+            if canReorder {
+                ReorderLineView(
+                    expectedType: "file",
+                    validateParent: validateParent,
+                    onDrop: { draggedId in onReorderInsertBefore(file.id, draggedId) },
+                    isTargeted: $isLineAboveTargeted
+                )
             }
-            Rectangle().fill(Color.clear).frame(width: 16)
-            HStack {
-                Image(systemName: "doc")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Text(file.title)
-                    .font(.system(size: 14))
-                Spacer()
-                if isReorderTargeted {
-                    Image(systemName: "arrow.right.circle.fill")
+            HStack(spacing: 4) {
+                ForEach(0..<safeDepth, id: \.self) { _ in
+                    Rectangle().fill(Color.clear).frame(width: 12)
+                }
+                Rectangle().fill(Color.clear).frame(width: 16)
+                HStack {
+                    Image(systemName: "doc")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Text(file.title)
                         .font(.system(size: 14))
-                        .foregroundStyle(.orange)
+                    Spacer()
+                }
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+                .background(isKeyboardFocused ? Color.accentColor.opacity(0.25) : Color.clear)
+                .overlay {
+                    if isKeyboardFocused {
+                        RoundedRectangle(cornerRadius: 3)
+                            .stroke(Color.accentColor.opacity(0.6), lineWidth: 1)
+                    }
                 }
             }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-            .background(isReorderTargeted ? Color.orange.opacity(0.3) : Color.clear)
-        }
-        .onDrop(of: [.text], isTargeted: $isReorderTargeted) { providers in
-            guard canReorder else { return false }
-            for p in providers {
-                _ = p.loadObject(ofClass: NSString.self) { obj, _ in
-                    guard let ns = obj as? NSString, let parsed = parseSimianDrag(String(ns)), parsed.type == "file", parsed.itemId != file.id else { return }
-                    let sameParent = (parsed.parentId ?? "") == (parentFolderId ?? "")
-                    guard sameParent else { return }
-                    DispatchQueue.main.async { onReorder(parsed.itemId) }
-                }
+            if canReorder {
+                ReorderLineView(
+                    expectedType: "file",
+                    validateParent: validateParent,
+                    onDrop: { draggedId in onReorderInsertBefore(nextFileId, draggedId) },
+                    isTargeted: $isLineBelowTargeted
+                )
             }
-            return true
         }
         .draggable(canReorder ? dragPayload : "simian|none|||")
         .contextMenu {

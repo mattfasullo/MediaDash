@@ -29,6 +29,7 @@ release/
 *_private_key
 sparkle_private_key
 dsa_priv.pem
+.sparkle_key_path
 
 # macOS
 .DS_Store

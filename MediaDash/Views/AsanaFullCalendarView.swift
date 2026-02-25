@@ -2,17 +2,16 @@
 //  AsanaFullCalendarView.swift
 //  MediaDash
 //
-//  Full Asana calendar: 2-week forward view with 2-day lookback.
+//  Full Asana calendar: 4 weeks starting Sunday of current week.
 //  Click a day to expand; collapsible Sessions, Media Tasks, Tasks. Filter and tag colors.
 //
 
 import SwiftUI
 import AppKit
 
-private let fullCalendarLookbackDays = 2
-private let fullCalendarFutureDays = 14
+private let fullCalendarWeeks = 4
 private let fullCalendarAutoLinkDayTolerance = 2
-private let gridColumns = 7
+private let weekendColumnWidth: CGFloat = 4
 
 struct TaskDetailSheetItem: Identifiable {
     let id: String
@@ -37,11 +36,14 @@ struct AsanaFullCalendarView: View {
     private static let filterSessionsKey = "asanaFullCalendar.filterSessions"
     private static let filterMediaTasksKey = "asanaFullCalendar.filterMediaTasks"
     private static let filterOtherTasksKey = "asanaFullCalendar.filterOtherTasks"
+    private static let showWeekendsKey = "asanaFullCalendar.showWeekends"
     
     @State private var filterSessions = UserDefaults.standard.object(forKey: Self.filterSessionsKey) as? Bool ?? true
     @State private var filterMediaTasks = UserDefaults.standard.object(forKey: Self.filterMediaTasksKey) as? Bool ?? true
     @State private var filterOtherTasks = UserDefaults.standard.object(forKey: Self.filterOtherTasksKey) as? Bool ?? true
+    @State private var showWeekends = UserDefaults.standard.object(forKey: Self.showWeekendsKey) as? Bool ?? false
     @State private var manualLinkVersion = 0
+    @State private var hoveredTaskGid: String?
 
     private static let dateOnlyFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -64,12 +66,43 @@ struct AsanaFullCalendarView: View {
         return f
     }()
 
+    /// Four weeks (28 days) starting on the Sunday of the current week.
     private var calendarDays: [Date] {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let start = cal.date(byAdding: .day, value: -fullCalendarLookbackDays, to: today) ?? today
-        let totalDays = fullCalendarLookbackDays + fullCalendarFutureDays
-        return (0..<totalDays).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+        let weekday = cal.component(.weekday, from: today) // 1 = Sun ... 7 = Sat
+        let daysFromSunday = weekday - 1
+        guard let startSunday = cal.date(byAdding: .day, value: -daysFromSunday, to: today) else { return [] }
+        let totalDays = fullCalendarWeeks * 7
+        return (0..<totalDays).compactMap { cal.date(byAdding: .day, value: $0, to: startSunday) }
+    }
+    
+    /// Rows of 7 days each (Sunday through Saturday). Exactly 4 rows.
+    private var weekRows: [[Date]] {
+        stride(from: 0, to: calendarDays.count, by: 7).map { start in
+            Array(calendarDays.dropFirst(start).prefix(7))
+        }
+    }
+    
+    /// When weekends are hidden, use narrow fixed columns for Sun/Sat so weekday columns expand to fill space.
+    private var gridColumns: [GridItem] {
+        if showWeekends {
+            return Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+        }
+        return [
+            GridItem(.fixed(weekendColumnWidth), spacing: 6),
+            GridItem(.flexible(), spacing: 6),
+            GridItem(.flexible(), spacing: 6),
+            GridItem(.flexible(), spacing: 6),
+            GridItem(.flexible(), spacing: 6),
+            GridItem(.flexible(), spacing: 6),
+            GridItem(.fixed(weekendColumnWidth), spacing: 6)
+        ]
+    }
+    
+    private func isWeekend(_ date: Date) -> Bool {
+        let w = Calendar.current.component(.weekday, from: date)
+        return w == 1 || w == 7 // Sunday, Saturday
     }
 
     private func tasks(for date: Date) -> [AsanaTask] {
@@ -187,6 +220,7 @@ struct AsanaFullCalendarView: View {
                             dayDetailView(day)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(20)
                 }
             }
@@ -237,12 +271,16 @@ struct AsanaFullCalendarView: View {
                 Spacer()
                 filterControls
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: gridColumns), spacing: 6) {
-                ForEach(Array(calendarDays.enumerated()), id: \.offset) { index, date in
-                    dayCell(date: date, isSelected: selectedDay.map { Calendar.current.isDate($0, inSameDayAs: date) } ?? false)
+            LazyVGrid(columns: gridColumns, spacing: 6) {
+                ForEach(Array(weekRows.enumerated()), id: \.offset) { _, row in
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, date in
+                        dayCell(date: date, isSelected: selectedDay.map { Calendar.current.isDate($0, inSameDayAs: date) } ?? false)
+                    }
                 }
             }
+            .frame(maxWidth: .infinity)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var filterControls: some View {
@@ -277,42 +315,61 @@ struct AsanaFullCalendarView: View {
             ))
             .toggleStyle(.checkbox)
             .controlSize(.small)
+            Toggle("Weekends", isOn: Binding(
+                get: { showWeekends },
+                set: { newValue in
+                    showWeekends = newValue
+                    UserDefaults.standard.set(newValue, forKey: Self.showWeekendsKey)
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
         }
     }
 
+    @ViewBuilder
     private func dayCell(date: Date, isSelected: Bool) -> some View {
         let count = filteredCount(for: date)
         let isToday = Calendar.current.isDateInToday(date)
-        return Button(action: {
-            selectedDay = date
-        }) {
-            VStack(spacing: 4) {
-                Text(Self.shortDayFormatter.string(from: date))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.secondary)
-                Text("\(Calendar.current.component(.day, from: date))")
-                    .font(.system(size: 16, weight: isToday ? .bold : .regular))
-                if count > 0 {
-                    Text("\(count)")
+        let weekendAsLine = !showWeekends && isWeekend(date)
+        if weekendAsLine {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.25))
+                .frame(width: 2)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+        } else {
+            Button(action: {
+                selectedDay = date
+            }) {
+                VStack(spacing: 4) {
+                    Text(Self.shortDayFormatter.string(from: date))
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.accentColor))
+                        .foregroundColor(.secondary)
+                    Text("\(Calendar.current.component(.day, from: date))")
+                        .font(.system(size: 16, weight: isToday ? .bold : .regular))
+                    if count > 0 {
+                        Text("\(count)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.accentColor))
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isSelected ? Color.accentColor.opacity(0.15) : (isToday ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor).opacity(0.5)))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2)
+                )
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.accentColor.opacity(0.15) : (isToday ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor).opacity(0.5)))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2)
-            )
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
     }
 
     private func dayDetailView(_ date: Date) -> some View {
@@ -356,6 +413,10 @@ struct AsanaFullCalendarView: View {
                         VStack(spacing: 4) {
                             ForEach(sessionList, id: \.gid) { task in
                                 sessionRow(task)
+                                    .overlay(hoverOverlay(visible: hoveredTaskGid == task.gid, cornerRadius: 6))
+                                    .onHover { hovering in
+                                        updateHover(gid: hovering ? task.gid : nil)
+                                    }
                             }
                         }
                     }
@@ -366,18 +427,22 @@ struct AsanaFullCalendarView: View {
                         count: mediaList.count,
                         isExpanded: $mediaTasksSectionExpanded
                     ) {
-                        mediaTasksSection(mediaList)
+                        mediaTasksSection(mediaList, hoveredTaskGid: hoveredTaskGid, setHoveredTaskGid: { hoveredTaskGid = $0 })
                     }
                 }
                 if filterOtherTasks && !otherList.isEmpty {
                     collapsibleSection(
-                        title: "Tasks",
+                        title: "Other",
                         count: otherList.count,
                         isExpanded: $otherTasksSectionExpanded
                     ) {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(otherList, id: \.gid) { task in
                                 taskRow(task)
+                                    .overlay(hoverOverlay(visible: hoveredTaskGid == task.gid, cornerRadius: 6))
+                                    .onHover { hovering in
+                                        updateHover(gid: hovering ? task.gid : nil)
+                                    }
                             }
                         }
                     }
@@ -419,8 +484,35 @@ struct AsanaFullCalendarView: View {
         }
     }
 
+    private func hoverOverlay(visible: Bool, cornerRadius: CGFloat = 6) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius)
+            .fill(Color.primary.opacity(0.08))
+            .opacity(visible ? 1 : 0)
+            .allowsHitTesting(false)
+    }
+
+    /// Update hover state only when it actually changes to avoid redundant re-renders that can nudge ScrollView.
+    /// Cursor is pushed/popped only on enter/leave to avoid spurious scroll or event issues.
+    private func updateHover(gid: String?) {
+        guard gid != hoveredTaskGid else { return }
+        let wasShowingHand = hoveredTaskGid != nil
+        hoveredTaskGid = gid
+        let nowShowingHand = gid != nil
+        if nowShowingHand, !wasShowingHand { NSCursor.pointingHand.push() }
+        else if !nowShowingHand, wasShowingHand { NSCursor.pop() }
+    }
+
+    private func updateHoverViaSetter(gid: String?, current: String?, set: (String?) -> Void) {
+        guard gid != current else { return }
+        let wasShowingHand = current != nil
+        set(gid)
+        let nowShowingHand = gid != nil
+        if nowShowingHand, !wasShowingHand { NSCursor.pointingHand.push() }
+        else if !nowShowingHand, wasShowingHand { NSCursor.pop() }
+    }
+
     @ViewBuilder
-    private func mediaTasksSection(_ mediaList: [AsanaTask]) -> some View {
+    private func mediaTasksSection(_ mediaList: [AsanaTask], hoveredTaskGid: String?, setHoveredTaskGid: @escaping (String?) -> Void) -> some View {
         let dayDemosTasks = mediaList.filter { DemosPostLinkStore.isDemosTask($0) }
         let crossDayPostCandidates = allMediaTasksInCalendarWindow()
             .filter { DemosPostLinkStore.isPostTask($0) }
@@ -437,27 +529,43 @@ struct AsanaFullCalendarView: View {
         }
         VStack(alignment: .leading, spacing: 2) {
             ForEach(pairs, id: \.0.gid) { demos, post in
-                linkedPairRow(demos: demos, post: post)
+                linkedPairRow(demos: demos, post: post, hoveredTaskGid: hoveredTaskGid, setHoveredTaskGid: setHoveredTaskGid)
             }
             ForEach(standaloneDemos, id: \.gid) { task in
                 mediaTaskRowWithLinkMenu(task: task)
+                    .overlay(hoverOverlay(visible: hoveredTaskGid == task.gid, cornerRadius: 6))
+                    .onHover { hovering in
+                        updateHoverViaSetter(gid: hovering ? task.gid : nil, current: hoveredTaskGid, set: setHoveredTaskGid)
+                    }
             }
             ForEach(standalonePosts, id: \.gid) { task in
                 mediaTaskRowWithLinkMenu(task: task)
+                    .overlay(hoverOverlay(visible: hoveredTaskGid == task.gid, cornerRadius: 6))
+                    .onHover { hovering in
+                        updateHoverViaSetter(gid: hovering ? task.gid : nil, current: hoveredTaskGid, set: setHoveredTaskGid)
+                    }
             }
             ForEach(otherMedia, id: \.gid) { task in
                 taskRow(task)
+                    .overlay(hoverOverlay(visible: hoveredTaskGid == task.gid, cornerRadius: 6))
+                    .onHover { hovering in
+                        updateHoverViaSetter(gid: hovering ? task.gid : nil, current: hoveredTaskGid, set: setHoveredTaskGid)
+                    }
             }
         }
     }
 
-    private func linkedPairRow(demos: AsanaTask, post: AsanaTask) -> some View {
+    private func linkedPairRow(demos: AsanaTask, post: AsanaTask, hoveredTaskGid: String?, setHoveredTaskGid: @escaping (String?) -> Void) -> some View {
         let demosColor = taskColor(demos)
         return VStack(spacing: 0) {
             Button(action: { openTask(demos) }) {
                 mediaTaskRowContent(task: demos)
             }
             .buttonStyle(.plain)
+            .overlay(hoverOverlay(visible: hoveredTaskGid == demos.gid, cornerRadius: 6))
+            .onHover { hovering in
+                updateHoverViaSetter(gid: hovering ? demos.gid : nil, current: hoveredTaskGid, set: setHoveredTaskGid)
+            }
             HStack(spacing: 4) {
                 Image(systemName: "link")
                     .font(.system(size: 10, weight: .medium))
@@ -468,6 +576,10 @@ struct AsanaFullCalendarView: View {
                 mediaTaskRowContent(task: post)
             }
             .buttonStyle(.plain)
+            .overlay(hoverOverlay(visible: hoveredTaskGid == post.gid, cornerRadius: 6))
+            .onHover { hovering in
+                updateHoverViaSetter(gid: hovering ? post.gid : nil, current: hoveredTaskGid, set: setHoveredTaskGid)
+            }
         }
         .padding(8)
         .background(
@@ -556,6 +668,8 @@ struct AsanaFullCalendarView: View {
                     .foregroundColor(.secondary)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .opacity(completed ? 0.65 : 1)
     }
 
@@ -602,6 +716,7 @@ struct AsanaFullCalendarView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             Button("Prep") {
@@ -662,6 +777,8 @@ struct AsanaFullCalendarView: View {
                         .foregroundColor(.secondary)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .padding(8)

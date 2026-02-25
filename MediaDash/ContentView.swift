@@ -72,6 +72,8 @@ struct ContentView: View {
     @State private var initialSearchText = ""
     @State private var showNotificationCenter = false
     @State private var showManualPrepSheet = false
+    /// When opening Manual Prep sheet or running both: use this existing prep folder name (nil = create new).
+    @State private var existingPrepFolderForJob: String? = nil
     @FocusState private var mainViewFocused: Bool
     @EnvironmentObject var notificationCenter: NotificationCenter
     @EnvironmentObject var emailScanningService: EmailScanningService
@@ -265,6 +267,7 @@ struct ContentView: View {
                 showDocketSelectionSheet: $showDocketSelectionSheet,
                 pendingJobType: $pendingJobType,
                 showManualPrepSheet: $showManualPrepSheet,
+                existingPrepFolderForJob: $existingPrepFolderForJob,
                 wpDate: wpDate,
                 prepDate: prepDate,
                 showQuickSearchSheet: $showQuickSearchSheet,
@@ -1311,7 +1314,8 @@ struct DocketSearchView: View {
     @Binding var isPresented: Bool
     @Binding var selectedDocket: String
     var jobType: JobType = .workPicture
-    var onConfirm: (String) -> Void
+    /// Called with (docket, existingPrepFolderName?). Pass nil for existingPrepFolderName to create a new prep folder.
+    var onConfirm: (String, String?) -> Void
     var cacheManager: AsanaCacheManager?
 
     @State private var searchText = ""
@@ -1578,7 +1582,7 @@ struct DocketSearchView: View {
                     prefillDocketNumber = nil
                     prefillJobName = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        onConfirm(selectedDocket)
+                        onConfirm(selectedDocket, nil)
                     }
                 },
                 initialDocketNumber: prefillDocketNumber,
@@ -1744,14 +1748,14 @@ struct DocketSearchView: View {
     private func selectDocket(_ docket: String) {
         selectedDocket = docket
 
-        // For "Both" mode, check if prep folders already exist
-        if jobType == .both {
+        // For prep or both, check if prep folders already exist for this docket
+        if jobType == .prep || jobType == .both {
             checkForExistingPrepFolders(docket: docket)
         } else {
             isPresented = false
             // Delay slightly to ensure sheet closes before job runs
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                onConfirm(docket)
+                onConfirm(docket, nil)
             }
         }
     }
@@ -1760,28 +1764,33 @@ struct DocketSearchView: View {
         Task {
             let prepPath = manager.config.getPaths().prep
             let fm = FileManager.default
+            let docketNumber = manager.config.namingService.parseDocket(docket).docketNumber
 
-            var existingFolders: [String] = []
+            var existingFolders: [(name: String, modDate: Date)] = []
 
-            if let items = try? fm.contentsOfDirectory(at: prepPath, includingPropertiesForKeys: nil) {
+            if let items = try? fm.contentsOfDirectory(at: prepPath, includingPropertiesForKeys: [.contentModificationDateKey]) {
                 for item in items {
-                    // Check if folder matches prep folder format for this docket
-                    // Prep folders typically start with "{docket}_PREP_" or use the configured format
-                    let prepPrefix = "\(docket)_PREP_"
-                    if item.hasDirectoryPath && item.lastPathComponent.hasPrefix(prepPrefix) {
-                        existingFolders.append(item.lastPathComponent)
+                    guard item.hasDirectoryPath else { continue }
+                    let name = item.lastPathComponent
+                    // Match prep folders for this docket: start with docket number + "_"
+                    if name.hasPrefix("\(docketNumber)_") && (name.contains("_PREP_") || name.contains("PREP")) {
+                        let modDate = (try? item.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                        existingFolders.append((name, modDate))
                     }
                 }
             }
+            // Most recent first so "Use Existing" uses the latest folder
+            existingFolders.sort { $0.modDate > $1.modDate }
+            let folderNames = existingFolders.map(\.name)
 
             await MainActor.run {
-                if !existingFolders.isEmpty {
-                    existingPrepFolders = existingFolders
+                if !folderNames.isEmpty {
+                    existingPrepFolders = folderNames
                     showExistingPrepAlert = true
                 } else {
                     isPresented = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        onConfirm(docket)
+                        onConfirm(docket, nil)
                     }
                 }
             }
@@ -1789,12 +1798,11 @@ struct DocketSearchView: View {
     }
 
     private func useExistingPrepFolder() {
-        // For now, just proceed - the runJob will create a new folder anyway
-        // In the future, we could modify runJob to use an existing folder
+        let folderToUse = existingPrepFolders.first
         showExistingPrepAlert = false
         isPresented = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            onConfirm(selectedDocket)
+            onConfirm(selectedDocket, folderToUse)
         }
     }
 
@@ -1802,7 +1810,7 @@ struct DocketSearchView: View {
         showExistingPrepAlert = false
         isPresented = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            onConfirm(selectedDocket)
+            onConfirm(selectedDocket, nil)
         }
     }
 
@@ -4100,9 +4108,8 @@ struct AlertsModifier: ViewModifier {
             // Removed alert popup on launch
             .alert("Convert Videos to ProRes Proxy?", isPresented: $manager.showConvertVideosPrompt) {
                 Button("Convert", role: .destructive) {
-                    Task {
-                        await manager.convertPrepVideos()
-                    }
+                    // Dismiss alert only; prep task will run conversion inline and then complete + ding once
+                    manager.showConvertVideosPrompt = false
                 }
                 Button("Skip", role: .cancel) {
                     manager.skipPrepVideoConversion()
@@ -4126,6 +4133,7 @@ struct SheetsModifier: ViewModifier {
     @Binding var showDocketSelectionSheet: Bool
     @Binding var pendingJobType: JobType?
     @Binding var showManualPrepSheet: Bool
+    @Binding var existingPrepFolderForJob: String?
     let wpDate: Date
     let prepDate: Date
     @Binding var showQuickSearchSheet: Bool
@@ -4169,7 +4177,7 @@ struct SheetsModifier: ViewModifier {
                     isPresented: $showDocketSelectionSheet,
                     selectedDocket: $selectedDocket,
                     jobType: selectedJobType,
-                    onConfirm: { docket in
+                    onConfirm: { docket, existingPrepFolderName in
                         if shouldFileThenPrep {
                             onFileThenPrepConfirm(docket)
                             showDocketSelectionSheet = false
@@ -4178,13 +4186,15 @@ struct SheetsModifier: ViewModifier {
 
                         if selectedJobType == .prep {
                             selectedDocket = docket
+                            existingPrepFolderForJob = existingPrepFolderName
                             showManualPrepSheet = true
                         } else {
                             manager.runJob(
                                 type: selectedJobType,
                                 docket: docket,
                                 wpDate: wpDate,
-                                prepDate: prepDate
+                                prepDate: prepDate,
+                                existingPrepFolderName: existingPrepFolderName
                             )
                         }
 
@@ -4195,14 +4205,15 @@ struct SheetsModifier: ViewModifier {
                 .sheetBorder()
             }
             .sheet(isPresented: $showManualPrepSheet, onDismiss: {
-                // ManualPrepSheet is recreated with fresh state on next open
+                existingPrepFolderForJob = nil
             }) {
                 ManualPrepSheet(
                     manager: manager,
                     isPresented: $showManualPrepSheet,
                     docket: selectedDocket,
                     wpDate: wpDate,
-                    prepDate: prepDate
+                    prepDate: prepDate,
+                    existingPrepFolderName: existingPrepFolderForJob
                 )
                 .sheetBorder()
             }

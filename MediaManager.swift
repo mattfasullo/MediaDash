@@ -1442,7 +1442,7 @@ class MediaManager: ObservableObject {
         conversionProgress.removeAll()
     }
     
-    func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date) {
+    func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date, existingPrepFolderName: String? = nil) {
         if selectedFiles.isEmpty {
             if type == .prep || type == .both {
                 errorMessage = "No files staged.\n\nAdd files in the Staging area before starting Prep."
@@ -1473,6 +1473,7 @@ class MediaManager: ObservableObject {
             pendingPrepAllFileItemsForChecklist = nil
         }
         let currentConfig = self.config
+        let useExistingPrepFolder = existingPrepFolderName
 
         // Calculate total bytes for all files
         let totalBytes: Int64 = files.reduce(0) { sum, file in
@@ -1647,25 +1648,37 @@ class MediaManager: ObservableObject {
                     return
                 }
                 
-                // Use FolderNamingService for consistent prep folder naming
-                let folder = currentConfig.prepFolderName(docket: docket, date: prepDate)
-                let root = paths.prep.appendingPathComponent(folder)
-                prepDestinationFolder = root
-                
-                // Check if prep folder already exists, if not create it
-                // If it exists, we'll use the existing folder and skip duplicate files
-                if !fm.fileExists(atPath: root.path) {
-                do {
-                        try fm.createDirectory(at: root, withIntermediateDirectories: false)
-                } catch {
-                    await MainActor.run {
-                            self.errorMessage = "Failed to create prep folder: \(error.localizedDescription)\n\nPath: \(root.path)"
-                        self.showError = true
-                        self.isProcessing = false
+                // Use existing prep folder when user chose "Use Existing", otherwise create new
+                let root: URL
+                if let existingName = useExistingPrepFolder, !existingName.isEmpty {
+                    root = paths.prep.appendingPathComponent(existingName)
+                    guard fm.fileExists(atPath: root.path) else {
+                        await MainActor.run {
+                            self.errorMessage = "Existing prep folder not found: \(root.path)"
+                            self.showError = true
+                            self.isProcessing = false
+                            FloatingProgressManager.shared.hide()
+                        }
+                        return
                     }
-                    return
+                } else {
+                    let folder = currentConfig.prepFolderName(docket: docket, date: prepDate)
+                    root = paths.prep.appendingPathComponent(folder)
+                    prepDestinationFolder = root
+                    if !fm.fileExists(atPath: root.path) {
+                        do {
+                            try fm.createDirectory(at: root, withIntermediateDirectories: false)
+                        } catch {
+                            await MainActor.run {
+                                self.errorMessage = "Failed to create prep folder: \(error.localizedDescription)\n\nPath: \(root.path)"
+                                self.showError = true
+                                self.isProcessing = false
+                            }
+                            return
+                        }
                     }
                 }
+                prepDestinationFolder = root
 
                 // Build map of flat files to their source FileItem
                 var flats: [(url: URL, sourceId: UUID)] = []
@@ -1915,6 +1928,12 @@ class MediaManager: ObservableObject {
             let jobType = type // Capture type for use in MainActor context
 
             let wasCancelled = await self.cancelRequested
+
+            // Run prep video conversion inline so progress bar includes it and we only ding once when truly done
+            let hasPendingConversion = await MainActor.run { self.pendingPrepConversion != nil && (type == .prep || type == .both) }
+            if !wasCancelled && hasPendingConversion {
+                await self.runPrepConversionInlineAndUpdateProgress()
+            }
 
             await MainActor.run {
                 if wasCancelled {
@@ -2435,7 +2454,80 @@ class MediaManager: ObservableObject {
         }
     }
 
-    /// Convert videos during prep and move originals to z_unconverted
+    /// Run prep video conversion inline (move to z_unconverted, convert) and drive progress. Call from the prep file operation before complete/ding so the bar and ding happen only once.
+    func runPrepConversionInlineAndUpdateProgress() async {
+        guard let pending = pendingPrepConversion,
+              let converter = videoConverter else {
+            showConvertVideosPrompt = false
+            return
+        }
+
+        showConvertVideosPrompt = false
+        pendingPrepConversion = nil
+
+        let fm = FileManager.default
+        let pictureFolder = pending.root.appendingPathComponent(config.settings.pictureFolderName)
+        let unconvertedFolder = pictureFolder.appendingPathComponent("z_unconverted")
+
+        try? fm.createDirectory(at: unconvertedFolder, withIntermediateDirectories: true)
+
+        statusMessage = "Moving originals to z_unconverted..."
+        FloatingProgressManager.shared.updateProgress(progress, message: "Moving originals to z_unconverted...")
+
+        for (videoURL, _) in pending.videoFiles {
+            let filename = videoURL.lastPathComponent
+            let unconvertedPath = unconvertedFolder.appendingPathComponent(filename)
+            let picturePath = pictureFolder.appendingPathComponent(filename)
+
+            if fm.fileExists(atPath: picturePath.path) {
+                if !fm.fileExists(atPath: unconvertedPath.path) {
+                    try? fm.moveItem(at: picturePath, to: unconvertedPath)
+                } else {
+                    try? fm.removeItem(at: picturePath)
+                }
+            } else if !fm.fileExists(atPath: unconvertedPath.path) {
+                try? fm.copyItem(at: videoURL, to: unconvertedPath)
+            }
+
+            converter.addFiles(
+                urls: [videoURL],
+                format: .proResProxy,
+                aspectRatio: .sixteenNine,
+                outputDirectory: pictureFolder,
+                keepOriginalName: true
+            )
+        }
+
+        statusMessage = "Converting videos to ProRes..."
+        // Reserve last 15% of progress bar for conversion phase
+        let conversionStartProgress = min(progress, 0.85)
+        let conversionRange = 1.0 - conversionStartProgress
+        FloatingProgressManager.shared.updateProgress(conversionStartProgress, message: "Converting videos...")
+
+        let progressTask = Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            while !Task.isCancelled && converter.isConverting {
+                let jobs = converter.jobs
+                let total = Double(max(1, jobs.count))
+                let completed = Double(jobs.filter { $0.status == .completed }.count)
+                let current = jobs.first(where: { $0.status == .converting })?.progress ?? 0
+                let conversionP = (completed + current) / total
+                let p = conversionStartProgress + conversionRange * conversionP
+                self.progress = min(1.0, p)
+                FloatingProgressManager.shared.updateProgress(p, message: "Converting videos...", currentFile: jobs.first(where: { $0.status == .converting })?.sourceName)
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+
+        await converter.startConversion(playCompletionSound: false)
+
+        progressTask.cancel()
+        progress = 1.0
+        statusMessage = "Conversion complete"
+        FloatingProgressManager.shared.updateProgress(1.0, message: "Converting videos...")
+    }
+
+    /// Convert videos during prep (standalone; used when user triggers convert from UI outside the prep flow). When prep runs with "Convert", conversion is done inline via runPrepConversionInlineAndUpdateProgress instead.
     func convertPrepVideos() async {
         guard let pending = pendingPrepConversion,
               let converter = videoConverter else {
@@ -2447,45 +2539,35 @@ class MediaManager: ObservableObject {
         let pictureFolder = pending.root.appendingPathComponent(config.settings.pictureFolderName)
         let unconvertedFolder = pictureFolder.appendingPathComponent("z_unconverted")
 
-        // Create z_unconverted folder
         try? fm.createDirectory(at: unconvertedFolder, withIntermediateDirectories: true)
 
         statusMessage = "Moving originals to z_unconverted..."
 
-        // Move video files to z_unconverted (they should have been skipped during prep)
         for (videoURL, _) in pending.videoFiles {
             let filename = videoURL.lastPathComponent
             let unconvertedPath = unconvertedFolder.appendingPathComponent(filename)
             let picturePath = pictureFolder.appendingPathComponent(filename)
 
-            // Priority 1: If file exists in PICTURE folder (duplicate), MOVE it to z_unconverted
             if fm.fileExists(atPath: picturePath.path) {
                 if !fm.fileExists(atPath: unconvertedPath.path) {
-                    // Move the duplicate from PICTURE to z_unconverted
                     try? fm.moveItem(at: picturePath, to: unconvertedPath)
                 } else {
-                    // File already in z_unconverted, just remove the duplicate from PICTURE
                     try? fm.removeItem(at: picturePath)
                 }
             } else if !fm.fileExists(atPath: unconvertedPath.path) {
-                // Priority 2: File not in PICTURE, copy from source to z_unconverted
                 try? fm.copyItem(at: videoURL, to: unconvertedPath)
             }
 
-            // Add source file to converter to create ProRes version in PICTURE folder
-            // For prep: Always 1920x1080, ProRes Proxy, 23.976fps, keep original filename
             converter.addFiles(
                 urls: [videoURL],
                 format: .proResProxy,
-                aspectRatio: .sixteenNine, // Always 16:9 (1920x1080) for prep
+                aspectRatio: .sixteenNine,
                 outputDirectory: pictureFolder,
-                keepOriginalName: true // Keep original filename during prep
+                keepOriginalName: true
             )
         }
 
         statusMessage = "Converting videos to ProRes..."
-
-        // Start conversion
         showConvertVideosPrompt = false
         pendingPrepConversion = nil
 

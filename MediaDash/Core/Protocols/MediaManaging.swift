@@ -12,7 +12,7 @@ protocol MediaManaging: ObservableObject {
     func refreshDockets()
     func buildSessionIndex(folder: SearchFolder)
     func searchSessions(term: String, folder: SearchFolder) async -> SearchResults
-    func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date)
+    func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date, existingPrepFolderName: String?)
     func pickFiles()
     func clearFiles()
 }

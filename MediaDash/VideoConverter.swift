@@ -206,7 +206,8 @@ class VideoConverterManager: ObservableObject {
     }
 
     // Start conversion process
-    func startConversion() async {
+    /// - Parameter playCompletionSound: If false, caller will play the done sound (e.g. when conversion is part of a larger prep flow).
+    func startConversion(playCompletionSound: Bool = true) async {
         guard !jobs.isEmpty else { return }
         guard !isConverting else { return }
 
@@ -227,8 +228,9 @@ class VideoConverterManager: ObservableObject {
 
         isConverting = false
 
-        // Play completion sound
-        NSSound(named: "Glass")?.play()
+        if playCompletionSound {
+            NSSound(named: "Glass")?.play()
+        }
     }
 
     // Convert a single job using FFmpeg

@@ -1,0 +1,21 @@
+---
+description: Run MediaDash releases from the Cursor agent (build, sign, appcast, GitHub release)
+alwaysApply: false
+---
+
+# Release from agent
+
+So the agent can run the full release (build, sign, appcast, push, GitHub release), the **user must complete the one-time setup** in `AGENT_RELEASE_SETUP.md` once on this machine.
+
+## When the user asks to release or run the release script
+
+1. Use the non-interactive script: `./release.sh <version> "<release notes>"`.
+2. Run with **full permissions** so Xcode build, codesign, and keychain work:
+   - `required_permissions: ["all"]`
+   - `timeout: 600000` (10 minutes; build can be slow).
+3. Example: `./release.sh 1.01 "Asana and notifications updates"`.
+4. If the run fails with `xcode-select: error: tool 'xcodebuild' requires Xcode`, remind the user to do the one-time setup (especially `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`).
+
+## Do not use `release_update.sh` from the agent
+
+That script is interactive (prompts for version and release notes). Use `release.sh <version> "<notes>"` instead.

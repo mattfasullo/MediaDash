@@ -13,6 +13,8 @@ struct ManualPrepSheet: View {
     let docket: String
     let wpDate: Date
     let prepDate: Date
+    /// When non-nil, prep files into this existing folder name instead of creating a new one.
+    var existingPrepFolderName: String? = nil
     
     @State private var prepRightViewMode: PrepRightViewMode = .folderPreview
     @State private var fileClassificationOverrides: [UUID: String] = [:]
@@ -561,7 +563,8 @@ struct ManualPrepSheet: View {
             type: .prep,
             docket: docket,
             wpDate: wpDate,
-            prepDate: prepDate
+            prepDate: prepDate,
+            existingPrepFolderName: existingPrepFolderName
         )
     }
 }
