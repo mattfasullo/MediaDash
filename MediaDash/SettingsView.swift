@@ -378,6 +378,10 @@ struct SettingsView: View {
                             settings: $settings,
                             hasUnsavedChanges: $hasUnsavedChanges
                         )
+                        ContactsCSVSection(
+                            settings: $settings,
+                            hasUnsavedChanges: $hasUnsavedChanges
+                        )
                     }
 
                     // Gmail Integration Section (media only)
@@ -2090,6 +2094,82 @@ struct AirtableIntegrationSection: View {
                 .frame(width: 160, alignment: .leading)
             TextField(placeholder, text: binding)
                 .textFieldStyle(.roundedBorder)
+        }
+    }
+}
+
+// MARK: - Contacts CSV Section (Producer: family tree)
+
+struct ContactsCSVSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Image(systemName: "person.2.fill")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("Contacts (family tree)")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+                Text("Connect a CSV or TSV file to build the contacts map. Expected columns: Company, Name, Email, Role, City, Country. TSV (tab-separated) is more reliable—export as Tab-Separated or Text (Tab delimited) from Excel/Numbers.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                HStack(spacing: 8) {
+                    TextField("Path to contacts CSV or TSV", text: Binding(
+                        get: { settings.contactsCSVPath ?? "" },
+                        set: { settings.contactsCSVPath = $0.isEmpty ? nil : $0; hasUnsavedChanges = true }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    Button("Choose…") {
+                        chooseContactsCSV()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                if let path = settings.contactsCSVPath, !path.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.text.fill")
+                            .foregroundColor(.blue)
+                            .font(.system(size: 12))
+                        Text(path)
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+        }
+    }
+
+    private func chooseContactsCSV() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.commaSeparatedText, .plainText]
+        panel.message = "Select contacts file (CSV or TSV; columns: Company, Name, Email, Role, City, Country)"
+        if panel.runModal() == .OK, let sourceURL = panel.url {
+            let destURL = copyContactsCSVToAppSupport(sourceURL: sourceURL)
+            settings.contactsCSVPath = destURL?.path ?? sourceURL.path
+            hasUnsavedChanges = true
+        }
+    }
+
+    /// Copy selected CSV to Application Support so we can read it later (avoids sandbox/security-scoped access issues for ~/Downloads).
+    private func copyContactsCSVToAppSupport(sourceURL: URL) -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        let mediaDash = appSupport.appendingPathComponent("MediaDash", isDirectory: true)
+        try? FileManager.default.createDirectory(at: mediaDash, withIntermediateDirectories: true)
+        let dest = mediaDash.appendingPathComponent("contacts.csv", isDirectory: false)
+        do {
+            if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.removeItem(at: dest) }
+            try FileManager.default.copyItem(at: sourceURL, to: dest)
+            return dest
+        } catch {
+            return nil
         }
     }
 }
@@ -4051,7 +4131,7 @@ struct GeneralOptionsSection: View {
                                     .font(.system(size: 12))
                             }
                             .toggleStyle(.switch)
-                            Toggle(isOn: bindingOptionalBool(for: \.createPrepChecklistFolder, default: true)) {
+                            Toggle(isOn: bindingOptionalBool(for: \.createPrepChecklistFolder, default: false)) {
                                 Text("Create CHECKLIST folder (from Prep Elements)")
                                     .font(.system(size: 12))
                             }

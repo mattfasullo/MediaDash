@@ -24,6 +24,11 @@ enum StagingViewMode: String, CaseIterable {
     case byAssignedLine = "By description line"
 }
 
+enum PrepRightPanelMode: String, CaseIterable {
+    case categorize = "Categorize"
+    case sessionDescription = "Session description"
+}
+
 struct SessionPrepElementsSheet: View {
     let session: DocketInfo
     let asanaService: AsanaService
@@ -43,6 +48,11 @@ struct SessionPrepElementsSheet: View {
     @State private var expandedLineIds: Set<UUID> = []
     @State private var videoDurations: [UUID: String] = [:]
     @State private var hoveredStagedFileId: UUID?
+    @State private var prepRightPanelMode: PrepRightPanelMode = .categorize
+    @State private var fileClassificationOverrides: [UUID: String] = [:]
+    @State private var selectedStagedFileIds: Set<UUID> = []
+    @State private var showExistingPrepSheet = false
+    @State private var existingPrepFoldersForSession: [(name: String, path: String)] = []
 
     private static let videoExtensions = ["mp4", "mov", "avi", "mxf", "m4v", "prores"]
 
@@ -196,6 +206,22 @@ struct SessionPrepElementsSheet: View {
         .onChange(of: stagingViewMode) { _, _ in
             updatePrepTreeNodes()
         }
+        .sheet(isPresented: $showExistingPrepSheet) {
+            ExistingPrepFolderPickerSheet(
+                existingFolders: existingPrepFoldersForSession,
+                onSelectExisting: { path in
+                    doRunPrep(existingFolderName: path)
+                },
+                onCreateNew: {
+                    doRunPrep(existingFolderName: nil)
+                },
+                onCancel: {
+                    showExistingPrepSheet = false
+                }
+            )
+            .compactSheetContent()
+            .sheetBorder()
+        }
     }
 
     private func updatePrepTreeNodes() {
@@ -224,8 +250,97 @@ struct SessionPrepElementsSheet: View {
         HStack(spacing: 0) {
             stagedFilesPanel
             Divider()
-            descriptionPanel
+            rightPanel
         }
+    }
+
+    private var rightPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Picker("", selection: $prepRightPanelMode) {
+                ForEach(PrepRightPanelMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            if prepRightPanelMode == .categorize {
+                categorizePanel
+            } else {
+                descriptionPanel
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var standardClassificationNames: [String] {
+        [settings.pictureFolderName, settings.aafOmfFolderName, settings.musicFolderName, "STINGS", "VO REFS", "MNEMONIC", settings.otherFolderName]
+    }
+
+    private var categorizePanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Drag files from the left to classify. Others are auto-classified by type.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            List {
+                ForEach(standardClassificationNames, id: \.self) { classification in
+                    categorizeDropRow(classification: classification)
+                }
+            }
+            .listStyle(.inset)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func categorizeDropRow(classification: String) -> some View {
+        let fileCount = flattenedFileList.filter { file in
+            let cat = fileClassificationOverrides[stagedFileIdFor(file)] ?? category(for: file)
+            return cat == classification
+        }.count
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "folder.fill")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                Text(classification)
+                    .font(.system(size: 13, weight: .medium))
+                Spacer()
+                Text("\(fileCount) file\(fileCount == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onDrop(of: [.text], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { obj, _ in
+                guard let string = obj as? String else { return }
+                let uuids = string.split(separator: ",").compactMap { UUID(uuidString: String($0.trimmingCharacters(in: .whitespaces))) }
+                DispatchQueue.main.async {
+                    for uuid in uuids {
+                        let rootId = rootIdForStaged(fileId: uuid)
+                        fileClassificationOverrides[rootId] = classification
+                    }
+                }
+            }
+            return true
+        }
+    }
+
+    private func stagedFileIdFor(_ file: FileItem) -> UUID {
+        if stagedFiles.contains(where: { $0.id == file.id }) { return file.id }
+        for root in stagedFiles where file.url.path.hasPrefix(root.url.path + "/") || file.url == root.url {
+            return root.id
+        }
+        return file.id
+    }
+
+    private func rootIdForStaged(fileId: UUID) -> UUID {
+        guard let file = allResolvableFileItems.first(where: { $0.id == fileId }) else { return fileId }
+        return stagedFileIdFor(file)
     }
     
     private var stagedFilesPanel: some View {
@@ -283,40 +398,45 @@ struct SessionPrepElementsSheet: View {
     private var stagingFileList: some View {
         switch stagingViewMode {
         case .byFolder:
-            List {
+            List(selection: $selectedStagedFileIds) {
                 ForEach(prepTreeNodes) { node in
                     PrepTreeNodeView(
                         node: node,
                         stagedFileIds: Set(stagedFiles.map(\.id)),
+                        selectedStagedFileIds: $selectedStagedFileIds,
                         rowContent: stagingFileRow
                     )
+                    .tag(node.file.id)
                 }
             }
             .listStyle(.inset)
         case .byFileType:
-            List {
+            List(selection: $selectedStagedFileIds) {
                 ForEach(filesGroupedByType, id: \.category) { group in
                     Section(group.category) {
                         ForEach(group.files) { file in
                             stagingFileRow(file)
+                                .tag(file.id)
                         }
                     }
                 }
             }
             .listStyle(.inset)
         case .flat:
-            List {
+            List(selection: $selectedStagedFileIds) {
                 ForEach(flattenedFileList) { file in
                     stagingFileRow(file)
+                        .tag(file.id)
                 }
             }
             .listStyle(.inset)
         case .byAssignedLine:
-            List {
+            List(selection: $selectedStagedFileIds) {
                 ForEach(filesGroupedByLine, id: \.line.id) { group in
                     Section {
                         ForEach(group.files) { file in
                             stagingFileRow(file)
+                                .tag(file.id)
                         }
                     } header: {
                         Text(group.line.text)
@@ -331,6 +451,7 @@ struct SessionPrepElementsSheet: View {
                     Section("Unassigned") {
                         ForEach(unassigned) { file in
                             stagingFileRow(file)
+                                .tag(file.id)
                         }
                     }
                 }
@@ -347,6 +468,8 @@ struct SessionPrepElementsSheet: View {
         let isVideo = !file.isDirectory && Self.videoExtensions.contains(file.url.pathExtension.lowercased())
         let isHovered = hoveredStagedFileId == file.id
         let isAssigned = isFileAssignedToPrep(file.id)
+        let rootId = stagedFileIdFor(file)
+        let displayCategory = fileClassificationOverrides[rootId] ?? category(for: file)
         return HStack(alignment: .center, spacing: 6) {
             Image(nsImage: NSWorkspace.shared.icon(forFile: file.url.path))
                 .resizable()
@@ -366,6 +489,9 @@ struct SessionPrepElementsSheet: View {
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }
+                    Text("→ \(displayCategory)")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
                     if isVideo {
                         if let duration = videoDurations[file.id] {
                             Text(duration)
@@ -735,6 +861,22 @@ struct SessionPrepElementsSheet: View {
     
     private func runPrep() {
         let sessionDocket = docketFolderName
+        let docketNumber = manager.config.namingService.parseDocket(sessionDocket).docketNumber
+        Task {
+            let folders = MediaLogic.existingPrepFolders(docketNumber: docketNumber, config: manager.config)
+            await MainActor.run {
+                if !folders.isEmpty {
+                    existingPrepFoldersForSession = folders
+                    showExistingPrepSheet = true
+                } else {
+                    doRunPrep(existingFolderName: nil)
+                }
+            }
+        }
+    }
+
+    private func doRunPrep(existingFolderName: String?) {
+        let sessionDocket = docketFolderName
         let items: [PrepChecklistItem] = descriptionLines
             .filter { !$0.assignedFileIds.isEmpty }
             .map { line in
@@ -753,9 +895,10 @@ struct SessionPrepElementsSheet: View {
         } else {
             manager.pendingPrepChecklistSession = nil
         }
-        manager.pendingPrepFileOverrides = nil
+        manager.pendingPrepFileOverrides = fileClassificationOverrides.isEmpty ? nil : fileClassificationOverrides
         manager.pendingPrepAllFileItemsForChecklist = allResolvableFileItems
         manager.selectedFiles = stagedFiles
+        showExistingPrepSheet = false
         isPresented = false
         let calendar = Calendar.current
         let prepDate = calendar.date(byAdding: .day, value: 1, to: Date()) ?? Date()
@@ -763,7 +906,8 @@ struct SessionPrepElementsSheet: View {
             type: .prep,
             docket: sessionDocket,
             wpDate: Date(),
-            prepDate: prepDate
+            prepDate: prepDate,
+            existingPrepFolderName: existingFolderName
         )
     }
 }
@@ -773,6 +917,7 @@ struct SessionPrepElementsSheet: View {
 struct PrepTreeNodeView<RowContent: View>: View {
     @ObservedObject var node: FileTreeNode
     let stagedFileIds: Set<UUID>
+    @Binding var selectedStagedFileIds: Set<UUID>
     @ViewBuilder let rowContent: (FileItem) -> RowContent
 
     var body: some View {
@@ -782,8 +927,10 @@ struct PrepTreeNodeView<RowContent: View>: View {
                     PrepTreeNodeView(
                         node: childNode,
                         stagedFileIds: stagedFileIds,
+                        selectedStagedFileIds: $selectedStagedFileIds,
                         rowContent: rowContent
                     )
+                    .tag(childNode.file.id)
                 }
             } label: {
                 rowLabel
@@ -796,8 +943,10 @@ struct PrepTreeNodeView<RowContent: View>: View {
                     node.loadChildrenIfNeeded()
                 }
             }
+            .tag(node.file.id)
         } else {
             rowLabel
+                .tag(node.file.id)
         }
     }
 
@@ -807,7 +956,11 @@ struct PrepTreeNodeView<RowContent: View>: View {
             rowContent(node.file)
                 .contentShape(Rectangle())
                 .onDrag {
-                    NSItemProvider(object: node.file.id.uuidString as NSString)
+                    let idsToDrag: [UUID] = selectedStagedFileIds.contains(node.file.id) && selectedStagedFileIds.count > 1
+                        ? Array(selectedStagedFileIds)
+                        : [node.file.id]
+                    let payload = idsToDrag.map(\.uuidString).joined(separator: ",")
+                    return NSItemProvider(object: payload as NSString)
                 }
         } else {
             rowContent(node.file)

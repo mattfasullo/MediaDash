@@ -623,7 +623,9 @@ struct AppSettings: Codable, Equatable {
     
     // Producer UI
     var producerRecentProjects: [ProducerRecentProject]?
-    
+    /// Path to CSV for Contacts "family tree" (Company, Name, Email, Role, City, Country). Set in Settings → Producer.
+    var contactsCSVPath: String?
+
     // Shared Cache (optional - if set, will fetch from shared cache instead of syncing locally)
     var sharedCacheURL: String?
     var useSharedCache: Bool
@@ -736,7 +738,7 @@ struct AppSettings: Codable, Equatable {
             createPrepMusicFolder: true,
             createPrepAafOmfFolder: true,
             createPrepOtherFolder: true,
-            createPrepChecklistFolder: true,
+            createPrepChecklistFolder: false,
             enableFuzzySearch: true,
             defaultSearchFolder: .sessions,
             searchFolderPreference: .rememberLast,
@@ -781,6 +783,7 @@ struct AppSettings: Codable, Equatable {
             airtableMusicTypeTags: "Original Music, Stock Music, Licensed Music",
             airtableProjectTitleField: nil,
             producerRecentProjects: [],
+            contactsCSVPath: nil,
             sharedCacheURL: "/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache",
             useSharedCache: true,
             gmailEnabled: true,

@@ -177,6 +177,9 @@ struct AuthenticatedRootView: View {
             )
         }
         .onAppear {
+                // #region agent log
+                DebugSessionLog.write(location: "GatekeeperView.swift:AuthenticatedRootView.onAppear", message: "AuthenticatedRootView onAppear (launch)", hypothesisId: "H4", data: [:])
+                // #endregion
                 // Sync settings manager with profile settings
                 settingsManager.currentSettings = profile.settings
                 

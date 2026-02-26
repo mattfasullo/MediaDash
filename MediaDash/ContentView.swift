@@ -3,6 +3,33 @@ import AppKit
 import Combine
 import UniformTypeIdentifiers
 
+// #region agent log
+enum DebugSessionLog {
+    private static let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-cc173a.log"
+    static func write(location: String, message: String, hypothesisId: String, runId: String = "run1", data: [String: Any] = [:]) {
+        let payload: [String: Any] = [
+            "sessionId": "cc173a",
+            "runId": runId,
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: payload),
+              let line = String(data: json, encoding: .utf8) else { return }
+        let handle = FileHandle(forWritingAtPath: path)
+        if let h = handle {
+            h.seekToEndOfFile()
+            h.write((line + "\n").data(using: .utf8)!)
+            h.closeFile()
+        } else {
+            try? (line + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        }
+    }
+}
+// #endregion
+
 // Focus management for all navigable buttons
 enum ActionButtonFocus: Hashable {
     case file, prep, calendar, convert, search, jobInfo, archiver
@@ -167,6 +194,9 @@ struct ContentView: View {
             .focusable()
             .focused($mainViewFocused)
             .onAppear {
+                // #region agent log
+                DebugSessionLog.write(location: "ContentView.swift:onAppear", message: "ContentView onAppear", hypothesisId: "H4", data: [:])
+                // #endregion
                 mainViewFocused = true
             }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
@@ -249,11 +279,17 @@ struct ContentView: View {
                 }
             }
             .onChange(of: manager.selectedFiles) { oldFiles, newFiles in
+                // #region agent log
+                let willSchedule = pendingJobType != nil && !newFiles.isEmpty && oldFiles.isEmpty
+                DebugSessionLog.write(location: "ContentView.swift:onChange(selectedFiles)", message: "onChange selectedFiles", hypothesisId: "H5", data: ["oldCount": oldFiles.count, "newCount": newFiles.count, "pendingJobTypeNil": pendingJobType == nil, "willScheduleSheet": willSchedule])
+                // #endregion
                 // Auto-continue filing process when files are staged after clicking File button
                 if pendingJobType != nil, !newFiles.isEmpty, oldFiles.isEmpty {
-                    // Files were just added and we have a pending job type
-                    // Automatically continue to docket selection (preserve pendingFileThenPrep state)
-                    showDocketSelectionSheet = true
+                    // Defer presenting the sheet to the next run loop so the main thread isn't
+                    // doing a large selectedFiles re-render and sheet presentation in the same cycle
+                    DispatchQueue.main.async {
+                        showDocketSelectionSheet = true
+                    }
                 }
             }
             .modifier(SheetsModifier(
@@ -1306,6 +1342,69 @@ struct ActionButtonWithShortcut: View {
 }
 
 
+// MARK: - Existing Prep Folder Picker Sheet
+
+struct ExistingPrepFolderPickerSheet: View {
+    /// (displayName, fullPath) so we can add files to the folder in the correct year.
+    let existingFolders: [(name: String, path: String)]
+    let onSelectExisting: (String) -> Void  // passes full path
+    let onCreateNew: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Prep folders exist for this docket")
+                .font(.headline)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+            Text("Add files to an existing folder or create a new one.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+                .padding(.bottom, 12)
+            Divider()
+            List {
+                Button(action: onCreateNew) {
+                    HStack {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Create new prep folder")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    .padding(.vertical, 6)
+                }
+                .listRowBackground(Color.green.opacity(0.08))
+                Section {
+                    ForEach(existingFolders, id: \.path) { folder in
+                        Button(action: { onSelectExisting(folder.path) }) {
+                            HStack {
+                                Image(systemName: "folder.fill")
+                                    .foregroundColor(.blue)
+                                Text(folder.name)
+                                    .font(.system(size: 13))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .padding(.vertical, 6)
+                        }
+                    }
+                } header: {
+                    Text("Existing folders")
+                }
+            }
+            .listStyle(.inset)
+            Divider()
+            HStack {
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+            }
+            .padding(12)
+        }
+        .frame(minWidth: 380, minHeight: 280)
+    }
+}
+
 // MARK: - Docket Selection Search View (New)
 
 struct DocketSearchView: View {
@@ -1328,7 +1427,7 @@ struct DocketSearchView: View {
     @State private var allDockets: [String] = []
     @State private var jobNameByDocket: [String: String] = [:]
     @State private var showExistingPrepAlert = false
-    @State private var existingPrepFolders: [String] = []
+    @State private var existingPrepFolders: [(name: String, path: String)] = []
     @State private var prefillDocketNumber: String? = nil
     @State private var prefillJobName: String? = nil
 
@@ -1703,18 +1802,29 @@ struct DocketSearchView: View {
             }
             return .ignored
         }
-        .alert("Existing Prep Folder Found", isPresented: $showExistingPrepAlert) {
-            Button("Use Existing", action: useExistingPrepFolder)
-            Button("Create New", action: createNewPrepFolder)
-            Button("Cancel", role: .cancel) {
-                showExistingPrepAlert = false
-            }
-        } message: {
-            if existingPrepFolders.count == 1 {
-                Text("A prep folder already exists for this docket:\n\(existingPrepFolders[0])\n\nDo you want to add files to the existing folder or create a new one?")
-            } else {
-                Text("\(existingPrepFolders.count) prep folders exist for this docket. Do you want to add to the most recent one or create a new folder?")
-            }
+        .sheet(isPresented: $showExistingPrepAlert) {
+            ExistingPrepFolderPickerSheet(
+                existingFolders: existingPrepFolders,
+                onSelectExisting: { folderName in
+                    showExistingPrepAlert = false
+                    isPresented = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        onConfirm(selectedDocket, folderName)
+                    }
+                },
+                onCreateNew: {
+                    showExistingPrepAlert = false
+                    isPresented = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        onConfirm(selectedDocket, nil)
+                    }
+                },
+                onCancel: {
+                    showExistingPrepAlert = false
+                }
+            )
+            .compactSheetContent()
+            .sheetBorder()
         }
     }
 
@@ -1762,30 +1872,11 @@ struct DocketSearchView: View {
 
     private func checkForExistingPrepFolders(docket: String) {
         Task {
-            let prepPath = manager.config.getPaths().prep
-            let fm = FileManager.default
             let docketNumber = manager.config.namingService.parseDocket(docket).docketNumber
-
-            var existingFolders: [(name: String, modDate: Date)] = []
-
-            if let items = try? fm.contentsOfDirectory(at: prepPath, includingPropertiesForKeys: [.contentModificationDateKey]) {
-                for item in items {
-                    guard item.hasDirectoryPath else { continue }
-                    let name = item.lastPathComponent
-                    // Match prep folders for this docket: start with docket number + "_"
-                    if name.hasPrefix("\(docketNumber)_") && (name.contains("_PREP_") || name.contains("PREP")) {
-                        let modDate = (try? item.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                        existingFolders.append((name, modDate))
-                    }
-                }
-            }
-            // Most recent first so "Use Existing" uses the latest folder
-            existingFolders.sort { $0.modDate > $1.modDate }
-            let folderNames = existingFolders.map(\.name)
-
+            let folders = MediaLogic.existingPrepFolders(docketNumber: docketNumber, config: manager.config)
             await MainActor.run {
-                if !folderNames.isEmpty {
-                    existingPrepFolders = folderNames
+                if !folders.isEmpty {
+                    existingPrepFolders = folders
                     showExistingPrepAlert = true
                 } else {
                     isPresented = false
@@ -1794,23 +1885,6 @@ struct DocketSearchView: View {
                     }
                 }
             }
-        }
-    }
-
-    private func useExistingPrepFolder() {
-        let folderToUse = existingPrepFolders.first
-        showExistingPrepAlert = false
-        isPresented = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            onConfirm(selectedDocket, folderToUse)
-        }
-    }
-
-    private func createNewPrepFolder() {
-        showExistingPrepAlert = false
-        isPresented = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            onConfirm(selectedDocket, nil)
         }
     }
 
@@ -4144,8 +4218,18 @@ struct SheetsModifier: ViewModifier {
     @Binding var showDownloadDemosTaskPicker: Bool
     var onFileThenPrepConfirm: (String) -> Void
 
+    // #region agent log
+    private static var bodyInvocationCount: Int = 0
+    // #endregion
+
     func body(content: Content) -> some View {
         content
+            .onAppear {
+                // #region agent log
+                Self.bodyInvocationCount += 1
+                DebugSessionLog.write(location: "ContentView.swift:SheetsModifier.body", message: "SheetsModifier body", hypothesisId: "H1", data: ["invocation": Self.bodyInvocationCount, "showDocketSelectionSheet": showDocketSelectionSheet, "pendingJobTypeNil": pendingJobType == nil])
+                // #endregion
+            }
             .sheet(isPresented: $showNewDocketSheet, onDismiss: {
                 // Reset so next open is fresh
             }) {
@@ -4202,6 +4286,9 @@ struct SheetsModifier: ViewModifier {
                     },
                     cacheManager: cacheManager
                 )
+                // #region agent log
+                .onAppear { DebugSessionLog.write(location: "ContentView.swift:SheetsModifier.docketSheetContent", message: "Docket sheet content closure executing", hypothesisId: "H2", data: ["showDocketSelectionSheet": showDocketSelectionSheet]) }
+                // #endregion
                 .sheetBorder()
             }
             .sheet(isPresented: $showManualPrepSheet, onDismiss: {

@@ -68,6 +68,17 @@ struct SimianPostView: View {
     @State private var isCreatingFolder = false
     @State private var newFolderError: String?
 
+    // New folder with selection: create a folder and move selected items into it
+    @State private var showNewFolderWithSelectionSheet = false
+    @State private var newFolderWithSelectionName = ""
+    @State private var newFolderWithSelectionIds: [String] = []
+    @State private var newFolderWithSelectionParentId: String?
+    @State private var isCreatingFolderWithSelection = false
+    @State private var newFolderWithSelectionError: String?
+
+    /// Multi-selection in folder tree (Cmd+click to add). Used for "New Folder with Selection".
+    @State private var selectedTreeIds: Set<String> = []
+
     /// Keyboard focus in folder tree: 0 = project root, 1..<count = flatTreeList indices. Nil when in project list or tree empty.
     @State private var keyboardFocusTreeIndex: Int?
 
@@ -158,6 +169,9 @@ struct SimianPostView: View {
         .sheet(isPresented: $showNewFolderSheet) {
             newFolderSheet
         }
+        .sheet(isPresented: $showNewFolderWithSelectionSheet) {
+            newFolderWithSelectionSheet
+        }
         .alert("Remove from Simian?", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { performPendingDelete() }
@@ -242,6 +256,40 @@ struct SimianPostView: View {
         }
     }
 
+    private var newFolderWithSelectionSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("New Folder with Selection")
+                .font(.headline)
+            Text("Create a folder and move \(newFolderWithSelectionIds.count) selected item(s) into it.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TextField("Folder name", text: $newFolderWithSelectionName)
+                .textFieldStyle(.roundedBorder)
+            if let err = newFolderWithSelectionError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    showNewFolderWithSelectionSheet = false
+                    newFolderWithSelectionError = nil
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Create") { submitNewFolderWithSelection() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newFolderWithSelectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCreatingFolderWithSelection)
+            }
+        }
+        .padding(24)
+        .frame(width: 360)
+        .onAppear {
+            newFolderWithSelectionName = "New Folder"
+            newFolderWithSelectionError = nil
+        }
+    }
+
     private func submitNewFolder() {
         let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, let projectId = selectedProjectId else { return }
@@ -270,6 +318,53 @@ struct SimianPostView: View {
                 await MainActor.run {
                     isCreatingFolder = false
                     newFolderError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func submitNewFolderWithSelection() {
+        let name = newFolderWithSelectionName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let projectId = selectedProjectId else { return }
+        isCreatingFolderWithSelection = true
+        newFolderWithSelectionError = nil
+        let parentId = newFolderWithSelectionParentId
+        let itemIds = newFolderWithSelectionIds
+        Task {
+            do {
+                let newFolderId = try await simianService.createFolderPublic(projectId: projectId, folderName: name, parentFolderId: parentId)
+                var movedCount = 0
+                for treeId in itemIds {
+                    if treeId.hasPrefix("file-"), treeId.count > 5 {
+                        let fileId = String(treeId.dropFirst(5))
+                        try await simianService.moveFile(projectId: projectId, fileId: fileId, folderId: newFolderId)
+                        movedCount += 1
+                    }
+                    // Folders: Simian API has no move_folder; skip
+                }
+                await MainActor.run {
+                    isCreatingFolderWithSelection = false
+                    showNewFolderWithSelectionSheet = false
+                    newFolderWithSelectionName = ""
+                    newFolderWithSelectionError = nil
+                    selectedTreeIds.removeAll()
+                    if parentId == nil {
+                        loadFolders(projectId: projectId, parentFolderId: nil)
+                    } else {
+                        folderChildrenCache.removeValue(forKey: parentId!)
+                        folderFilesCache.removeValue(forKey: parentId!)
+                        expandedFolderIds.insert(parentId!)
+                        loadFolderChildren(projectId: projectId, folderId: parentId!)
+                    }
+                    // Invalidate new folder's file cache so it reloads when expanded
+                    folderFilesCache.removeValue(forKey: newFolderId)
+                    statusMessage = movedCount > 0 ? "Folder created; \(movedCount) file(s) moved" : "Folder created"
+                    statusIsError = false
+                }
+            } catch {
+                await MainActor.run {
+                    isCreatingFolderWithSelection = false
+                    newFolderWithSelectionError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 }
             }
         }
@@ -609,7 +704,7 @@ struct SimianPostView: View {
                     let treeList = flatTreeList(projectId: projectId)
                     let effectiveTreeFocusIndex = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
                     ScrollViewReader { proxy in
-                        List {
+                        List(selection: $selectedTreeIds) {
                             // Project root - always selectable
                             ProjectRootRowView(
                                 isSelected: selectedDestinationFolderId == nil,
@@ -624,6 +719,7 @@ struct SimianPostView: View {
                                 }
                             )
                             .id("project-root")
+                            .tag("project-root")
                             .contextMenu {
                                 Button("New Folder") {
                                     newFolderParentId = nil
@@ -640,18 +736,19 @@ struct SimianPostView: View {
                                 }
                             }
 
-                            // Tree of folders and files (folders expandable, click to select)
+                            // Tree of folders and files (folders expandable, click to select; Cmd+click for multi-selection)
                             ForEach(Array(treeList.enumerated()), id: \.element.id) { offset, item in
                                 let treeIndex = offset + 1
                                 Group {
                                     switch item {
                                 case .folder(let f, let d, let p, let parentId):
-                                    folderTreeRow(projectId: projectId, folder: f, depth: d, path: p, parentFolderId: parentId, siblings: folderSiblings(parentId: parentId), treeList: treeList, treeIndex: treeIndex, isKeyboardFocused: effectiveTreeFocusIndex == treeIndex)
+                                    folderTreeRow(projectId: projectId, folder: f, depth: d, path: p, parentFolderId: parentId, siblings: folderSiblings(parentId: parentId), treeList: treeList, treeIndex: treeIndex, isKeyboardFocused: effectiveTreeFocusIndex == treeIndex, onNewFolderWithSelection: { startNewFolderWithSelection(projectId: projectId, treeList: treeList, rightClickedId: item.id) })
                                     case .file(let file, let d, let p, let parentId):
-                                        fileTreeRow(file: file, depth: d, path: p, parentFolderId: parentId, siblings: fileSiblings(parentFolderId: parentId), treeList: treeList, isKeyboardFocused: effectiveTreeFocusIndex == treeIndex)
+                                        fileTreeRow(file: file, depth: d, path: p, parentFolderId: parentId, siblings: fileSiblings(parentFolderId: parentId), treeList: treeList, isKeyboardFocused: effectiveTreeFocusIndex == treeIndex, onNewFolderWithSelection: { startNewFolderWithSelection(projectId: projectId, treeList: treeList, rightClickedId: item.id) })
                                     }
                                 }
                                 .id(item.id)
+                                .tag(item.id)
                             }
                             if treeList.count >= maxTotalTreeRows {
                                 Text("(Showing first \(maxTotalTreeRows) folders — right-click any folder for link to open in Simian)")
@@ -665,11 +762,42 @@ struct SimianPostView: View {
                             guard let idx = newIndex, let id = treeRowId(projectId: projectId, index: idx) else { return }
                             proxy.scrollTo(id, anchor: .center)
                         }
+                        .onChange(of: selectedTreeIds) { _, ids in
+                            if ids.count == 1, let id = ids.first, id.hasPrefix("f-"), id.count > 2 {
+                                selectedDestinationFolderId = String(id.dropFirst(2))
+                                if let item = treeList.first(where: { $0.id == id }),
+                                   case .folder(_, _, let path, _) = item {
+                                    selectedDestinationPath = path
+                                }
+                                keyboardFocusTreeIndex = treeList.firstIndex(where: { $0.id == id }).map { $0 + 1 } ?? keyboardFocusTreeIndex
+                            }
+                        }
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Start "New Folder with Selection": resolve effective selection (same parent), show sheet.
+    private func startNewFolderWithSelection(projectId: String, treeList: [SimianTreeItem], rightClickedId: String) {
+        let effectiveIds: Set<String> = selectedTreeIds.contains(rightClickedId) ? selectedTreeIds : [rightClickedId]
+        func parentId(for treeId: String) -> String? {
+            guard let item = treeList.first(where: { $0.id == treeId }) else { return nil }
+            switch item {
+            case .folder(_, _, _, let pid): return pid
+            case .file(_, _, _, let pid): return pid
+            }
+        }
+        let rightParent = parentId(for: rightClickedId)
+        let sameParentIds = effectiveIds.filter { parentId(for: $0) == rightParent }
+        let idsToMove = Array(sameParentIds).sorted()
+        guard !idsToMove.isEmpty else { return }
+        newFolderWithSelectionIds = idsToMove
+        newFolderWithSelectionParentId = rightParent
+        newFolderWithSelectionName = "New Folder"
+        newFolderWithSelectionError = nil
+        showNewFolderWithSelectionSheet = true
     }
 
     private var destinationAndPostView: some View {
@@ -953,7 +1081,7 @@ struct SimianPostView: View {
     }
 
     /// Single folder row in the tree: expand chevron + clickable row to select + draggable for reorder
-    private func folderTreeRow(projectId: String, folder: SimianFolder, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFolder], treeList: [SimianTreeItem], treeIndex: Int, isKeyboardFocused: Bool = false) -> some View {
+    private func folderTreeRow(projectId: String, folder: SimianFolder, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFolder], treeList: [SimianTreeItem], treeIndex: Int, isKeyboardFocused: Bool = false, onNewFolderWithSelection: @escaping () -> Void) -> some View {
         let isExpanded = expandedFolderIds.contains(folder.id)
         let isLoading = loadingFolderIds.contains(folder.id)
         let hasOrMayHaveChildren = folderChildrenCache[folder.id] != nil || !isExpanded
@@ -1022,6 +1150,7 @@ struct SimianPostView: View {
                 newFolderName = ""
                 showNewFolderSheet = true
             },
+            onNewFolderWithSelection: onNewFolderWithSelection,
             onReorder: { draggedFolderId in
                 reorderFolder(projectId: projectId, folderId: draggedFolderId, parentFolderId: parentFolderId, dropBeforeFolderId: folder.id)
             },
@@ -1034,7 +1163,7 @@ struct SimianPostView: View {
     }
 
     /// File row (display only; draggable for reorder)
-    private func fileTreeRow(file: SimianFile, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFile], treeList: [SimianTreeItem], isKeyboardFocused: Bool = false) -> some View {
+    private func fileTreeRow(file: SimianFile, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFile], treeList: [SimianTreeItem], isKeyboardFocused: Bool = false, onNewFolderWithSelection: @escaping () -> Void) -> some View {
         let nextFileId = siblings.firstIndex(where: { $0.id == file.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
         return FileTreeRowContentView(
             projectId: selectedProjectId ?? "",
@@ -1058,6 +1187,7 @@ struct SimianPostView: View {
                 pendingDeleteParentFolderId = parentFolderId
                 showDeleteConfirmation = true
             },
+            onNewFolderWithSelection: onNewFolderWithSelection,
             onReorderInsertBefore: { dropBeforeFileId, draggedFileId in
                 reorderFile(projectId: selectedProjectId ?? "", fileId: draggedFileId, parentFolderId: parentFolderId, dropBeforeFileId: dropBeforeFileId)
             },
@@ -1795,6 +1925,7 @@ private struct FolderTreeRowContentView: View {
     let onRename: () -> Void
     let onDelete: () -> Void
     let onNewFolder: () -> Void
+    let onNewFolderWithSelection: () -> Void
     let onReorder: (String) -> Void
     let onReorderInsertBefore: (String?, String) -> Void
     let canReorder: Bool
@@ -1915,6 +2046,7 @@ private struct FolderTreeRowContentView: View {
             }
             .draggable(canReorder ? dragPayload : "simian|none|||")
             .contextMenu {
+                Button("New Folder with Selection", action: onNewFolderWithSelection)
                 Button("New Folder", action: onNewFolder)
                 Button("Rename…", action: onRename)
                 Button("Copy Link", action: onCopyLink)
@@ -1944,6 +2076,7 @@ private struct FileTreeRowContentView: View {
     let nextFileId: String? // Next file in same folder (for "insert after" line); nil = last file
     let onRename: () -> Void
     let onDelete: () -> Void
+    let onNewFolderWithSelection: () -> Void
     let onReorderInsertBefore: (String?, String) -> Void // (dropBeforeFileId, draggedFileId); nil = insert at end
     let canReorder: Bool
 
@@ -2001,6 +2134,7 @@ private struct FileTreeRowContentView: View {
         }
         .draggable(canReorder ? dragPayload : "simian|none|||")
         .contextMenu {
+            Button("New Folder with Selection", action: onNewFolderWithSelection)
             Button("Rename…", action: onRename)
             Divider()
             Button("Remove from Simian…", role: .destructive, action: onDelete)

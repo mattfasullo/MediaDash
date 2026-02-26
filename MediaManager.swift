@@ -421,7 +421,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
     let fileCount: Int // For directories, counts files recursively; for files, always 1
     let fileSize: Int64? // File size in bytes (nil for directories)
 
-    init(url: URL) {
+    nonisolated init(url: URL) {
         self.url = url
         self.name = url.lastPathComponent
 
@@ -465,7 +465,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
         return formatter.string(fromByteCount: size)
     }
 
-    private static func countFilesRecursively(in directory: URL, maxFiles: Int = 10000) -> Int {
+    private nonisolated static func countFilesRecursively(in directory: URL, maxFiles: Int = 10000) -> Int {
         guard let enumerator = FileManager.default.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -669,6 +669,85 @@ enum MediaLogic {
         }
         
         return results
+    }
+    
+    /// Normalize docket to the numeric base (e.g. "26044" or "26044-A" -> "26044") for matching prep folder names.
+    private nonisolated static func docketBaseNumber(_ docketNumber: String) -> String {
+        if let idx = docketNumber.firstIndex(of: "-") {
+            return String(docketNumber[..<idx])
+        }
+        return docketNumber
+    }
+
+    /// Scan all year folders for prep directories that have the same docket number. Any folder in prep whose name
+    /// starts with the docket number (e.g. 26044_) counts. Returns (displayName, fullPath) sorted by most recent first.
+    nonisolated static func existingPrepFolders(docketNumber: String, config: AppConfig) -> [(name: String, path: String)] {
+        let fm = FileManager.default
+        let baseNum = docketBaseNumber(docketNumber)
+        let serverBase = URL(fileURLWithPath: config.settings.serverBasePath)
+        let yearPrefix = config.settings.yearPrefix
+        let prepFolderName = config.settings.prepFolderName
+        var folderPaths: [String: (path: String, modDate: Date)] = [:]
+        guard !serverBase.path.isEmpty,
+              fm.fileExists(atPath: serverBase.path),
+              let yearFolders = try? fm.contentsOfDirectory(at: serverBase, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        let prefixToMatch = "\(baseNum)_"
+        for yearFolder in yearFolders where yearFolder.lastPathComponent.hasPrefix(yearPrefix) {
+            let yearString = yearFolder.lastPathComponent.replacingOccurrences(of: yearPrefix, with: "")
+            let prepPath = yearFolder.appendingPathComponent("\(yearString)_\(prepFolderName)")
+            guard fm.fileExists(atPath: prepPath.path),
+                  let items = try? fm.contentsOfDirectory(at: prepPath, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+                continue
+            }
+            for item in items {
+                guard item.hasDirectoryPath, !item.lastPathComponent.hasPrefix(".") else { continue }
+                let name = item.lastPathComponent
+                guard name.hasPrefix(prefixToMatch) else { continue }
+                let fullPath = item.path
+                let modDate = (try? item.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                if let existing = folderPaths[name] {
+                    if modDate > existing.modDate { folderPaths[name] = (fullPath, modDate) }
+                } else {
+                    folderPaths[name] = (fullPath, modDate)
+                }
+            }
+        }
+        return folderPaths.sorted { $0.value.modDate > $1.value.modDate }.map { (name: $0.key, path: $0.value.path) }
+    }
+
+    /// Returns the work picture folder name to use when building a new prep folder name.
+    /// Scans work picture for folders matching the docket number; prefers the shortest name (clean, no extraneous info).
+    /// Example: for docket "26044_Sleep Country Do Not Disturb-Sleep Easy...", if work picture has "26044_Sleep Country", returns that.
+    nonisolated static func workPictureFolderNameForPrep(docket: String, config: AppConfig) -> String? {
+        let docketNumber = config.namingService.parseDocket(docket).docketNumber
+        let fm = FileManager.default
+        let serverBase = URL(fileURLWithPath: config.settings.serverBasePath)
+        let yearPrefix = config.settings.yearPrefix
+        let workPictureFolderName = config.settings.workPictureFolderName
+        
+        guard fm.fileExists(atPath: serverBase.path) else { return nil }
+        guard let yearFolders = try? fm.contentsOfDirectory(at: serverBase, includingPropertiesForKeys: nil) else { return nil }
+        
+        var matchingNames: [String] = []
+        for yearFolder in yearFolders where yearFolder.lastPathComponent.hasPrefix(yearPrefix) {
+            let yearString = yearFolder.lastPathComponent.replacingOccurrences(of: yearPrefix, with: "")
+            let workPicPath = yearFolder.appendingPathComponent("\(yearString)_\(workPictureFolderName)")
+            guard fm.fileExists(atPath: workPicPath.path) else { continue }
+            guard let items = try? fm.contentsOfDirectory(at: workPicPath, includingPropertiesForKeys: nil) else { continue }
+            for item in items {
+                guard item.hasDirectoryPath, !item.lastPathComponent.hasPrefix(".") else { continue }
+                let name = item.lastPathComponent
+                if name == docketNumber || name.hasPrefix("\(docketNumber)_") {
+                    if !matchingNames.contains(name) {
+                        matchingNames.append(name)
+                    }
+                }
+            }
+        }
+        // Prefer shortest name (clean folder without extraneous session info)
+        return matchingNames.min(by: { $0.count < $1.count })
     }
     
     nonisolated static func buildIndex(config: AppConfig, folder: SearchFolder = .sessions) -> [String] {
@@ -1388,12 +1467,20 @@ class MediaManager: ObservableObject {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
-        panel.begin { response in
-            if response == .OK {
-                let items = panel.urls.map { FileItem(url: $0) }
-                let currentIDs = Set(self.selectedFiles.map { $0.url })
-                let new = items.filter { !currentIDs.contains($0.url) }
-                self.selectedFiles.append(contentsOf: new)
+        panel.begin { [weak self] response in
+            guard let self = self, response == .OK else { return }
+            let urls = panel.urls
+            let currentURLs = Set(self.selectedFiles.map { $0.url })
+            let newURLs = urls.filter { !currentURLs.contains($0) }
+            guard !newURLs.isEmpty else { return }
+            // Build FileItems off the main thread to avoid freezing when selecting folders
+            // (FileItem.init does recursive directory counting for each folder)
+            Task.detached(priority: .userInitiated) { [weak self] in
+                let items = newURLs.map { FileItem(url: $0) }
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    self.selectedFiles.append(contentsOf: items)
+                }
             }
         }
     }
@@ -1650,8 +1737,12 @@ class MediaManager: ObservableObject {
                 
                 // Use existing prep folder when user chose "Use Existing", otherwise create new
                 let root: URL
-                if let existingName = useExistingPrepFolder, !existingName.isEmpty {
-                    root = paths.prep.appendingPathComponent(existingName)
+                if let existingNameOrPath = useExistingPrepFolder, !existingNameOrPath.isEmpty {
+                    if existingNameOrPath.contains("/") {
+                        root = URL(fileURLWithPath: existingNameOrPath)
+                    } else {
+                        root = paths.prep.appendingPathComponent(existingNameOrPath)
+                    }
                     guard fm.fileExists(atPath: root.path) else {
                         await MainActor.run {
                             self.errorMessage = "Existing prep folder not found: \(root.path)"
@@ -1662,7 +1753,9 @@ class MediaManager: ObservableObject {
                         return
                     }
                 } else {
-                    let folder = currentConfig.prepFolderName(docket: docket, date: prepDate)
+                    // Use work picture folder name for prep naming when available (clean name without extraneous session info)
+                    let docketForNaming = MediaLogic.workPictureFolderNameForPrep(docket: docket, config: currentConfig) ?? docket
+                    let folder = currentConfig.prepFolderName(docket: docketForNaming, date: prepDate)
                     root = paths.prep.appendingPathComponent(folder)
                     prepDestinationFolder = root
                     if !fm.fileExists(atPath: root.path) {
@@ -1871,7 +1964,7 @@ class MediaManager: ObservableObject {
                     }
                 }
 
-                if (currentConfig.settings.createPrepChecklistFolder ?? true),
+                if (currentConfig.settings.createPrepChecklistFolder ?? false),
                    let session = checklistSession, session.docket == docket {
                     let filesForChecklist = allFileItemsForChecklist ?? files
                     MediaLogic.applyPrepChecklistAssignments(session: session, root: root, stagedFiles: filesForChecklist)
@@ -2089,6 +2182,28 @@ class MediaManager: ObservableObject {
         } catch {
             print("Error copying file from \(from.path) to \(to.path): \(error.localizedDescription)")
             return false
+        }
+    }
+
+    /// Copy directory tree preserving structure; skips files that already exist at destination.
+    nonisolated private func copyDirectoryPreservingStructure(from sourceDir: URL, to destDir: URL, fm: FileManager) {
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: sourceDir.path, isDirectory: &isDir), isDir.boolValue else { return }
+        if !fm.fileExists(atPath: destDir.path) {
+            try? fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        }
+        guard let contents = try? fm.contentsOfDirectory(at: sourceDir, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles) else { return }
+        for item in contents {
+            var itemIsDir: ObjCBool = false
+            guard fm.fileExists(atPath: item.path, isDirectory: &itemIsDir) else { continue }
+            let destItem = destDir.appendingPathComponent(item.lastPathComponent)
+            if itemIsDir.boolValue {
+                copyDirectoryPreservingStructure(from: item, to: destItem, fm: fm)
+            } else {
+                if !fm.fileExists(atPath: destItem.path) {
+                    try? fm.copyItem(at: item, to: destItem)
+                }
+            }
         }
     }
 

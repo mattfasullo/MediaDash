@@ -26,8 +26,11 @@ struct ManualPrepSheet: View {
     @State private var tempSelection: Set<UUID> = []
     @State private var draggedFileId: UUID?
     @State private var showAddClassificationSheet = false
+    @State private var selectedFileIds: Set<UUID> = []
     @State private var newClassificationName = ""
-    
+    @State private var showExistingPrepSheet = false
+    @State private var existingPrepFoldersList: [(name: String, path: String)] = []
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -53,6 +56,22 @@ struct ManualPrepSheet: View {
             newClassificationName = ""
         }) {
             addClassificationSheet
+        }
+        .sheet(isPresented: $showExistingPrepSheet) {
+            ExistingPrepFolderPickerSheet(
+                existingFolders: existingPrepFoldersList,
+                onSelectExisting: { path in
+                    doRunPrep(existingFolderNameOrPath: path)
+                },
+                onCreateNew: {
+                    doRunPrep(existingFolderNameOrPath: nil)
+                },
+                onCancel: {
+                    showExistingPrepSheet = false
+                }
+            )
+            .compactSheetContent()
+            .sheetBorder()
         }
     }
     
@@ -146,8 +165,9 @@ struct ManualPrepSheet: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
             
-            List {
+            List(selection: $selectedFileIds) {
                 ForEach(manager.selectedFiles) { file in
+                    let displayCategory = fileClassificationOverrides[file.id] ?? autoCategory(for: file.url)
                     HStack {
                         Image(nsImage: NSWorkspace.shared.icon(forFile: file.url.path))
                             .resizable()
@@ -169,14 +189,17 @@ struct ManualPrepSheet: View {
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
+                                Text("→ \(displayCategory)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
                             }
                         }
                         
                         Spacer()
                         
-                        // Show classification (folder preview) or checklist assignment count
-                        if prepRightViewMode == .folderPreview, let cat = fileClassificationOverrides[file.id] {
-                            Text(cat)
+                        // Show classification override badge (folder preview) or checklist assignment count
+                        if prepRightViewMode == .folderPreview, fileClassificationOverrides[file.id] != nil {
+                            Text(displayCategory)
                                 .font(.caption2)
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 6)
@@ -207,8 +230,13 @@ struct ManualPrepSheet: View {
                     }
                     .onDrag {
                         draggedFileId = file.id
-                        return NSItemProvider(object: file.id.uuidString as NSString)
+                        let idsToDrag: [UUID] = selectedFileIds.contains(file.id) && selectedFileIds.count > 1
+                            ? Array(selectedFileIds)
+                            : [file.id]
+                        let payload = idsToDrag.map(\.uuidString).joined(separator: ",")
+                        return NSItemProvider(object: payload as NSString)
                     }
+                    .tag(file.id)
                 }
             }
             .listStyle(.inset)
@@ -313,8 +341,10 @@ struct ManualPrepSheet: View {
         .onDrop(of: [.text], isTargeted: nil) { providers in
             guard let provider = providers.first else { return false }
             _ = provider.loadObject(ofClass: NSString.self) { string, _ in
-                if let uuidString = string as? String, let uuid = UUID(uuidString: uuidString) {
-                    DispatchQueue.main.async {
+                guard let string = string as? String else { return }
+                let uuids = string.split(separator: ",").compactMap { UUID(uuidString: String($0.trimmingCharacters(in: .whitespaces))) }
+                DispatchQueue.main.async {
+                    for uuid in uuids {
                         fileClassificationOverrides[uuid] = classification
                     }
                 }
@@ -538,33 +568,47 @@ struct ManualPrepSheet: View {
     }
     
     private func runPrep() {
-        // Folder preview overrides: fileId -> classification folder name (only used classifications get folders when files are copied)
+        if existingPrepFolderName != nil {
+            doRunPrep(existingFolderNameOrPath: existingPrepFolderName)
+            return
+        }
+        let docketNumber = manager.config.namingService.parseDocket(docket).docketNumber
+        Task {
+            let folders = MediaLogic.existingPrepFolders(docketNumber: docketNumber, config: manager.config)
+            await MainActor.run {
+                if !folders.isEmpty {
+                    existingPrepFoldersList = folders
+                    showExistingPrepSheet = true
+                } else {
+                    doRunPrep(existingFolderNameOrPath: nil)
+                }
+            }
+        }
+    }
+
+    private func doRunPrep(existingFolderNameOrPath: String?) {
         if !fileClassificationOverrides.isEmpty {
             manager.pendingPrepFileOverrides = fileClassificationOverrides
         } else {
             manager.pendingPrepFileOverrides = nil
         }
-        
-        // Checklist session (when user switched to Checklist view and parsed/assigned items)
         if prepRightViewMode == .checklist, !items.isEmpty {
-            let session = PrepChecklistSession(
+            manager.pendingPrepChecklistSession = PrepChecklistSession(
                 docket: docket,
                 items: items,
                 rawChecklistText: checklistText
             )
-            manager.pendingPrepChecklistSession = session
         } else {
             manager.pendingPrepChecklistSession = nil
         }
-        
+        showExistingPrepSheet = false
         isPresented = false
-        
         manager.runJob(
             type: .prep,
             docket: docket,
             wpDate: wpDate,
             prepDate: prepDate,
-            existingPrepFolderName: existingPrepFolderName
+            existingPrepFolderName: existingFolderNameOrPath
         )
     }
 }

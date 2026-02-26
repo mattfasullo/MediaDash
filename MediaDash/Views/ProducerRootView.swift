@@ -5,6 +5,14 @@ extension Foundation.Notification.Name {
     static let producerOpenRecentProject = Foundation.Notification.Name("ProducerOpenRecentProject")
 }
 
+/// Producer main area: Dockets (Asana search/push) or Contacts (CSV family tree).
+private enum ProducerPage {
+    case dockets
+    case contacts
+}
+
+private let contentPadding: CGFloat = 20
+
 /// Minimal authenticated root for Producer role.
 /// Same layout as media: sidebar + main content, Settings overlay top-right.
 struct ProducerRootView: View {
@@ -19,6 +27,7 @@ struct ProducerRootView: View {
     @State private var showAirtableTablePicker = false
     @State private var showServicesSetupPrompt = false
     @State private var hasEvaluatedServicesPrompt = false
+    @State private var producerPage: ProducerPage = .dockets
 
     init(sessionManager: SessionManager, profile: WorkspaceProfile) {
         self.sessionManager = sessionManager
@@ -51,10 +60,31 @@ struct ProducerRootView: View {
                 }
                 .environmentObject(settingsManager)
 
-                ProducerView()
-                    .environmentObject(settingsManager)
-                    .environmentObject(sessionManager)
-                    .environmentObject(asanaCacheManager)
+                VStack(spacing: 0) {
+                    // Tab bar: Dockets | Contacts
+                    Picker("", selection: $producerPage) {
+                        Text("Dockets").tag(ProducerPage.dockets)
+                        Text("Contacts").tag(ProducerPage.contacts)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, contentPadding)
+                    .padding(.top, 8)
+                    .padding(.bottom, 6)
+                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+
+                    Group {
+                        if producerPage == .dockets {
+                            ProducerView()
+                                .environmentObject(settingsManager)
+                                .environmentObject(sessionManager)
+                                .environmentObject(asanaCacheManager)
+                        } else {
+                            ContactsView()
+                                .environmentObject(settingsManager)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
