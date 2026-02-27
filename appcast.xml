@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.01</title>
+            <description><![CDATA[
+                <p>Truncation handling rule; release script fixes</p>
+            ]]></description>
+            <pubDate>Fri, 27 Feb 2026 21:18:56 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.01/MediaDash.zip"
+                sparkle:version="104"
+                sparkle:shortVersionString="1.01"
+                sparkle:edSignature="53DwwwHRr2xm65zrasNH21rFqVBkawCM5agwcFZxLBXGsVAQ+D7iPL5QiYKNkJdMVmdhd44vRgBSh1SP7LLpCQ=="
+                length="9912278"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.0</title>
             <description><![CDATA[
                 <p>MediaDash 1.0 - Full release
