@@ -7,6 +7,22 @@
         <item>
             <title>Version 1.01</title>
             <description><![CDATA[
+                <p>Bug fixes and improvements</p>
+            ]]></description>
+            <pubDate>Wed, 11 Mar 2026 16:06:11 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.01/MediaDash.zip"
+                sparkle:version="104"
+                sparkle:shortVersionString="1.01"
+                sparkle:edSignature="fZyFR2lPsq3i+xnuTLFBJmmDQZ1Wg7qK3dLHyIq3QYIMp2Qo3hggfjYSbdjTvFO9B3LMRl6oyqmVcc97eEScAA=="
+                length="9902076"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
+            <title>Version 1.01</title>
+            <description><![CDATA[
                 <p>Truncation handling rule; release script fixes</p>
             ]]></description>
             <pubDate>Fri, 27 Feb 2026 21:18:56 +0000</pubDate>
