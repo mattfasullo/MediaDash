@@ -3,10 +3,11 @@ import AppKit
 import Combine
 import UniformTypeIdentifiers
 
-// #region agent log
+// #region agent log (no-op in Release so updates work with no issues)
 enum DebugSessionLog {
-    private static let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-cc173a.log"
     static func write(location: String, message: String, hypothesisId: String, runId: String = "run1", data: [String: Any] = [:]) {
+        #if DEBUG
+        let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-cc173a.log"
         let payload: [String: Any] = [
             "sessionId": "cc173a",
             "runId": runId,
@@ -26,6 +27,7 @@ enum DebugSessionLog {
         } else {
             try? (line + "\n").write(toFile: path, atomically: true, encoding: .utf8)
         }
+        #endif
     }
 }
 // #endregion
@@ -4440,10 +4442,10 @@ struct ContentViewLifecycleModifier: ViewModifier {
                 // Auto-sync Asana cache on app launch if using Asana source
                 autoSyncAsanaCache()
                 
-                // Start watching Downloads folder for "Use with MediaDash" popup
-                Task { @MainActor in
-                    DownloadPromptManager.shared.startWatching()
-                }
+                // DISABLED: Download prompt popup (watching Downloads folder)
+                // Task { @MainActor in
+                //     DownloadPromptManager.shared.startWatching()
+                // }
             }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: DownloadPromptNotification.addToStaging)) { notification in
                 guard let url = notification.userInfo?["url"] as? URL else { return }

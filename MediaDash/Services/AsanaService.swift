@@ -283,6 +283,21 @@ class AsanaService: ObservableObject {
         throw lastError ?? AsanaError.apiError("Request failed after \(maxRetries) attempts")
     }
     
+    /// Run an async operation with a timeout; throws if the operation doesn't complete in time.
+    /// Used during parallel project fetch so one slow/hanging project doesn't stall the whole sync.
+    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw AsanaError.apiError("Request timed out after \(Int(seconds))s")
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
+    }
+    
     /// Fetch users in a workspace (for Director etc. dropdowns). Requires workspace to be set.
     func fetchWorkspaceUsers(workspaceID: String) async throws -> [AsanaUser] {
         var all: [AsanaUser] = []
@@ -1467,7 +1482,9 @@ class AsanaService: ObservableObject {
                             
                             let startTime = Date()
                             do {
-                                let tasks = try await self.fetchTasks(workspaceID: wsId, projectID: projectGid, maxTasks: nil, modifiedSince: modSince)
+                                let tasks = try await self.withTimeout(seconds: 90) {
+                                    try await self.fetchTasks(workspaceID: wsId, projectID: projectGid, maxTasks: nil, modifiedSince: modSince)
+                                }
                                 let responseTime = Date().timeIntervalSince(startTime)
                                 await tracker.recordResponseTime(responseTime)
                                 return (index: index, project: proj, tasks: tasks, error: nil)
@@ -1504,7 +1521,9 @@ class AsanaService: ObservableObject {
                                 
                                 let startTime = Date()
                                 do {
-                                    let tasks = try await self.fetchTasks(workspaceID: wsId, projectID: projectGid, maxTasks: nil, modifiedSince: modSince)
+                                    let tasks = try await self.withTimeout(seconds: 90) {
+                                        try await self.fetchTasks(workspaceID: wsId, projectID: projectGid, maxTasks: nil, modifiedSince: modSince)
+                                    }
                                     let responseTime = Date().timeIntervalSince(startTime)
                                     await tracker.recordResponseTime(responseTime)
                                     return (index: index, project: proj, tasks: tasks, error: nil)

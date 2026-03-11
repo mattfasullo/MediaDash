@@ -750,10 +750,32 @@ class AsanaCacheManager: ObservableObject {
     }
     
     /// Poll sync lock until gone or stale; refresh cache and clear sync state when done. Run when we did not acquire the lock.
+    /// Stops after staleLockInterval so we never show "Syncing..." forever (e.g. if progress file is unreadable or other host is stuck).
+    /// If progress file is unreadable for 2+ min (e.g. orphaned lock after other host closed), we treat lock as stale and clear it.
     private func runSyncObserverLoop(sharedCacheURL: String) async {
         let pollInterval: UInt64 = 2_500_000_000  // 2.5 s in nanoseconds
+        let observerStartedAt = Date()
+        /// When we can't read progress (nil) for this long, treat lock as orphaned and remove it (e.g. other host closed without releasing).
+        let unreadableStaleSeconds: TimeInterval = 120  // 2 min
+        var lastSuccessfulReadAt: Date? = nil
         while true {
             try? await Task.sleep(nanoseconds: pollInterval)
+            let elapsed = Date().timeIntervalSince(observerStartedAt)
+            // Stop observing after max duration so UI never sticks on "Syncing..." indefinitely
+            if elapsed >= SyncCoordination.staleLockInterval {
+                print("⚠️ [Cache] Observer gave up after \(Int(SyncCoordination.staleLockInterval / 60)) min – clearing sync state")
+                await Task.detached(priority: .utility) {
+                    SyncCoordination.removeStaleLock(sharedCacheURL: sharedCacheURL)
+                }.value
+                await MainActor.run {
+                    refreshCachedDocketsFromDisk()
+                    isSyncing = false
+                    syncProgress = 0
+                    syncPhase = ""
+                    syncHostDeviceName = nil
+                }
+                return
+            }
             let present = await Task.detached(priority: .utility) {
                 SyncCoordination.isSyncLockPresent(sharedCacheURL: sharedCacheURL)
             }.value
@@ -770,6 +792,23 @@ class AsanaCacheManager: ObservableObject {
             let result = await Task.detached(priority: .utility) {
                 SyncCoordination.readSyncProgress(sharedCacheURL: sharedCacheURL)
             }.value
+            if result != nil { lastSuccessfulReadAt = Date() }
+            // If we can't read progress for 2+ min, lock is likely orphaned (other host closed) – remove it so we can sync
+            let timeSinceSuccess = lastSuccessfulReadAt.map { Date().timeIntervalSince($0) } ?? elapsed
+            if result == nil && timeSinceSuccess >= unreadableStaleSeconds {
+                print("⚠️ [Cache] Progress file unreadable for 2+ min – removing orphaned lock (other host may have closed)")
+                await Task.detached(priority: .utility) {
+                    SyncCoordination.removeStaleLock(sharedCacheURL: sharedCacheURL)
+                }.value
+                await MainActor.run {
+                    refreshCachedDocketsFromDisk()
+                    isSyncing = false
+                    syncProgress = 0
+                    syncPhase = ""
+                    syncHostDeviceName = nil
+                }
+                return
+            }
             if let (_, isStale) = result, isStale {
                 await Task.detached(priority: .utility) {
                     SyncCoordination.removeStaleLock(sharedCacheURL: sharedCacheURL)
@@ -897,34 +936,44 @@ class AsanaCacheManager: ObservableObject {
         }
         
         // Sync coordination: when using shared cache, only one instance runs sync; others observe progress.
-        // If we can't acquire (someone else has lock) we observe; if lock isn't present (read-only or stale removed) we run sync anyway.
+        // If we can't acquire (someone else has lock) we observe; if lock is from this machine (orphaned from app quit) we remove it and retry.
         if useSharedCache, let sharedURL = sharedCacheURL, !sharedURL.isEmpty {
             let deviceName = Host.current().localizedName ?? "This Mac"
-            let acquired = await Task.detached(priority: .utility) {
+            var acquired = await Task.detached(priority: .utility) {
                 SyncCoordination.tryAcquireSyncLock(sharedCacheURL: sharedURL, hostDeviceName: deviceName)
             }.value
-            if !acquired {
+            while !acquired {
                 let lockPresent = await Task.detached(priority: .utility) {
                     SyncCoordination.isSyncLockPresent(sharedCacheURL: sharedURL)
                 }.value
-                if lockPresent {
-                    isSyncHost = false
-                    let progressResult = await Task.detached(priority: .utility) {
-                        SyncCoordination.readSyncProgress(sharedCacheURL: sharedURL)
+                guard lockPresent else { break }
+                let progressResult = await Task.detached(priority: .utility) {
+                    SyncCoordination.readSyncProgress(sharedCacheURL: sharedURL)
+                }.value
+                // If the lock is from this machine, we left it by closing the app mid-sync — remove it and retry so we don't show stale "16%" forever
+                if let (payload, _) = progressResult, payload.hostDeviceName == deviceName {
+                    print("⚠️ [Cache] Removing orphaned sync lock from this machine (app was closed during sync)")
+                    await Task.detached(priority: .utility) {
+                        SyncCoordination.removeStaleLock(sharedCacheURL: sharedURL)
                     }.value
-                    if let (payload, _) = progressResult {
-                        syncProgress = payload.progress
-                        syncPhase = payload.phase
-                        syncHostDeviceName = payload.hostDeviceName
-                    } else {
-                        syncPhase = "Syncing..."
-                        syncHostDeviceName = nil
-                    }
-                    await runSyncObserverLoop(sharedCacheURL: sharedURL)
-                    return
+                    acquired = await Task.detached(priority: .utility) {
+                        SyncCoordination.tryAcquireSyncLock(sharedCacheURL: sharedURL, hostDeviceName: deviceName)
+                    }.value
+                    continue
                 }
-                // Lock not present: we couldn't create it (e.g. read-only share) or we just removed stale — run sync anyway (progress writes will no-op if needed)
-            } else {
+                isSyncHost = false
+                if let (payload, _) = progressResult {
+                    syncProgress = payload.progress
+                    syncPhase = payload.phase
+                    syncHostDeviceName = payload.hostDeviceName
+                } else {
+                    syncPhase = "Syncing..."
+                    syncHostDeviceName = nil
+                }
+                await runSyncObserverLoop(sharedCacheURL: sharedURL)
+                return
+            }
+            if acquired {
                 weAreSyncHost = true
                 sharedURLForLock = sharedURL
                 isSyncHost = true
