@@ -2,7 +2,7 @@
 //  SimianPostView.swift
 //  MediaDash
 //
-//  Post to Simian: search projects, navigate folders, choose local folder and post.
+//  Simian: search projects, navigate folders, upload via drag-drop or right-click.
 //
 
 import SwiftUI
@@ -25,20 +25,23 @@ struct SimianPostView: View {
     @State private var selectedProjectId: String?
     @State private var selectedProjectName: String?
 
-    // Folder navigation: (folderId, name); empty = project root
     @State private var folderBreadcrumb: [(id: String, name: String)] = []
     @State private var currentFolders: [SimianFolder] = []
     @State private var isLoadingFolders = false
-    @State private var selectedDestinationFolderId: String? = nil // nil = project root
-    @State private var selectedDestinationPath: String? = nil // e.g. "01_Delivery / 02_Work Picture"
 
-    // Tree view: expandable folders (lazy load children on expand)
+    // Tree view
     @State private var expandedFolderIds: Set<String> = []
     @State private var folderChildrenCache: [String: [SimianFolder]] = [:]
     @State private var folderFilesCache: [String: [SimianFile]] = [:]
     @State private var loadingFolderIds: Set<String> = []
 
-    @State private var localFolderURL: URL?
+    // Native List selection (single blue highlight for files AND folders)
+    @State private var selectedItemIds: Set<String> = []
+
+    // Inline rename: which tree item is being edited, and the text field value
+    @State private var inlineRenameItemId: String?
+    @State private var inlineRenameText: String = ""
+
     @State private var statusMessage = ""
     @State private var statusIsError = false
     @State private var isUploading = false
@@ -46,7 +49,7 @@ struct SimianPostView: View {
     @State private var uploadTotal = 0
     @State private var uploadFileName = ""
 
-    // Rename sheet: folder or file
+    // Rename sheet (fallback, kept for context menu "Rename…")
     @State private var showRenameSheet = false
     @State private var renameIsFolder = true
     @State private var renameItemId = ""
@@ -54,21 +57,21 @@ struct SimianPostView: View {
     @State private var renameCurrentName = ""
     @State private var renameNewName = ""
 
-    // Delete confirmation: folder or file
+    // Delete confirmation
     @State private var showDeleteConfirmation = false
     @State private var pendingDeleteIsFolder = true
     @State private var pendingDeleteItemId = ""
     @State private var pendingDeleteItemName = ""
     @State private var pendingDeleteParentFolderId: String?
 
-    // New folder: parent folder id (nil = project root)
+    // New folder
     @State private var showNewFolderSheet = false
     @State private var newFolderParentId: String?
     @State private var newFolderName = ""
     @State private var isCreatingFolder = false
     @State private var newFolderError: String?
 
-    // New folder with selection: create a folder and move selected items into it
+    // New folder with selection
     @State private var showNewFolderWithSelectionSheet = false
     @State private var newFolderWithSelectionName = ""
     @State private var newFolderWithSelectionIds: [String] = []
@@ -76,14 +79,7 @@ struct SimianPostView: View {
     @State private var isCreatingFolderWithSelection = false
     @State private var newFolderWithSelectionError: String?
 
-    /// Multi-selection in folder tree (Cmd+click to add). Used for "New Folder with Selection".
-    @State private var selectedTreeIds: Set<String> = []
-
-    /// Keyboard focus in folder tree: 0 = project root, 1..<count = flatTreeList indices. Nil when in project list or tree empty.
-    @State private var keyboardFocusTreeIndex: Int?
-
     @FocusState private var isSearchFocused: Bool
-    @FocusState private var isListFocused: Bool
 
     private var filteredProjects: [SimianProject] {
         let term = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -112,23 +108,6 @@ struct SimianPostView: View {
         folderBreadcrumb.last?.id
     }
 
-    private var hasNothingToUpload: Bool {
-        if !manager.selectedFiles.isEmpty { return false }
-        guard let url = localFolderURL else { return true }
-        return countFiles(in: url) == 0
-    }
-
-    private var destinationSummary: String {
-        guard let name = selectedProjectName else { return "" }
-        if selectedDestinationFolderId == nil {
-            return "\(name) (root)"
-        }
-        if let path = selectedDestinationPath, !path.isEmpty {
-            return "\(name) / \(path)"
-        }
-        return "\(name) (selected folder)"
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             if let err = projectLoadError, allProjects.isEmpty {
@@ -147,14 +126,13 @@ struct SimianPostView: View {
                     projectListView
                 }
 
-                Divider()
-                destinationAndPostView
+                if isUploading || !statusMessage.isEmpty {
+                    Divider()
+                    statusBarView
+                }
             }
         }
         .frame(minWidth: 640, minHeight: 520)
-        .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
-            handleFileDrop(providers: providers, destination: nil)
-        }
         .onAppear {
             updateSimianServiceConfiguration()
             loadProjects()
@@ -163,162 +141,272 @@ struct SimianPostView: View {
         .onChange(of: settingsManager.currentSettings.simianAPIBaseURL) { _, _ in
             updateSimianServiceConfiguration()
         }
-        .sheet(isPresented: $showRenameSheet) {
-            renameSheet
-        }
-        .sheet(isPresented: $showNewFolderSheet) {
-            newFolderSheet
-        }
-        .sheet(isPresented: $showNewFolderWithSelectionSheet) {
-            newFolderWithSelectionSheet
-        }
+        .sheet(isPresented: $showRenameSheet) { renameSheet }
+        .sheet(isPresented: $showNewFolderSheet) { newFolderSheet }
+        .sheet(isPresented: $showNewFolderWithSelectionSheet) { newFolderWithSelectionSheet }
         .alert("Remove from Simian?", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { performPendingDelete() }
         } message: {
             let name = pendingDeleteItemName.isEmpty ? (pendingDeleteIsFolder ? "this folder" : "this file") : pendingDeleteItemName
             Text(pendingDeleteIsFolder
-                 ? "“\(name)” and its contents will be removed from Simian. This cannot be undone."
-                 : "“\(name)” will be removed from Simian. This cannot be undone.")
+                 ? "\u{201C}\(name)\u{201D} and its contents will be removed from Simian. This cannot be undone."
+                 : "\u{201C}\(name)\u{201D} will be removed from Simian. This cannot be undone.")
         }
-        .onKeyPress(.upArrow) { handleKeyUp() }
-        .onKeyPress(.downArrow) { handleKeyDown() }
         .onKeyPress(.leftArrow) { handleKeyLeft() }
         .onKeyPress(.rightArrow) { handleKeyRight() }
+        .onKeyPress(.upArrow) { handleKeyUp() }
+        .onKeyPress(.downArrow) { handleKeyDown() }
         .onKeyPress(.return) { handleKeyReturn() }
-        .onKeyPress(.space) { handleKeyReturn() }
         .onKeyPress(.escape) { handleKeyEscape() }
-        .keyboardNavigationHandler(handleKey: { event in
-            let keyCode = Int(event.keyCode)
-            let result: KeyPress.Result
-            switch keyCode {
-            case 126: result = handleKeyUp()
-            case 125: result = handleKeyDown()
-            case 123: result = handleKeyLeft()
-            case 124: result = handleKeyRight()
-            case 36: result = handleKeyReturn()
-            case 49: result = handleKeyReturn()
-            case 53: result = handleKeyEscape()
-            default: result = .ignored
-            }
-            return result == .handled
-        })
     }
+
+    // MARK: - Keyboard navigation
+
+    private func shouldIgnoreKeyPress() -> Bool {
+        if isSearchFocused { return true }
+        if inlineRenameItemId != nil { return true }
+        if let window = NSApp.keyWindow, KeyboardNavigationCoordinator.isEditingText(in: window) { return true }
+        return false
+    }
+
+    private func handleKeyLeft() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        guard let projectId = selectedProjectId else { return .ignored }
+        guard selectedItemIds.count == 1, let itemId = selectedItemIds.first else { return .ignored }
+        if itemId.hasPrefix("f-") {
+            let folderId = String(itemId.dropFirst(2))
+            if expandedFolderIds.contains(folderId) {
+                expandedFolderIds.remove(folderId)
+                return .handled
+            }
+        }
+        // Move selection to parent folder
+        let treeList = flatTreeList(projectId: projectId)
+        if let item = treeList.first(where: { $0.id == itemId }) {
+            let parentFolderId: String?
+            switch item {
+            case .folder(_, _, _, let pid): parentFolderId = pid
+            case .file(_, _, _, let pid): parentFolderId = pid
+            }
+            if let pid = parentFolderId {
+                selectedItemIds = ["f-\(pid)"]
+            }
+            // else: at top level, stay on current item
+            return .handled
+        }
+        return .ignored
+    }
+
+    private func handleKeyUp() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        guard let projectId = selectedProjectId else { return .ignored }
+        let treeList = flatTreeList(projectId: projectId)
+        guard !treeList.isEmpty else { return .ignored }
+        if selectedItemIds.isEmpty {
+            selectedItemIds = [treeList.last!.id]
+            return .handled
+        }
+        guard selectedItemIds.count == 1, let itemId = selectedItemIds.first else { return .ignored }
+        if let idx = treeList.firstIndex(where: { $0.id == itemId }), idx > 0 {
+            selectedItemIds = [treeList[idx - 1].id]
+            return .handled
+        }
+        return .ignored
+    }
+
+    private func handleKeyDown() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        guard let projectId = selectedProjectId else { return .ignored }
+        let treeList = flatTreeList(projectId: projectId)
+        guard !treeList.isEmpty else { return .ignored }
+        if selectedItemIds.isEmpty {
+            selectedItemIds = [treeList.first!.id]
+            return .handled
+        }
+        guard selectedItemIds.count == 1, let itemId = selectedItemIds.first else { return .ignored }
+        if let idx = treeList.firstIndex(where: { $0.id == itemId }), idx + 1 < treeList.count {
+            selectedItemIds = [treeList[idx + 1].id]
+            return .handled
+        }
+        return .ignored
+    }
+
+    private func handleKeyRight() -> KeyPress.Result {
+        if shouldIgnoreKeyPress() { return .ignored }
+        guard let projectId = selectedProjectId else { return .ignored }
+        guard selectedItemIds.count == 1, let itemId = selectedItemIds.first else { return .ignored }
+        if itemId.hasPrefix("f-") {
+            let folderId = String(itemId.dropFirst(2))
+            if !expandedFolderIds.contains(folderId) {
+                expandedFolderIds.insert(folderId)
+                if folderChildrenCache[folderId] == nil {
+                    loadFolderChildren(projectId: projectId, folderId: folderId)
+                }
+                return .handled
+            }
+            // Already expanded: move selection to first child
+            let treeList = flatTreeList(projectId: projectId)
+            if let idx = treeList.firstIndex(where: { $0.id == itemId }), idx + 1 < treeList.count {
+                selectedItemIds = [treeList[idx + 1].id]
+                return .handled
+            }
+        }
+        return .ignored
+    }
+
+    private func handleKeyReturn() -> KeyPress.Result {
+        if isSearchFocused { return .ignored }
+        if inlineRenameItemId != nil { return .ignored }
+        guard selectedProjectId != nil else { return .ignored }
+        guard selectedItemIds.count == 1, let itemId = selectedItemIds.first else { return .ignored }
+        // Start inline rename
+        let treeList = flatTreeList(projectId: selectedProjectId!)
+        if let item = treeList.first(where: { $0.id == itemId }) {
+            switch item {
+            case .folder(let f, _, _, _):
+                inlineRenameText = f.name
+                inlineRenameItemId = itemId
+            case .file(let f, _, _, _):
+                inlineRenameText = f.title
+                inlineRenameItemId = itemId
+            }
+            return .handled
+        }
+        return .ignored
+    }
+
+    private func handleKeyEscape() -> KeyPress.Result {
+        if inlineRenameItemId != nil {
+            inlineRenameItemId = nil
+            inlineRenameText = ""
+            return .handled
+        }
+        if selectedProjectId != nil && selectedItemIds.isEmpty {
+            selectedProjectId = nil
+            selectedProjectName = nil
+            folderBreadcrumb = []
+            currentFolders = []
+            expandedFolderIds.removeAll()
+            folderChildrenCache.removeAll()
+            folderFilesCache.removeAll()
+            return .handled
+        }
+        if !selectedItemIds.isEmpty {
+            selectedItemIds.removeAll()
+            return .handled
+        }
+        return .ignored
+    }
+
+    /// Commit inline rename for the currently-editing item
+    private func commitInlineRename() {
+        guard let itemId = inlineRenameItemId, let projectId = selectedProjectId else {
+            inlineRenameItemId = nil
+            return
+        }
+        let newName = inlineRenameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty else { inlineRenameItemId = nil; return }
+        let treeList = flatTreeList(projectId: projectId)
+        guard let item = treeList.first(where: { $0.id == itemId }) else { inlineRenameItemId = nil; return }
+
+        inlineRenameItemId = nil
+        Task {
+            do {
+                switch item {
+                case .folder(let f, _, _, let parentId):
+                    guard newName != f.name else { return }
+                    try await simianService.renameFolder(projectId: projectId, folderId: f.id, newName: newName)
+                    await MainActor.run {
+                        applyFolderRename(folderId: f.id, parentFolderId: parentId, newName: newName)
+                        statusMessage = "Folder renamed"; statusIsError = false
+                    }
+                case .file(let f, _, _, let parentId):
+                    guard newName != f.title else { return }
+                    try await simianService.renameFile(projectId: projectId, fileId: f.id, newName: newName)
+                    await MainActor.run {
+                        applyFileRename(fileId: f.id, parentFolderId: parentId, newName: newName)
+                        statusMessage = "File renamed"; statusIsError = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    statusIsError = true
+                }
+            }
+        }
+    }
+
+    // MARK: - Sheets
 
     private var renameSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(renameIsFolder ? "Rename Folder" : "Rename File")
-                .font(.headline)
-            TextField("Name", text: $renameNewName)
-                .textFieldStyle(.roundedBorder)
+            Text(renameIsFolder ? "Rename Folder" : "Rename File").font(.headline)
+            TextField("Name", text: $renameNewName).textFieldStyle(.roundedBorder)
             HStack {
                 Spacer()
-                Button("Cancel") { showRenameSheet = false }
-                    .keyboardShortcut(.cancelAction)
-                Button("Rename") { submitRename() }
-                    .keyboardShortcut(.defaultAction)
+                Button("Cancel") { showRenameSheet = false }.keyboardShortcut(.cancelAction)
+                Button("Rename") { submitRename() }.keyboardShortcut(.defaultAction)
                     .disabled(renameNewName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(24)
-        .frame(width: 320)
+        .padding(24).frame(width: 320)
         .onAppear { renameNewName = renameCurrentName }
     }
 
     private var newFolderSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("New Folder")
-                .font(.headline)
-            TextField("Folder name", text: $newFolderName)
-                .textFieldStyle(.roundedBorder)
-            if let err = newFolderError {
-                Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
+            Text("New Folder").font(.headline)
+            TextField("Folder name", text: $newFolderName).textFieldStyle(.roundedBorder)
+            if let err = newFolderError { Text(err).font(.caption).foregroundStyle(.red) }
             HStack {
                 Spacer()
-                Button("Cancel") {
-                    showNewFolderSheet = false
-                    newFolderError = nil
-                }
-                .keyboardShortcut(.cancelAction)
-                Button("Create") { submitNewFolder() }
-                    .keyboardShortcut(.defaultAction)
+                Button("Cancel") { showNewFolderSheet = false; newFolderError = nil }.keyboardShortcut(.cancelAction)
+                Button("Create") { submitNewFolder() }.keyboardShortcut(.defaultAction)
                     .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCreatingFolder)
             }
         }
-        .padding(24)
-        .frame(width: 320)
-        .onAppear {
-            newFolderName = ""
-            newFolderError = nil
-        }
+        .padding(24).frame(width: 320)
+        .onAppear { newFolderName = ""; newFolderError = nil }
     }
 
     private var newFolderWithSelectionSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("New Folder with Selection")
-                .font(.headline)
+            Text("New Folder with Selection").font(.headline)
             Text("Create a folder and move \(newFolderWithSelectionIds.count) selected item(s) into it.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            TextField("Folder name", text: $newFolderWithSelectionName)
-                .textFieldStyle(.roundedBorder)
-            if let err = newFolderWithSelectionError {
-                Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
+                .font(.subheadline).foregroundStyle(.secondary)
+            TextField("Folder name", text: $newFolderWithSelectionName).textFieldStyle(.roundedBorder)
+            if let err = newFolderWithSelectionError { Text(err).font(.caption).foregroundStyle(.red) }
             HStack {
                 Spacer()
-                Button("Cancel") {
-                    showNewFolderWithSelectionSheet = false
-                    newFolderWithSelectionError = nil
-                }
-                .keyboardShortcut(.cancelAction)
-                Button("Create") { submitNewFolderWithSelection() }
-                    .keyboardShortcut(.defaultAction)
+                Button("Cancel") { showNewFolderWithSelectionSheet = false; newFolderWithSelectionError = nil }.keyboardShortcut(.cancelAction)
+                Button("Create") { submitNewFolderWithSelection() }.keyboardShortcut(.defaultAction)
                     .disabled(newFolderWithSelectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCreatingFolderWithSelection)
             }
         }
-        .padding(24)
-        .frame(width: 360)
-        .onAppear {
-            newFolderWithSelectionName = "New Folder"
-            newFolderWithSelectionError = nil
-        }
+        .padding(24).frame(width: 360)
+        .onAppear { newFolderWithSelectionName = "New Folder"; newFolderWithSelectionError = nil }
     }
+
+    // MARK: - Submit actions
 
     private func submitNewFolder() {
         let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, let projectId = selectedProjectId else { return }
-        isCreatingFolder = true
-        newFolderError = nil
+        isCreatingFolder = true; newFolderError = nil
         let parentId = newFolderParentId
         Task {
             do {
                 _ = try await simianService.createFolderPublic(projectId: projectId, folderName: name, parentFolderId: parentId)
                 await MainActor.run {
-                    isCreatingFolder = false
-                    showNewFolderSheet = false
-                    newFolderName = ""
-                    newFolderError = nil
-                    if parentId == nil {
-                        loadFolders(projectId: projectId, parentFolderId: nil)
-                    } else {
-                        folderChildrenCache.removeValue(forKey: parentId!)
-                        expandedFolderIds.insert(parentId!)
-                        loadFolderChildren(projectId: projectId, folderId: parentId!)
-                    }
-                    statusMessage = "Folder created"
-                    statusIsError = false
+                    isCreatingFolder = false; showNewFolderSheet = false; newFolderName = ""; newFolderError = nil
+                    if parentId == nil { loadFolders(projectId: projectId, parentFolderId: nil) }
+                    else { folderChildrenCache.removeValue(forKey: parentId!); expandedFolderIds.insert(parentId!); loadFolderChildren(projectId: projectId, folderId: parentId!) }
+                    statusMessage = "Folder created"; statusIsError = false
                 }
             } catch {
-                await MainActor.run {
-                    isCreatingFolder = false
-                    newFolderError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
+                await MainActor.run { isCreatingFolder = false; newFolderError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription }
             }
         }
     }
@@ -326,8 +414,7 @@ struct SimianPostView: View {
     private func submitNewFolderWithSelection() {
         let name = newFolderWithSelectionName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, let projectId = selectedProjectId else { return }
-        isCreatingFolderWithSelection = true
-        newFolderWithSelectionError = nil
+        isCreatingFolderWithSelection = true; newFolderWithSelectionError = nil
         let parentId = newFolderWithSelectionParentId
         let itemIds = newFolderWithSelectionIds
         Task {
@@ -340,32 +427,20 @@ struct SimianPostView: View {
                         try await simianService.moveFile(projectId: projectId, fileId: fileId, folderId: newFolderId)
                         movedCount += 1
                     }
-                    // Folders: Simian API has no move_folder; skip
                 }
                 await MainActor.run {
-                    isCreatingFolderWithSelection = false
-                    showNewFolderWithSelectionSheet = false
-                    newFolderWithSelectionName = ""
-                    newFolderWithSelectionError = nil
-                    selectedTreeIds.removeAll()
-                    if parentId == nil {
-                        loadFolders(projectId: projectId, parentFolderId: nil)
-                    } else {
-                        folderChildrenCache.removeValue(forKey: parentId!)
-                        folderFilesCache.removeValue(forKey: parentId!)
-                        expandedFolderIds.insert(parentId!)
-                        loadFolderChildren(projectId: projectId, folderId: parentId!)
+                    isCreatingFolderWithSelection = false; showNewFolderWithSelectionSheet = false
+                    newFolderWithSelectionName = ""; newFolderWithSelectionError = nil
+                    if parentId == nil { loadFolders(projectId: projectId, parentFolderId: nil) }
+                    else {
+                        folderChildrenCache.removeValue(forKey: parentId!); folderFilesCache.removeValue(forKey: parentId!)
+                        expandedFolderIds.insert(parentId!); loadFolderChildren(projectId: projectId, folderId: parentId!)
                     }
-                    // Invalidate new folder's file cache so it reloads when expanded
                     folderFilesCache.removeValue(forKey: newFolderId)
-                    statusMessage = movedCount > 0 ? "Folder created; \(movedCount) file(s) moved" : "Folder created"
-                    statusIsError = false
+                    statusMessage = movedCount > 0 ? "Folder created; \(movedCount) file(s) moved" : "Folder created"; statusIsError = false
                 }
             } catch {
-                await MainActor.run {
-                    isCreatingFolderWithSelection = false
-                    newFolderWithSelectionError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
+                await MainActor.run { isCreatingFolderWithSelection = false; newFolderWithSelectionError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription }
             }
         }
     }
@@ -378,49 +453,34 @@ struct SimianPostView: View {
             do {
                 if renameIsFolder {
                     try await simianService.renameFolder(projectId: projectId, folderId: renameItemId, newName: newName)
-                    await MainActor.run {
-                        applyFolderRename(folderId: renameItemId, parentFolderId: renameParentFolderId, newName: newName)
-                    }
+                    await MainActor.run { applyFolderRename(folderId: renameItemId, parentFolderId: renameParentFolderId, newName: newName) }
                 } else {
                     try await simianService.renameFile(projectId: projectId, fileId: renameItemId, newName: newName)
-                    await MainActor.run {
-                        applyFileRename(fileId: renameItemId, parentFolderId: renameParentFolderId, newName: newName)
-                    }
+                    await MainActor.run { applyFileRename(fileId: renameItemId, parentFolderId: renameParentFolderId, newName: newName) }
                 }
-                await MainActor.run {
-                    statusMessage = renameIsFolder ? "Folder renamed" : "File renamed"
-                    statusIsError = false
-                }
+                await MainActor.run { statusMessage = renameIsFolder ? "Folder renamed" : "File renamed"; statusIsError = false }
             } catch {
-                await MainActor.run {
-                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    statusIsError = true
-                }
+                await MainActor.run { statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; statusIsError = true }
             }
         }
     }
 
     private func applyFolderRename(folderId: String, parentFolderId: String?, newName: String) {
         if let parentId = parentFolderId, !parentId.isEmpty {
-            if var children = folderChildrenCache[parentId] {
-                if let idx = children.firstIndex(where: { $0.id == folderId }) {
-                    let old = children[idx]
-                    children[idx] = SimianFolder(id: old.id, name: newName, parentId: old.parentId)
-                    folderChildrenCache[parentId] = children
-                }
+            if var children = folderChildrenCache[parentId], let idx = children.firstIndex(where: { $0.id == folderId }) {
+                let old = children[idx]; children[idx] = SimianFolder(id: old.id, name: newName, parentId: old.parentId)
+                folderChildrenCache[parentId] = children
             }
         } else {
             if let idx = currentFolders.firstIndex(where: { $0.id == folderId }) {
-                let old = currentFolders[idx]
-                currentFolders[idx] = SimianFolder(id: old.id, name: newName, parentId: old.parentId)
+                let old = currentFolders[idx]; currentFolders[idx] = SimianFolder(id: old.id, name: newName, parentId: old.parentId)
             }
         }
     }
 
     private func applyFileRename(fileId: String, parentFolderId: String?, newName: String) {
         guard let parentId = parentFolderId else { return }
-        if var files = folderFilesCache[parentId],
-           let idx = files.firstIndex(where: { $0.id == fileId }) {
+        if var files = folderFilesCache[parentId], let idx = files.firstIndex(where: { $0.id == fileId }) {
             let old = files[idx]
             files[idx] = SimianFile(id: old.id, title: newName, fileType: old.fileType, mediaURL: old.mediaURL, folderId: old.folderId, projectId: old.projectId)
             folderFilesCache[parentId] = files
@@ -429,9 +489,7 @@ struct SimianPostView: View {
 
     private func performPendingDelete() {
         guard let projectId = selectedProjectId else { return }
-        let isFolder = pendingDeleteIsFolder
-        let itemId = pendingDeleteItemId
-        let parentId = pendingDeleteParentFolderId
+        let isFolder = pendingDeleteIsFolder; let itemId = pendingDeleteItemId; let parentId = pendingDeleteParentFolderId
         showDeleteConfirmation = false
         Task {
             do {
@@ -439,40 +497,26 @@ struct SimianPostView: View {
                     try await simianService.deleteFolder(projectId: projectId, folderId: itemId)
                     await MainActor.run {
                         applyFolderDeletion(folderId: itemId, parentFolderId: parentId)
-                        expandedFolderIds.remove(itemId)
-                        folderChildrenCache.removeValue(forKey: itemId)
-                        folderFilesCache.removeValue(forKey: itemId)
-                        if selectedDestinationFolderId == itemId {
-                            selectedDestinationFolderId = nil
-                            selectedDestinationPath = nil
-                        }
-                        statusMessage = "Folder removed"
-                        statusIsError = false
+                        expandedFolderIds.remove(itemId); folderChildrenCache.removeValue(forKey: itemId); folderFilesCache.removeValue(forKey: itemId)
+                        selectedItemIds.remove("f-\(itemId)"); statusMessage = "Folder removed"; statusIsError = false
                     }
                 } else {
                     try await simianService.deleteFile(projectId: projectId, fileId: itemId)
                     await MainActor.run {
                         applyFileDeletion(fileId: itemId, parentFolderId: parentId)
-                        statusMessage = "File removed"
-                        statusIsError = false
+                        selectedItemIds.remove("file-\(itemId)"); statusMessage = "File removed"; statusIsError = false
                     }
                 }
                 await MainActor.run { refreshCurrentView() }
             } catch {
-                await MainActor.run {
-                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    statusIsError = true
-                }
+                await MainActor.run { statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; statusIsError = true }
             }
         }
     }
 
     private func applyFolderDeletion(folderId: String, parentFolderId: String?) {
-        if let pid = parentFolderId, !pid.isEmpty {
-            folderChildrenCache[pid] = folderChildrenCache[pid]?.filter { $0.id != folderId } ?? []
-        } else {
-            currentFolders = currentFolders.filter { $0.id != folderId }
-        }
+        if let pid = parentFolderId, !pid.isEmpty { folderChildrenCache[pid] = folderChildrenCache[pid]?.filter { $0.id != folderId } ?? [] }
+        else { currentFolders = currentFolders.filter { $0.id != folderId } }
     }
 
     private func applyFileDeletion(fileId: String, parentFolderId: String?) {
@@ -480,56 +524,33 @@ struct SimianPostView: View {
         folderFilesCache[pid] = folderFilesCache[pid]?.filter { $0.id != fileId } ?? []
     }
 
-    /// Refresh what's on screen: project list or current folder tree
     private func refreshCurrentView() {
         if let projectId = selectedProjectId {
-            folderChildrenCache.removeAll()
-            folderFilesCache.removeAll()
+            folderChildrenCache.removeAll(); folderFilesCache.removeAll()
             loadFolders(projectId: projectId, parentFolderId: currentParentFolderId)
-            for folderId in expandedFolderIds {
-                loadFolderChildren(projectId: projectId, folderId: folderId)
-            }
-        } else {
-            loadProjects()
-        }
+            for folderId in expandedFolderIds { loadFolderChildren(projectId: projectId, folderId: folderId) }
+        } else { loadProjects() }
     }
+
+    // MARK: - View builders
 
     private func unavailableView(message: String) -> some View {
         VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(.orange)
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 48)).foregroundStyle(.orange)
             VStack(spacing: 8) {
-                Text("Simian Unavailable")
-                    .font(.title3.weight(.medium))
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
+                Text("Simian Unavailable").font(.title3.weight(.medium))
+                Text(message).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 40)
             }
-            Button("Open Settings") {
-                SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+            Button("Open Settings") { SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager) }.buttonStyle(.borderedProminent)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
     }
 
     private func projectNameBarView(projectName: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(.blue)
-            Text(projectName)
-                .font(.subheadline.weight(.medium))
+            Image(systemName: "folder.fill").font(.system(size: 14)).foregroundStyle(.blue)
+            Text(projectName).font(.subheadline.weight(.medium))
             Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .frame(maxWidth: .infinity)
+        }.padding(.horizontal, 12).padding(.vertical, 8).background(Color(nsColor: .controlBackgroundColor)).frame(maxWidth: .infinity)
     }
 
     private var searchBarView: some View {
@@ -537,461 +558,403 @@ struct SimianPostView: View {
             HStack {
                 Image(systemName: isLoadingProjects ? "hourglass" : "magnifyingglass")
                     .foregroundColor(isLoadingProjects ? .orange : .primary)
-
-                NoSelectTextField(
-                    text: $searchText,
-                    placeholder: "Search by docket or project name...",
-                    isEnabled: true,
-                    onSubmit: { selectFirstProjectIfOne() },
-                    onTextChange: { }
-                )
-                .padding(10)
-
+                NoSelectTextField(text: $searchText, placeholder: "Search by docket or project name...", isEnabled: true, onSubmit: { selectFirstProjectIfOne() }, onTextChange: { }).padding(10)
                 if !searchText.isEmpty {
                     HoverableButton(action: { searchText = "" }) { isHovered in
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(isHovered ? .primary : .secondary)
-                            .scaleEffect(isHovered ? 1.1 : 1.0)
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(isHovered ? .primary : .secondary).scaleEffect(isHovered ? 1.1 : 1.0)
                     }
                 }
-
                 Picker("Sort", selection: $projectSortOrder) {
-                    Text("Name (A–Z)").tag(ProjectSortOrder.nameAsc)
-                    Text("Name (Z–A)").tag(ProjectSortOrder.nameDesc)
+                    Text("Name (A\u{2013}Z)").tag(ProjectSortOrder.nameAsc)
+                    Text("Name (Z\u{2013}A)").tag(ProjectSortOrder.nameDesc)
                     Text("Last edited (newest)").tag(ProjectSortOrder.lastEditedNewest)
                     Text("Last edited (oldest)").tag(ProjectSortOrder.lastEditedOldest)
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .frame(width: 160)
-                .onChange(of: projectSortOrder) { _, _ in
-                    loadProjectInfosIfNeeded()
-                }
-
-                Button(action: { refreshCurrentView() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14))
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh project list")
-
-                if isLoadingProjectInfos {
-                    ProgressView().scaleEffect(0.7)
-                }
+                }.pickerStyle(.menu).labelsHidden().frame(width: 160).onChange(of: projectSortOrder) { _, _ in loadProjectInfosIfNeeded() }
+                Button(action: { refreshCurrentView() }) { Image(systemName: "arrow.clockwise").font(.system(size: 14)) }.buttonStyle(.borderless).help("Refresh project list")
+                if isLoadingProjectInfos { ProgressView().scaleEffect(0.7) }
             }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .frame(maxWidth: .infinity)
+        }.padding(.horizontal, 12).padding(.vertical, 8).background(Color(nsColor: .controlBackgroundColor)).frame(maxWidth: .infinity)
     }
 
     private var projectListView: some View {
         VStack(alignment: .leading, spacing: 0) {
             if isLoadingProjects && allProjects.isEmpty {
-                HStack(spacing: 8) {
-                    ProgressView().scaleEffect(0.8)
-                    Text("Loading projects...")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
+                HStack(spacing: 8) { ProgressView().scaleEffect(0.8); Text("Loading projects...").font(.subheadline).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
             } else if filteredProjects.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "folder.badge.questionmark")
-                        .font(.title)
-                        .foregroundStyle(.secondary)
-                    Text("No projects match your search")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
+                VStack(spacing: 8) { Image(systemName: "folder.badge.questionmark").font(.title).foregroundStyle(.secondary); Text("No projects match your search").font(.subheadline).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
             } else {
                 List(selection: $selectedProjectId) {
                     ForEach(filteredProjects, id: \.id) { project in
-                        HoverableButton(action: {
-                            selectedProjectId = project.id
-                            selectedProjectName = project.name
-                            folderBreadcrumb = []
-                            selectedDestinationFolderId = nil
-                            selectedDestinationPath = nil
-                            expandedFolderIds.removeAll()
-                            folderChildrenCache.removeAll()
-                            folderFilesCache.removeAll()
-                            loadFolders(projectId: project.id, parentFolderId: nil)
-                            keyboardFocusTreeIndex = 0
-                        }) { isHovered in
+                        HoverableButton(action: { openProject(project) }) { isHovered in
                             HStack {
-                                Image(systemName: "folder.fill")
-                                    .foregroundStyle(.blue)
-                                Text(project.name)
-                                    .font(.system(size: 14))
+                                Image(systemName: "folder.fill").foregroundStyle(.blue)
+                                Text(project.name).font(.system(size: 14))
                                 Spacer()
-                            }
-                            .padding(.vertical, 2)
-                            .contentShape(Rectangle())
-                            .background(isHovered ? Color.blue.opacity(0.1) : Color.clear)
-                        }
-                        .buttonStyle(.plain)
-                        .tag(project.id)
+                            }.padding(.vertical, 2).contentShape(Rectangle()).background(isHovered ? Color.blue.opacity(0.1) : Color.clear)
+                        }.buttonStyle(.plain).tag(project.id)
                     }
-                }
-                .listStyle(.inset(alternatesRowBackgrounds: true))
+                }.listStyle(.inset(alternatesRowBackgrounds: true))
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func openProject(_ project: SimianProject) {
+        selectedProjectId = project.id; selectedProjectName = project.name; folderBreadcrumb = []
+        selectedItemIds.removeAll(); expandedFolderIds.removeAll(); folderChildrenCache.removeAll(); folderFilesCache.removeAll()
+        loadFolders(projectId: project.id, parentFolderId: nil)
     }
 
     private func folderBrowserView(projectId: String, projectName: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Button(action: {
-                    selectedProjectId = nil
-                    selectedProjectName = nil
-                    folderBreadcrumb = []
-                    currentFolders = []
-                    selectedDestinationFolderId = nil
-                    selectedDestinationPath = nil
-                    expandedFolderIds.removeAll()
-                    folderChildrenCache.removeAll()
-                    folderFilesCache.removeAll()
-                    keyboardFocusTreeIndex = nil
-                }) {
-                    Label("Back to projects", systemImage: "chevron.left")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-
-                Text("→")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Text(projectName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
+                    selectedProjectId = nil; selectedProjectName = nil; folderBreadcrumb = []; currentFolders = []
+                    selectedItemIds.removeAll(); expandedFolderIds.removeAll(); folderChildrenCache.removeAll(); folderFilesCache.removeAll()
+                }) { Label("Back to projects", systemImage: "chevron.left").font(.caption) }.buttonStyle(.borderless)
+                Text("\u{2192}").font(.caption).foregroundStyle(.secondary)
+                Text(projectName).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-
-                Button(action: { refreshCurrentView() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh folders and files")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                Button(action: { refreshCurrentView() }) { Image(systemName: "arrow.clockwise").font(.system(size: 12)) }.buttonStyle(.borderless).help("Refresh folders and files")
+            }.padding(.horizontal, 12).padding(.vertical, 8).background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
 
             if isLoadingFolders {
-                HStack(spacing: 8) {
-                    ProgressView().scaleEffect(0.8)
-                    Text("Loading folders...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
+                HStack(spacing: 8) { ProgressView().scaleEffect(0.8); Text("Loading folders...").font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity).padding()
             } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Click a folder to select it as the upload destination. Drop files on a folder to upload there directly. Use arrow keys: ↑↓ move, → expand / enter folder, ← collapse / parent.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 4)
-
-                    let treeList = flatTreeList(projectId: projectId)
-                    let effectiveTreeFocusIndex = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
-                    ScrollViewReader { proxy in
-                        List(selection: $selectedTreeIds) {
-                            // Project root - always selectable
-                            ProjectRootRowView(
-                                isSelected: selectedDestinationFolderId == nil,
-                                isKeyboardFocused: effectiveTreeFocusIndex == 0,
-                                onTap: {
-                                    selectedDestinationFolderId = nil
-                                    selectedDestinationPath = nil
-                                    keyboardFocusTreeIndex = 0
-                                },
-                                onDrop: { providers in
-                                    handleFileDrop(providers: providers, destination: (nil, nil))
-                                }
-                            )
-                            .id("project-root")
-                            .tag("project-root")
-                            .contextMenu {
-                                Button("New Folder") {
-                                    newFolderParentId = nil
-                                    newFolderName = ""
-                                    showNewFolderSheet = true
-                                }
-                                Button("Copy Link") {
-                                    if let url = SimianService.folderLinkURL(projectId: projectId, folderId: nil) {
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
-                                        statusMessage = "Project link copied"
-                                        statusIsError = false
-                                    }
-                                }
-                            }
-
-                            // Tree of folders and files (folders expandable, click to select; Cmd+click for multi-selection)
-                            ForEach(Array(treeList.enumerated()), id: \.element.id) { offset, item in
-                                let treeIndex = offset + 1
-                                Group {
-                                    switch item {
+                let treeList = flatTreeList(projectId: projectId)
+                ScrollViewReader { proxy in
+                    List(selection: $selectedItemIds) {
+                        ForEach(Array(treeList.enumerated()), id: \.element.id) { _, item in
+                            Group {
+                                switch item {
                                 case .folder(let f, let d, let p, let parentId):
-                                    folderTreeRow(projectId: projectId, folder: f, depth: d, path: p, parentFolderId: parentId, siblings: folderSiblings(parentId: parentId), treeList: treeList, treeIndex: treeIndex, isKeyboardFocused: effectiveTreeFocusIndex == treeIndex, onNewFolderWithSelection: { startNewFolderWithSelection(projectId: projectId, treeList: treeList, rightClickedId: item.id) })
-                                    case .file(let file, let d, let p, let parentId):
-                                        fileTreeRow(file: file, depth: d, path: p, parentFolderId: parentId, siblings: fileSiblings(parentFolderId: parentId), treeList: treeList, isKeyboardFocused: effectiveTreeFocusIndex == treeIndex, onNewFolderWithSelection: { startNewFolderWithSelection(projectId: projectId, treeList: treeList, rightClickedId: item.id) })
-                                    }
+                                    folderTreeRow(projectId: projectId, folder: f, depth: d, path: p, parentFolderId: parentId, siblings: folderSiblings(parentId: parentId), treeList: treeList)
+                                case .file(let file, let d, let p, let parentId):
+                                    fileTreeRow(file: file, depth: d, path: p, parentFolderId: parentId, siblings: fileSiblings(parentFolderId: parentId), treeList: treeList)
                                 }
-                                .id(item.id)
-                                .tag(item.id)
                             }
-                            if treeList.count >= maxTotalTreeRows {
-                                Text("(Showing first \(maxTotalTreeRows) folders — right-click any folder for link to open in Simian)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.vertical, 4)
-                            }
+                            .tag(item.id).id(item.id)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
                         }
-                        .listStyle(.inset(alternatesRowBackgrounds: true))
-                        .onChange(of: keyboardFocusTreeIndex) { _, newIndex in
-                            guard let idx = newIndex, let id = treeRowId(projectId: projectId, index: idx) else { return }
-                            proxy.scrollTo(id, anchor: .center)
+
+                        if treeList.count >= maxTotalTreeRows {
+                            Text("(Showing first \(maxTotalTreeRows) items)").font(.caption2).foregroundStyle(.secondary).padding(.vertical, 4)
                         }
-                        .onChange(of: selectedTreeIds) { _, ids in
-                            if ids.count == 1, let id = ids.first, id.hasPrefix("f-"), id.count > 2 {
-                                selectedDestinationFolderId = String(id.dropFirst(2))
-                                if let item = treeList.first(where: { $0.id == id }),
-                                   case .folder(_, _, let path, _) = item {
-                                    selectedDestinationPath = path
-                                }
-                                keyboardFocusTreeIndex = treeList.firstIndex(where: { $0.id == id }).map { $0 + 1 } ?? keyboardFocusTreeIndex
-                            }
-                        }
-                    }
+                    }.listStyle(.inset(alternatesRowBackgrounds: true))
                 }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Start "New Folder with Selection": resolve effective selection (same parent), show sheet.
-    private func startNewFolderWithSelection(projectId: String, treeList: [SimianTreeItem], rightClickedId: String) {
-        let effectiveIds: Set<String> = selectedTreeIds.contains(rightClickedId) ? selectedTreeIds : [rightClickedId]
-        func parentId(for treeId: String) -> String? {
-            guard let item = treeList.first(where: { $0.id == treeId }) else { return nil }
-            switch item {
-            case .folder(_, _, _, let pid): return pid
-            case .file(_, _, _, let pid): return pid
-            }
-        }
-        let rightParent = parentId(for: rightClickedId)
-        let sameParentIds = effectiveIds.filter { parentId(for: $0) == rightParent }
-        let idsToMove = Array(sameParentIds).sorted()
-        guard !idsToMove.isEmpty else { return }
-        newFolderWithSelectionIds = idsToMove
-        newFolderWithSelectionParentId = rightParent
-        newFolderWithSelectionName = "New Folder"
-        newFolderWithSelectionError = nil
-        showNewFolderWithSelectionSheet = true
-    }
+    // MARK: - Status bar
 
-    private var destinationAndPostView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if !destinationSummary.isEmpty {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.up.circle")
-                        .foregroundStyle(.secondary)
-                    Text("Post to: \(destinationSummary)")
-                        .font(.subheadline)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(nsColor: .controlBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-
-            HStack(spacing: 12) {
-                if !manager.selectedFiles.isEmpty {
-                    HStack(spacing: 8) {
-                        Image(systemName: "doc.on.doc.fill")
-                            .foregroundStyle(.blue)
-                        Text("\(manager.selectedFiles.count) item(s), \(manager.selectedFiles.reduce(0) { $0 + $1.fileCount }) file(s) staged")
-                            .font(.caption)
-                        Button("Clear", role: .destructive) { manager.clearFiles() }
-                            .font(.caption)
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                } else if let url = localFolderURL {
-                    HStack(spacing: 8) {
-                        Image(systemName: "folder")
-                            .foregroundStyle(.secondary)
-                        Text(url.lastPathComponent)
-                            .font(.caption)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Button("Change") { chooseLocalFolder() }
-                            .font(.caption)
-                        Button("Clear", role: .destructive) { localFolderURL = nil }
-                            .font(.caption)
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                } else {
-                    Button(action: { chooseLocalFolder() }) {
-                        Label("Choose folder…", systemImage: "folder.badge.plus")
-                            .font(.subheadline)
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-
+    private var statusBarView: some View {
+        VStack(alignment: .leading, spacing: 8) {
             if isUploading {
                 HStack(spacing: 10) {
-                    ProgressView()
-                        .scaleEffect(0.9)
+                    ProgressView().scaleEffect(0.9)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Uploading \(uploadCurrent) of \(uploadTotal)")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        if !uploadFileName.isEmpty {
-                            Text(uploadFileName)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
+                        Text("Uploading \(uploadCurrent) of \(uploadTotal)").font(.subheadline).fontWeight(.medium)
+                        if !uploadFileName.isEmpty { Text(uploadFileName).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
                     }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Color(nsColor: .controlBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                }.frame(maxWidth: .infinity, alignment: .leading)
             }
-
             if !statusMessage.isEmpty {
                 HStack(spacing: 8) {
-                    Image(systemName: statusIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(statusIsError ? .orange : .green)
-                    Text(statusMessage)
-                        .font(.caption)
-                        .foregroundStyle(statusIsError ? .orange : .secondary)
+                    Image(systemName: statusIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill").foregroundStyle(statusIsError ? .orange : .green)
+                    Text(statusMessage).font(.caption).foregroundStyle(statusIsError ? .orange : .secondary)
+                    Spacer()
+                    Button(action: { statusMessage = "" }) { Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(.secondary) }.buttonStyle(.plain)
                 }
             }
-
-            Button(action: performPost) {
-                Label("Post", systemImage: "arrow.up.circle.fill")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(selectedProjectId == nil || hasNothingToUpload || isUploading)
-        }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+        }.padding(.horizontal, 12).padding(.vertical, 8).background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
     }
+
+    // MARK: - Upload via context menu
+
+    private func uploadToFolder(folderId: String?) {
+        guard let projectId = selectedProjectId else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
+        panel.message = "Select files or folders to upload"
+        panel.begin { response in
+            guard response == .OK, !panel.urls.isEmpty else { return }
+            DispatchQueue.main.async { uploadDroppedFiles(projectId: projectId, folderId: folderId, fileURLs: panel.urls) }
+        }
+    }
+
+    private func uploadStagedFiles(folderId: String?) {
+        guard let projectId = selectedProjectId, !manager.selectedFiles.isEmpty else { return }
+        uploadDroppedFiles(projectId: projectId, folderId: folderId, fileURLs: manager.selectedFiles.map { $0.url })
+    }
+
+    // MARK: - Tree row builders
+
+    private func folderTreeRow(projectId: String, folder: SimianFolder, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFolder], treeList: [SimianTreeItem]) -> some View {
+        let isExpanded = expandedFolderIds.contains(folder.id)
+        let isLoading = loadingFolderIds.contains(folder.id)
+        let hasOrMayHaveChildren = folderChildrenCache[folder.id] != nil || !isExpanded
+        let isEditing = inlineRenameItemId == "f-\(folder.id)"
+
+        return SimianFolderRow(
+            folderId: folder.id, projectId: projectId, parentFolderId: parentFolderId,
+            isExpanded: isExpanded, isLoading: isLoading, hasOrMayHaveChildren: hasOrMayHaveChildren,
+            depth: depth, folderName: folder.name, canReorder: siblings.count > 1,
+            isEditing: isEditing, editText: $inlineRenameText,
+            selectedItemIds: selectedItemIds,
+            onChevronTap: { toggleExpand(projectId: projectId, folderId: folder.id) },
+            onDoubleTap: { toggleExpand(projectId: projectId, folderId: folder.id) },
+            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: folder.id) },
+            onReorderDrop: { draggedIds in reorderItems(projectId: projectId, draggedIds: draggedIds, targetId: "f-\(folder.id)", treeList: treeList) },
+            onReorderInsertAfter: { draggedIds in
+                let nextId = siblings.firstIndex(where: { $0.id == folder.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
+                reorderItems(projectId: projectId, draggedIds: draggedIds, targetId: nextId.map { "f-\($0)" }, treeList: treeList)
+            },
+            onCommitRename: { commitInlineRename() },
+            onCancelRename: { inlineRenameItemId = nil; inlineRenameText = "" }
+        )
+        .contextMenu {
+            Button("Upload to\u{2026}") { uploadToFolder(folderId: folder.id) }
+            if !manager.selectedFiles.isEmpty {
+                Button("Upload \(manager.selectedFiles.count) staged file(s) here") { uploadStagedFiles(folderId: folder.id) }
+            }
+            Divider()
+            Button("New Folder with Selection") { startNewFolderWithSelection(projectId: projectId, treeList: treeList, rightClickedId: "f-\(folder.id)") }
+            Button("New Folder") { newFolderParentId = folder.id; newFolderName = ""; showNewFolderSheet = true }
+            Button("Rename\u{2026}") {
+                renameIsFolder = true; renameItemId = folder.id; renameParentFolderId = parentFolderId
+                renameCurrentName = folder.name; renameNewName = folder.name; showRenameSheet = true
+            }
+            Button("Copy Link") { copyFolderLink(projectId: projectId, folderId: folder.id) }
+            Divider()
+            Button("Remove from Simian\u{2026}", role: .destructive) {
+                pendingDeleteIsFolder = true; pendingDeleteItemId = folder.id; pendingDeleteItemName = folder.name
+                pendingDeleteParentFolderId = parentFolderId; showDeleteConfirmation = true
+            }
+        }
+    }
+
+    private func fileTreeRow(file: SimianFile, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFile], treeList: [SimianTreeItem]) -> some View {
+        let isEditing = inlineRenameItemId == "file-\(file.id)"
+        return SimianFileRow(
+            fileId: file.id, projectId: selectedProjectId ?? "", parentFolderId: parentFolderId,
+            depth: depth, fileName: file.title, canReorder: siblings.count > 1,
+            isEditing: isEditing, editText: $inlineRenameText,
+            selectedItemIds: selectedItemIds,
+            onReorderDrop: { draggedIds in reorderItems(projectId: selectedProjectId ?? "", draggedIds: draggedIds, targetId: "file-\(file.id)", treeList: treeList) },
+            onReorderInsertAfter: { draggedIds in
+                let nextId = siblings.firstIndex(where: { $0.id == file.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
+                reorderItems(projectId: selectedProjectId ?? "", draggedIds: draggedIds, targetId: nextId.map { "file-\($0)" }, treeList: treeList)
+            },
+            onCommitRename: { commitInlineRename() },
+            onCancelRename: { inlineRenameItemId = nil; inlineRenameText = "" }
+        )
+        .contextMenu {
+            Button("New Folder with Selection") { startNewFolderWithSelection(projectId: selectedProjectId ?? "", treeList: treeList, rightClickedId: "file-\(file.id)") }
+            Button("Rename\u{2026}") {
+                renameIsFolder = false; renameItemId = file.id; renameParentFolderId = parentFolderId
+                renameCurrentName = file.title; renameNewName = file.title; showRenameSheet = true
+            }
+            Divider()
+            Button("Remove from Simian\u{2026}", role: .destructive) {
+                pendingDeleteIsFolder = false; pendingDeleteItemId = file.id; pendingDeleteItemName = file.title
+                pendingDeleteParentFolderId = parentFolderId; showDeleteConfirmation = true
+            }
+        }
+    }
+
+    private func toggleExpand(projectId: String, folderId: String) {
+        if expandedFolderIds.contains(folderId) { expandedFolderIds.remove(folderId) }
+        else {
+            expandedFolderIds.insert(folderId)
+            if folderChildrenCache[folderId] == nil { loadFolderChildren(projectId: projectId, folderId: folderId) }
+        }
+    }
+
+    private func startNewFolderWithSelection(projectId: String, treeList: [SimianTreeItem], rightClickedId: String) {
+        func parentId(for treeId: String) -> String? {
+            guard let item = treeList.first(where: { $0.id == treeId }) else { return nil }
+            switch item { case .folder(_, _, _, let pid): return pid; case .file(_, _, _, let pid): return pid }
+        }
+        newFolderWithSelectionIds = [rightClickedId]; newFolderWithSelectionParentId = parentId(for: rightClickedId)
+        newFolderWithSelectionName = "New Folder"; newFolderWithSelectionError = nil; showNewFolderWithSelectionSheet = true
+    }
+
+    // MARK: - Multi-item reorder
+
+    /// Reorder one or more dragged items relative to a target position in the tree.
+    private func reorderItems(projectId: String, draggedIds: [String], targetId: String?, treeList: [SimianTreeItem]) {
+        // For now, handle the first dragged item to determine type, then batch
+        let folderIds = draggedIds.compactMap { id -> String? in id.hasPrefix("f-") ? String(id.dropFirst(2)) : nil }
+        let fileIds = draggedIds.compactMap { id -> String? in id.hasPrefix("file-") ? String(id.dropFirst(5)) : nil }
+
+        if !folderIds.isEmpty, let targetId = targetId, targetId.hasPrefix("f-") {
+            let targetFolderId = String(targetId.dropFirst(2))
+            // Find parent from target
+            if let targetItem = treeList.first(where: { $0.id == targetId }), case .folder(_, _, _, let parentId) = targetItem {
+                reorderFolders(projectId: projectId, folderIds: folderIds, parentFolderId: parentId, dropBeforeFolderId: targetFolderId)
+            }
+        }
+        if !fileIds.isEmpty, let targetId = targetId, targetId.hasPrefix("file-") {
+            let targetFileId = String(targetId.dropFirst(5))
+            if let targetItem = treeList.first(where: { $0.id == targetId }), case .file(_, _, _, let parentId) = targetItem {
+                reorderFiles(projectId: projectId, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: targetFileId)
+            }
+        }
+        // If targetId is nil (insert at end), use last item's parent
+        if targetId == nil {
+            if !folderIds.isEmpty {
+                if let firstDragged = treeList.first(where: { draggedIds.contains($0.id) }), case .folder(_, _, _, let parentId) = firstDragged {
+                    reorderFolders(projectId: projectId, folderIds: folderIds, parentFolderId: parentId, dropBeforeFolderId: nil)
+                }
+            }
+            if !fileIds.isEmpty {
+                if let firstDragged = treeList.first(where: { draggedIds.contains($0.id) }), case .file(_, _, _, let parentId) = firstDragged {
+                    reorderFiles(projectId: projectId, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: nil)
+                }
+            }
+        }
+    }
+
+    private func reorderFolders(projectId: String, folderIds: [String], parentFolderId: String?, dropBeforeFolderId: String?) {
+        let siblings = folderSiblings(parentId: parentFolderId)
+        var reordered = siblings.filter { !folderIds.contains($0.id) }
+        let moved = siblings.filter { folderIds.contains($0.id) }
+        guard !moved.isEmpty else { return }
+        let insertIdx: Int
+        if let beforeId = dropBeforeFolderId, let toIdx = reordered.firstIndex(where: { $0.id == beforeId }) { insertIdx = toIdx }
+        else { insertIdx = reordered.count }
+        reordered.insert(contentsOf: moved, at: insertIdx)
+        let ids = reordered.map { $0.id }
+        Task {
+            do {
+                try await simianService.updateFolderSort(projectId: projectId, parentFolderId: parentFolderId, folderIds: ids)
+                await MainActor.run {
+                    if let pid = parentFolderId { folderChildrenCache[pid] = reordered } else { currentFolders = reordered }
+                    statusMessage = moved.count > 1 ? "\(moved.count) folders moved" : "Folder moved"; statusIsError = false
+                }
+            } catch {
+                await MainActor.run { statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; statusIsError = true }
+            }
+        }
+    }
+
+    private func reorderFiles(projectId: String, fileIds: [String], parentFolderId: String?, dropBeforeFileId: String?) {
+        guard let pid = parentFolderId else { return }
+        let siblings = fileSiblings(parentFolderId: pid)
+        var reordered = siblings.filter { !fileIds.contains($0.id) }
+        let moved = siblings.filter { fileIds.contains($0.id) }
+        guard !moved.isEmpty else { return }
+        let insertIdx: Int
+        if let beforeId = dropBeforeFileId, let toIdx = reordered.firstIndex(where: { $0.id == beforeId }) { insertIdx = toIdx }
+        else { insertIdx = reordered.count }
+        reordered.insert(contentsOf: moved, at: insertIdx)
+        let ids = reordered.map { $0.id }
+        Task {
+            do {
+                try await simianService.updateFileSort(projectId: projectId, folderId: pid, fileIds: ids)
+                await MainActor.run {
+                    folderFilesCache[pid] = reordered
+                    statusMessage = moved.count > 1 ? "\(moved.count) files moved" : "File moved"; statusIsError = false
+                }
+            } catch {
+                await MainActor.run { statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; statusIsError = true }
+            }
+        }
+    }
+
+    private func copyFolderLink(projectId: String, folderId: String) {
+        Task {
+            do {
+                let shortLink = try await simianService.getShortLink(projectId: projectId, folderId: folderId)
+                await MainActor.run { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(shortLink, forType: .string); statusMessage = "Short link copied"; statusIsError = false }
+            } catch {
+                await MainActor.run {
+                    if let url = SimianService.folderLinkURL(projectId: projectId, folderId: folderId) {
+                        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                        statusMessage = "Direct link copied (short link unavailable)"; statusIsError = false
+                    } else { statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; statusIsError = true }
+                }
+            }
+        }
+    }
+
+    // MARK: - Data loading
 
     private func updateSimianServiceConfiguration() {
         let settings = settingsManager.currentSettings
         if let baseURL = settings.simianAPIBaseURL, !baseURL.isEmpty {
             simianService.setBaseURL(baseURL)
-            if let username = SharedKeychainService.getSimianUsername(),
-               let password = SharedKeychainService.getSimianPassword() {
+            if let username = SharedKeychainService.getSimianUsername(), let password = SharedKeychainService.getSimianPassword() {
                 simianService.setCredentials(username: username, password: password)
             }
-        } else {
-            simianService.clearConfiguration()
-        }
+        } else { simianService.clearConfiguration() }
     }
 
     private func loadProjects() {
-        isLoadingProjects = true
-        projectLoadError = nil
+        isLoadingProjects = true; projectLoadError = nil
         Task {
-            do {
-                let list = try await simianService.getProjectList()
-                await MainActor.run {
-                    allProjects = list
-                    isLoadingProjects = false
-                    loadProjectInfosIfNeeded()
-                }
-            } catch {
-                await MainActor.run {
-                    projectLoadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    isLoadingProjects = false
-                }
-            }
+            do { let list = try await simianService.getProjectList(); await MainActor.run { allProjects = list; isLoadingProjects = false; loadProjectInfosIfNeeded() } }
+            catch { await MainActor.run { projectLoadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; isLoadingProjects = false } }
         }
     }
 
-    /// Fetch project info for last-edited sorting (only when user selects that sort option)
     private func loadProjectInfosIfNeeded() {
         guard projectSortOrder.usesLastEdited, projectInfos.isEmpty, !allProjects.isEmpty else { return }
-        isLoadingProjectInfos = true
-        let list = allProjects
+        isLoadingProjectInfos = true; let list = allProjects
         Task {
             await withTaskGroup(of: (String, SimianProjectInfo?).self) { group in
-                for project in list {
-                    group.addTask {
-                        (project.id, try? await simianService.getProjectInfoDetails(projectId: project.id))
-                    }
-                }
-                for await (id, info) in group {
-                    if let info = info {
-                        await MainActor.run { projectInfos[id] = info }
-                    }
-                }
+                for project in list { group.addTask { (project.id, try? await simianService.getProjectInfoDetails(projectId: project.id)) } }
+                for await (id, info) in group { if let info = info { await MainActor.run { projectInfos[id] = info } } }
             }
             await MainActor.run { isLoadingProjectInfos = false }
         }
     }
 
-    /// Max folders to show per expanded level (prevents crash with huge folders)
+    private func loadFolderChildren(projectId: String, folderId: String) {
+        loadingFolderIds.insert(folderId)
+        Task {
+            do {
+                async let foldersTask = simianService.getProjectFolders(projectId: projectId, parentFolderId: folderId)
+                async let filesTask = simianService.getProjectFiles(projectId: projectId, folderId: folderId)
+                let (children, files) = try await (foldersTask, filesTask)
+                await MainActor.run { folderChildrenCache[folderId] = children; folderFilesCache[folderId] = files; loadingFolderIds.remove(folderId) }
+            } catch { await MainActor.run { folderChildrenCache[folderId] = []; folderFilesCache[folderId] = []; loadingFolderIds.remove(folderId) } }
+        }
+    }
+
+    private func loadFolders(projectId: String, parentFolderId: String?) {
+        isLoadingFolders = true
+        Task {
+            do { let folders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: parentFolderId); await MainActor.run { currentFolders = folders; isLoadingFolders = false } }
+            catch { await MainActor.run { currentFolders = []; isLoadingFolders = false } }
+        }
+    }
+
+    private func selectFirstProjectIfOne() { if filteredProjects.count == 1 { openProject(filteredProjects[0]) } }
+
+    // MARK: - Tree model
+
     private let maxFoldersPerLevel = 200
-    /// Max total rows in tree (safety cap)
     private let maxTotalTreeRows = 500
 
-    /// Siblings at a level: folders for reorder (parent nil = root)
     private func folderSiblings(parentId: String?) -> [SimianFolder] {
         parentId == nil ? currentFolders : (folderChildrenCache[parentId!] ?? [])
     }
-    /// File siblings in a folder
     private func fileSiblings(parentFolderId: String?) -> [SimianFile] {
-        guard let id = parentFolderId else { return [] }
-        return folderFilesCache[id] ?? []
+        guard let id = parentFolderId else { return [] }; return folderFilesCache[id] ?? []
     }
 
-    /// Tree item: folder (expandable, selectable, reorderable) or file (display, reorderable)
-    private enum SimianTreeItem: Identifiable {
+    enum SimianTreeItem: Identifiable {
         case folder(SimianFolder, depth: Int, path: String, parentFolderId: String?)
         case file(SimianFile, depth: Int, path: String, parentFolderId: String?)
         var id: String {
-            switch self {
-            case .folder(let f, _, _, _): return "f-\(f.id)"
-            case .file(let f, _, _, _): return "file-\(f.id)"
-            }
+            switch self { case .folder(let f, _, _, _): return "f-\(f.id)"; case .file(let f, _, _, _): return "file-\(f.id)" }
         }
     }
 
-    /// Build a flattened list of folders and files for tree display (respects expanded state).
-    /// Folders first (with subfolders when expanded), then files under each folder. Uses DFS.
     private func flatTreeList(projectId: String) -> [SimianTreeItem] {
         var result: [SimianTreeItem] = []
-        enum StackItem {
-            case folders([SimianFolder], Int, String, String?)
-            case files([SimianFile], Int, String, String?)
-        }
+        enum StackItem { case folders([SimianFolder], Int, String, String?); case files([SimianFile], Int, String, String?) }
         var stack: [StackItem] = [.folders(currentFolders, 0, "", nil)]
         while !stack.isEmpty && result.count < maxTotalTreeRows {
             switch stack.removeLast() {
@@ -1003,15 +966,9 @@ struct SimianPostView: View {
                     result.append(.folder(f, depth: depth, path: path, parentFolderId: parentId))
                     if expandedFolderIds.contains(f.id) {
                         let remaining = Array(capped.suffix(from: i + 1))
-                        if !remaining.isEmpty {
-                            stack.append(.folders(remaining, depth, pathPrefix, parentId))
-                        }
-                        if let files = folderFilesCache[f.id], !files.isEmpty {
-                            stack.append(.files(Array(files.prefix(100)), depth + 1, path, f.id))
-                        }
-                        if let children = folderChildrenCache[f.id] {
-                            stack.append(.folders(children, depth + 1, path, f.id))
-                        }
+                        if !remaining.isEmpty { stack.append(.folders(remaining, depth, pathPrefix, parentId)) }
+                        if let files = folderFilesCache[f.id], !files.isEmpty { stack.append(.files(Array(files.prefix(100)), depth + 1, path, f.id)) }
+                        if let children = folderChildrenCache[f.id] { stack.append(.folders(children, depth + 1, path, f.id)) }
                         break
                     }
                 }
@@ -1025,1124 +982,297 @@ struct SimianPostView: View {
         return result
     }
 
-    /// Total tree row count: 1 (root) + flatTreeList.count. Used for keyboard index bounds.
-    private func treeRowCount(projectId: String) -> Int {
-        1 + flatTreeList(projectId: projectId).count
-    }
+    // MARK: - File drop handling
 
-    /// Resolve keyboard focus index to root or tree item. Index 0 = project root; index i >= 1 = treeList[i-1].
-    private func treeItemAtIndex(projectId: String, index: Int) -> (isRoot: Bool, item: SimianTreeItem?)? {
-        let tree = flatTreeList(projectId: projectId)
-        if index == 0 { return (true, nil) }
-        let i = index - 1
-        guard i < tree.count else { return nil }
-        return (false, tree[i])
-    }
-
-    /// Index of the parent row for the row at `index`. Root (index 0) has no parent. For folder/file, parent is the folder row with matching parentFolderId.
-    private func parentTreeIndex(projectId: String, index: Int) -> Int? {
-        guard index > 0 else { return nil }
-        let tree = flatTreeList(projectId: projectId)
-        let i = index - 1
-        guard i < tree.count else { return nil }
-        let parentFolderId: String?
-        switch tree[i] {
-        case .folder(_, _, _, let pid): parentFolderId = pid
-        case .file(_, _, _, let pid): parentFolderId = pid
-        }
-        if parentFolderId == nil { return 0 }
-        guard let parentId = parentFolderId else { return 0 }
-        for j in (0..<i).reversed() {
-            if case .folder(let f, _, _, _) = tree[j], f.id == parentId {
-                return j + 1
-            }
-        }
-        return 0
-    }
-
-    /// Stable id for the row at `index` (for ScrollViewReader.scrollTo). Index 0 = "project-root".
-    private func treeRowId(projectId: String, index: Int) -> String? {
-        if index == 0 { return "project-root" }
-        let tree = flatTreeList(projectId: projectId)
-        let i = index - 1
-        guard i < tree.count else { return nil }
-        return tree[i].id
-    }
-
-    /// Resolve current destination to tree focus index. Returns 0 for root, or index of folder row with selectedDestinationFolderId.
-    private func destinationToTreeFocusIndex(projectId: String) -> Int {
-        guard selectedDestinationFolderId != nil else { return 0 }
-        let tree = flatTreeList(projectId: projectId)
-        guard let fid = selectedDestinationFolderId else { return 0 }
-        for (idx, item) in tree.enumerated() {
-            if case .folder(let f, _, _, _) = item, f.id == fid { return idx + 1 }
-        }
-        return 0
-    }
-
-    /// Single folder row in the tree: expand chevron + clickable row to select + draggable for reorder
-    private func folderTreeRow(projectId: String, folder: SimianFolder, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFolder], treeList: [SimianTreeItem], treeIndex: Int, isKeyboardFocused: Bool = false, onNewFolderWithSelection: @escaping () -> Void) -> some View {
-        let isExpanded = expandedFolderIds.contains(folder.id)
-        let isLoading = loadingFolderIds.contains(folder.id)
-        let hasOrMayHaveChildren = folderChildrenCache[folder.id] != nil || !isExpanded
-        let isSelected = selectedDestinationFolderId == folder.id
-        let nextFolderId = siblings.firstIndex(where: { $0.id == folder.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
-
-        return FolderTreeRowContentView(
-            projectId: projectId,
-            folderId: folder.id,
-            parentFolderId: parentFolderId,
-            isExpanded: isExpanded,
-            isLoading: isLoading,
-            hasOrMayHaveChildren: hasOrMayHaveChildren,
-            isSelected: isSelected,
-            isKeyboardFocused: isKeyboardFocused,
-            depth: depth,
-            folderName: folder.name,
-            onChevronTap: {
-                if isExpanded {
-                    expandedFolderIds.remove(folder.id)
-                } else {
-                    expandedFolderIds.insert(folder.id)
-                    if folderChildrenCache[folder.id] == nil {
-                        loadFolderChildren(projectId: projectId, folderId: folder.id)
-                    }
-                }
-            },
-            onRowTap: {
-                selectedDestinationFolderId = folder.id
-                selectedDestinationPath = path
-                keyboardFocusTreeIndex = treeIndex
-            },
-            onDoubleTap: {
-                if isExpanded {
-                    expandedFolderIds.remove(folder.id)
-                } else {
-                    expandedFolderIds.insert(folder.id)
-                    if folderChildrenCache[folder.id] == nil {
-                        loadFolderChildren(projectId: projectId, folderId: folder.id)
-                    }
-                }
-            },
-            onDrop: { providers in
-                handleFileDrop(providers: providers, destination: (folder.id, path))
-            },
-            onCopyLink: {
-                copyFolderLink(projectId: projectId, folderId: folder.id)
-            },
-            onRename: {
-                renameIsFolder = true
-                renameItemId = folder.id
-                renameParentFolderId = parentFolderId
-                renameCurrentName = folder.name
-                renameNewName = folder.name
-                showRenameSheet = true
-            },
-            onDelete: {
-                pendingDeleteIsFolder = true
-                pendingDeleteItemId = folder.id
-                pendingDeleteItemName = folder.name
-                pendingDeleteParentFolderId = parentFolderId
-                showDeleteConfirmation = true
-            },
-            onNewFolder: {
-                newFolderParentId = folder.id
-                newFolderName = ""
-                showNewFolderSheet = true
-            },
-            onNewFolderWithSelection: onNewFolderWithSelection,
-            onReorder: { draggedFolderId in
-                reorderFolder(projectId: projectId, folderId: draggedFolderId, parentFolderId: parentFolderId, dropBeforeFolderId: folder.id)
-            },
-            onReorderInsertBefore: { dropBeforeFolderId, draggedFolderId in
-                reorderFolder(projectId: projectId, folderId: draggedFolderId, parentFolderId: parentFolderId, dropBeforeFolderId: dropBeforeFolderId)
-            },
-            canReorder: siblings.count > 1,
-            nextFolderId: nextFolderId
-        )
-    }
-
-    /// File row (display only; draggable for reorder)
-    private func fileTreeRow(file: SimianFile, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFile], treeList: [SimianTreeItem], isKeyboardFocused: Bool = false, onNewFolderWithSelection: @escaping () -> Void) -> some View {
-        let nextFileId = siblings.firstIndex(where: { $0.id == file.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
-        return FileTreeRowContentView(
-            projectId: selectedProjectId ?? "",
-            file: file,
-            parentFolderId: parentFolderId,
-            depth: depth,
-            isKeyboardFocused: isKeyboardFocused,
-            nextFileId: nextFileId,
-            onRename: {
-                renameIsFolder = false
-                renameItemId = file.id
-                renameParentFolderId = parentFolderId
-                renameCurrentName = file.title
-                renameNewName = file.title
-                showRenameSheet = true
-            },
-            onDelete: {
-                pendingDeleteIsFolder = false
-                pendingDeleteItemId = file.id
-                pendingDeleteItemName = file.title
-                pendingDeleteParentFolderId = parentFolderId
-                showDeleteConfirmation = true
-            },
-            onNewFolderWithSelection: onNewFolderWithSelection,
-            onReorderInsertBefore: { dropBeforeFileId, draggedFileId in
-                reorderFile(projectId: selectedProjectId ?? "", fileId: draggedFileId, parentFolderId: parentFolderId, dropBeforeFileId: dropBeforeFileId)
-            },
-            canReorder: siblings.count > 1
-        )
-    }
-
-    private func reorderFolder(projectId: String, folderId: String, parentFolderId: String?, dropBeforeFolderId: String?) {
-        let siblings = folderSiblings(parentId: parentFolderId)
-        guard let fromIdx = siblings.firstIndex(where: { $0.id == folderId }) else { return }
-        var reordered = siblings
-        reordered.remove(at: fromIdx)
-        let newIdx: Int
-        if let beforeId = dropBeforeFolderId, let toIdx = reordered.firstIndex(where: { $0.id == beforeId }) {
-            newIdx = toIdx
-        } else {
-            newIdx = reordered.count
-        }
-        guard fromIdx != newIdx else { return }
-        reordered.insert(siblings[fromIdx], at: newIdx)
-        let ids = reordered.map { $0.id }
-        Task {
-            do {
-                try await simianService.updateFolderSort(projectId: projectId, parentFolderId: parentFolderId, folderIds: ids)
-                await MainActor.run {
-                    if let pid = parentFolderId {
-                        folderChildrenCache[pid] = reordered
-                    } else {
-                        currentFolders = reordered
-                    }
-                    statusMessage = "Folder moved"
-                    statusIsError = false
-                }
-            } catch {
-                await MainActor.run {
-                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    statusIsError = true
-                }
-            }
-        }
-    }
-
-    private func reorderFile(projectId: String, fileId: String, parentFolderId: String?, dropBeforeFileId: String?) {
-        guard let pid = parentFolderId else { return }
-        let siblings = fileSiblings(parentFolderId: pid)
-        guard let fromIdx = siblings.firstIndex(where: { $0.id == fileId }) else { return }
-        var reordered = siblings
-        reordered.remove(at: fromIdx)
-        let newIdx: Int
-        if let beforeId = dropBeforeFileId, let toIdx = reordered.firstIndex(where: { $0.id == beforeId }) {
-            newIdx = toIdx
-        } else {
-            newIdx = reordered.count
-        }
-        guard fromIdx != newIdx else { return }
-        reordered.insert(siblings[fromIdx], at: newIdx)
-        let ids = reordered.map { $0.id }
-        Task {
-            do {
-                try await simianService.updateFileSort(projectId: projectId, folderId: pid, fileIds: ids)
-                await MainActor.run {
-                    folderFilesCache[pid] = reordered
-                    statusMessage = "File moved"
-                    statusIsError = false
-                }
-            } catch {
-                await MainActor.run {
-                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    statusIsError = true
-                }
-            }
-        }
-    }
-
-    /// Copy Simian short link (Share → Get Shortlink → Create Link) to clipboard.
-    private func copyFolderLink(projectId: String, folderId: String) {
-        Task {
-            do {
-                let shortLink = try await simianService.getShortLink(projectId: projectId, folderId: folderId)
-                await MainActor.run {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(shortLink, forType: .string)
-                    statusMessage = "Short link copied"
-                    statusIsError = false
-                }
-            } catch {
-                await MainActor.run {
-                    if let url = SimianService.folderLinkURL(projectId: projectId, folderId: folderId) {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
-                        statusMessage = "Direct link copied (short link unavailable)"
-                        statusIsError = false
-                    } else {
-                        statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                        statusIsError = true
-                    }
-                }
-            }
-        }
-    }
-
-    private func loadFolderChildren(projectId: String, folderId: String) {
-        loadingFolderIds.insert(folderId)
-        Task {
-            do {
-                async let foldersTask = simianService.getProjectFolders(projectId: projectId, parentFolderId: folderId)
-                async let filesTask = simianService.getProjectFiles(projectId: projectId, folderId: folderId)
-                let (children, files) = try await (foldersTask, filesTask)
-                await MainActor.run {
-                    folderChildrenCache[folderId] = children
-                    folderFilesCache[folderId] = files
-                    loadingFolderIds.remove(folderId)
-                }
-            } catch {
-                await MainActor.run {
-                    folderChildrenCache[folderId] = []
-                    folderFilesCache[folderId] = []
-                    loadingFolderIds.remove(folderId)
-                }
-            }
-        }
-    }
-
-    private func loadFolders(projectId: String, parentFolderId: String?) {
-        isLoadingFolders = true
-        Task {
-            do {
-                let folders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: parentFolderId)
-                await MainActor.run {
-                    currentFolders = folders
-                    isLoadingFolders = false
-                }
-            } catch {
-                await MainActor.run {
-                    currentFolders = []
-                    isLoadingFolders = false
-                }
-            }
-        }
-    }
-
-    private func selectFirstProjectIfOne() {
-        if filteredProjects.count == 1 {
-            let p = filteredProjects[0]
-            selectedProjectId = p.id
-            selectedProjectName = p.name
-            folderBreadcrumb = []
-            selectedDestinationFolderId = nil
-            selectedDestinationPath = nil
-            expandedFolderIds.removeAll()
-            folderChildrenCache.removeAll()
-            folderFilesCache.removeAll()
-            loadFolders(projectId: p.id, parentFolderId: nil)
-        }
-    }
-
-    private func chooseLocalFolder() {
-        FilePickerService.chooseFolder { url in
-            if let url = url {
-                localFolderURL = url
-            }
-        }
-    }
-
-    // MARK: - Keyboard navigation (Finder-like)
-
-    private func shouldIgnoreKeyPress() -> Bool {
-        if isSearchFocused { return true }
-        if let window = NSApp.keyWindow, KeyboardNavigationCoordinator.isEditingText(in: window) { return true }
-        return false
-    }
-
-    private func handleKeyUp() -> KeyPress.Result {
-        if shouldIgnoreKeyPress() { return .ignored }
-        if selectedProjectId == nil {
-            // Project list: move selection up
-            let list = filteredProjects
-            guard !list.isEmpty else { return .handled }
-            let currentId = selectedProjectId
-            let idx = currentId.flatMap { id in list.firstIndex(where: { $0.id == id }) } ?? -1
-            let newIdx = max(0, idx - 1)
-            let project = list[newIdx]
-            selectedProjectId = project.id
-            selectedProjectName = project.name
-            return .handled
-        }
-        // Folder tree: move focus up
-        guard let projectId = selectedProjectId else { return .handled }
-        let count = treeRowCount(projectId: projectId)
-        guard count > 0 else { return .handled }
-        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
-        keyboardFocusTreeIndex = current
-        let newIdx = max(0, current - 1)
-        keyboardFocusTreeIndex = newIdx
-        applyDestinationFromTreeIndex(projectId: projectId, index: newIdx)
-        return .handled
-    }
-
-    private func handleKeyDown() -> KeyPress.Result {
-        if shouldIgnoreKeyPress() { return .ignored }
-        if selectedProjectId == nil {
-            // Project list: move selection down or select first
-            let list = filteredProjects
-            guard !list.isEmpty else { return .handled }
-            let currentId = selectedProjectId
-            let idx = currentId.flatMap { id in list.firstIndex(where: { $0.id == id }) }
-            let newIdx: Int
-            if let i = idx {
-                newIdx = min(list.count - 1, i + 1)
-            } else {
-                newIdx = 0
-            }
-            let project = list[newIdx]
-            selectedProjectId = project.id
-            selectedProjectName = project.name
-            return .handled
-        }
-        // Folder tree: move focus down
-        guard let projectId = selectedProjectId else { return .handled }
-        let count = treeRowCount(projectId: projectId)
-        guard count > 0 else { return .handled }
-        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
-        keyboardFocusTreeIndex = current
-        let newIdx = min(count - 1, current + 1)
-        keyboardFocusTreeIndex = newIdx
-        applyDestinationFromTreeIndex(projectId: projectId, index: newIdx)
-        return .handled
-    }
-
-    private func handleKeyLeft() -> KeyPress.Result {
-        if shouldIgnoreKeyPress() { return .ignored }
-        guard let projectId = selectedProjectId else { return .ignored }
-        let count = treeRowCount(projectId: projectId)
-        guard count > 0 else { return .handled }
-        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
-        keyboardFocusTreeIndex = current
-        guard let info = treeItemAtIndex(projectId: projectId, index: current) else { return .handled }
-        if !info.isRoot, let item = info.item, case .folder(let f, _, _, _) = item, expandedFolderIds.contains(f.id) {
-            expandedFolderIds.remove(f.id)
-            keyboardFocusTreeIndex = current
-        } else if let parentIdx = parentTreeIndex(projectId: projectId, index: current) {
-            keyboardFocusTreeIndex = parentIdx
-            applyDestinationFromTreeIndex(projectId: projectId, index: parentIdx)
-        }
-        return .handled
-    }
-
-    private func handleKeyRight() -> KeyPress.Result {
-        if shouldIgnoreKeyPress() { return .ignored }
-        guard let projectId = selectedProjectId else { return .ignored }
-        let count = treeRowCount(projectId: projectId)
-        guard count > 0 else { return .handled }
-        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
-        keyboardFocusTreeIndex = current
-        guard let info = treeItemAtIndex(projectId: projectId, index: current) else { return .handled }
-        if info.isRoot {
-            return .handled
-        }
-        guard let item = info.item else { return .handled }
-        if case .folder(let f, _, _, _) = item {
-            let isExpanded = expandedFolderIds.contains(f.id)
-            if !isExpanded {
-                expandedFolderIds.insert(f.id)
-                if folderChildrenCache[f.id] == nil {
-                    loadFolderChildren(projectId: projectId, folderId: f.id)
-                }
-                keyboardFocusTreeIndex = current
-            } else {
-                let nextIdx = current + 1
-                if nextIdx < count {
-                    keyboardFocusTreeIndex = nextIdx
-                    applyDestinationFromTreeIndex(projectId: projectId, index: nextIdx)
-                }
-            }
-        }
-        return .handled
-    }
-
-    private func handleKeyReturn() -> KeyPress.Result {
-        if shouldIgnoreKeyPress() { return .ignored }
-        if selectedProjectId == nil {
-            // Project list: open selected project (or first if none selected)
-            let list = filteredProjects
-            guard !list.isEmpty else { return .handled }
-            let id = selectedProjectId ?? list[0].id
-            let name = selectedProjectName ?? list.first(where: { $0.id == id })?.name ?? ""
-            selectedProjectId = id
-            selectedProjectName = name
-            folderBreadcrumb = []
-            selectedDestinationFolderId = nil
-            selectedDestinationPath = nil
-            expandedFolderIds.removeAll()
-            folderChildrenCache.removeAll()
-            folderFilesCache.removeAll()
-            loadFolders(projectId: id, parentFolderId: nil)
-            keyboardFocusTreeIndex = 0
-            return .handled
-        }
-        // Folder tree: set destination from focused row (if folder or root)
-        guard let projectId = selectedProjectId else { return .handled }
-        let count = treeRowCount(projectId: projectId)
-        guard count > 0 else { return .handled }
-        let current = keyboardFocusTreeIndex ?? destinationToTreeFocusIndex(projectId: projectId)
-        keyboardFocusTreeIndex = current
-        applyDestinationFromTreeIndex(projectId: projectId, index: current)
-        return .handled
-    }
-
-    private func handleKeyEscape() -> KeyPress.Result {
-        if shouldIgnoreKeyPress() { return .ignored }
-        if selectedProjectId != nil {
-            selectedProjectId = nil
-            selectedProjectName = nil
-            folderBreadcrumb = []
-            currentFolders = []
-            selectedDestinationFolderId = nil
-            selectedDestinationPath = nil
-            expandedFolderIds.removeAll()
-            folderChildrenCache.removeAll()
-            folderFilesCache.removeAll()
-            keyboardFocusTreeIndex = nil
-            return .handled
-        }
-        return .ignored
-    }
-
-    /// Update selectedDestinationFolderId and selectedDestinationPath from the tree row at index (only when row is root or folder).
-    private func applyDestinationFromTreeIndex(projectId: String, index: Int) {
-        guard let info = treeItemAtIndex(projectId: projectId, index: index) else { return }
-        if info.isRoot {
-            selectedDestinationFolderId = nil
-            selectedDestinationPath = nil
-            return
-        }
-        if case .folder(let f, _, let path, _) = info.item! {
-            selectedDestinationFolderId = f.id
-            selectedDestinationPath = path
-        }
-    }
-
-    /// destination: nil = don't change / add to staging; (nil, nil) = project root; (id, path) = that folder. When destination is set, upload dropped files directly there (no staging).
-    private func handleFileDrop(providers: [NSItemProvider], destination: (folderId: String?, path: String?)?) -> Bool {
-        if let dest = destination {
-            selectedDestinationFolderId = dest.folderId
-            selectedDestinationPath = dest.path ?? ""
-            guard let projectId = selectedProjectId else { return true }
-            loadURLsFromProviders(providers) { [self] urls in
-                guard !urls.isEmpty else { return }
-                uploadDroppedFiles(projectId: projectId, folderId: dest.folderId, fileURLs: urls)
-            }
-            return true
-        }
-        for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
-                    if let data = item as? Data,
-                       let url = URL(dataRepresentation: data, relativeTo: nil) {
-                        DispatchQueue.main.async {
-                            let fileItem = FileItem(url: url)
-                            let currentIDs = Set(self.manager.selectedFiles.map { $0.url })
-                            if !currentIDs.contains(fileItem.url) {
-                                self.manager.selectedFiles.append(fileItem)
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    private func handleExternalFileDrop(providers: [NSItemProvider], folderId: String?) -> Bool {
+        guard let projectId = selectedProjectId else { return false }
+        loadURLsFromProviders(providers) { urls in guard !urls.isEmpty else { return }; uploadDroppedFiles(projectId: projectId, folderId: folderId, fileURLs: urls) }
         return true
     }
 
-    /// Load all file URLs from drag providers, then call completion on main queue with the collected URLs.
     private func loadURLsFromProviders(_ providers: [NSItemProvider], completion: @escaping ([URL]) -> Void) {
-        var urls: [URL] = []
-        let group = DispatchGroup()
+        var urls: [URL] = []; let group = DispatchGroup()
         for provider in providers {
             guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { continue }
             group.enter()
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
-                    urls.append(url)
-                }
-                group.leave()
+                if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) { urls.append(url) }; group.leave()
             }
         }
-        group.notify(queue: .main) {
-            completion(urls)
-        }
+        group.notify(queue: .main) { completion(urls) }
     }
 
-    /// Upload dropped files directly to the given folder (no staging). Uses same logic as performPost.
     private func uploadDroppedFiles(projectId: String, folderId: String?, fileURLs: [URL]) {
         let itemsToUpload = fileURLs.map { FileItem(url: $0) }
         let totalFiles = itemsToUpload.reduce(0) { $0 + $1.fileCount }
-        isUploading = true
-        statusMessage = "Uploading…"
-        statusIsError = false
-        uploadTotal = totalFiles
-        uploadCurrent = 0
-        uploadFileName = ""
-
+        isUploading = true; statusMessage = "Uploading\u{2026}"; statusIsError = false; uploadTotal = totalFiles; uploadCurrent = 0; uploadFileName = ""
         Task {
             do {
                 let progressCounter = ProgressCounter()
                 for fileItem in itemsToUpload {
                     let existingFolders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: folderId)
-                    let existingNames = existingFolders.map { $0.name }
-
                     if fileItem.isDirectory {
-                        try await uploadFolderWithStructure(
-                            projectId: projectId,
-                            destinationFolderId: folderId,
-                            localFolderURL: fileItem.url,
-                            existingFolderNames: existingNames,
-                            uploadProgress: { fileName in
-                                progressCounter.increment()
-                                Task { @MainActor in
-                                    uploadCurrent = progressCounter.value
-                                    uploadTotal = totalFiles
-                                    uploadFileName = fileName
-                                }
-                            }
-                        )
-                    } else {
-                        progressCounter.increment()
-                        await MainActor.run {
-                            uploadCurrent = progressCounter.value
-                            uploadTotal = totalFiles
-                            uploadFileName = fileItem.name
+                        try await uploadFolderWithStructure(projectId: projectId, destinationFolderId: folderId, localFolderURL: fileItem.url, existingFolderNames: existingFolders.map { $0.name }) { fileName in
+                            progressCounter.increment(); Task { @MainActor in uploadCurrent = progressCounter.value; uploadTotal = totalFiles; uploadFileName = fileName }
                         }
+                    } else {
+                        progressCounter.increment(); await MainActor.run { uploadCurrent = progressCounter.value; uploadTotal = totalFiles; uploadFileName = fileItem.name }
                         _ = try await simianService.uploadFile(projectId: projectId, folderId: folderId, fileURL: fileItem.url)
                     }
                 }
-
                 await MainActor.run {
-                    isUploading = false
-                    let destSummary = folderId == nil ? "project root" : "folder"
-                    statusMessage = "Uploaded \(progressCounter.value) file(s) to \(destSummary)."
-                    statusIsError = false
+                    isUploading = false; statusMessage = "Uploaded \(progressCounter.value) file(s)."; statusIsError = false
                     if selectedProjectId == projectId {
-                        if let destId = folderId {
-                            folderChildrenCache.removeValue(forKey: destId)
-                            folderFilesCache.removeValue(forKey: destId)
-                        }
+                        if let destId = folderId { folderChildrenCache.removeValue(forKey: destId); folderFilesCache.removeValue(forKey: destId) }
                         loadFolders(projectId: projectId, parentFolderId: currentParentFolderId)
                     }
                 }
             } catch {
-                await MainActor.run {
-                    isUploading = false
-                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    statusIsError = true
-                }
+                await MainActor.run { isUploading = false; statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; statusIsError = true }
             }
         }
     }
 
-    /// Count total files for progress (recursive)
-    private func countFiles(in directoryURL: URL) -> Int {
+    private func uploadFolderWithStructure(projectId: String, destinationFolderId: String?, localFolderURL: URL, existingFolderNames: [String], uploadProgress: @escaping (String) -> Void) async throws {
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: directoryURL,
-            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return 0 }
-        var count = 0
-        for case let url as URL in enumerator {
-            guard url.lastPathComponent != ".DS_Store" else { continue }
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            count += 1
-        }
-        return count
-    }
-
-    private func performPost() {
-        guard let projectId = selectedProjectId else { return }
-        let destinationFolderId = selectedDestinationFolderId
-
-        let itemsToUpload: [FileItem]
-        let totalFiles: Int
-        if !manager.selectedFiles.isEmpty {
-            itemsToUpload = manager.selectedFiles
-            totalFiles = manager.selectedFiles.reduce(0) { $0 + $1.fileCount }
-        } else if let folderURL = localFolderURL, countFiles(in: folderURL) > 0 {
-            itemsToUpload = [FileItem(url: folderURL)]
-            totalFiles = countFiles(in: folderURL)
-        } else {
-            return
-        }
-
-        isUploading = true
-        statusMessage = ""
-        statusIsError = false
-        uploadTotal = totalFiles
-        uploadCurrent = 0
-        uploadFileName = ""
-
-        Task {
-            do {
-                let progressCounter = ProgressCounter()
-                for fileItem in itemsToUpload {
-                    let existingFolders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: destinationFolderId)
-                    let existingNames = existingFolders.map { $0.name }
-
-                    if fileItem.isDirectory {
-                        try await uploadFolderWithStructure(
-                            projectId: projectId,
-                            destinationFolderId: destinationFolderId,
-                            localFolderURL: fileItem.url,
-                            existingFolderNames: existingNames,
-                            uploadProgress: { fileName in
-                                progressCounter.increment()
-                                Task { @MainActor in
-                                    uploadCurrent = progressCounter.value
-                                    uploadTotal = totalFiles
-                                    uploadFileName = fileName
-                                }
-                            }
-                        )
-                    } else {
-                        progressCounter.increment()
-                        await MainActor.run {
-                            uploadCurrent = progressCounter.value
-                            uploadTotal = totalFiles
-                            uploadFileName = fileItem.name
-                        }
-                        _ = try await simianService.uploadFile(projectId: projectId, folderId: destinationFolderId, fileURL: fileItem.url)
-                    }
-                }
-
-                await MainActor.run {
-                    isUploading = false
-                    statusMessage = "Uploaded \(progressCounter.value) file(s) to \(destinationSummary)."
-                    statusIsError = false
-                    if selectedProjectId == projectId {
-                        if let destId = destinationFolderId {
-                            folderChildrenCache.removeValue(forKey: destId)
-                            folderFilesCache.removeValue(forKey: destId)
-                        }
-                        loadFolders(projectId: projectId, parentFolderId: currentParentFolderId)
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    isUploading = false
-                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    statusIsError = true
-                }
-            }
-        }
-    }
-
-    /// Upload a folder and its contents to Simian, preserving folder structure.
-    /// Uses next number in sequence for numbered folders (01_, 02_, etc.) at each level.
-    private func uploadFolderWithStructure(
-        projectId: String,
-        destinationFolderId: String?,
-        localFolderURL: URL,
-        existingFolderNames: [String],
-        uploadProgress: @escaping (String) -> Void
-    ) async throws {
-        let fm = FileManager.default
-
-        // Determine the folder name for Simian (apply numbered sequencing if destination has numbered folders)
-        let sourceFolderName = localFolderURL.lastPathComponent
-        let folderName = SimianService.nextNumberedFolderName(existingFolderNames: existingFolderNames, sourceFolderName: sourceFolderName)
-
-        // Create the folder in Simian
-        let simianFolderId = try await simianService.createFolderPublic(
-            projectId: projectId,
-            folderName: folderName,
-            parentFolderId: destinationFolderId
-        )
-
-        // Get contents of the local folder
-        guard let contents = try? fm.contentsOfDirectory(
-            at: localFolderURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
-
-        var filesInThisFolder: [URL] = []
-        var subfolders: [URL] = []
-
+        let folderName = SimianService.nextNumberedFolderName(existingFolderNames: existingFolderNames, sourceFolderName: localFolderURL.lastPathComponent)
+        let simianFolderId = try await simianService.createFolderPublic(projectId: projectId, folderName: folderName, parentFolderId: destinationFolderId)
+        guard let contents = try? fm.contentsOfDirectory(at: localFolderURL, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey], options: [.skipsHiddenFiles]) else { return }
+        var filesHere: [URL] = []; var subfolders: [URL] = []
         for item in contents {
             guard item.lastPathComponent != ".DS_Store" else { continue }
-            if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-                subfolders.append(item)
-            } else if (try? item.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
-                filesInThisFolder.append(item)
-            }
+            if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { subfolders.append(item) }
+            else if (try? item.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true { filesHere.append(item) }
         }
-
-        // Upload files in this folder
-        for fileURL in filesInThisFolder {
-            uploadProgress(fileURL.lastPathComponent)
-            _ = try await simianService.uploadFile(projectId: projectId, folderId: simianFolderId, fileURL: fileURL)
-        }
-
-        // Recursively upload subfolders
-        for subfolderURL in subfolders {
-            let existingInSimian = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: simianFolderId)
-            let existingNames = existingInSimian.map { $0.name }
-
-            try await uploadFolderWithStructure(
-                projectId: projectId,
-                destinationFolderId: simianFolderId,
-                localFolderURL: subfolderURL,
-                existingFolderNames: existingNames,
-                uploadProgress: uploadProgress
-            )
+        for fileURL in filesHere { uploadProgress(fileURL.lastPathComponent); _ = try await simianService.uploadFile(projectId: projectId, folderId: simianFolderId, fileURL: fileURL) }
+        for sub in subfolders {
+            let existing = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: simianFolderId)
+            try await uploadFolderWithStructure(projectId: projectId, destinationFolderId: simianFolderId, localFolderURL: sub, existingFolderNames: existing.map { $0.name }, uploadProgress: uploadProgress)
         }
     }
 }
+
+// MARK: - Sort order
 
 enum ProjectSortOrder: String, CaseIterable {
-    case nameAsc = "name_asc"
-    case nameDesc = "name_desc"
-    case lastEditedNewest = "last_newest"
-    case lastEditedOldest = "last_oldest"
+    case nameAsc = "name_asc"; case nameDesc = "name_desc"; case lastEditedNewest = "last_newest"; case lastEditedOldest = "last_oldest"
+    var usesLastEdited: Bool { self == .lastEditedNewest || self == .lastEditedOldest }
+}
 
-    var usesLastEdited: Bool {
-        self == .lastEditedNewest || self == .lastEditedOldest
+// MARK: - Drag payload: "simian-multi|type|projectId|parentId|id1,id2,id3"
+
+private func buildSimianDragPayload(type: String, projectId: String, parentId: String?, itemIds: [String]) -> String {
+    "simian-multi|\(type)|\(projectId)|\(parentId ?? "")|\(itemIds.joined(separator: ","))"
+}
+
+private func parseSimianMultiDrag(_ str: String) -> (type: String, projectId: String, parentId: String?, itemIds: [String])? {
+    let parts = str.split(separator: "|", maxSplits: 4).map(String.init)
+    guard parts.count >= 5 else { return nil }
+    if parts[0] == "simian-multi" {
+        let ids = parts[4].split(separator: ",").map(String.init)
+        return (parts[1], parts[2], parts[3].isEmpty ? nil : parts[3], ids)
     }
+    // Legacy single-item format
+    if parts[0] == "simian", parts.count >= 5 {
+        return (parts[1], parts[2], parts[3].isEmpty ? nil : parts[3], [parts[4]])
+    }
+    return nil
 }
 
-/// Drag payload for Simian reorder: "simian|folder|projectId|parentId|itemId" or "simian|file|projectId|parentId|itemId"
-private func parseSimianDrag(_ str: String) -> (type: String, projectId: String, parentId: String?, itemId: String)? {
-    let parts = str.split(separator: "|").map(String.init)
-    guard parts.count >= 5, parts[0] == "simian" else { return nil }
-    return (parts[1], parts[2], parts[3].isEmpty ? nil : parts[3], parts[4])
-}
+// MARK: - Reorder gap (items shift apart dynamically)
 
-/// Thin drop zone that shows a horizontal line when a reorder drag is over it. Used between rows to indicate "insert before" or "insert after".
-private struct ReorderLineView: View {
-    let expectedType: String // "folder" or "file"
+private struct ReorderGapView: View {
+    let expectedType: String
     let validateParent: (String?) -> Bool
-    let onDrop: (String) -> Void
+    let onDrop: ([String]) -> Void
     @Binding var isTargeted: Bool
 
-    private let lineHeight: CGFloat = 2
-    private let hitHeight: CGFloat = 4
+    private let hitHeight: CGFloat = 6
+    private let expandedHeight: CGFloat = 26
 
     var body: some View {
         ZStack {
-            Color.clear.frame(height: hitHeight)
+            Color.clear
             if isTargeted {
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(height: lineHeight)
+                RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.18)).padding(.horizontal, 4)
             }
         }
-        .frame(height: hitHeight)
-        .onDrop(of: [.text], isTargeted: $isTargeted) { providers in
+        .frame(height: isTargeted ? expandedHeight : hitHeight)
+        .animation(.easeInOut(duration: 0.15), value: isTargeted)
+        .contentShape(Rectangle())
+        .onDrop(of: [.text, .plainText, .utf8PlainText], isTargeted: $isTargeted) { providers in
             guard let provider = providers.first else { return false }
-            _ = provider.loadObject(ofClass: NSString.self) { obj, _ in
-                guard let ns = obj as? NSString else { return }
-                let str = String(ns)
-                guard let parsed = parseSimianDrag(str),
-                      parsed.type == expectedType,
-                      validateParent(parsed.parentId) else { return }
-                DispatchQueue.main.async { onDrop(parsed.itemId) }
+            let types: [UTType] = [.text, .plainText, .utf8PlainText]
+            let hasPayload = types.contains { provider.hasItemConformingToTypeIdentifier($0.identifier) }
+            guard hasPayload else { return false }
+            _ = provider.loadObject(ofClass: String.self) { obj, _ in
+                guard let str = obj else { return }
+                guard let parsed = parseSimianMultiDrag(str),
+                      parsed.type == expectedType, validateParent(parsed.parentId) else { return }
+                DispatchQueue.main.async { onDrop(parsed.itemIds) }
             }
             return true
         }
     }
 }
 
-// Project root row with hover and drop-target visual feedback
-private struct ProjectRootRowView: View {
-    let isSelected: Bool
-    var isKeyboardFocused: Bool = false
-    let onTap: () -> Void
-    let onDrop: ([NSItemProvider]) -> Bool
+// MARK: - Folder row
 
-    @State private var isHovered = false
-    @State private var isDropTargeted = false
-
-    private var rowBackground: Color {
-        if isDropTargeted { return Color.accentColor.opacity(0.3) }
-        if isKeyboardFocused { return Color.accentColor.opacity(0.25) }
-        if isSelected { return Color.accentColor.opacity(0.2) }
-        if isHovered { return Color.primary.opacity(0.06) }
-        return Color.clear
-    }
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack {
-                Image(systemName: "folder.fill")
-                    .foregroundStyle(.blue)
-                Text("Project root")
-                    .font(.system(size: 14))
-                Spacer()
-                if isDropTargeted {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
-            .padding(.vertical, 2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .background(rowBackground)
-            .overlay {
-                if isSelected || isKeyboardFocused {
-                    RoundedRectangle(cornerRadius: 3)
-                        .stroke(Color.accentColor.opacity(0.6), lineWidth: 1)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-        .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted, perform: onDrop)
-    }
-}
-
-// Folder row with hover, drop-target, and reorder support
-private struct FolderTreeRowContentView: View {
-    let projectId: String
+private struct SimianFolderRow: View {
     let folderId: String
+    let projectId: String
     let parentFolderId: String?
     let isExpanded: Bool
     let isLoading: Bool
     let hasOrMayHaveChildren: Bool
-    let isSelected: Bool
-    var isKeyboardFocused: Bool = false
     let depth: Int
     let folderName: String
-    let onChevronTap: () -> Void
-    let onRowTap: () -> Void
-    let onDoubleTap: () -> Void
-    let onDrop: ([NSItemProvider]) -> Bool
-    let onCopyLink: () -> Void
-    let onRename: () -> Void
-    let onDelete: () -> Void
-    let onNewFolder: () -> Void
-    let onNewFolderWithSelection: () -> Void
-    let onReorder: (String) -> Void
-    let onReorderInsertBefore: (String?, String) -> Void
     let canReorder: Bool
-    let nextFolderId: String?
+    let isEditing: Bool
+    @Binding var editText: String
+    let selectedItemIds: Set<String>
+    let onChevronTap: () -> Void
+    let onDoubleTap: () -> Void
+    let onExternalFileDrop: ([NSItemProvider]) -> Bool
+    let onReorderDrop: ([String]) -> Void
+    let onReorderInsertAfter: ([String]) -> Void
+    let onCommitRename: () -> Void
+    let onCancelRename: () -> Void
 
-    @State private var isHovered = false
     @State private var isDropTargeted = false
-    @State private var isReorderTargeted = false
-    @State private var isLineAboveTargeted = false
-    @State private var isLineBelowTargeted = false
-    @State private var pendingSingleTap: DispatchWorkItem?
-
-    private var dragPayload: String {
-        "simian|folder|\(projectId)|\(parentFolderId ?? "")|\(folderId)"
-    }
+    @State private var isGapBelow = false
+    @State private var isHovered = false
+    @FocusState private var isEditFocused: Bool
 
     private var safeDepth: Int { min(depth, 30) }
+    private var treeId: String { "f-\(folderId)" }
 
-    private func validateParent(_ parsedParentId: String?) -> Bool {
-        (parsedParentId ?? "") == (parentFolderId ?? "")
+    private var dragPayload: String {
+        let selected = selectedItemIds.contains(treeId) ? selectedItemIds : [treeId]
+        let treeIdsInSelection = Array(selected.filter { $0.hasPrefix("f-") })
+        guard !treeIdsInSelection.isEmpty else {
+            return buildSimianDragPayload(type: "folder", projectId: projectId, parentId: parentFolderId, itemIds: [treeId])
+        }
+        return buildSimianDragPayload(type: "folder", projectId: projectId, parentId: parentFolderId, itemIds: treeIdsInSelection)
     }
 
-    private var rowBackground: Color {
-        if isReorderTargeted { return Color.orange.opacity(0.3) }
-        if isDropTargeted { return Color.accentColor.opacity(0.3) }
-        if isKeyboardFocused { return Color.accentColor.opacity(0.25) }
-        if isSelected { return Color.accentColor.opacity(0.2) }
-        if isHovered { return Color.primary.opacity(0.06) }
-        return Color.clear
-    }
+    private func validateParent(_ parsedParentId: String?) -> Bool { (parsedParentId ?? "") == (parentFolderId ?? "") }
 
     var body: some View {
         VStack(spacing: 0) {
-            if canReorder {
-                ReorderLineView(
-                    expectedType: "folder",
-                    validateParent: validateParent,
-                    onDrop: { draggedId in onReorderInsertBefore(folderId, draggedId) },
-                    isTargeted: $isLineAboveTargeted
-                )
-            }
-            HStack(spacing: 4) {
-                ForEach(0..<safeDepth, id: \.self) { _ in
-                    Rectangle().fill(Color.clear).frame(width: 12)
-                }
+            HStack(spacing: 5) {
+                ForEach(0..<safeDepth, id: \.self) { _ in Rectangle().fill(Color.clear).frame(width: 10) }
                 Button(action: onChevronTap) {
                     Group {
                         if isLoading {
-                            ProgressView().scaleEffect(0.6)
-                        } else if hasOrMayHaveChildren {
+                            ProgressView().scaleEffect(0.4).frame(width: 14, height: 14)
+                        }
+                        else if hasOrMayHaveChildren {
                             Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 16, height: 16)
-                        } else {
-                            Rectangle().fill(Color.clear).frame(width: 16, height: 16)
-                        }
+                                .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary).frame(width: 14, height: 14)
+                        } else { Rectangle().fill(Color.clear).frame(width: 14, height: 14) }
                     }
-                }
-                .buttonStyle(.plain)
+                    .offset(y: 2)
+                }.buttonStyle(.plain)
 
-                Button(action: {
-                if let prior = pendingSingleTap {
-                    prior.cancel()
-                    pendingSingleTap = nil
-                    onDoubleTap()
+                Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(.secondary).offset(y: 2).allowsHitTesting(false)
+                if isEditing {
+                    TextField("", text: $editText, onCommit: { onCommitRename() })
+                        .textFieldStyle(.roundedBorder).font(.system(size: 13))
+                        .focused($isEditFocused)
+                        .onAppear { isEditFocused = true }
+                        .onExitCommand { onCancelRename() }
                 } else {
-                    let work = DispatchWorkItem { onRowTap() }
-                    pendingSingleTap = work
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-                        if !work.isCancelled {
-                            work.perform()
-                        }
-                        pendingSingleTap = nil
-                    }
+                    Text(folderName).font(.system(size: 13)).lineLimit(1).offset(y: 2).allowsHitTesting(false)
                 }
-            }) {
-                HStack {
-                    Image(systemName: "folder")
-                        .foregroundStyle(.secondary)
-                    Text(folderName)
-                        .font(.system(size: 14))
-                    Spacer()
-                    if isDropTargeted {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Color.accentColor)
-                    } else if isReorderTargeted {
-                        Image(systemName: "arrow.right.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.orange)
-                    }
-                }
-                .padding(.vertical, 2)
-                .contentShape(Rectangle())
-                .background(rowBackground)
-                .overlay {
-                    if isSelected || isKeyboardFocused {
-                        RoundedRectangle(cornerRadius: 3)
-                            .stroke(Color.accentColor.opacity(0.6), lineWidth: 1)
-                    }
-                }
+                Spacer()
+                if isDropTargeted { Image(systemName: "plus.circle.fill").font(.system(size: 12)).foregroundStyle(Color.accentColor) }
             }
-            .buttonStyle(.plain)
-            .onHover { isHovered = $0 }
-            .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted, perform: onDrop)
-            .onDrop(of: [.text], isTargeted: $isReorderTargeted) { providers in
-                guard canReorder else { return false }
-                for p in providers {
-                    _ = p.loadObject(ofClass: NSString.self) { obj, _ in
-                        guard let ns = obj as? NSString, let parsed = parseSimianDrag(String(ns)), parsed.type == "folder", parsed.itemId != folderId else { return }
-                        let sameParent = (parsed.parentId ?? "") == (parentFolderId ?? "")
-                        guard sameParent else { return }
-                        DispatchQueue.main.async { onReorder(parsed.itemId) }
-                    }
-                }
-                return true
-            }
-            .draggable(canReorder ? dragPayload : "simian|none|||")
-            .contextMenu {
-                Button("New Folder with Selection", action: onNewFolderWithSelection)
-                Button("New Folder", action: onNewFolder)
-                Button("Rename…", action: onRename)
-                Button("Copy Link", action: onCopyLink)
-                Divider()
-                Button("Remove from Simian…", role: .destructive, action: onDelete)
-            }
-            }
+            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .center)
+            .contentShape(Rectangle())
+            .background(isDropTargeted ? Color.accentColor.opacity(0.15) : Color.clear)
+            .simultaneousGesture(TapGesture(count: 2).onEnded { onDoubleTap() })
+            .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted, perform: onExternalFileDrop)
+
             if canReorder {
-                ReorderLineView(
-                    expectedType: "folder",
-                    validateParent: validateParent,
-                    onDrop: { draggedId in onReorderInsertBefore(nextFolderId, draggedId) },
-                    isTargeted: $isLineBelowTargeted
-                )
+                ReorderGapView(expectedType: "folder", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
             }
         }
+        .contentShape(Rectangle())
+        .background(isHovered ? Color.blue.opacity(0.08) : Color.clear)
+        .onHover { isHovered = $0 }
+        .draggable(dragPayload)
     }
 }
 
-// File row with reorder support (line indicators between files, no full-row highlight)
-private struct FileTreeRowContentView: View {
+// MARK: - File row
+
+private struct SimianFileRow: View {
+    let fileId: String
     let projectId: String
-    let file: SimianFile
     let parentFolderId: String?
     let depth: Int
-    var isKeyboardFocused: Bool = false
-    let nextFileId: String? // Next file in same folder (for "insert after" line); nil = last file
-    let onRename: () -> Void
-    let onDelete: () -> Void
-    let onNewFolderWithSelection: () -> Void
-    let onReorderInsertBefore: (String?, String) -> Void // (dropBeforeFileId, draggedFileId); nil = insert at end
+    let fileName: String
     let canReorder: Bool
+    let isEditing: Bool
+    @Binding var editText: String
+    let selectedItemIds: Set<String>
+    let onReorderDrop: ([String]) -> Void
+    let onReorderInsertAfter: ([String]) -> Void
+    let onCommitRename: () -> Void
+    let onCancelRename: () -> Void
 
-    @State private var isLineAboveTargeted = false
-    @State private var isLineBelowTargeted = false
+    @State private var isGapBelow = false
+    @State private var isHovered = false
+    @FocusState private var isEditFocused: Bool
 
     private var safeDepth: Int { min(depth, 30) }
-    private var dragPayload: String { "simian|file|\(projectId)|\(parentFolderId ?? "")|\(file.id)" }
+    private var treeId: String { "file-\(fileId)" }
 
-    private func validateParent(_ parsedParentId: String?) -> Bool {
-        (parsedParentId ?? "") == (parentFolderId ?? "")
+    private var dragPayload: String {
+        let selected = selectedItemIds.contains(treeId) ? selectedItemIds : [treeId]
+        let treeIdsInSelection = Array(selected.filter { $0.hasPrefix("file-") })
+        guard !treeIdsInSelection.isEmpty else {
+            return buildSimianDragPayload(type: "file", projectId: projectId, parentId: parentFolderId, itemIds: [treeId])
+        }
+        return buildSimianDragPayload(type: "file", projectId: projectId, parentId: parentFolderId, itemIds: treeIdsInSelection)
     }
+
+    private func validateParent(_ parsedParentId: String?) -> Bool { (parsedParentId ?? "") == (parentFolderId ?? "") }
 
     var body: some View {
         VStack(spacing: 0) {
-            if canReorder {
-                ReorderLineView(
-                    expectedType: "file",
-                    validateParent: validateParent,
-                    onDrop: { draggedId in onReorderInsertBefore(file.id, draggedId) },
-                    isTargeted: $isLineAboveTargeted
-                )
+            HStack(spacing: 5) {
+                ForEach(0..<safeDepth, id: \.self) { _ in Rectangle().fill(Color.clear).frame(width: 10) }
+                Rectangle().fill(Color.clear).frame(width: 14)
+                Image(systemName: "doc").font(.system(size: 11)).foregroundStyle(.secondary).offset(y: 2).allowsHitTesting(false)
+                if isEditing {
+                    TextField("", text: $editText, onCommit: { onCommitRename() })
+                        .textFieldStyle(.roundedBorder).font(.system(size: 13))
+                        .focused($isEditFocused)
+                        .onAppear { isEditFocused = true }
+                        .onExitCommand { onCancelRename() }
+                } else {
+                    Text(fileName).font(.system(size: 13)).lineLimit(1).offset(y: 2).allowsHitTesting(false)
+                }
+                Spacer()
             }
-            HStack(spacing: 4) {
-                ForEach(0..<safeDepth, id: \.self) { _ in
-                    Rectangle().fill(Color.clear).frame(width: 12)
-                }
-                Rectangle().fill(Color.clear).frame(width: 16)
-                HStack {
-                    Image(systemName: "doc")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Text(file.title)
-                        .font(.system(size: 14))
-                    Spacer()
-                }
-                .padding(.vertical, 2)
-                .contentShape(Rectangle())
-                .background(isKeyboardFocused ? Color.accentColor.opacity(0.25) : Color.clear)
-                .overlay {
-                    if isKeyboardFocused {
-                        RoundedRectangle(cornerRadius: 3)
-                            .stroke(Color.accentColor.opacity(0.6), lineWidth: 1)
-                    }
-                }
-            }
+            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .center)
+            .contentShape(Rectangle())
+
             if canReorder {
-                ReorderLineView(
-                    expectedType: "file",
-                    validateParent: validateParent,
-                    onDrop: { draggedId in onReorderInsertBefore(nextFileId, draggedId) },
-                    isTargeted: $isLineBelowTargeted
-                )
+                ReorderGapView(expectedType: "file", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
             }
         }
-        .draggable(canReorder ? dragPayload : "simian|none|||")
-        .contextMenu {
-            Button("New Folder with Selection", action: onNewFolderWithSelection)
-            Button("Rename…", action: onRename)
-            Divider()
-            Button("Remove from Simian…", role: .destructive, action: onDelete)
-        }
+        .contentShape(Rectangle())
+        .background(isHovered ? Color.blue.opacity(0.08) : Color.clear)
+        .onHover { isHovered = $0 }
+        .draggable(dragPayload)
     }
 }
 
-// Helper for tracking upload progress across async recursion
+// MARK: - Upload progress counter
+
 private final class ProgressCounter {
     var value = 0
     func increment() { value += 1 }

@@ -2,7 +2,7 @@
 //  SimianPostWindowManager.swift
 //  MediaDash
 //
-//  Opens the Post to Simian window: search Simian, pick project/folder, choose local folder.
+//  Opens the Simian window: search projects, pick folder, choose local folder and post.
 //
 
 import SwiftUI
@@ -41,7 +41,7 @@ final class SimianPostWindowManager: NSObject, ObservableObject, NSWindowDelegat
             backing: .buffered,
             defer: false
         )
-        window.title = "Post to Simian"
+        window.title = "Simian"
         window.contentView = hostingView
         window.isReleasedWhenClosed = false
         window.delegate = self

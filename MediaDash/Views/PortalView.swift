@@ -22,7 +22,7 @@ struct PortalView: View {
             Text("Portal")
                 .font(.title)
                 .fontWeight(.bold)
-            Text("Media layups: convert video, restripe picture+audio, post to Simian.")
+            Text("Media layups: convert video, restripe picture+audio, Simian uploads.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -47,7 +47,7 @@ struct PortalView: View {
 
                 if let onOpenSimian = onOpenSimian {
                     PortalOptionRow(
-                        title: "Post to Simian",
+                        title: "Simian",
                         subtitle: "Upload to Simian",
                         icon: "arrow.up.circle"
                     ) {
@@ -56,7 +56,7 @@ struct PortalView: View {
                     }
                 } else {
                     PortalOptionRow(
-                        title: "Post to Simian",
+                        title: "Simian",
                         subtitle: "Coming soon",
                         icon: "arrow.up.circle",
                         disabled: true
