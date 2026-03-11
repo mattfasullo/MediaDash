@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.02</title>
+            <description><![CDATA[
+                <p>Bug fixes and improvements</p>
+            ]]></description>
+            <pubDate>Wed, 11 Mar 2026 20:39:56 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.02/MediaDash.zip"
+                sparkle:version="120"
+                sparkle:shortVersionString="1.02"
+                sparkle:edSignature="EbDcgF3C08X/FNkumPBzIGuwyk19nt/0JJ5+aoFzCF2nfrtNPOeBtzshoGFs2PLxDHG0Q7ZNFB93D9Myy2mqBw=="
+                length="9862462"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.01</title>
             <description><![CDATA[
                 <p>Bug fixes and improvements</p>
