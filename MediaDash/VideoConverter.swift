@@ -135,21 +135,22 @@ class VideoConverterManager: ObservableObject {
         return nil
     }
 
-    // Add files for conversion
-    func addFiles(urls: [URL], format: VideoFormat, aspectRatio: AspectRatio, outputDirectory: URL, keepOriginalName: Bool = false) {
+    /// Add files for conversion.
+    /// - Parameter outputDirectory: If nil, each file is written next to its source (same folder). If non-nil, all outputs go to this folder.
+    func addFiles(urls: [URL], format: VideoFormat, aspectRatio: AspectRatio, outputDirectory: URL?, keepOriginalName: Bool = false) {
         for url in urls {
+            // Output folder: same as source file, or the single chosen folder
+            let folder = outputDirectory ?? url.deletingLastPathComponent()
             // Create output filename
             let baseName = url.deletingPathExtension().lastPathComponent
             let outputName: String
             if keepOriginalName {
-                // Keep original name, just change extension
                 outputName = "\(baseName).\(format.fileExtension)"
             } else {
                 outputName = "\(baseName)_ProResProxy.\(format.fileExtension)"
             }
-            let outputURL = outputDirectory.appendingPathComponent(outputName)
+            let outputURL = folder.appendingPathComponent(outputName)
 
-            // Ensure unique filename
             let uniqueURL = makeUniqueURL(outputURL)
 
             let job = ConversionJob(
@@ -495,12 +496,19 @@ class VideoConverterViewCoordinator: ObservableObject {
 
 // MARK: - Video Converter View
 
+enum VideoConverterOutputDestination: String, CaseIterable {
+    case sameAsSource = "Same folder as each video"
+    case customFolder = "Choose folder..."
+}
+
 struct VideoConverterView: View {
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var settingsManager: SettingsManager
     @ObservedObject var manager: MediaManager
     @StateObject private var coordinator = VideoConverterViewCoordinator()
     @State private var selectedAspectRatio: AspectRatio = .sixteenNine
-    @State private var outputDirectory: URL? = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+    @State private var outputDestination: VideoConverterOutputDestination = .sameAsSource
+    @State private var outputDirectory: URL? = nil
     @State private var showAlert = false
     @State private var alertMessage = ""
     @State private var hasStartedConversion = false
@@ -621,27 +629,39 @@ struct VideoConverterView: View {
                         Spacer()
                     }
 
-                    // Output Directory
-                    HStack {
-                        Text("Output Folder:")
+                    // Output destination: same as source (default) or custom folder
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Output:")
                             .font(.headline)
 
-                        if let outputDir = outputDirectory {
-                            Text(outputDir.path)
+                        Picker("Output", selection: $outputDestination) {
+                            Text("Same folder as each video").tag(VideoConverterOutputDestination.sameAsSource)
+                            Text("Choose folder...").tag(VideoConverterOutputDestination.customFolder)
+                        }
+                        .pickerStyle(.segmented)
+
+                        if outputDestination == .customFolder {
+                            HStack {
+                                if let outputDir = outputDirectory {
+                                    Text(outputDir.path)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                } else {
+                                    Text("No folder selected")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                }
+                                Spacer()
+                                Button("Choose...") {
+                                    selectOutputDirectory()
+                                }
+                            }
+                        } else {
+                            Text("Each converted file will be saved next to its original.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        } else {
-                            Text("Not selected")
-                                .font(.caption)
-                                .foregroundColor(.red)
-                        }
-
-                        Spacer()
-
-                        Button("Choose...") {
-                            selectOutputDirectory()
                         }
                     }
 
@@ -652,7 +672,7 @@ struct VideoConverterView: View {
                         Button("Start Conversion") {
                             startConversion()
                         }
-                        .disabled(videoFiles.isEmpty || outputDirectory == nil)
+                        .disabled(videoFiles.isEmpty || (outputDestination == .customFolder && outputDirectory == nil))
                         .buttonStyle(.borderedProminent)
 
                         Spacer()
@@ -679,7 +699,7 @@ struct VideoConverterView: View {
                         Text("\(videoFiles.count) video file(s) ready")
                             .font(.headline)
                             .foregroundColor(.secondary)
-                        Text("Select output folder and click Start Conversion")
+                        Text("Output goes next to each original by default, or choose a folder.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Text("Conversion progress will be shown here")
@@ -712,6 +732,14 @@ struct VideoConverterView: View {
                 hasStartedConversion = true
             }
         }
+        .onChange(of: coordinator.isConverting) { wasConverting, isConverting in
+            // When conversion finishes (true -> false), clear staging if setting is on and all jobs are done
+            guard wasConverting, !isConverting else { return }
+            let allDone = !coordinator.jobs.isEmpty && coordinator.jobs.allSatisfy { $0.status == .completed || $0.status == .failed }
+            if allDone && (settingsManager.currentSettings.clearStagingWhenDone == true) {
+                manager.clearFiles()
+            }
+        }
     }
 
     // Select output directory
@@ -731,19 +759,20 @@ struct VideoConverterView: View {
 
     // Start conversion
     private func startConversion() {
-        guard let outputDir = outputDirectory else {
-            alertMessage = "Please select an output directory first"
-            showAlert = true
-            return
-        }
-
         guard let converter = converter else {
             alertMessage = "Video converter not available"
             showAlert = true
             return
         }
 
-        // Add files to converter
+        // outputDirectory: nil = same folder as each source; non-nil = single custom folder
+        let outputDir: URL? = outputDestination == .customFolder ? outputDirectory : nil
+        if outputDestination == .customFolder && outputDir == nil {
+            alertMessage = "Please select an output folder first"
+            showAlert = true
+            return
+        }
+
         converter.addFiles(
             urls: videoFiles.map { $0.url },
             format: .proResProxy,
