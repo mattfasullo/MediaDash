@@ -72,6 +72,14 @@ struct AsanaTaskDetailView: View {
     @State private var editableTaskDescription: String = ""
     @State private var isSavingTaskDescription: Bool = false
     @State private var taskDescriptionSaveError: String?
+    // Demos rounds (dated subfolders) under the docket folder, e.g. "01_Feb09.26"
+    @State private var demosDateFolders: [String] = []
+    // Currently selected demos round; when nil, uses the most recent folder.
+    @State private var selectedDemosDateFolder: String?
+    // Whether a shared local-only MediaDash submit task already exists for the selected round.
+    @State private var hasLocalMediaTaskForSelectedRound: Bool = false
+    // Writers the user has chosen to hide locally (by subtask gid). Does not affect Asana.
+    @State private var ignoredWriterSubtaskGids: Set<String> = []
     private static let demosDocketUserDefaultsKeyPrefix = "mediaDash.demosTaskDocket."
     private static let demosTrackInUseKeyPrefix = "mediaDash.demosTrackInUse."
     private static let demosTrackColorKeyPrefix = "mediaDash.demosTrackColor."
@@ -105,6 +113,26 @@ struct AsanaTaskDetailView: View {
         case .post: return "Who wrote what"
         case .other: return "Subtasks"
         }
+    }
+
+    /// Whether the currently selected demos round (date folder) appears to match this Asana task's due date.
+    /// If the dates don't line up, we treat the round as "local-only" for this job.
+    private var isSelectedRoundLinkedToAsana: Bool {
+        guard taskKind == .demos,
+              let selectedName = selectedDemosDateFolder,
+              !selectedName.isEmpty,
+              let rawDue = task?.effectiveDueDate else {
+            // If we don't have enough info, assume linked so we don't show a spurious warning.
+            return true
+        }
+        guard let due = parseShortDate(String(rawDue.prefix(10))),
+              let folderDate = dateFromDemosFolderName(selectedName) else {
+            return true
+        }
+        let cal = Calendar.current
+        let dueComponents = cal.dateComponents([.year, .month, .day], from: due)
+        let folderComponents = cal.dateComponents([.year, .month, .day], from: folderDate)
+        return dueComponents == folderComponents
     }
 
     var body: some View {
@@ -249,13 +277,14 @@ struct AsanaTaskDetailView: View {
     }
 
     private func onChangeSubtasks(_ new: [AsanaTask]) {
-        if taskKind == .demos, !new.isEmpty, composerInitialsPromptName == nil {
-            if let first = new.first(where: { composerFolderName(for: $0.assignee?.name ?? $0.name).isEmpty }) {
+        let visibleNew = new.filter { !ignoredWriterSubtaskGids.contains($0.gid) }
+        if taskKind == .demos, !visibleNew.isEmpty, composerInitialsPromptName == nil {
+            if let first = visibleNew.first(where: { composerFolderName(for: $0.assignee?.name ?? $0.name).isEmpty }) {
                 let name = first.assignee?.name ?? first.name
                 if !name.isEmpty { composerInitialsPromptName = name }
             }
         }
-        if taskKind == .demos, !new.isEmpty {
+        if taskKind == .demos, !visibleNew.isEmpty {
             refreshComposerFolderContents()
         }
     }
@@ -584,6 +613,59 @@ struct AsanaTaskDetailView: View {
                         }
                         .buttonStyle(.bordered)
                         .help("Select the docket folder under Music Demos")
+                    }
+                    if !demosDateFolders.isEmpty {
+                        HStack(spacing: 8) {
+                            Text("Demo round")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.secondary)
+                            Picker("Demo round", selection: Binding(
+                                get: { selectedDemosDateFolder ?? demosDateFolders.sorted().last ?? "" },
+                                set: { newValue in
+                                    selectedDemosDateFolder = newValue.isEmpty ? nil : newValue
+                                    refreshComposerFolderContents()
+                                }
+                            )) {
+                                ForEach(demosDateFolders.sorted(), id: \.self) { name in
+                                    Text(name)
+                                        .tag(name)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: 220)
+                            Spacer()
+                        }
+                        if taskKind == .demos, !isSelectedRoundLinkedToAsana {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange)
+                                    Text("No Asana Submit/Demos task matches this round’s date. MediaDash will treat this round as a local-only demos task.")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                }
+                                if hasLocalMediaTaskForSelectedRound {
+                                    Text("A shared MediaDash submit task already exists for this round and will be visible to everyone using the shared server/cache.")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Button("Create Submit task") {
+                                        guard let cfg = config else { return }
+                                        let roundName = selectedDemosDateFolder ?? demosDateFolders.sorted().last
+                                        guard let roundName, !roundName.isEmpty else { return }
+                                        let baseName = task?.name ?? demosDocketFolder
+                                        let title = "SUBMIT – \(baseName)"
+                                        cfg.upsertLocalMediaTask(docketFolderName: demosDocketFolder, roundFolderName: roundName, name: title)
+                                        hasLocalMediaTaskForSelectedRound = true
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                }
+                            }
+                            .padding(8)
+                            .background(Color.orange.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
                     }
                     if demosFolderMissing {
                         HStack(spacing: 8) {
@@ -1110,6 +1192,14 @@ struct AsanaTaskDetailView: View {
                         .buttonStyle(.borderless)
                         .font(.system(size: 11))
                         .foregroundColor(.accentColor)
+                        if taskKind == .demos {
+                            Button("Refresh") {
+                                ignoredWriterSubtaskGids.removeAll()
+                                loadTaskAndSubtasks()
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11))
+                        }
                     }
                     if taskKind == .demos, !writersNeedingInitials.isEmpty {
                         HStack(spacing: 6) {
@@ -1124,8 +1214,9 @@ struct AsanaTaskDetailView: View {
                         .background(Color.orange.opacity(0.12))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
+                    let visibleSubtasks = subtasks.filter { !ignoredWriterSubtaskGids.contains($0.gid) }
                     VStack(spacing: 4) {
-                        ForEach(subtasks, id: \.gid) { st in
+                        ForEach(visibleSubtasks, id: \.gid) { st in
                             subtaskRow(st)
                         }
                         ForEach(knownFolderOnlyKeys, id: \.self) { key in
@@ -1163,15 +1254,17 @@ struct AsanaTaskDetailView: View {
                     Text(subtasksSectionTitle)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.secondary)
+                    let visibleSubtasks = subtasks.filter { !ignoredWriterSubtaskGids.contains($0.gid) }
                     VStack(spacing: 4) {
-                        ForEach(subtasks, id: \.gid) { st in
+                        ForEach(visibleSubtasks, id: \.gid) { st in
                             subtaskRow(st)
                         }
                     }
                 }
             }
             if taskKind == .demos, config != nil, settingsManager != nil, !demosDocketFolder.isEmpty {
-                let subtaskComposerNamesSet = Set(subtasks.compactMap { $0.assignee?.name ?? $0.name }.filter { !$0.isEmpty })
+                let visibleSubtasks = subtasks.filter { !ignoredWriterSubtaskGids.contains($0.gid) }
+                let subtaskComposerNamesSet = Set(visibleSubtasks.compactMap { $0.assignee?.name ?? $0.name }.filter { !$0.isEmpty })
                 let otherKeys = composerFolderContents.keys.filter { !subtaskComposerNamesSet.contains($0) && !knownComposerNames.contains($0) }.sorted()
                 if !otherKeys.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -1301,6 +1394,10 @@ struct AsanaTaskDetailView: View {
                 }
                 .help("Name shown as row title and when creating Asana subtasks")
             }
+            Button("Remove from list (keep in Asana)") {
+                ignoredWriterSubtaskGids.insert(st.gid)
+            }
+            .help("Hide this writer locally without deleting the Asana subtask")
         }
         .onDrop(of: [.fileURL, .audio], isTargeted: nil) { providers in
             handleDrop(providers: providers, composerName: composerName, folderNameOverride: nil)
@@ -1726,6 +1823,16 @@ struct AsanaTaskDetailView: View {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Parse a demos date folder name (e.g. "01_Feb09.26") into a Date using the shared folder naming convention.
+    private func dateFromDemosFolderName(_ folderName: String) -> Date? {
+        guard let underscore = folderName.firstIndex(of: "_") else { return nil }
+        let datePart = String(folderName[folderName.index(after: underscore)...])
+        let formatter = DateFormatter()
+        formatter.dateFormat = FolderNamingService.standardDateFormat
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter.date(from: datePart)
+    }
+
     private func parseShortDate(_ s: String) -> Date? {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
@@ -1903,9 +2010,18 @@ struct AsanaTaskDetailView: View {
     /// Subtask writers (assignee name or task name) that don't have initials/nickname set yet.
     private var writersNeedingInitials: [String] {
         guard taskKind == .demos else { return [] }
+        var seen = Set<String>()
         return subtasks
+            .filter { !ignoredWriterSubtaskGids.contains($0.gid) }
             .compactMap { $0.assignee?.name ?? $0.name }
-            .filter { !$0.isEmpty && composerFolderName(for: $0).isEmpty }
+            .filter { name in
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, composerFolderName(for: trimmed).isEmpty else { return false }
+                let lowered = trimmed.lowercased()
+                if seen.contains(lowered) { return false }
+                seen.insert(lowered)
+                return true
+            }
     }
 
     private var knownComposerNames: Set<String> {
@@ -2117,16 +2233,52 @@ struct AsanaTaskDetailView: View {
             return
         }
         let dueDate = t.effectiveDueDate.flatMap { s in parseShortDate(String(s.prefix(10))) } ?? Date()
-        var contents: [String: [String]] = [:]
-        var inUseFromDisk: [String: Set<String>] = [:]
         let fm = FileManager.default
-        let subtaskComposerNames = Set(subtasks.compactMap { $0.assignee?.name ?? $0.name }.filter { !$0.isEmpty })
-        // Use read-only lookup — never create folders when refreshing
-        guard let dateFolder = config.getDemosDateFolderIfExists(docketFolderName: demosDocketFolder, date: dueDate) else {
+        // Discover all existing date folders (rounds) under this docket
+        if let year = Calendar.current.dateComponents([.year], from: dueDate).year {
+            let root = config.getMusicDemosRoot(for: year)
+            let docketPath = root.appendingPathComponent(demosDocketFolder)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: docketPath.path, isDirectory: &isDir), isDir.boolValue,
+               let subdirs = try? fm.contentsOfDirectory(at: docketPath, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+                let dateFolders = subdirs.filter { url in
+                    var d: ObjCBool = false
+                    return fm.fileExists(atPath: url.path, isDirectory: &d) && d.boolValue
+                }
+                demosDateFolders = dateFolders.map { $0.lastPathComponent }.sorted()
+            } else {
+                demosDateFolders = []
+            }
+        } else {
+            demosDateFolders = []
+        }
+
+        // Resolve which date folder (round) to inspect. Prefer explicit selection; fall back to most recent existing.
+        var resolvedDateFolder: URL?
+        if let selected = selectedDemosDateFolder, !selected.isEmpty,
+           let year = Calendar.current.dateComponents([.year], from: dueDate).year {
+            let root = config.getMusicDemosRoot(for: year)
+            let candidate = root.appendingPathComponent(demosDocketFolder).appendingPathComponent(selected)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
+                resolvedDateFolder = candidate
+            } else {
+                resolvedDateFolder = nil
+            }
+        } else {
+            resolvedDateFolder = config.getDemosDateFolderIfExists(docketFolderName: demosDocketFolder, date: dueDate)
+            selectedDemosDateFolder = resolvedDateFolder?.lastPathComponent
+        }
+
+        guard let dateFolder = resolvedDateFolder else {
             composerFolderContents = [:]
             demosFolderMissing = true
             return
         }
+
+        var contents: [String: [String]] = [:]
+        var inUseFromDisk = [String: Set<String>]()
+        let subtaskComposerNames = Set(subtasks.compactMap { $0.assignee?.name ?? $0.name }.filter { !$0.isEmpty })
         demosFolderMissing = false
         // Auto-create writer folders for subtasks that have designated initials/nickname
         for composerName in subtaskComposerNames {

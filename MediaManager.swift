@@ -3,6 +3,16 @@ import AppKit
 import Combine
 import AVFoundation
 
+// Local-only MediaDash tasks for demos rounds (stored on shared server or shared cache)
+struct LocalMediaTask: Codable, Identifiable, Sendable {
+    var id: String { "\(docketFolderName)|\(roundFolderName)" }
+    var docketFolderName: String
+    var roundFolderName: String
+    var name: String
+    var createdAt: Date
+    var createdByHost: String
+}
+
 // --- CONFIGURATION (Strictly Non-Isolated) ---
 struct AppConfig: Sendable {
     let settings: AppSettings
@@ -107,9 +117,19 @@ struct AppConfig: Sendable {
         return base.appendingPathComponent("_MediaDash", isDirectory: true).appendingPathComponent("writers.json")
     }
 
+    private nonisolated var serverLocalMediaTasksFileURL: URL {
+        let base = URL(fileURLWithPath: settings.serverBasePath)
+        return base.appendingPathComponent("_MediaDash", isDirectory: true).appendingPathComponent("local_media_tasks.json")
+    }
+
     private nonisolated var sharedWritersFileURL: URL? {
         guard let sharedPath = normalizedSharedCachePath else { return nil }
         return URL(fileURLWithPath: sharedPath).appendingPathComponent("writers.json")
+    }
+
+    private nonisolated var sharedLocalMediaTasksFileURL: URL? {
+        guard let sharedPath = normalizedSharedCachePath else { return nil }
+        return URL(fileURLWithPath: sharedPath).appendingPathComponent("local_media_tasks.json")
     }
 
     /// Prefer shared cache when reachable; otherwise fall back to server base/_MediaDash.
@@ -122,6 +142,18 @@ struct AppConfig: Sendable {
             }
         }
         return serverWritersFileURL
+    }
+
+    /// Prefer shared cache when reachable; otherwise fall back to server base/_MediaDash for local media tasks.
+    private nonisolated var localMediaTasksFileURL: URL {
+        let fm = FileManager.default
+        if let sharedURL = sharedLocalMediaTasksFileURL {
+            let sharedBase = sharedURL.deletingLastPathComponent()
+            if fm.fileExists(atPath: sharedBase.path) {
+                return sharedURL
+            }
+        }
+        return serverLocalMediaTasksFileURL
     }
 
     private nonisolated var writersBasePathExists: Bool {
@@ -231,6 +263,65 @@ struct AppConfig: Sendable {
             try data.write(to: url, options: .atomic)
         } catch {
             print("⚠️ [Writers] Failed to write \(url.path): \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Local Media Tasks (shared across team)
+
+    /// Load all local-only MediaDash tasks (e.g. demos rounds without Asana tasks) from the shared JSON store.
+    nonisolated func loadLocalMediaTasks() -> [LocalMediaTask] {
+        let url = localMediaTasksFileURL
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return [] }
+        do {
+            let data = try Data(contentsOf: url)
+            let tasks = try JSONDecoder().decode([LocalMediaTask].self, from: data)
+            return tasks
+        } catch {
+            print("⚠️ [LocalMediaTasks] Failed to read \(url.path): \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    /// Append or update a local MediaDash task for a docket+round in the shared JSON store.
+    nonisolated func upsertLocalMediaTask(docketFolderName: String, roundFolderName: String, name: String) {
+        let trimmedDocket = docketFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedRound = roundFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedDocket.isEmpty, !trimmedRound.isEmpty, !trimmedName.isEmpty else { return }
+
+        let url = localMediaTasksFileURL
+        let fm = FileManager.default
+        let dir = url.deletingLastPathComponent()
+        do {
+            if !fm.fileExists(atPath: dir.path) {
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
+            }
+        } catch {
+            print("⚠️ [LocalMediaTasks] Failed to create directory \(dir.path): \(error.localizedDescription)")
+        }
+
+        var tasks = loadLocalMediaTasks()
+        let host = Host.current().localizedName ?? "Unknown Mac"
+
+        if let idx = tasks.firstIndex(where: { $0.docketFolderName == trimmedDocket && $0.roundFolderName == trimmedRound }) {
+            tasks[idx].name = trimmedName
+        } else {
+            let task = LocalMediaTask(
+                docketFolderName: trimmedDocket,
+                roundFolderName: trimmedRound,
+                name: trimmedName,
+                createdAt: Date(),
+                createdByHost: host
+            )
+            tasks.append(task)
+        }
+
+        do {
+            let data = try JSONEncoder().encode(tasks)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            print("⚠️ [LocalMediaTasks] Failed to write \(url.path): \(error.localizedDescription)")
         }
     }
 

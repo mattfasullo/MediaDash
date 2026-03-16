@@ -1,0 +1,12 @@
+---
+description: When the AI response is truncated due to token limit, break work into smaller pieces and continue on "continue"
+alwaysApply: true
+---
+
+# Truncation handling
+
+When the system cuts off the AI response because it exceeded the output token limit:
+
+1. **Do not** repeatedly search the codebase or read the same file in a loop.
+2. Output a single short message: "Response truncated due to length. Reply with 'continue' and I'll continue from where I left off."
+3. When the user replies with "continue", continue the **same task** in a **smaller** chunk (e.g. one focused change or one file at a time). Do not restart the task.
