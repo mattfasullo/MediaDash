@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.03</title>
+            <description><![CDATA[
+                <p>Asana task detail and MediaManager updates; truncation-handling rule; work consolidated on main; fix Swift optimizer crash in SidebarView</p>
+            ]]></description>
+            <pubDate>Mon, 16 Mar 2026 15:18:23 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.03/MediaDash.zip"
+                sparkle:version="121"
+                sparkle:shortVersionString="1.03"
+                sparkle:edSignature="TdP/bLWszAzJQfuwyfyZXKYOBwigGahk4BeR9XYznqzMSU0syHwF+IrqximUi1I4S+wvHBLFhFf1p9/if8RcBw=="
+                length="9903781"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.02</title>
             <description><![CDATA[
                 <p>Bug fixes and improvements</p>
