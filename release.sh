@@ -44,6 +44,8 @@ BUILD_NUMBER=$(echo "$VERSION" | awk -F. '{printf "%d", $1*100 + $2*10 + $3}')
 [ "$VERSION" = "1.0" ] && [ "$BUILD_NUMBER" -lt 103 ] && BUILD_NUMBER=103
 # 1.01 must be > 103 so Sparkle offers update from 1.0
 [ "$VERSION" = "1.01" ] && BUILD_NUMBER=104
+# 1.02 is 120 in appcast; 1.03 must be > 120 for Sparkle to offer update
+[ "$VERSION" = "1.03" ] && BUILD_NUMBER=121
 
 # Validate BUILD_NUMBER is numeric
 if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
@@ -305,7 +307,7 @@ This app is not notarized (no Developer ID certificate). macOS may show a securi
 $RELEASE_NOTES"
 
 # Create release (pre-release for beta versions, full release for 1.0+)
-if [ "$VERSION" = "1.0" ] || [ "$VERSION" = "1.01" ]; then
+if [ "$VERSION" = "1.0" ] || [ "$VERSION" = "1.01" ] || [ "$VERSION" = "1.02" ] || [ "$VERSION" = "1.03" ]; then
     gh release create "v$VERSION" \
         "$RELEASE_DIR/$APP_NAME.zip" \
         "install_mediadash.sh" \

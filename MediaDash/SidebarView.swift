@@ -830,6 +830,10 @@ struct RightClickableButton<Content: View>: NSViewRepresentable {
             self.parent = parent
         }
         
+        deinit {
+            // Explicit deinit avoids Swift 6.2 optimizer crash (EarlyPerfInliner) in Release builds
+        }
+        
         @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
             parent.action()
         }
