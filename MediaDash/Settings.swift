@@ -577,6 +577,8 @@ struct AppSettings: Codable, Equatable {
     // Workflow Settings
     var openPrepFolderWhenDone: Bool
     var openWorkPictureFolderWhenDone: Bool
+    /// When true, clear the staging area after video conversion finishes (all jobs done).
+    var clearStagingWhenDone: Bool?
 
     // CSV Column Names
     var csvDocketColumn: String
@@ -749,6 +751,7 @@ struct AppSettings: Codable, Equatable {
             customHolidays: [],
             openPrepFolderWhenDone: true,
             openWorkPictureFolderWhenDone: true,
+            clearStagingWhenDone: false,
             csvDocketColumn: "Docket",
             csvProjectTitleColumn: "Licensor/Project Title",
             csvClientColumn: "Client",
