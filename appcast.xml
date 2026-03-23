@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.04</title>
+            <description><![CDATA[
+                <p>Restripe: modern onChange API and SwiftUI type-check fix. Updates for Asana cache, notifications, Simian, email scanning, session, settings, MediaManager, and docket metadata.</p>
+            ]]></description>
+            <pubDate>Mon, 23 Mar 2026 21:23:48 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.04/MediaDash.zip"
+                sparkle:version="122"
+                sparkle:shortVersionString="1.04"
+                sparkle:edSignature="4UXixZr2zXhGDscIl+xbW4c0dcp21yL3LSmkbr9XSodF9fE+M9DAjpZERJYZwHRNDJW4qEnBYhRH5v09xqsmBw=="
+                length="10012285"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.03</title>
             <description><![CDATA[
                 <p>Asana task detail and MediaManager updates; truncation-handling rule; work consolidated on main; fix Swift optimizer crash in SidebarView</p>
