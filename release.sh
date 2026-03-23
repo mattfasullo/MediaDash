@@ -287,7 +287,7 @@ fi
 
 # Commit and push
 echo -e "${BLUE}🚀 Publishing...${NC}"
-git add "$APPCAST_FILE" "MediaDash/Info.plist"
+git add "$APPCAST_FILE" "MediaDash/Info.plist" "MediaDash.xcodeproj/project.pbxproj"
 git commit -m "Release v$VERSION"
 git push
 
