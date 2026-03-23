@@ -3,6 +3,32 @@ import AppKit
 import Combine
 import AVFoundation
 
+// #region agent log
+private func _dbgLog(_ location: String, _ message: String, _ data: [String: Any] = [:], hypothesisId: String = "") {
+    let logPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-555b09.log"
+    var entry: [String: Any] = [
+        "sessionId": "555b09",
+        "location": location,
+        "message": message,
+        "hypothesisId": hypothesisId,
+        "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+    ]
+    if !data.isEmpty { entry["data"] = data }
+    guard
+        let jsonData = try? JSONSerialization.data(withJSONObject: entry),
+        let jsonString = String(data: jsonData, encoding: .utf8),
+        let lineData = (jsonString + "\n").data(using: .utf8)
+    else { return }
+    if let handle = FileHandle(forWritingAtPath: logPath) {
+        handle.seekToEndOfFile()
+        handle.write(lineData)
+        try? handle.close()
+    } else {
+        FileManager.default.createFile(atPath: logPath, contents: lineData)
+    }
+}
+// #endregion
+
 // Local-only MediaDash tasks for demos rounds (stored on shared server or shared cache)
 struct LocalMediaTask: Codable, Identifiable, Sendable {
     var id: String { "\(docketFolderName)|\(roundFolderName)" }
@@ -409,6 +435,11 @@ struct AppConfig: Sendable {
         let docketPath = root.appendingPathComponent(docketFolderName)
         let fm = FileManager.default
         if !fm.fileExists(atPath: docketPath.path) {
+            // #region agent log
+            Task { @MainActor in
+                _dbgLog("MediaManager.getOrCreateDemosDateFolder", "Creating docket folder", ["docketFolderName": docketFolderName], hypothesisId: "H-B")
+            }
+            // #endregion
             try fm.createDirectory(at: docketPath, withIntermediateDirectories: true, attributes: nil)
         }
         // See if the docket already has any date folders (e.g. 01_Feb.9.26) – use the most recent one instead of creating
@@ -423,12 +454,43 @@ struct AppConfig: Sendable {
                     let tB = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
                     return tA < tB
                 })
+                // #region agent log
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy-MM-dd"
+                let inputDate = formatter.string(from: date)
+                let allFolders = dateFolders.map { $0.lastPathComponent }
+                let picked = best?.lastPathComponent ?? "nil"
+                let folderCount = dateFolders.count
+                Task { @MainActor in
+                    _dbgLog(
+                        "MediaManager.getOrCreateDemosDateFolder",
+                        "Picked most-recently-modified folder",
+                        [
+                            "inputDate": inputDate,
+                            "allFolders": allFolders,
+                            "picked": picked,
+                            "folderCount": folderCount
+                        ],
+                        hypothesisId: "H-B"
+                    )
+                }
+                // #endregion
                 if let use = best { return use }
             }
         }
         // No existing date folder – create one with next sequence number (01, 02, 03…) + date part
         let dateName = nextDemosDateFolderName(docketPath: docketPath, date: date)
         let datePath = docketPath.appendingPathComponent(dateName)
+        // #region agent log
+        Task { @MainActor in
+            _dbgLog(
+                "MediaManager.getOrCreateDemosDateFolder",
+                "Creating new date folder",
+                ["docketFolderName": docketFolderName, "dateName": dateName],
+                hypothesisId: "H-B"
+            )
+        }
+        // #endregion
         if !fm.fileExists(atPath: datePath.path) {
             try fm.createDirectory(at: datePath, withIntermediateDirectories: true, attributes: nil)
         }

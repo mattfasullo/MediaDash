@@ -39,6 +39,7 @@ dsa_priv.pem
 
 # Cursor
 .cursor/debug.log
+.cursor/debug-*.log
 
 # Temporary files
 *.swp

@@ -80,7 +80,10 @@ struct SimianPostView: View {
     @State private var newFolderWithSelectionError: String?
 
     @FocusState private var isSearchFocused: Bool
+    @FocusState private var isProjectListFocused: Bool
     @FocusState private var isFolderListFocused: Bool
+    /// True when the Simian `NoSelectTextField` is key (AppKit); SwiftUI `isSearchFocused` is not auto-synced for `NSViewRepresentable`.
+    @State private var simianSearchFieldIsFirstResponder = false
 
     private var filteredProjects: [SimianProject] {
         let term = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -107,6 +110,57 @@ struct SimianPostView: View {
 
     private var currentParentFolderId: String? {
         folderBreadcrumb.last?.id
+    }
+
+    private var isSimianSearchInputActive: Bool {
+        isSearchFocused || simianSearchFieldIsFirstResponder
+    }
+
+    /// Drop AppKit focus from the search field so the list can receive selection/keys.
+    private func resignSimianSearchFieldForListNavigation() {
+        isSearchFocused = false
+        simianSearchFieldIsFirstResponder = false
+        DispatchQueue.main.async {
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
+    }
+
+    private static let simianKeyDebugLog = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-simian-keyfocus.log"
+    /// Session `5a89d5`: NDJSON focus / key routing (do not remove until verified).
+    private static let agentDebugLogPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-5a89d5.log"
+
+    // #region agent log
+    private func logAgentFocus(_ message: String, hypothesisId: String, data: [String: Any]) {
+        let payload: [String: Any] = [
+            "sessionId": "5a89d5",
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+            "location": "SimianPostView",
+            "message": message,
+            "hypothesisId": hypothesisId,
+            "data": data
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let json = try? JSONSerialization.data(withJSONObject: payload),
+              let line = String(data: json, encoding: .utf8) else { return }
+        let path = Self.agentDebugLogPath
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        guard let h = FileHandle(forWritingAtPath: path) else { return }
+        h.seekToEndOfFile()
+        h.write(Data((line + "\n").utf8))
+        h.closeFile()
+    }
+    // #endregion
+
+    private func logSimianKeyDebug(_ message: String) {
+        if FileManager.default.fileExists(atPath: Self.simianKeyDebugLog) == false {
+            FileManager.default.createFile(atPath: Self.simianKeyDebugLog, contents: nil)
+        }
+        guard let h = FileHandle(forWritingAtPath: Self.simianKeyDebugLog) else { return }
+        h.seekToEndOfFile()
+        h.write(Data("\(message)\n".utf8))
+        h.closeFile()
     }
 
     var body: some View {
@@ -137,7 +191,14 @@ struct SimianPostView: View {
         .onAppear {
             updateSimianServiceConfiguration()
             loadProjects()
+            isProjectListFocused = false
             isSearchFocused = true
+            // #region agent log
+            logAgentFocus("root onAppear", hypothesisId: "H1", data: [
+                "isSearchFocused": true,
+                "isProjectListFocused": false
+            ])
+            // #endregion
         }
         .onChange(of: settingsManager.currentSettings.simianAPIBaseURL) { _, _ in
             updateSimianServiceConfiguration()
@@ -159,15 +220,28 @@ struct SimianPostView: View {
         .onKeyPress(.upArrow) { handleKeyUp() }
         .onKeyPress(.downArrow) { handleKeyDown() }
         .onKeyPress(.return) { handleKeyReturn() }
+        .onKeyPress(.tab) { handleKeyTab() }
+        .onKeyPress { handleGlobalKeyPress($0) }
         .onKeyPress(.escape) { handleKeyEscape() }
     }
 
     // MARK: - Keyboard navigation
 
-    private func shouldIgnoreKeyPress() -> Bool {
-        if isSearchFocused { return true }
+    private func shouldIgnoreKeyPress(allowSearchFocusInProjectList: Bool = false, allowSearchFocusInProjectView: Bool = false) -> Bool {
+        let searchActive = isSimianSearchInputActive
+        if searchActive &&
+            !(allowSearchFocusInProjectList && selectedProjectName == nil) &&
+            !(allowSearchFocusInProjectView && selectedProjectName != nil) {
+            return true
+        }
         if inlineRenameItemId != nil { return true }
-        if let window = NSApp.keyWindow, KeyboardNavigationCoordinator.isEditingText(in: window) { return true }
+        // When showing the project list, the only text editor is the search field — allow arrow/tab reroute whenever typing is active.
+        if let window = NSApp.keyWindow, KeyboardNavigationCoordinator.isEditingText(in: window) {
+            let allowSearchReroute =
+                (allowSearchFocusInProjectList && selectedProjectName == nil)
+                || (allowSearchFocusInProjectView && selectedProjectName != nil && searchActive)
+            if !allowSearchReroute { return true }
+        }
         return false
     }
 
@@ -199,8 +273,31 @@ struct SimianPostView: View {
         return .ignored
     }
 
-    private func handleKeyUp() -> KeyPress.Result {
-        if shouldIgnoreKeyPress() { return .ignored }
+    private func handleKeyUp(fromSimianSearchField: Bool = false) -> KeyPress.Result {
+        if !fromSimianSearchField {
+            if shouldIgnoreKeyPress(allowSearchFocusInProjectList: true, allowSearchFocusInProjectView: true) { return .ignored }
+        } else if inlineRenameItemId != nil {
+            return .ignored
+        }
+        if selectedProjectName == nil && (isSimianSearchInputActive || fromSimianSearchField) {
+            resignSimianSearchFieldForListNavigation()
+            isProjectListFocused = true
+        } else if selectedProjectName != nil && isSimianSearchInputActive {
+            resignSimianSearchFieldForListNavigation()
+            isFolderListFocused = true
+        }
+        if selectedProjectName == nil {
+            let projects = filteredProjects
+            guard !projects.isEmpty else { return .handled }
+            if let selectedId = selectedProjectId,
+               let idx = projects.firstIndex(where: { $0.id == selectedId }),
+               idx > 0 {
+                selectedProjectId = projects[idx - 1].id
+            } else {
+                selectedProjectId = projects.last?.id
+            }
+            return .handled
+        }
         guard let projectId = selectedProjectId else { return .ignored }
         let treeList = flatTreeList(projectId: projectId)
         guard !treeList.isEmpty else { return .ignored }
@@ -216,8 +313,37 @@ struct SimianPostView: View {
         return .ignored
     }
 
-    private func handleKeyDown() -> KeyPress.Result {
-        if shouldIgnoreKeyPress() { return .ignored }
+    private func handleKeyDown(fromSimianSearchField: Bool = false) -> KeyPress.Result {
+        if !fromSimianSearchField {
+            if shouldIgnoreKeyPress(allowSearchFocusInProjectList: true, allowSearchFocusInProjectView: true) { return .ignored }
+        } else if inlineRenameItemId != nil {
+            return .ignored
+        }
+        if selectedProjectName == nil && (isSimianSearchInputActive || fromSimianSearchField) {
+            resignSimianSearchFieldForListNavigation()
+            isProjectListFocused = true
+        } else if selectedProjectName != nil && isSimianSearchInputActive {
+            resignSimianSearchFieldForListNavigation()
+            isFolderListFocused = true
+        }
+        if selectedProjectName == nil {
+            let projects = filteredProjects
+            guard !projects.isEmpty else {
+                if fromSimianSearchField { logSimianKeyDebug("handleKeyDown fromSearch emptyProjects handled") }
+                return .handled
+            }
+            if let selectedId = selectedProjectId,
+               let idx = projects.firstIndex(where: { $0.id == selectedId }),
+               idx + 1 < projects.count {
+                selectedProjectId = projects[idx + 1].id
+            } else {
+                selectedProjectId = projects.first?.id
+            }
+            if fromSimianSearchField {
+                logSimianKeyDebug("handleKeyDown fromSearch selected=\(selectedProjectId ?? "nil") count=\(projects.count)")
+            }
+            return .handled
+        }
         guard let projectId = selectedProjectId else { return .ignored }
         let treeList = flatTreeList(projectId: projectId)
         guard !treeList.isEmpty else { return .ignored }
@@ -257,8 +383,24 @@ struct SimianPostView: View {
     }
 
     private func handleKeyReturn() -> KeyPress.Result {
-        if isSearchFocused { return .ignored }
+        if shouldIgnoreKeyPress(allowSearchFocusInProjectList: true, allowSearchFocusInProjectView: true) { return .ignored }
+        if selectedProjectName == nil && isSimianSearchInputActive {
+            resignSimianSearchFieldForListNavigation()
+            isProjectListFocused = true
+        } else if selectedProjectName != nil && isSimianSearchInputActive {
+            resignSimianSearchFieldForListNavigation()
+            isFolderListFocused = true
+        }
         if inlineRenameItemId != nil { return .ignored }
+        // Project list mode: Enter opens selected project.
+        if selectedProjectName == nil {
+            guard let selectedId = selectedProjectId,
+                  let project = filteredProjects.first(where: { $0.id == selectedId }) else {
+                return .ignored
+            }
+            openProject(project)
+            return .handled
+        }
         guard selectedProjectId != nil else { return .ignored }
         guard selectedItemIds.count == 1, let itemId = selectedItemIds.first else { return .ignored }
         // Start inline rename
@@ -277,6 +419,165 @@ struct SimianPostView: View {
         return .ignored
     }
 
+    private func handleKeyTab() -> KeyPress.Result {
+        if inlineRenameItemId != nil { return .ignored }
+        if isSimianSearchInputActive {
+            resignSimianSearchFieldForListNavigation()
+            if selectedProjectName == nil {
+                isProjectListFocused = true
+                if selectedProjectId == nil, let firstId = filteredProjects.first?.id {
+                    selectedProjectId = firstId
+                }
+            } else {
+                isFolderListFocused = true
+                if selectedItemIds.isEmpty,
+                   let projectId = selectedProjectId {
+                    let treeList = flatTreeList(projectId: projectId)
+                    if let first = treeList.first {
+                        selectedItemIds = [first.id]
+                    }
+                }
+            }
+        } else {
+            isProjectListFocused = false
+            isFolderListFocused = false
+            isSearchFocused = true
+        }
+        return .handled
+    }
+
+    private func handleGlobalKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        let cmdResult = handleCommandKeyPress(press)
+        if cmdResult == .handled { return .handled }
+
+        let keyWin = NSApp.keyWindow
+        let editing = keyWin.map { KeyboardNavigationCoordinator.isEditingText(in: $0) } ?? false
+        // #region agent log
+        logAgentFocus("handleGlobalKeyPress entry", hypothesisId: "H2", data: [
+            "isEditingText": editing,
+            "isSimianSearchInputActive": isSimianSearchInputActive,
+            "simianNativeFR": simianSearchFieldIsFirstResponder,
+            "isSearchFocusedState": isSearchFocused,
+            "isProjectListFocused": isProjectListFocused,
+            "charCount": press.characters.count,
+            "key": String(describing: press.key)
+        ])
+        // #endregion
+
+        if let window = keyWin, KeyboardNavigationCoordinator.isEditingText(in: window) {
+            // #region agent log
+            logAgentFocus("globalKeyPress ignored: text editing active", hypothesisId: "H2", data: [:])
+            // #endregion
+            return .ignored
+        }
+
+        // Typing while in keyboard-nav mode returns focus to search and seeds typed character.
+        // Do NOT gate on `isSimianSearchInputActive`: after the first key we set `isSearchFocused` true while
+        // AppKit first responder can still be the list — `isEditingText` is false, so requiring
+        // `!isSimianSearchInputActive` drops the next keystroke → system beep (see H4 logs).
+        if !press.modifiers.contains(.command),
+           press.characters.count == 1,
+           let char = press.characters.first,
+           (char.isLetter || char.isNumber || (char.isWhitespace && !char.isNewline) || char.isPunctuation) {
+            isProjectListFocused = false
+            isFolderListFocused = false
+            isSearchFocused = true
+            searchText.append(char)
+            // #region agent log
+            logAgentFocus("globalKeyPress typing branch handled", hypothesisId: "H4", data: [
+                "char": String(char),
+                "isSimianSearchInputActive": isSimianSearchInputActive,
+                "simianNativeFR": simianSearchFieldIsFirstResponder
+            ])
+            // #endregion
+            return .handled
+        }
+
+        return .ignored
+    }
+
+    private func handleCommandKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.contains(.command) else { return .ignored }
+
+        // Cmd+Down: open selected item (Finder-style).
+        if press.key == .downArrow {
+            // Project list mode: open selected project.
+            if selectedProjectName == nil {
+                if isSimianSearchInputActive {
+                    resignSimianSearchFieldForListNavigation()
+                    isProjectListFocused = true
+                }
+                guard let selectedId = selectedProjectId,
+                      let project = filteredProjects.first(where: { $0.id == selectedId }) else {
+                    return .ignored
+                }
+                openProject(project)
+                return .handled
+            }
+
+            // Inside a project: if a folder is selected, enter it as the exclusive view.
+            guard let projectId = selectedProjectId,
+                  selectedItemIds.count == 1,
+                  let itemId = selectedItemIds.first,
+                  itemId.hasPrefix("f-") else {
+                return .ignored
+            }
+            let folderId = String(itemId.dropFirst(2))
+            let treeList = flatTreeList(projectId: projectId)
+            let folderName: String
+            if let match = treeList.first(where: { $0.id == itemId }),
+               case .folder(let folder, _, _, _) = match {
+                folderName = folder.name
+            } else {
+                folderName = "Folder"
+            }
+
+            if folderBreadcrumb.last?.id != folderId {
+                folderBreadcrumb.append((id: folderId, name: folderName))
+            }
+            selectedItemIds.removeAll()
+            expandedFolderIds.removeAll()
+            loadFolders(projectId: projectId, parentFolderId: folderId)
+            isFolderListFocused = true
+            return .handled
+        }
+
+        // Cmd+Up: go up one level; exit project only when already at project root.
+        if press.key == .upArrow {
+            guard let projectId = selectedProjectId, selectedProjectName != nil else { return .ignored }
+            if !folderBreadcrumb.isEmpty {
+                folderBreadcrumb.removeLast()
+                selectedItemIds.removeAll()
+                expandedFolderIds.removeAll()
+                loadFolders(projectId: projectId, parentFolderId: folderBreadcrumb.last?.id)
+                isFolderListFocused = true
+            } else {
+                exitToProjectList(keepSelection: true)
+            }
+            return .handled
+        }
+
+        return .ignored
+    }
+
+    private func exitToProjectList(keepSelection: Bool) {
+        let previousProjectId = selectedProjectId
+        selectedProjectName = nil
+        folderBreadcrumb = []
+        currentFolders = []
+        selectedItemIds.removeAll()
+        expandedFolderIds.removeAll()
+        folderChildrenCache.removeAll()
+        folderFilesCache.removeAll()
+        loadingFolderIds.removeAll()
+        if !keepSelection {
+            selectedProjectId = nil
+        } else if let previousProjectId {
+            selectedProjectId = previousProjectId
+        }
+        isProjectListFocused = true
+    }
+
     private func handleKeyEscape() -> KeyPress.Result {
         if inlineRenameItemId != nil {
             inlineRenameItemId = nil
@@ -284,13 +585,7 @@ struct SimianPostView: View {
             return .handled
         }
         if selectedProjectId != nil && selectedItemIds.isEmpty {
-            selectedProjectId = nil
-            selectedProjectName = nil
-            folderBreadcrumb = []
-            currentFolders = []
-            expandedFolderIds.removeAll()
-            folderChildrenCache.removeAll()
-            folderFilesCache.removeAll()
+            exitToProjectList(keepSelection: false)
             return .handled
         }
         if !selectedItemIds.isEmpty {
@@ -639,7 +934,43 @@ struct SimianPostView: View {
             HStack {
                 Image(systemName: isLoadingProjects ? "hourglass" : "magnifyingglass")
                     .foregroundColor(isLoadingProjects ? .orange : .primary)
-                NoSelectTextField(text: $searchText, placeholder: "Search by docket or project name...", isEnabled: true, onSubmit: { selectFirstProjectIfOne() }, onTextChange: { }).padding(10)
+                NoSelectTextField(
+                    text: $searchText,
+                    placeholder: "Search by docket or project name...",
+                    isEnabled: true,
+                    onSubmit: { selectFirstProjectIfOne() },
+                    onTextChange: { },
+                    onMoveUp: {
+                        switch handleKeyUp(fromSimianSearchField: true) {
+                        case .handled: return true
+                        default: return false
+                        }
+                    },
+                    onMoveDown: {
+                        switch handleKeyDown(fromSimianSearchField: true) {
+                        case .handled: return true
+                        default: return false
+                        }
+                    },
+                    onTab: {
+                        switch handleKeyTab() {
+                        case .handled: return true
+                        default: return false
+                        }
+                    },
+                    onEditingBegan: { simianSearchFieldIsFirstResponder = true },
+                    onEditingEnded: { simianSearchFieldIsFirstResponder = false },
+                    onNativeFirstResponderChange: { isKey in
+                        // #region agent log
+                        logAgentFocus("search onNativeFirstResponderChange", hypothesisId: "H3", data: [
+                            "isKey": isKey,
+                            "searchTextLen": searchText.count
+                        ])
+                        // #endregion
+                        simianSearchFieldIsFirstResponder = isKey
+                    }
+                )
+                .padding(10)
                 if !searchText.isEmpty {
                     HoverableButton(action: { searchText = "" }) { isHovered in
                         Image(systemName: "xmark.circle.fill").foregroundStyle(isHovered ? .primary : .secondary).scaleEffect(isHovered ? 1.1 : 1.0)
@@ -664,17 +995,42 @@ struct SimianPostView: View {
             } else if filteredProjects.isEmpty {
                 VStack(spacing: 8) { Image(systemName: "folder.badge.questionmark").font(.title).foregroundStyle(.secondary); Text("No projects match your search").font(.subheadline).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
             } else {
-                List(selection: $selectedProjectId) {
-                    ForEach(filteredProjects, id: \.id) { project in
-                        HoverableButton(action: { openProject(project) }) { isHovered in
+                ScrollViewReader { proxy in
+                    List(selection: $selectedProjectId) {
+                        ForEach(filteredProjects, id: \.id) { project in
                             HStack {
                                 Image(systemName: "folder.fill").foregroundStyle(.blue)
                                 Text(project.name).font(.system(size: 14))
                                 Spacer()
-                            }.padding(.vertical, 2).contentShape(Rectangle()).background(isHovered ? Color.blue.opacity(0.1) : Color.clear)
-                        }.buttonStyle(.plain).tag(project.id)
+                            }
+                            .padding(.vertical, 2)
+                            .contentShape(Rectangle())
+                            .tag(project.id)
+                            .id(project.id)
+                            .onTapGesture { openProject(project) }
+                        }
                     }
-                }.listStyle(.inset(alternatesRowBackgrounds: true))
+                    .listStyle(.inset(alternatesRowBackgrounds: true))
+                    .focusable()
+                    .focused($isProjectListFocused)
+                    .onAppear {
+                        // #region agent log
+                        logAgentFocus("projectList onAppear (no longer stealing list focus)", hypothesisId: "H1", data: [
+                            "filteredCount": filteredProjects.count,
+                            "searchLen": searchText.count
+                        ])
+                        // #endregion
+                        if selectedProjectId == nil, let firstId = filteredProjects.first?.id {
+                            selectedProjectId = firstId
+                        }
+                    }
+                    .onChange(of: selectedProjectId) { _, newValue in
+                        guard selectedProjectName == nil, let id = newValue else { return }
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(id, anchor: .center)
+                        }
+                    }
+                }
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -702,6 +1058,7 @@ struct SimianPostView: View {
                 HStack(spacing: 8) { ProgressView().scaleEffect(0.8); Text("Loading folders...").font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity).padding()
             } else {
                 let treeList = flatTreeList(projectId: projectId)
+                let treeListAnimationKey = treeList.map(\.id).joined(separator: "|")
                 ScrollViewReader { proxy in
                     List(selection: $selectedItemIds) {
                         ForEach(Array(treeList.enumerated()), id: \.element.id) { _, item in
@@ -715,6 +1072,7 @@ struct SimianPostView: View {
                             }
                             .tag(item.id).id(item.id)
                             .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
+                            .transition(.move(edge: .top).combined(with: .opacity))
                         }
 
                         if treeList.count >= maxTotalTreeRows {
@@ -722,12 +1080,22 @@ struct SimianPostView: View {
                         }
                     }
                     .listStyle(.inset(alternatesRowBackgrounds: true))
+                    .animation(.spring(response: 0.45, dampingFraction: 0.7, blendDuration: 0.15), value: treeListAnimationKey)
                     .focusable()
                     .focused($isFolderListFocused)
                     .onAppear {
                         isFolderListFocused = true
                         if selectedItemIds.isEmpty, !treeList.isEmpty {
                             selectedItemIds = [treeList[0].id]
+                        }
+                    }
+                    .onChange(of: selectedItemIds) { _, newValue in
+                        guard selectedProjectId != nil,
+                              selectedProjectName != nil,
+                              newValue.count == 1,
+                              let id = newValue.first else { return }
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            proxy.scrollTo(id, anchor: .center)
                         }
                     }
                 }
@@ -1187,18 +1555,21 @@ private struct ReorderGapView: View {
     let onDrop: ([String]) -> Void
     @Binding var isTargeted: Bool
 
-    private let hitHeight: CGFloat = 6
-    private let expandedHeight: CGFloat = 26
+    private let hitHeight: CGFloat = 8
+    private let expandedHeight: CGFloat = 28
 
     var body: some View {
         ZStack {
             Color.clear
             if isTargeted {
-                RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.18)).padding(.horizontal, 4)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.accentColor.opacity(0.18))
+                    .padding(.horizontal, 4)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
         .frame(height: isTargeted ? expandedHeight : hitHeight)
-        .animation(.easeInOut(duration: 0.15), value: isTargeted)
+        .animation(.spring(response: 0.45, dampingFraction: 0.7, blendDuration: 0.15), value: isTargeted)
         .contentShape(Rectangle())
         .onDrop(of: [.text, .plainText, .utf8PlainText], isTargeted: $isTargeted) { providers in
             guard let provider = providers.first else { return false }
@@ -1275,10 +1646,10 @@ private struct SimianFolderRow: View {
                                 .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary).frame(width: 14, height: 14)
                         } else { Rectangle().fill(Color.clear).frame(width: 14, height: 14) }
                     }
-                    .offset(y: 2)
+                    .offset(y: 3.5)
                 }.buttonStyle(.plain)
 
-                Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(.secondary).offset(y: 2).allowsHitTesting(false)
+                Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(.secondary).offset(y: 3.5).allowsHitTesting(false)
                 if isEditing {
                     TextField("", text: $editText, onCommit: { onCommitRename() })
                         .textFieldStyle(.roundedBorder).font(.system(size: 13))
@@ -1286,7 +1657,7 @@ private struct SimianFolderRow: View {
                         .onAppear { isEditFocused = true }
                         .onExitCommand { onCancelRename() }
                 } else {
-                    Text(folderName).font(.system(size: 13)).lineLimit(1).offset(y: 2).allowsHitTesting(false)
+                    Text(folderName).font(.system(size: 13)).lineLimit(1).offset(y: 3.5).allowsHitTesting(false)
                 }
                 Spacer()
                 if isDropTargeted { Image(systemName: "plus.circle.fill").font(.system(size: 12)).foregroundStyle(Color.accentColor) }
@@ -1307,15 +1678,12 @@ private struct SimianFolderRow: View {
                 return true
             }
 
-            if canReorder {
-                ReorderGapView(expectedType: "folder", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
-            }
+            ReorderGapView(expectedType: "folder", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .background(isHovered ? Color.blue.opacity(0.08) : Color.clear)
         .onHover { isHovered = $0 }
-        .highPriorityGesture(TapGesture().onEnded { onSelect() })
         .draggable(dragPayload)
     }
 }
@@ -1361,7 +1729,7 @@ private struct SimianFileRow: View {
             HStack(spacing: 5) {
                 ForEach(0..<safeDepth, id: \.self) { _ in Rectangle().fill(Color.clear).frame(width: 10) }
                 Rectangle().fill(Color.clear).frame(width: 14)
-                Image(systemName: "doc").font(.system(size: 11)).foregroundStyle(.secondary).offset(y: 2).allowsHitTesting(false)
+                Image(systemName: "doc").font(.system(size: 11)).foregroundStyle(.secondary).offset(y: 3.5).allowsHitTesting(false)
                 if isEditing {
                     TextField("", text: $editText, onCommit: { onCommitRename() })
                         .textFieldStyle(.roundedBorder).font(.system(size: 13))
@@ -1369,22 +1737,19 @@ private struct SimianFileRow: View {
                         .onAppear { isEditFocused = true }
                         .onExitCommand { onCancelRename() }
                 } else {
-                    Text(fileName).font(.system(size: 13)).lineLimit(1).offset(y: 2).allowsHitTesting(false)
+                    Text(fileName).font(.system(size: 13)).lineLimit(1).offset(y: 3.5).allowsHitTesting(false)
                 }
                 Spacer()
             }
             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .center)
             .contentShape(Rectangle())
 
-            if canReorder {
-                ReorderGapView(expectedType: "file", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
-            }
+            ReorderGapView(expectedType: "file", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .background(isHovered ? Color.blue.opacity(0.08) : Color.clear)
         .onHover { isHovered = $0 }
-        .onTapGesture { onSelect() }
         .draggable(dragPayload)
     }
 }

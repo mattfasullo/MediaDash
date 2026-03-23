@@ -10,6 +10,32 @@ import AppKit
 import UniformTypeIdentifiers
 import Foundation
 
+// #region agent log
+private func _dbgLog(_ location: String, _ message: String, _ data: [String: Any] = [:], hypothesisId: String = "") {
+    let logPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-555b09.log"
+    var entry: [String: Any] = [
+        "sessionId": "555b09",
+        "location": location,
+        "message": message,
+        "hypothesisId": hypothesisId,
+        "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+    ]
+    if !data.isEmpty { entry["data"] = data }
+    guard
+        let jsonData = try? JSONSerialization.data(withJSONObject: entry),
+        let jsonString = String(data: jsonData, encoding: .utf8),
+        let lineData = (jsonString + "\n").data(using: .utf8)
+    else { return }
+    if let handle = FileHandle(forWritingAtPath: logPath) {
+        handle.seekToEndOfFile()
+        handle.write(lineData)
+        try? handle.close()
+    } else {
+        FileManager.default.createFile(atPath: logPath, contents: lineData)
+    }
+}
+// #endregion
+
 enum TaskDetailKind {
     case demos
     case post
@@ -2127,6 +2153,19 @@ struct AsanaTaskDetailView: View {
         let custom = settingsManager?.currentSettings.composerInitials ?? [:]
         let wasDerived = folderNameOverride == nil && !custom.keys.contains(composerName)
         let dueDate = task?.effectiveDueDate.flatMap { s in parseShortDate(String(s.prefix(10))) } ?? Date()
+        // #region agent log
+        _dbgLog(
+            "AsanaTaskDetailView.handleDrop",
+            "Drop target folder resolution",
+            [
+                "selectedDemosDateFolder": selectedDemosDateFolder ?? "nil",
+                "dueDate": task?.effectiveDueDate ?? "nil",
+                "composerName": composerName,
+                "demosDocketFolder": demosDocketFolder
+            ],
+            hypothesisId: "H-A"
+        )
+        // #endregion
         do {
             let dateFolder = try config.getOrCreateDemosDateFolder(docketFolderName: demosDocketFolder, date: dueDate)
             let composerDir = dateFolder.appendingPathComponent(folderName)
@@ -2176,6 +2215,18 @@ struct AsanaTaskDetailView: View {
         }
         guard !folderName.isEmpty else { return }
         let dueDate = task?.effectiveDueDate.flatMap { s in parseShortDate(String(s.prefix(10))) } ?? Date()
+        // #region agent log
+        _dbgLog(
+            "AsanaTaskDetailView.addFilesViaFinder",
+            "Add files target folder resolution",
+            [
+                "selectedDemosDateFolder": selectedDemosDateFolder ?? "nil",
+                "dueDate": task?.effectiveDueDate ?? "nil",
+                "composerName": composerName
+            ],
+            hypothesisId: "H-A"
+        )
+        // #endregion
         let panel = NSOpenPanel()
         panel.title = "Add tracks for \(composerName)"
         panel.message = "Select audio files to add to this writer's folder."
@@ -2286,6 +2337,19 @@ struct AsanaTaskDetailView: View {
             if !folderName.isEmpty {
                 let composerDir = dateFolder.appendingPathComponent(folderName)
                 if !fm.fileExists(atPath: composerDir.path) {
+                    // #region agent log
+                    _dbgLog(
+                        "AsanaTaskDetailView.refreshComposerFolderContents",
+                        "Auto-creating writer folder on refresh",
+                        [
+                            "composerName": composerName,
+                            "folderName": folderName,
+                            "dateFolderPath": dateFolder.lastPathComponent,
+                            "selectedRound": selectedDemosDateFolder ?? "nil"
+                        ],
+                        hypothesisId: "H-C"
+                    )
+                    // #endregion
                     _ = try? fm.createDirectory(at: composerDir, withIntermediateDirectories: true, attributes: nil)
                 }
             }
@@ -2318,6 +2382,18 @@ struct AsanaTaskDetailView: View {
             }
         }
         composerFolderContents = contents
+        // #region agent log
+        let previousInUse = Dictionary(uniqueKeysWithValues: trackInUse.filter { !$0.value.isEmpty }.map { ($0.key, Array($0.value).sorted()) })
+        let diskInUse = Dictionary(uniqueKeysWithValues: inUseFromDisk.filter { !$0.value.isEmpty }.map { ($0.key, Array($0.value).sorted()) })
+        if previousInUse != diskInUse {
+            _dbgLog(
+                "AsanaTaskDetailView.refreshComposerFolderContents",
+                "trackInUse overwritten by disk scan",
+                ["prevTrackInUse": previousInUse, "newTrackInUseFromDisk": diskInUse],
+                hypothesisId: "H-E"
+            )
+        }
+        // #endregion
         trackInUse = inUseFromDisk
     }
     
@@ -2504,6 +2580,19 @@ struct AsanaTaskDetailView: View {
     private func fileURLForTrack(composerName: String, filename: String, folderNameOverride: String? = nil) -> URL? {
         guard let config = config, !demosDocketFolder.isEmpty, let t = task else { return nil }
         let dueDate = t.effectiveDueDate.flatMap { s in parseShortDate(String(s.prefix(10))) } ?? Date()
+        // #region agent log
+        _dbgLog(
+            "AsanaTaskDetailView.fileURLForTrack",
+            "Resolving file URL (calls getOrCreateDemosDateFolder)",
+            [
+                "selectedDemosDateFolder": selectedDemosDateFolder ?? "nil",
+                "dueDate": t.effectiveDueDate ?? "nil",
+                "composerName": composerName,
+                "filename": filename
+            ],
+            hypothesisId: "H-D"
+        )
+        // #endregion
         guard let dateFolder = try? config.getOrCreateDemosDateFolder(docketFolderName: demosDocketFolder, date: dueDate) else { return nil }
         let folderName = folderNameOverride ?? composerFolderName(for: composerName)
         guard !folderName.isEmpty else { return nil }
