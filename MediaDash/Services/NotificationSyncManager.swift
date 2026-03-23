@@ -14,6 +14,9 @@ class NotificationSyncManager: ObservableObject {
     @Published private(set) var lastSyncDate: Date?
     @Published private(set) var isSyncing = false
     
+    /// DEBUG: only log when merged completion count changes (avoids spam from repeated sync calls).
+    private var lastDebugLoggedSyncCompletionCount: Int?
+    
     private init() {
         // Load last sync date from UserDefaults
         if let date = UserDefaults.standard.object(forKey: "notification_sync_last_sync") as? Date {
@@ -90,7 +93,9 @@ class NotificationSyncManager: ObservableObject {
         
         // Check if server is connected (if cache is on server)
         if !isServerConnected() {
+            #if DEBUG
             print("📋 [NotificationSync] Cannot access shared cache - server not connected")
+            #endif
             return
         }
         
@@ -117,13 +122,19 @@ class NotificationSyncManager: ObservableObject {
             // Try to save to shared location
             do {
                 guard isServerConnected() else {
+                    #if DEBUG
                     print("📋 [NotificationSync] Cannot save to shared cache - server not connected")
+                    #endif
                     return
                 }
                 
                 try await saveSharedCompletionData(mergedData, to: sharedURL)
                 #if DEBUG
-                print("📋 [NotificationSync] Cache sync completed: \(mergedData.completions.count) completions")
+                let count = mergedData.completions.count
+                if lastDebugLoggedSyncCompletionCount != count {
+                    lastDebugLoggedSyncCompletionCount = count
+                    print("📋 [NotificationSync] Cache sync completed: \(count) completions")
+                }
                 #endif
             } catch {
                 print("📋 [NotificationSync] Failed to save to shared cache: \(error.localizedDescription)")
@@ -146,7 +157,9 @@ class NotificationSyncManager: ObservableObject {
             return
         }
         
+        #if DEBUG
         print("📋 [NotificationSync] Saving completion status for notification \(notificationId)")
+        #endif
         
         do {
             // Load existing data
@@ -180,7 +193,9 @@ class NotificationSyncManager: ObservableObject {
             // Save to shared cache
             try await saveSharedCompletionData(updatedData, to: sharedURL)
             
+            #if DEBUG
             print("📋 [NotificationSync] Successfully saved completion status")
+            #endif
         } catch {
             print("📋 [NotificationSync] Failed to save completion status: \(error.localizedDescription)")
         }

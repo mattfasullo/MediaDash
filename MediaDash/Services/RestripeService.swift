@@ -91,14 +91,25 @@ enum RestripeService {
 
             await onProgress?(index + 1, total, outputFilename)
 
+            // MP4 cannot contain ProRes (and some other mezzanine codecs) with stream copy.
+            // MOV keeps `-c:v copy` for quality/speed; MP4 re-encodes to H.264 for compatibility.
             var args: [String] = [
                 "-i", picture.path,
                 "-i", item.audio.path,
                 "-shortest",
                 "-map", "0:v",
                 "-map", "1:a",
-                "-c:v", "copy",
             ]
+            switch outputFormat {
+            case .mp4:
+                args.append(contentsOf: [
+                    "-c:v", "h264_videotoolbox",
+                    "-b:v", "12M",
+                    "-pix_fmt", "yuv420p",
+                ])
+            case .mov:
+                args.append(contentsOf: ["-c:v", "copy"])
+            }
             if abs(audioGainDB) > 0.01 {
                 args.append(contentsOf: ["-filter:a", "volume=\(audioGainDB)dB", "-c:a", "aac"])
             } else {

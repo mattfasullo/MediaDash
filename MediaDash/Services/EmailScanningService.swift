@@ -33,6 +33,15 @@ class EmailScanningService: ObservableObject {
         CompanyNameCache.shared
     }
     
+    #if DEBUG
+    /// Verbose Gmail scan logs (Release: no-op; autoclosure not evaluated).
+    private func emailScanDebug(_ message: @autoclosure () -> String) {
+        print(message())
+    }
+    #else
+    private func emailScanDebug(_ message: @autoclosure () -> String) {}
+    #endif
+    
     init(gmailService: GmailService, parser: EmailDocketParser) {
         self.gmailService = gmailService
         self.parser = parser
@@ -152,23 +161,8 @@ class EmailScanningService: ObservableObject {
     /// Check if an email is a reply or forward
     /// Perform a manual scan now
     func scanNow(forceRescan: Bool = false) async {
-        // #region agent log
-        do {
-            let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanNow entry", "data": ["forceRescan": forceRescan], "hypothesisId": "H4"]
-            if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                if !FileManager.default.fileExists(atPath: path) { try? Data().write(to: URL(fileURLWithPath: path)) }
-                if let stream = OutputStream(url: URL(fileURLWithPath: path), append: true) {
-                    stream.open()
-                    defer { stream.close() }
-                    let out = (line + "\n").data(using: .utf8)!
-                    _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                }
-            }
-        }
-        // #endregion
         #if DEBUG
-        print("🔍 EmailScanningService.scanNow() called")
+        emailScanDebug("🔍 EmailScanningService.scanNow() called")
         #endif
         if isScanning {
             return
@@ -198,8 +192,10 @@ class EmailScanningService: ObservableObject {
             return
         }
         
-        print("✅ EmailScanningService: Gmail is enabled and authenticated - proceeding with scan")
-        print("EmailScanningService: Gmail authenticated, starting email query")
+        #if DEBUG
+        emailScanDebug("✅ EmailScanningService: Gmail is enabled and authenticated - proceeding with scan")
+        emailScanDebug("EmailScanningService: Gmail authenticated, starting email query")
+        #endif
         
         // Defer state updates to next run loop cycle to avoid SwiftUI warnings
         // Use DispatchQueue.main.async to ensure we're outside the view update cycle
@@ -215,35 +211,35 @@ class EmailScanningService: ObservableObject {
             // Scan all unread emails to find new docket emails
             let query = "is:unread"
             
-            print("EmailScanningService: 🔍 Starting scan...")
-            print("  📧 Gmail enabled: \(settings.gmailEnabled)")
-            print("  🔑 Gmail authenticated: \(gmailService.isAuthenticated)")
-            print("  🔎 Query: \(query) (scanning all unread emails)")
+            emailScanDebug("EmailScanningService: 🔍 Starting scan...")
+            emailScanDebug("  📧 Gmail enabled: \(settings.gmailEnabled)")
+            emailScanDebug("  🔑 Gmail authenticated: \(gmailService.isAuthenticated)")
+            emailScanDebug("  🔎 Query: \(query) (scanning all unread emails)")
             
-            print("EmailScanningService: Starting email scan - query: \(query), gmailEnabled: \(settings.gmailEnabled), gmailAuthenticated: \(gmailService.isAuthenticated)")
+            emailScanDebug("EmailScanningService: Starting email scan - query: \(query), gmailEnabled: \(settings.gmailEnabled), gmailAuthenticated: \(gmailService.isAuthenticated)")
             // Fetch emails matching query
             let messageRefs = try await gmailService.fetchEmails(
                 query: query,
                 maxResults: 50
             )
             
-            print("EmailScanningService: Email query completed - found \(messageRefs.count) emails")
+            emailScanDebug("EmailScanningService: Email query completed - found \(messageRefs.count) emails")
             
-            print("  📨 Found \(messageRefs.count) email references matching query")
+            emailScanDebug("  📨 Found \(messageRefs.count) email references matching query")
             
             // Get full email messages
             let messages = try await gmailService.getEmails(messageReferences: messageRefs)
             
-            print("  📦 Retrieved \(messages.count) full email messages")
+            emailScanDebug("  📦 Retrieved \(messages.count) full email messages")
             
             // DEBUG: Log ALL messages retrieved (before filtering)
-            print("  🔍 DEBUG: All messages retrieved from Gmail:")
+            emailScanDebug("  🔍 DEBUG: All messages retrieved from Gmail:")
             for (index, message) in messages.enumerated() {
                 let subject = message.subject ?? "(no subject)"
                 let from = message.from ?? "(no sender)"
                 let labelIds = message.labelIds ?? []
                 let isUnread = labelIds.contains("UNREAD")
-                print("    \(index + 1). \"\(subject)\" | From: \(from) | Unread: \(isUnread)")
+                emailScanDebug("    \(index + 1). \"\(subject)\" | From: \(from) | Unread: \(isUnread)")
             }
             
             // Filter to only unread emails (double-check labelIds)
@@ -251,7 +247,7 @@ class EmailScanningService: ObservableObject {
                 guard let labelIds = message.labelIds else { return false }
                 return labelIds.contains("UNREAD")
             }
-            print("  ✅ \(unreadMessages.count) are unread (filtered out \(messages.count - unreadMessages.count) already-read emails)")
+            emailScanDebug("  ✅ \(unreadMessages.count) are unread (filtered out \(messages.count - unreadMessages.count) already-read emails)")
             
             // DEBUG: Check if Kids Help Phone email is in the unread list
             let kidsHelpPhoneEmails = unreadMessages.filter { message in
@@ -261,16 +257,16 @@ class EmailScanningService: ObservableObject {
                        from.localizedCaseInsensitiveContains("kids help phone")
             }
             if !kidsHelpPhoneEmails.isEmpty {
-                print("  ✅ FOUND Kids Help Phone email(s) in unread list: \(kidsHelpPhoneEmails.count)")
+                emailScanDebug("  ✅ FOUND Kids Help Phone email(s) in unread list: \(kidsHelpPhoneEmails.count)")
                 for email in kidsHelpPhoneEmails {
-                    print("    - Subject: \(email.subject ?? "none") | From: \(email.from ?? "none") | ID: \(email.id)")
+                    emailScanDebug("    - Subject: \(email.subject ?? "none") | From: \(email.from ?? "none") | ID: \(email.id)")
                 }
             } else {
-                print("  ⚠️  WARNING: Kids Help Phone email NOT found in unread list")
-                print("     This could mean:")
-                print("     1. Email is marked as read in Gmail")
-                print("     2. Email is not in the first 50 unread emails (Gmail query limit)")
-                print("     3. Email was already processed and is in processedEmailIds/processedThreadIds")
+                emailScanDebug("  ⚠️  WARNING: Kids Help Phone email NOT found in unread list")
+                emailScanDebug("     This could mean:")
+                emailScanDebug("     1. Email is marked as read in Gmail")
+                emailScanDebug("     2. Email is not in the first 50 unread emails (Gmail query limit)")
+                emailScanDebug("     3. Email was already processed and is in processedEmailIds/processedThreadIds")
             }
             
             // Cache unread emails for reuse in checklist flow
@@ -280,7 +276,7 @@ class EmailScanningService: ObservableObject {
             
             // Log ALL unread emails found
             if !unreadMessages.isEmpty {
-                print("  📝 Found \(unreadMessages.count) unread email(s):")
+                emailScanDebug("  📝 Found \(unreadMessages.count) unread email(s):")
                 for (index, message) in unreadMessages.enumerated() {
                     let subject = message.subject ?? "(no subject)"
                     let from = message.from ?? "(no sender)"
@@ -289,20 +285,20 @@ class EmailScanningService: ObservableObject {
                     var status = ""
                     if isProcessed { status += " [already processed]" }
                     if isThreadProcessed { status += " [thread already processed]" }
-                    print("    \(index + 1). \"\(subject)\" | From: \(from)\(status)")
+                    emailScanDebug("    \(index + 1). \"\(subject)\" | From: \(from)\(status)")
                     
                     // Log if this might be a request (for debugging)
-                    if subject.localizedCaseInsensitiveContains("request") || 
+                    if subject.localizedCaseInsensitiveContains("request") ||
                        subject.localizedCaseInsensitiveContains("help") ||
                        from.localizedCaseInsensitiveContains("kids help phone") {
-                        print("      🔍 NOTE: This email might be a request")
+                        emailScanDebug("      🔍 NOTE: This email might be a request")
                     }
                 }
             }
             
             // Process ALL unread emails - parser will determine if they contain new docket information
             let initialEmails = unreadMessages
-            print("  📬 Processing all \(initialEmails.count) unread emails - parser will determine relevance")
+            emailScanDebug("  📬 Processing all \(initialEmails.count) unread emails - parser will determine relevance")
             
             // Filter out already processed emails AND threads (unless force rescan)
             // This prevents duplicate notifications from the same email thread
@@ -315,35 +311,35 @@ class EmailScanningService: ObservableObject {
                 
                 // Skip if this exact email was already processed
                 if processedEmailIds.contains(emailId) {
-                    print("  ⏭️  SKIPPED (already processed): \"\(subject)\" from \(from) [emailId: \(emailId)]")
+                    emailScanDebug("  ⏭️  SKIPPED (already processed): \"\(subject)\" from \(from) [emailId: \(emailId)]")
                     return false
                 }
                 // Skip if this thread was already processed (prevents duplicates from replies)
                 if processedThreadIds.contains(threadId) {
-                    print("  ⏭️  SKIPPED (thread processed): \"\(subject)\" from \(from) [threadId: \(threadId)]")
+                    emailScanDebug("  ⏭️  SKIPPED (thread processed): \"\(subject)\" from \(from) [threadId: \(threadId)]")
                     return false
                 }
                 return true
             }
 
             let alreadyProcessedCount = initialEmails.count - newMessages.count
-            print("  🆕 \(newMessages.count) are new (not yet processed)")
+            emailScanDebug("  🆕 \(newMessages.count) are new (not yet processed)")
             if alreadyProcessedCount > 0 {
-                print("  ⏭️  Skipped \(alreadyProcessedCount) already-processed emails/threads")
-                print("  🔍 DEBUG: If 'Kids Help Phone' email is missing, check if it was in the skipped list above")
+                emailScanDebug("  ⏭️  Skipped \(alreadyProcessedCount) already-processed emails/threads")
+                emailScanDebug("  🔍 DEBUG: If 'Kids Help Phone' email is missing, check if it was in the skipped list above")
             }
             
             // DEBUG: Log all emails that will be processed
-            print("  📋 Emails that will be processed:")
+            emailScanDebug("  📋 Emails that will be processed:")
             for (index, message) in newMessages.enumerated() {
                 let subject = message.subject ?? "(no subject)"
                 let from = message.from ?? "(no sender)"
-                print("    \(index + 1). \"\(subject)\" | From: \(from)")
+                emailScanDebug("    \(index + 1). \"\(subject)\" | From: \(from)")
                 
                 // Specifically highlight Kids Help Phone emails
                 if subject.localizedCaseInsensitiveContains("kids help phone") ||
                    from.localizedCaseInsensitiveContains("kids help phone") {
-                    print("      ✅ Kids Help Phone email WILL BE PROCESSED")
+                    emailScanDebug("      ✅ Kids Help Phone email WILL BE PROCESSED")
                 }
             }
             
@@ -356,11 +352,11 @@ class EmailScanningService: ObservableObject {
                 processedCount += 1
                 let subject = message.subject ?? "(no subject)"
                 let from = message.from ?? "(no sender)"
-                print("  🔄 Processing email \(processedCount)/\(newMessages.count): \"\(subject)\" from \(from)")
+                emailScanDebug("  🔄 Processing email \(processedCount)/\(newMessages.count): \"\(subject)\" from \(from)")
                 
                 if await processEmailAndCreateNotification(message) {
                     notificationCount += 1
-                    print("    ✅ Created notification")
+                    emailScanDebug("    ✅ Created notification")
                     // Mark email AND thread as processed (prevents duplicate notifications from same thread)
                     _ = await MainActor.run {
                         processedEmailIds.insert(message.id)
@@ -368,7 +364,7 @@ class EmailScanningService: ObservableObject {
                     }
                 } else {
                     rejectedCount += 1
-                    print("    ❌ Rejected (no notification created)")
+                    emailScanDebug("    ❌ Rejected (no notification created)")
                 }
             }
             
@@ -379,18 +375,18 @@ class EmailScanningService: ObservableObject {
             cleanupOldProcessedIds()
             
             // Print diagnostic summary
-            print("EmailScanningService: 📊 Scan Summary:")
-            print("  📧 Total emails found: \(messageRefs.count)")
-            print("  ✅ Unread: \(unreadMessages.count)")
-            print("  📬 Initial (not reply/forward): \(initialEmails.count)")
-            print("  🆕 New (not processed): \(newMessages.count)")
-            print("  ✅ Notifications created: \(notificationCount)")
-            print("  ❌ Rejected: \(rejectedCount)")
+            emailScanDebug("EmailScanningService: 📊 Scan Summary:")
+            emailScanDebug("  📧 Total emails found: \(messageRefs.count)")
+            emailScanDebug("  ✅ Unread: \(unreadMessages.count)")
+            emailScanDebug("  📬 Initial (not reply/forward): \(initialEmails.count)")
+            emailScanDebug("  🆕 New (not processed): \(newMessages.count)")
+            emailScanDebug("  ✅ Notifications created: \(notificationCount)")
+            emailScanDebug("  ❌ Rejected: \(rejectedCount)")
             
             if notificationCount == 0 && newMessages.count > 0 {
-                print("  ⚠️  WARNING: No notifications created despite \(newMessages.count) new emails!")
-                print("     This likely means emails are being rejected by the parser.")
-                print("     Check console logs for detailed parsing information.")
+                emailScanDebug("  ⚠️  WARNING: No notifications created despite \(newMessages.count) new emails!")
+                emailScanDebug("     This likely means emails are being rejected by the parser.")
+                emailScanDebug("     Check console logs for detailed parsing information.")
             }
             
             // Use DispatchQueue to avoid SwiftUI view update cycle conflicts
@@ -472,13 +468,13 @@ class EmailScanningService: ObservableObject {
     func processEmailAndCreateNotification(_ message: GmailMessage) async -> Bool {
         // Safety check: Only process unread emails
         guard let labelIds = message.labelIds, labelIds.contains("UNREAD") else {
-            print("    ❌ REJECTED: Email already marked as read")
+            emailScanDebug("    ❌ REJECTED: Email already marked as read")
             return false
         }
         
         // Use parser with custom patterns if configured
         guard let settingsManager = settingsManager else {
-            print("    ❌ REJECTED: Settings manager is nil")
+            emailScanDebug("    ❌ REJECTED: Settings manager is nil")
             return false
         }
         let currentSettings = settingsManager.currentSettings
@@ -501,19 +497,19 @@ class EmailScanningService: ObservableObject {
         // detect "new docket" and docket numbers that appear in the preview (subject + snippet are what we have)
         if body.isEmpty, let snippet = message.snippet, !snippet.isEmpty {
             body = snippet
-            print("  Using snippet as body fallback for parsing (\(snippet.count) chars)")
+            emailScanDebug("  Using snippet as body fallback for parsing (\(snippet.count) chars)")
         }
         
-        print("EmailScanningService: Parsing email:")
-        print("  Subject: \(subject)")
-        print("  Plain body length: \(plainBody.count)")
-        print("  HTML body length: \(htmlBody.count)")
-        print("  Using body: \(!plainBody.isEmpty ? "plain" : (!htmlBody.isEmpty ? "HTML" : (body.isEmpty ? "none" : "snippet")))")
+        emailScanDebug("EmailScanningService: Parsing email:")
+        emailScanDebug("  Subject: \(subject)")
+        emailScanDebug("  Plain body length: \(plainBody.count)")
+        emailScanDebug("  HTML body length: \(htmlBody.count)")
+        emailScanDebug("  Using body: \(!plainBody.isEmpty ? "plain" : (!htmlBody.isEmpty ? "HTML" : (body.isEmpty ? "none" : "snippet")))")
         if !body.isEmpty {
-        print("  Body preview: \(body.prefix(200))")
+            emailScanDebug("  Body preview: \(body.prefix(200))")
         } else {
-            print("  Body: (empty)")
-            print("  Snippet: \(message.snippet ?? "(none)")")
+            emailScanDebug("  Body: (empty)")
+            emailScanDebug("  Snippet: \(message.snippet ?? "(none)")")
         }
         
         // Determine the original sender: check if there's already a notification for this thread
@@ -524,33 +520,17 @@ class EmailScanningService: ObservableObject {
             // Check if there's an existing notification for this thread
             if let existingNotification = notificationCenter.notifications.first(where: { $0.threadId == threadId && $0.type == .newDocket }) {
                 originalSenderEmail = existingNotification.sourceEmail
-                print("  📧 Using original sender from existing notification: \(originalSenderEmail ?? "nil")")
+                emailScanDebug("  📧 Using original sender from existing notification: \(originalSenderEmail ?? "nil")")
             } else {
                 // No existing notification - try to get the original sender from the thread
-                // Fetch the thread to get the first message (original sender)
-                // #region agent log
-                do {
-                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "processEmail_calling_getThread", "data": ["threadId": threadId], "hypothesisId": "H2"]
-                    if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                        let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                        if !FileManager.default.fileExists(atPath: path) { try? Data().write(to: URL(fileURLWithPath: path)) }
-                        if let stream = OutputStream(url: URL(fileURLWithPath: path), append: true) {
-                            stream.open()
-                            defer { stream.close() }
-                            let out = (line + "\n").data(using: .utf8)!
-                            _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                        }
-                    }
-                }
-                // #endregion
                 do {
                     let thread = try await gmailService.getThread(threadId: threadId)
                     if let messages = thread.messages, let firstMessage = messages.first {
                         originalSenderEmail = firstMessage.from
-                        print("  📧 Using original sender from thread's first message: \(originalSenderEmail ?? "nil")")
+                        emailScanDebug("  📧 Using original sender from thread's first message: \(originalSenderEmail ?? "nil")")
                     }
                 } catch {
-                    print("  ⚠️ Could not fetch thread to get original sender, using current message sender: \(error.localizedDescription)")
+                    emailScanDebug("  ⚠️ Could not fetch thread to get original sender, using current message sender: \(error.localizedDescription)")
                 }
             }
         }
@@ -564,30 +544,14 @@ class EmailScanningService: ObservableObject {
             body: body,
             from: originalSenderEmail
         )
-        // #region agent log
-        if parsedDocket == nil {
-            let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "parseEmail returned nil", "data": ["subjectLen": subject.count, "bodyLen": body.count, "bodyEmpty": body.isEmpty], "hypothesisId": "H5"]
-            if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                let url = URL(fileURLWithPath: path)
-                if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                if let stream = OutputStream(url: url, append: true) {
-                    stream.open()
-                    defer { stream.close() }
-                    let out = (line + "\n").data(using: .utf8)!
-                    _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                }
-            }
-        }
-        // #endregion
-        
+                
         // Check for multiple docket numbers in the parsed result
         if let docketNum = parsedDocket?.docketNumber {
             let multipleDockets = parseMultipleDocketNumbers(docketNum)
             
             if multipleDockets.count > 1 {
                 // Multiple dockets detected - create notifications for each
-                print("EmailScanningService: ✅ Parser detected \(multipleDockets.count) docket numbers: \(multipleDockets)")
+                emailScanDebug("EmailScanningService: ✅ Parser detected \(multipleDockets.count) docket numbers: \(multipleDockets)")
                 
                 await MainActor.run {
                     for docket in multipleDockets {
@@ -616,17 +580,17 @@ class EmailScanningService: ObservableObject {
         }
         
         guard let parsedDocket = parsedDocket else {
-            print("    ❌ REJECTED: Failed to parse email - no docket information found in subject or body")
+            emailScanDebug("    ❌ REJECTED: Failed to parse email - no docket information found in subject or body")
             return false
         }
         
-        print("    ✅ Parsed docket: \(parsedDocket.docketNumber) - \(parsedDocket.jobName)")
+        emailScanDebug("    ✅ Parsed docket: \(parsedDocket.docketNumber) - \(parsedDocket.jobName)")
         
         // STRICT VALIDATION: Docket number is REQUIRED - no exceptions, no "TBD" allowed
         // If we don't have a valid docket number, reject the notification
         if !isValidDocketNumber(parsedDocket.docketNumber) {
-            print("    ❌ REJECTED: Invalid or missing docket number: '\(parsedDocket.docketNumber)' (must be exactly 5 digits, optionally with -US suffix)")
-            print("    ⚠️ DOCKET NUMBERS ARE MANDATORY - This email will NOT create a notification")
+            emailScanDebug("    ❌ REJECTED: Invalid or missing docket number: '\(parsedDocket.docketNumber)' (must be exactly 5 digits, optionally with -US suffix)")
+            emailScanDebug("    ⚠️ DOCKET NUMBERS ARE MANDATORY - This email will NOT create a notification")
             return false
         }
         
@@ -634,7 +598,7 @@ class EmailScanningService: ObservableObject {
         if let manager = mediaManager,
            manager.dockets.contains("\(parsedDocket.docketNumber)_\(parsedDocket.jobName)") {
             // Docket already exists - mark as processed but don't create notification
-            print("    ❌ REJECTED: Docket already exists: \(parsedDocket.docketNumber)_\(parsedDocket.jobName)")
+            emailScanDebug("    ❌ REJECTED: Docket already exists: \(parsedDocket.docketNumber)_\(parsedDocket.jobName)")
             return false
         }
         
@@ -676,9 +640,9 @@ class EmailScanningService: ObservableObject {
             )
             
             
-            print("EmailScanningService: Adding notification for docket \(docketNumber ?? "TBD"): \(parsedDocket.jobName)")
+            emailScanDebug("EmailScanningService: Adding notification for docket \(docketNumber ?? "TBD"): \(parsedDocket.jobName)")
             notificationCenter.add(notification)
-            print("EmailScanningService: Notification added. Total notifications: \(notificationCenter.notifications.count)")
+            emailScanDebug("EmailScanningService: Notification added. Total notifications: \(notificationCenter.notifications.count)")
             
             // Auto-scan for duplicates (Work Picture folder and Simian project)
             Task {
@@ -700,16 +664,16 @@ class EmailScanningService: ObservableObject {
         let recipients = message.allRecipients
         let mediaEmailLower = mediaEmail.lowercased()
         
-        print("EmailScanningService: Checking if email \(message.id) is sent to media email")
-        print("  Media email: \(mediaEmailLower)")
-        print("  Recipients: \(recipients)")
+        emailScanDebug("EmailScanningService: Checking if email \(message.id) is sent to media email")
+        emailScanDebug("  Media email: \(mediaEmailLower)")
+        emailScanDebug("  Recipients: \(recipients)")
         
         // Check if media email is in recipients
         let isMediaEmail = recipients.contains { recipient in
             recipient.lowercased() == mediaEmailLower
         }
         
-        print("  Is media email: \(isMediaEmail)")
+        emailScanDebug("  Is media email: \(isMediaEmail)")
         return isMediaEmail
     }
     
@@ -742,20 +706,20 @@ class EmailScanningService: ObservableObject {
     func processMediaEmailAndCreateNotification(_ message: GmailMessage) async -> Bool {
         // Safety check: Only process unread emails
         guard let labelIds = message.labelIds, labelIds.contains("UNREAD") else {
-            print("EmailScanningService: Skipping media email \(message.id) - already marked as read")
+            emailScanDebug("EmailScanningService: Skipping media email \(message.id) - already marked as read")
             return false
         }
         
         guard let settingsManager = settingsManager else {
-            print("EmailScanningService: ❌ Failed to create media file notification for email \(message.id) - settingsManager is nil")
+            emailScanDebug("EmailScanningService: ❌ Failed to create media file notification for email \(message.id) - settingsManager is nil")
             return false
         }
         let settings = settingsManager.currentSettings
         
         // Check if email is actually sent to media email
         guard checkIfMediaEmail(message, mediaEmail: settings.companyMediaEmail) else {
-            print("EmailScanningService: ❌ Failed to create media file notification for email \(message.id) - email is not sent to media email address (\(settings.companyMediaEmail))")
-            print("  Recipients: \(message.allRecipients.joined(separator: ", "))")
+            emailScanDebug("EmailScanningService: ❌ Failed to create media file notification for email \(message.id) - email is not sent to media email address (\(settings.companyMediaEmail))")
+            emailScanDebug("  Recipients: \(message.allRecipients.joined(separator: ", "))")
             return false
         }
         
@@ -768,14 +732,14 @@ class EmailScanningService: ObservableObject {
         let bodyForDetection = !plainBody.isEmpty ? (plainBody + " " + htmlBody) : htmlBody
         let body = !plainBody.isEmpty ? plainBody : htmlBody
         
-        print("EmailScanningService: Processing media email \(message.id)")
-        print("  Subject: \(subject)")
-        print("  Plain body length: \(plainBody.count)")
-        print("  HTML body length: \(htmlBody.count)")
-        print("  Plain body preview: \(plainBody.prefix(200))")
-        print("  HTML body preview: \(htmlBody.prefix(200))")
-        print("  Combined body for detection preview: \(bodyForDetection.prefix(300))")
-        print("  File hosting whitelist: \(settings.grabbedFileHostingWhitelist)")
+        emailScanDebug("EmailScanningService: Processing media email \(message.id)")
+        emailScanDebug("  Subject: \(subject)")
+        emailScanDebug("  Plain body length: \(plainBody.count)")
+        emailScanDebug("  HTML body length: \(htmlBody.count)")
+        emailScanDebug("  Plain body preview: \(plainBody.prefix(200))")
+        emailScanDebug("  HTML body preview: \(htmlBody.prefix(200))")
+        emailScanDebug("  Combined body for detection preview: \(bodyForDetection.prefix(300))")
+        emailScanDebug("  File hosting whitelist: \(settings.grabbedFileHostingWhitelist)")
         
         // Use rule-based detection for file delivery
         var linkResult: QualificationResult? = nil
@@ -817,31 +781,31 @@ class EmailScanningService: ObservableObject {
         }
         
         guard let linkResult = linkResult else {
-            print("EmailScanningService: Failed to determine file delivery status")
+            emailScanDebug("EmailScanningService: Failed to determine file delivery status")
             return false
         }
         
         // Log detailed debug information
         let separator = String(repeating: "=", count: 80)
-        print("\n\(separator)")
-        print("📧 FILE DELIVERY NOTIFICATION DEBUG - Email ID: \(message.id)")
-        print(separator)
+        emailScanDebug("\n\(separator)")
+        emailScanDebug("📧 FILE DELIVERY NOTIFICATION DEBUG - Email ID: \(message.id)")
+        emailScanDebug(separator)
         for reason in linkResult.reasons {
-            print(reason)
+            emailScanDebug(reason)
         }
         if linkResult.qualifies {
-            print("\n✅ RESULT: QUALIFIED AS FILE DELIVERY")
-            print("  Matched criteria: \(linkResult.matchedCriteria.joined(separator: ", "))")
+            emailScanDebug("\n✅ RESULT: QUALIFIED AS FILE DELIVERY")
+            emailScanDebug("  Matched criteria: \(linkResult.matchedCriteria.joined(separator: ", "))")
         } else {
-            print("\n❌ RESULT: NOT QUALIFIED")
+            emailScanDebug("\n❌ RESULT: NOT QUALIFIED")
             if !linkResult.exclusionReasons.isEmpty {
-                print("  Exclusion reasons: \(linkResult.exclusionReasons.joined(separator: ", "))")
+                emailScanDebug("  Exclusion reasons: \(linkResult.exclusionReasons.joined(separator: ", "))")
             }
         }
-        print("\(separator)\n")
+        emailScanDebug("\(separator)\n")
         
         guard linkResult.qualifies else {
-            print("EmailScanningService: Media email \(message.id) does not contain file hosting links from whitelist")
+            emailScanDebug("EmailScanningService: Media email \(message.id) does not contain file hosting links from whitelist")
             return false
         }
         
@@ -863,7 +827,7 @@ class EmailScanningService: ObservableObject {
                 if isValidDocketNumber(parsed.docketNumber) {
                     extractedDocketNumber = parsed.docketNumber
                     extractedJobName = parsed.jobName
-                    print("EmailScanningService: ✅ Extracted docket from file delivery email: \(parsed.docketNumber) - \(parsed.jobName)")
+                    emailScanDebug("EmailScanningService: ✅ Extracted docket from file delivery email: \(parsed.docketNumber) - \(parsed.jobName)")
                 }
             }
             
@@ -908,20 +872,20 @@ class EmailScanningService: ObservableObject {
             )
             
             
-            print("EmailScanningService: ✅ Adding media file notification for email \(message.id)")
-            print("  Notification ID: \(notification.id)")
-            print("  Type: \(notification.type)")
-            print("  Status: \(notification.status)")
-            print("  Title: \(notification.title)")
-            print("  Message: \(notification.message)")
-            print("  File links found: \(fileLinks.count)")
+            emailScanDebug("EmailScanningService: ✅ Adding media file notification for email \(message.id)")
+            emailScanDebug("  Notification ID: \(notification.id)")
+            emailScanDebug("  Type: \(notification.type)")
+            emailScanDebug("  Status: \(notification.status)")
+            emailScanDebug("  Title: \(notification.title)")
+            emailScanDebug("  Message: \(notification.message)")
+            emailScanDebug("  File links found: \(fileLinks.count)")
             for (index, link) in fileLinks.enumerated() {
-                print("    Link \(index + 1): \(link)")
+                emailScanDebug("    Link \(index + 1): \(link)")
             }
             notificationCenter.add(notification)
-            print("EmailScanningService: ✅ Notification added. Total notifications: \(notificationCenter.notifications.count)")
-            print("  Active notifications: \(notificationCenter.activeNotifications.count)")
-            print("  Media file notifications: \(notificationCenter.activeNotifications.filter { $0.type == .mediaFiles }.count)")
+            emailScanDebug("EmailScanningService: ✅ Notification added. Total notifications: \(notificationCenter.notifications.count)")
+            emailScanDebug("  Active notifications: \(notificationCenter.activeNotifications.count)")
+            emailScanDebug("  Media file notifications: \(notificationCenter.activeNotifications.filter { $0.type == .mediaFiles }.count)")
         }
         
         return true
@@ -1100,13 +1064,13 @@ class EmailScanningService: ObservableObject {
             if let emailId = notification.emailId {
                 do {
                     try await gmailService.markAsRead(messageId: emailId)
-                    print("📧 EmailScanningService: Successfully marked email \(emailId) as read after creating docket")
+                    emailScanDebug("📧 EmailScanningService: Successfully marked email \(emailId) as read after creating docket")
                 } catch {
-                    print("📧 EmailScanningService: ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
+                    emailScanDebug("📧 EmailScanningService: ❌ Failed to mark email \(emailId) as read: \(error.localizedDescription)")
                     print("📧 EmailScanningService: Error details: \(error)")
                 }
             } else {
-                print("📧 EmailScanningService: ⚠️ Cannot mark email as read - notification has no emailId")
+                emailScanDebug("📧 EmailScanningService: ⚠️ Cannot mark email as read - notification has no emailId")
             }
             
             // Don't update status to completed here - let the caller handle it
@@ -1245,46 +1209,14 @@ class EmailScanningService: ObservableObject {
         // Save the cleaned-up sets
         saveProcessedEmailIds()
         
-        print("EmailScanningService: Cleaned up processed IDs (kept \(processedEmailIds.count) emails, \(processedThreadIds.count) threads)")
+        emailScanDebug("EmailScanningService: Cleaned up processed IDs (kept \(processedEmailIds.count) emails, \(processedThreadIds.count) threads)")
     }
     
     /// Scan for unread docket emails and create notifications (used when opening notification window)
     /// - Parameter forceRescan: If true, will rescan emails even if they already have notifications (useful after clearing all)
     func scanUnreadEmails(forceRescan: Bool = false) async {
-        // #region agent log
-        do {
-            let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails entry", "data": ["forceRescan": forceRescan], "hypothesisId": "H5"]
-            if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                let url = URL(fileURLWithPath: path)
-                if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                if let stream = OutputStream(url: url, append: true) {
-                    stream.open()
-                    defer { stream.close() }
-                    let out = (line + "\n").data(using: .utf8)!
-                    _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                }
-            }
-        }
-        // #endregion
         guard let settingsManager = settingsManager else {
             print("EmailScanningService: ERROR - settingsManager is nil")
-            // #region agent log
-            do {
-                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "settingsManager nil"], "hypothesisId": "H5"]
-                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                    let url = URL(fileURLWithPath: path)
-                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                    if let stream = OutputStream(url: url, append: true) {
-                        stream.open()
-                        defer { stream.close() }
-                        let out = (line + "\n").data(using: .utf8)!
-                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                    }
-                }
-            }
-            // #endregion
             return
         }
         
@@ -1292,64 +1224,16 @@ class EmailScanningService: ObservableObject {
         
         guard settings.gmailEnabled else {
             print("EmailScanningService: Gmail not enabled")
-            // #region agent log
-            do {
-                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "gmailEnabled false"], "hypothesisId": "H5"]
-                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                    let url = URL(fileURLWithPath: path)
-                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                    if let stream = OutputStream(url: url, append: true) {
-                        stream.open()
-                        defer { stream.close() }
-                        let out = (line + "\n").data(using: .utf8)!
-                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                    }
-                }
-            }
-            // #endregion
             return
         }
         
         guard gmailService.isAuthenticated else {
             print("EmailScanningService: Gmail not authenticated")
-            // #region agent log
-            do {
-                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "gmail not authenticated"], "hypothesisId": "H5"]
-                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                    let url = URL(fileURLWithPath: path)
-                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                    if let stream = OutputStream(url: url, append: true) {
-                        stream.open()
-                        defer { stream.close() }
-                        let out = (line + "\n").data(using: .utf8)!
-                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                    }
-                }
-            }
-            // #endregion
             return
         }
         
         guard let notificationCenter = notificationCenter else {
             print("EmailScanningService: ERROR - notificationCenter is nil")
-            // #region agent log
-            do {
-                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "notificationCenter nil"], "hypothesisId": "H5"]
-                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                    let url = URL(fileURLWithPath: path)
-                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                    if let stream = OutputStream(url: url, append: true) {
-                        stream.open()
-                        defer { stream.close() }
-                        let out = (line + "\n").data(using: .utf8)!
-                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                    }
-                }
-            }
-            // #endregion
             return
         }
         
@@ -1362,184 +1246,87 @@ class EmailScanningService: ObservableObject {
         do {
             // Scan all unread emails to find new docket emails
             let query = "is:unread"
-            print("EmailScanningService: Scanning all unread emails for new docket notifications")
-            // #region agent log
-            do {
-                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "calling fetchEmails", "data": ["query": query], "hypothesisId": "H2"]
-                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                    let url = URL(fileURLWithPath: path)
-                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                    if let stream = OutputStream(url: url, append: true) {
-                        stream.open()
-                        defer { stream.close() }
-                        let out = (line + "\n").data(using: .utf8)!
-                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                    }
-                }
-            }
-            // #endregion
-            // Fetch all unread emails
+            emailScanDebug("EmailScanningService: Scanning all unread emails for new docket notifications")
             let messageRefs = try await gmailService.fetchEmails(
                 query: query,
                 maxResults: 50
             )
             
-            print("EmailScanningService: Found \(messageRefs.count) unread emails")
-            // #region agent log
-            do {
-                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "fetchEmails result", "data": ["messageRefsCount": messageRefs.count], "hypothesisId": "H5"]
-                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                    let url = URL(fileURLWithPath: path)
-                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                    if let stream = OutputStream(url: url, append: true) {
-                        stream.open()
-                        defer { stream.close() }
-                        let out = (line + "\n").data(using: .utf8)!
-                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                    }
-                }
-            }
-            // #endregion
+            emailScanDebug("EmailScanningService: Found \(messageRefs.count) unread emails")
             
             guard !messageRefs.isEmpty else {
-                print("EmailScanningService: No unread emails found")
-                // #region agent log
-                do {
-                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails early exit", "data": ["reason": "no unread emails"], "hypothesisId": "H5"]
-                    if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                        let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                        let url = URL(fileURLWithPath: path)
-                        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                        if let stream = OutputStream(url: url, append: true) {
-                            stream.open()
-                            defer { stream.close() }
-                            let out = (line + "\n").data(using: .utf8)!
-                            _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                        }
-                    }
-                }
-                // #endregion
+                emailScanDebug("EmailScanningService: No unread emails found")
                 return
             }
             
             // Get full email messages
             let messages = try await gmailService.getEmails(messageReferences: messageRefs)
-            print("EmailScanningService: Fetched \(messages.count) full email messages")
+            emailScanDebug("EmailScanningService: Fetched \(messages.count) full email messages")
             
             // Filter to only unread emails (check labelIds)
             let unreadMessages = messages.filter { message in
                 guard let labelIds = message.labelIds else { return false }
                 return labelIds.contains("UNREAD")
             }
-            print("EmailScanningService: \(unreadMessages.count) emails are actually unread (out of \(messages.count) total)")
+            emailScanDebug("EmailScanningService: \(unreadMessages.count) emails are actually unread (out of \(messages.count) total)")
             
             // Don't filter out replies/forwards - let the parser determine if they contain new docket info
-            // Forwards often contain new docket information in the body
             let initialEmails = unreadMessages
-            print("EmailScanningService: Processing \(initialEmails.count) unread emails (including replies/forwards - parser will determine relevance)")
+            emailScanDebug("EmailScanningService: Processing \(initialEmails.count) unread emails (including replies/forwards - parser will determine relevance)")
             
-            // Get existing notification email IDs to avoid duplicates (unless force rescan)
             let existingEmailIds = await MainActor.run {
                 return forceRescan ? Set<String>() : Set(notificationCenter.notifications.compactMap { $0.emailId })
             }
-            print("EmailScanningService: \(existingEmailIds.count) emails already have notifications (forceRescan: \(forceRescan))")
+            emailScanDebug("EmailScanningService: \(existingEmailIds.count) emails already have notifications (forceRescan: \(forceRescan))")
             
-            // Process unread emails and create notifications if they don't already exist
             var createdCount = 0
             var skippedCount = 0
             var failedCount = 0
             var interactedCount = 0
             
-            // #region agent log
-            do {
-                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails loop start", "data": ["initialEmailsCount": initialEmails.count, "existingCount": existingEmailIds.count], "hypothesisId": "H5"]
-                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                    let url = URL(fileURLWithPath: path)
-                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                    if let stream = OutputStream(url: url, append: true) {
-                        stream.open()
-                        defer { stream.close() }
-                        let out = (line + "\n").data(using: .utf8)!
-                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                    }
-                }
-            }
-            // #endregion
             for message in initialEmails {
-                // Skip if notification already exists for this email (unless force rescan)
                 if !forceRescan && existingEmailIds.contains(message.id) {
                     skippedCount += 1
                     continue
                 }
                 
-                // Skip if email has been interacted with (downvoted, grabbed, approved, etc.)
-                // This prevents showing notifications for emails we've already handled
                 let hasInteracted = await MainActor.run {
                     EmailFeedbackTracker.shared.hasAnyInteraction(emailId: message.id)
                 }
                 if hasInteracted {
                     interactedCount += 1
-                    print("EmailScanningService: ⏭️  Skipping email \(message.id) - already interacted with")
+                    emailScanDebug("EmailScanningService: ⏭️  Skipping email \(message.id) - already interacted with")
                     continue
                 }
                 
-                // If force rescan, remove existing notification first
                 if forceRescan && existingEmailIds.contains(message.id) {
                     let existingNotification = await MainActor.run {
                         return notificationCenter.notifications.first(where: { $0.emailId == message.id })
                     }
                     if let existingNotification = existingNotification {
-                        // Call remove explicitly to avoid ambiguity
                         await notificationCenter.remove(_: existingNotification, emailScanningService: self)
                     }
                 }
                 
-                // Process email as new docket email
-                print("EmailScanningService: Email \(message.id) - attempting to process as new docket email...")
-                // #region agent log
-                do {
-                    let subj = message.subject ?? ""
-                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "calling processEmailAndCreateNotification", "data": ["emailId": message.id, "subjectLen": subj.count, "subjectPreview": String(subj.prefix(80))], "hypothesisId": "H5"]
-                    if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                        let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                        let url = URL(fileURLWithPath: path)
-                        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                        if let stream = OutputStream(url: url, append: true) {
-                            stream.open()
-                            defer { stream.close() }
-                            let out = (line + "\n").data(using: .utf8)!
-                            _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                        }
-                    }
-                }
-                // #endregion
+                emailScanDebug("EmailScanningService: Email \(message.id) - attempting to process as new docket email...")
                 let isNewDocket = await processEmailAndCreateNotification(message)
                 
                 if isNewDocket {
-                    // Successfully processed as new docket email
                     createdCount += 1
-                    print("EmailScanningService: ✅ Created new docket notification for email \(message.id)")
-                    // Don't mark as processed - we want to keep showing it until it's read/approved
+                    emailScanDebug("EmailScanningService: ✅ Created new docket notification for email \(message.id)")
                 } else {
-                    // Not a new docket email - skip it (we only process new docket emails now)
                     failedCount += 1
-                    print("EmailScanningService: Email \(message.id) - not a new docket, skipping (media files and requests are no longer processed)")
+                    emailScanDebug("EmailScanningService: Email \(message.id) - not a new docket, skipping (media files and requests are no longer processed)")
                 }
             }
             
-            print("EmailScanningService: Summary - Created: \(createdCount), Skipped: \(skippedCount), Failed: \(failedCount), Interacted: \(interactedCount)")
+            emailScanDebug("EmailScanningService: Summary - Created: \(createdCount), Skipped: \(skippedCount), Failed: \(failedCount), Interacted: \(interactedCount)")
             
-            // Scan completed successfully; update last scan time (so UI and 30s debounce work) and clear cooldown
             lastScanTime = Date()
             clearRateLimitRetryAfter()
             
-            // After scanning emails, check for grabbed replies immediately
-            // (in addition to the periodic check)
             if let grabbedService = notificationCenter.grabbedIndicatorService {
-                print("EmailScanningService: Triggering immediate grabbed reply check...")
+                emailScanDebug("EmailScanningService: Triggering immediate grabbed reply check...")
                 Task {
                     await grabbedService.checkForGrabbedReplies()
                 }
@@ -1548,44 +1335,11 @@ class EmailScanningService: ObservableObject {
         } catch {
             print("EmailScanningService: Error scanning unread emails: \(error.localizedDescription)")
             let errorMessage = error.localizedDescription
-            // Remember rate-limit retry-after so we don't hammer the API (same as scanNow)
             if let retryAfter = parseRetryAfterDate(from: errorMessage) {
-                // #region agent log
-                do {
-                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "setting lastRateLimitRetryAfter", "data": ["retryAfter": retryAfter.timeIntervalSince1970, "now": Date().timeIntervalSince1970], "hypothesisId": "H3"]
-                    if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                        let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                        let url = URL(fileURLWithPath: path)
-                        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                        if let stream = OutputStream(url: url, append: true) {
-                            stream.open()
-                            defer { stream.close() }
-                            let out = (line + "\n").data(using: .utf8)!
-                            _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                        }
-                    }
-                }
-                // #endregion
                 lastRateLimitRetryAfter = retryAfter
                 saveRateLimitRetryAfter(retryAfter)
                 print("EmailScanningService: Rate limited - will retry after \(retryAfter)")
             }
-            // #region agent log
-            do {
-                let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "EmailScanningService", "message": "scanUnreadEmails catch", "data": ["error": errorMessage, "errorType": String(describing: type(of: error))], "hypothesisId": "H5"]
-                if let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) {
-                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                    let url = URL(fileURLWithPath: path)
-                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                    if let stream = OutputStream(url: url, append: true) {
-                        stream.open()
-                        defer { stream.close() }
-                        let out = (line + "\n").data(using: .utf8)!
-                        _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-                    }
-                }
-            }
-            // #endregion
             DispatchQueue.main.async {
                 self.lastError = errorMessage
             }
@@ -1669,14 +1423,14 @@ class EmailScanningService: ObservableObject {
         
         // VALIDATE docket number before creating notification
         if !isValidDocketNumber(docketNumber) {
-            print("EmailScanningService: ❌ REJECTED: Invalid docket number format: '\(docketNumber)' (must be exactly 5 digits, optionally with -US suffix)")
+            emailScanDebug("EmailScanningService: ❌ REJECTED: Invalid docket number format: '\(docketNumber)' (must be exactly 5 digits, optionally with -US suffix)")
             return
         }
         
         // Check if docket already exists
         if let manager = mediaManager,
            manager.dockets.contains("\(docketNumber)_\(jobName)") {
-            print("EmailScanningService: Docket already exists: \(docketNumber)_\(jobName)")
+            emailScanDebug("EmailScanningService: Docket already exists: \(docketNumber)_\(jobName)")
             return
         }
         
@@ -1692,7 +1446,7 @@ class EmailScanningService: ObservableObject {
 
         if existingNotification != nil {
             let threadIdDisplay = message.threadId.isEmpty ? "nil" : message.threadId
-            print("EmailScanningService: Notification already exists for docket \(docketNumber) from email/thread \(message.id)/\(threadIdDisplay)")
+            emailScanDebug("EmailScanningService: Notification already exists for docket \(docketNumber) from email/thread \(message.id)/\(threadIdDisplay)")
             return
         }
 
@@ -1718,7 +1472,7 @@ class EmailScanningService: ObservableObject {
         
         
         notificationCenter.add(notification)
-        print("EmailScanningService: ✅ Created notification for docket \(docketNumber) - \(jobName)")
+        emailScanDebug("EmailScanningService: ✅ Created notification for docket \(docketNumber) - \(jobName)")
         totalDocketsCreated += 1
         
         // Auto-scan for duplicates (Work Picture folder and Simian project)
@@ -1740,7 +1494,7 @@ class EmailScanningService: ObservableObject {
             return
         }
         
-        print("📋 [EmailScanningService] Auto-scanning for duplicates: \(docketNumber)_\(jobName)")
+        emailScanDebug("📋 [EmailScanningService] Auto-scanning for duplicates: \(docketNumber)_\(jobName)")
         
         var workPictureExists = false
         var simianExists = false
@@ -1750,7 +1504,7 @@ class EmailScanningService: ObservableObject {
             let docketName = "\(docketNumber)_\(jobName)"
             workPictureExists = mediaManager.dockets.contains(docketName)
             if workPictureExists {
-                print("📋 [EmailScanningService] ✅ Found existing Work Picture folder: \(docketName)")
+                emailScanDebug("📋 [EmailScanningService] ✅ Found existing Work Picture folder: \(docketName)")
             }
         }
         
@@ -1762,10 +1516,10 @@ class EmailScanningService: ObservableObject {
             do {
                 simianExists = try await simianService.projectExists(docketNumber: docketNumber, jobName: jobName)
                 if simianExists {
-                    print("📋 [EmailScanningService] ✅ Found existing Simian project: \(docketNumber)_\(jobName)")
+                    emailScanDebug("📋 [EmailScanningService] ✅ Found existing Simian project: \(docketNumber)_\(jobName)")
                 }
             } catch {
-                print("📋 [EmailScanningService] ⚠️ Error checking Simian: \(error.localizedDescription)")
+                emailScanDebug("📋 [EmailScanningService] ⚠️ Error checking Simian: \(error.localizedDescription)")
             }
         }
         
@@ -1775,7 +1529,7 @@ class EmailScanningService: ObservableObject {
                 if let nc = notificationCenter,
                    let currentNotification = nc.notifications.first(where: { $0.id == notification.id }) {
                     nc.markAsInWorkPicture(currentNotification, createdByUs: false)
-                    print("📋 [EmailScanningService] Marked notification as pre-existing in Work Picture")
+                    emailScanDebug("📋 [EmailScanningService] Marked notification as pre-existing in Work Picture")
                 }
             }
         }
@@ -1785,7 +1539,7 @@ class EmailScanningService: ObservableObject {
                 if let nc = notificationCenter,
                    let currentNotification = nc.notifications.first(where: { $0.id == notification.id }) {
                     nc.markAsInSimian(currentNotification, createdByUs: false)
-                    print("📋 [EmailScanningService] Marked notification as pre-existing in Simian")
+                    emailScanDebug("📋 [EmailScanningService] Marked notification as pre-existing in Simian")
                 }
             }
         }

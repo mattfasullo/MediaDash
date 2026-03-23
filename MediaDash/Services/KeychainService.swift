@@ -248,7 +248,9 @@ class KeychainService {
         logKeychainOp("migration_COMPLETE", key: "ALL", status: "migrated_\(migratedCount)", hypothesisId: "A")
         // #endregion
         if migratedCount > 0 {
+            #if DEBUG
             print("KeychainService: Migrated \(migratedCount) keychain items to new access control")
+            #endif
         }
     }
 

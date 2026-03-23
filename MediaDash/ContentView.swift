@@ -660,12 +660,16 @@ struct ContentView: View {
         
         // Check if we have an access token
         guard SharedKeychainService.getAsanaAccessToken() != nil else {
+            #if DEBUG
             print("📦 [AutoSync] No Asana access token found, skipping sync")
+            #endif
             return
         }
         
         // Use shared cache if fresh; otherwise sync from Asana API so Job Info stays current
+        #if DEBUG
         print("📦 [AutoSync] Checking cache / syncing from Asana if needed...")
+        #endif
         
         // Only try to use shared cache if configured
         if settings.useSharedCache, let sharedURL = settings.sharedCacheURL, !sharedURL.isEmpty {
@@ -680,14 +684,18 @@ struct ContentView: View {
                         sharedCacheURL: settings.sharedCacheURL,
                         useSharedCache: settings.useSharedCache
                     )
+                    #if DEBUG
                     print("✅ [AutoSync] Loaded from shared cache successfully")
+                    #endif
                 } catch {
                     // Silently fail - shared cache might not be ready yet
                     print("⚠️ [AutoSync] Shared cache not available: \(error.localizedDescription)")
                 }
             }
         } else {
+            #if DEBUG
             print("📦 [AutoSync] Shared cache not configured - external service will handle syncing")
+            #endif
         }
     }
     
@@ -705,7 +713,9 @@ struct ContentView: View {
                     sharedCacheURL: settings.sharedCacheURL,
                     useSharedCache: settings.useSharedCache
                 )
+                #if DEBUG
                 print("✅ [AutoSync] Automatic sync completed successfully")
+                #endif
             } catch {
                 print("⚠️ [AutoSync] Automatic sync failed: \(error.localizedDescription)")
                 // Silently fail - don't show error to user
@@ -720,7 +730,9 @@ struct ContentView: View {
         // Cancel any existing task
         hourlySyncTask?.cancel()
         hourlySyncTask = nil
+        #if DEBUG
         print("📦 [AutoSync] Hourly sync disabled - external service handles syncing")
+        #endif
     }
 
     
@@ -1937,6 +1949,8 @@ struct SearchView: View {
     @State private var selectedFolder: SearchFolder
     @FocusState private var isSearchFieldFocused: Bool
     @FocusState private var isListFocused: Bool
+    /// Drives `NoSelectTextField` AppKit focus (SwiftUI `@FocusState` does not focus `NSViewRepresentable`).
+    @State private var searchFieldFocusToken = 0
     @Environment(\.scenePhase) private var scenePhase
 
     // Cache search results for all folders
@@ -2012,12 +2026,7 @@ struct SearchView: View {
             updateDisplayedResults()
             isSearchFieldFocused = true
             isListFocused = false
-
-            // Aggressively restore focus with delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-                isSearchFieldFocused = true
-                isListFocused = false
-            }
+            requestAppKitSearchFieldFocus()
         }) { isHovered in
             Text(folder.displayName)
                 .font(.system(size: 11))
@@ -2059,7 +2068,8 @@ struct SearchView: View {
                         Task { @MainActor in
                             performSearch()
                         }
-                    }
+                    },
+                    focusRequestToken: searchFieldFocusToken
                 )
                 .padding(10)
 
@@ -2274,6 +2284,7 @@ struct SearchView: View {
             // Set initial focus when view appears
             isSearchFieldFocused = true
             isListFocused = false
+            requestAppKitSearchFieldFocus()
 
             // Perform initial search if there's text (index was pre-built at app startup)
             if !searchText.isEmpty && !manager.isIndexing {
@@ -2285,6 +2296,7 @@ struct SearchView: View {
             if newPhase == .active {
                 isSearchFieldFocused = true
                 isListFocused = false
+                requestAppKitSearchFieldFocus()
             }
         }
         .onChange(of: manager.isIndexing) { oldValue, newValue in
@@ -2292,6 +2304,7 @@ struct SearchView: View {
             if oldValue && !newValue {
                 isSearchFieldFocused = true
                 isListFocused = false
+                requestAppKitSearchFieldFocus()
 
                 // Re-search with existing text if any
                 if !searchText.isEmpty {
@@ -2362,6 +2375,7 @@ struct SearchView: View {
             // Pressing Tab refocuses the search field
             isSearchFieldFocused = true
             isListFocused = false
+            requestAppKitSearchFieldFocus()
             return .handled
         }
         .onKeyPress(.escape) {
@@ -2382,6 +2396,7 @@ struct SearchView: View {
             if isListFocused {
                 isSearchFieldFocused = true
                 isListFocused = false
+                requestAppKitSearchFieldFocus()
                 return .handled
             }
             return .ignored
@@ -2400,6 +2415,7 @@ struct SearchView: View {
                         // Refocus search field
                         isSearchFieldFocused = true
                         isListFocused = false
+                        requestAppKitSearchFieldFocus()
                         // Trigger search with new text
                         performSearch()
                     }
@@ -2408,6 +2424,10 @@ struct SearchView: View {
             }
             return .ignored
         }
+    }
+
+    private func requestAppKitSearchFieldFocus() {
+        searchFieldFocusToken += 1
     }
 
     // MARK: - Helper Methods
@@ -2618,6 +2638,7 @@ struct QuickDocketSearchView: View {
     @State private var asanaError: String?
     @FocusState private var isSearchFocused: Bool
     @FocusState private var isListFocused: Bool
+    @State private var searchFieldFocusToken = 0
     @State private var searchTask: Task<Void, Never>?
     @State private var showSettingsSheet = false
     @State private var showMetadataEditor = false
@@ -2735,6 +2756,7 @@ struct QuickDocketSearchView: View {
             // Pressing Tab refocuses the search field
             isSearchFocused = true
             isListFocused = false
+            requestAppKitSearchFieldFocus()
             return .handled
         }
         .onKeyPress(.return) {
@@ -2756,6 +2778,7 @@ struct QuickDocketSearchView: View {
             if isListFocused {
                 isSearchFocused = true
                 isListFocused = false
+                requestAppKitSearchFieldFocus()
                 return .handled
             }
             return .ignored
@@ -2768,11 +2791,16 @@ struct QuickDocketSearchView: View {
                 if char.isLetter || char.isNumber || (char.isWhitespace && !char.isNewline) || char.isPunctuation {
                     isSearchFocused = true
                     isListFocused = false
+                    requestAppKitSearchFieldFocus()
                     return .handled
                 }
             }
             return .ignored
         }
+    }
+    
+    private func requestAppKitSearchFieldFocus() {
+        searchFieldFocusToken += 1
     }
     
     // MARK: - View Sections
@@ -2791,7 +2819,8 @@ struct QuickDocketSearchView: View {
                 },
                 onTextChange: {
                     performSearch()
-                }
+                },
+                focusRequestToken: searchFieldFocusToken
             )
             .padding(10)
 
@@ -3248,6 +3277,7 @@ struct QuickDocketSearchView: View {
     
     private func handleOnAppear() {
         isSearchFocused = true
+        requestAppKitSearchFieldFocus()
         metadataManager.reloadMetadata()
         
         // Reset auto-selection flag when sheet opens

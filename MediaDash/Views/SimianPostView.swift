@@ -27,6 +27,7 @@ struct SimianPostView: View {
 
     @State private var folderBreadcrumb: [(id: String, name: String)] = []
     @State private var currentFolders: [SimianFolder] = []
+    @State private var currentFiles: [SimianFile] = []
     @State private var isLoadingFolders = false
 
     // Tree view
@@ -56,6 +57,15 @@ struct SimianPostView: View {
     @State private var renameParentFolderId: String?
     @State private var renameCurrentName = ""
     @State private var renameNewName = ""
+
+    // Batch rename
+    @State private var showBatchRenameSheet = false
+    @State private var batchRenameTargets: [BatchRenameTarget] = []
+    @State private var batchRenameMode: BatchRenameMode = .replace
+    @State private var batchRenameFindText = ""
+    @State private var batchRenameValueText = ""
+    @State private var batchRenameError: String?
+    @State private var isBatchRenaming = false
 
     // Delete confirmation
     @State private var showDeleteConfirmation = false
@@ -204,6 +214,7 @@ struct SimianPostView: View {
             updateSimianServiceConfiguration()
         }
         .sheet(isPresented: $showRenameSheet) { renameSheet }
+        .sheet(isPresented: $showBatchRenameSheet) { batchRenameSheet }
         .sheet(isPresented: $showNewFolderSheet) { newFolderSheet }
         .sheet(isPresented: $showNewFolderWithSelectionSheet) { newFolderWithSelectionSheet }
         .alert("Remove from Simian?", isPresented: $showDeleteConfirmation) {
@@ -226,6 +237,29 @@ struct SimianPostView: View {
     }
 
     // MARK: - Keyboard navigation
+
+    private enum BatchRenameMode: String, CaseIterable, Identifiable {
+        case replace
+        case addBefore
+        case addAfter
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .replace: return "Replace"
+            case .addBefore: return "Add Before"
+            case .addAfter: return "Add After"
+            }
+        }
+    }
+
+    private struct BatchRenameTarget: Identifiable {
+        let id: String          // tree id: f-123 or file-123
+        let itemId: String      // raw Simian id
+        let isFolder: Bool
+        let parentFolderId: String?
+        let currentName: String
+    }
 
     private func shouldIgnoreKeyPress(allowSearchFocusInProjectList: Bool = false, allowSearchFocusInProjectView: Bool = false) -> Bool {
         let searchActive = isSimianSearchInputActive
@@ -565,6 +599,7 @@ struct SimianPostView: View {
         selectedProjectName = nil
         folderBreadcrumb = []
         currentFolders = []
+        currentFiles = []
         selectedItemIds.removeAll()
         expandedFolderIds.removeAll()
         folderChildrenCache.removeAll()
@@ -636,6 +671,121 @@ struct SimianPostView: View {
 
     // MARK: - Sheets
 
+    private var batchRenameCanApply: Bool {
+        guard !isBatchRenaming, !batchRenameTargets.isEmpty else { return false }
+        switch batchRenameMode {
+        case .replace:
+            return !batchRenameFindText.isEmpty
+        case .addBefore, .addAfter:
+            return !batchRenameValueText.isEmpty
+        }
+    }
+
+    private func batchRenamedName(from original: String) -> String {
+        switch batchRenameMode {
+        case .replace:
+            guard !batchRenameFindText.isEmpty else { return original }
+            return original.replacingOccurrences(of: batchRenameFindText, with: batchRenameValueText)
+        case .addBefore:
+            return batchRenameValueText + original
+        case .addAfter:
+            return original + batchRenameValueText
+        }
+    }
+
+    private func batchRenamePreviewRows(limit: Int = 10) -> [(String, String)] {
+        batchRenameTargets.prefix(limit).map { target in
+            (target.currentName, batchRenamedName(from: target.currentName))
+        }
+    }
+
+    private var batchRenameSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Batch Rename")
+                .font(.headline)
+            Text("Rename \(batchRenameTargets.count) selected item(s).")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Picker("Mode", selection: $batchRenameMode) {
+                ForEach(BatchRenameMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if batchRenameMode == .replace {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Find text", text: $batchRenameFindText)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Replace with", text: $batchRenameValueText)
+                        .textFieldStyle(.roundedBorder)
+                }
+            } else {
+                TextField(batchRenameMode == .addBefore ? "Text to add before" : "Text to add after", text: $batchRenameValueText)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            let rows = batchRenamePreviewRows()
+            if !rows.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Preview")
+                        .font(.subheadline)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                                HStack {
+                                    Text(row.0)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .foregroundStyle(.secondary)
+                                    Image(systemName: "arrow.right")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Text(row.1)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                .font(.caption)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 180)
+                }
+            }
+
+            if let err = batchRenameError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Button("Cancel") {
+                    if !isBatchRenaming {
+                        showBatchRenameSheet = false
+                        batchRenameError = nil
+                    }
+                }
+                .keyboardShortcut(.cancelAction)
+                .disabled(isBatchRenaming)
+                Spacer()
+                Button("Apply") {
+                    submitBatchRename()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!batchRenameCanApply)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
+        .onAppear {
+            batchRenameError = nil
+            isBatchRenaming = false
+        }
+    }
+
     private var renameSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(renameIsFolder ? "Rename Folder" : "Rename File").font(.headline)
@@ -686,6 +836,77 @@ struct SimianPostView: View {
     }
 
     // MARK: - Submit actions
+
+    private func submitBatchRename() {
+        guard let projectId = selectedProjectId else { return }
+        isBatchRenaming = true
+        batchRenameError = nil
+        let targets = batchRenameTargets
+        let mode = batchRenameMode
+        let findText = batchRenameFindText
+        let valueText = batchRenameValueText
+        Task {
+            var renamedCount = 0
+            var skippedCount = 0
+            var failures: [String] = []
+
+            for target in targets {
+                let newName: String
+                switch mode {
+                case .replace:
+                    if findText.isEmpty {
+                        newName = target.currentName
+                    } else {
+                        newName = target.currentName.replacingOccurrences(of: findText, with: valueText)
+                    }
+                case .addBefore:
+                    newName = valueText + target.currentName
+                case .addAfter:
+                    newName = target.currentName + valueText
+                }
+                if newName == target.currentName {
+                    skippedCount += 1
+                    continue
+                }
+                if newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    failures.append("\"\(target.currentName)\" became empty")
+                    continue
+                }
+                do {
+                    if target.isFolder {
+                        try await simianService.renameFolder(projectId: projectId, folderId: target.itemId, newName: newName)
+                        await MainActor.run {
+                            applyFolderRename(folderId: target.itemId, parentFolderId: target.parentFolderId, newName: newName)
+                        }
+                    } else {
+                        try await simianService.renameFile(projectId: projectId, fileId: target.itemId, newName: newName)
+                        await MainActor.run {
+                            applyFileRename(fileId: target.itemId, parentFolderId: target.parentFolderId, newName: newName)
+                        }
+                    }
+                    renamedCount += 1
+                } catch {
+                    failures.append(target.currentName)
+                }
+            }
+
+            await MainActor.run {
+                isBatchRenaming = false
+                if failures.isEmpty {
+                    showBatchRenameSheet = false
+                    let skippedPart = skippedCount > 0 ? " (\(skippedCount) unchanged)" : ""
+                    statusMessage = "Renamed \(renamedCount) item(s)\(skippedPart)"
+                    statusIsError = false
+                } else {
+                    let firstFew = failures.prefix(3).joined(separator: ", ")
+                    let extra = failures.count > 3 ? ", ..." : ""
+                    batchRenameError = "Could not rename \(failures.count) item(s): \(firstFew)\(extra)"
+                    statusMessage = "Batch rename completed with errors"
+                    statusIsError = true
+                }
+            }
+        }
+    }
 
     private func submitNewFolder() {
         let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1037,6 +1258,7 @@ struct SimianPostView: View {
 
     private func openProject(_ project: SimianProject) {
         selectedProjectId = project.id; selectedProjectName = project.name; folderBreadcrumb = []
+        currentFiles = []
         selectedItemIds.removeAll(); expandedFolderIds.removeAll(); folderChildrenCache.removeAll(); folderFilesCache.removeAll()
         loadFolders(projectId: project.id, parentFolderId: nil)
     }
@@ -1046,6 +1268,7 @@ struct SimianPostView: View {
             HStack(spacing: 8) {
                 Button(action: {
                     selectedProjectId = nil; selectedProjectName = nil; folderBreadcrumb = []; currentFolders = []
+                    currentFiles = []
                     selectedItemIds.removeAll(); expandedFolderIds.removeAll(); folderChildrenCache.removeAll(); folderFilesCache.removeAll()
                 }) { Label("Back to projects", systemImage: "chevron.left").font(.caption) }.buttonStyle(.borderless)
                 Text("\u{2192}").font(.caption).foregroundStyle(.secondary)
@@ -1180,6 +1403,9 @@ struct SimianPostView: View {
             Divider()
             Button("New Folder with Selection") { startNewFolderWithSelection(projectId: projectId, treeList: treeList, rightClickedId: "f-\(folder.id)") }
             Button("New Folder") { newFolderParentId = folder.id; newFolderName = ""; showNewFolderSheet = true }
+            Button(batchRenameMenuLabel(for: "f-\(folder.id)")) {
+                startBatchRename(treeList: treeList, rightClickedId: "f-\(folder.id)")
+            }
             Button("Rename\u{2026}") {
                 renameIsFolder = true; renameItemId = folder.id; renameParentFolderId = parentFolderId
                 renameCurrentName = folder.name; renameNewName = folder.name; showRenameSheet = true
@@ -1211,6 +1437,9 @@ struct SimianPostView: View {
         )
         .contextMenu {
             Button("New Folder with Selection") { startNewFolderWithSelection(projectId: selectedProjectId ?? "", treeList: treeList, rightClickedId: "file-\(file.id)") }
+            Button(batchRenameMenuLabel(for: "file-\(file.id)")) {
+                startBatchRename(treeList: treeList, rightClickedId: "file-\(file.id)")
+            }
             Button("Rename\u{2026}") {
                 renameIsFolder = false; renameItemId = file.id; renameParentFolderId = parentFolderId
                 renameCurrentName = file.title; renameNewName = file.title; showRenameSheet = true
@@ -1245,6 +1474,48 @@ struct SimianPostView: View {
         newFolderWithSelectionName = "New Folder"
         newFolderWithSelectionError = nil
         showNewFolderWithSelectionSheet = true
+    }
+
+    private func batchRenameMenuLabel(for rightClickedId: String) -> String {
+        if selectedItemIds.contains(rightClickedId), selectedItemIds.count > 1 {
+            return "Batch Rename Selected…"
+        }
+        return "Batch Rename…"
+    }
+
+    private func startBatchRename(treeList: [SimianTreeItem], rightClickedId: String) {
+        let ids = (selectedItemIds.contains(rightClickedId) && selectedItemIds.count > 1)
+            ? Array(selectedItemIds)
+            : [rightClickedId]
+        let mapped: [BatchRenameTarget] = ids.compactMap { id in
+            guard let item = treeList.first(where: { $0.id == id }) else { return nil }
+            switch item {
+            case .folder(let folder, _, _, let parentId):
+                return BatchRenameTarget(
+                    id: id,
+                    itemId: folder.id,
+                    isFolder: true,
+                    parentFolderId: parentId,
+                    currentName: folder.name
+                )
+            case .file(let file, _, _, let parentId):
+                return BatchRenameTarget(
+                    id: id,
+                    itemId: file.id,
+                    isFolder: false,
+                    parentFolderId: parentId,
+                    currentName: file.title
+                )
+            }
+        }
+        guard !mapped.isEmpty else { return }
+        batchRenameTargets = mapped
+        batchRenameMode = .replace
+        batchRenameFindText = ""
+        batchRenameValueText = ""
+        batchRenameError = nil
+        isBatchRenaming = false
+        showBatchRenameSheet = true
     }
 
     // MARK: - Multi-item reorder
@@ -1393,8 +1664,27 @@ struct SimianPostView: View {
     private func loadFolders(projectId: String, parentFolderId: String?) {
         isLoadingFolders = true
         Task {
-            do { let folders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: parentFolderId); await MainActor.run { currentFolders = folders; isLoadingFolders = false } }
-            catch { await MainActor.run { currentFolders = []; isLoadingFolders = false } }
+            do {
+                async let foldersTask = simianService.getProjectFolders(projectId: projectId, parentFolderId: parentFolderId)
+                let files: [SimianFile]
+                if let folderId = parentFolderId {
+                    files = try await simianService.getProjectFiles(projectId: projectId, folderId: folderId)
+                } else {
+                    files = []
+                }
+                let folders = try await foldersTask
+                await MainActor.run {
+                    currentFolders = folders
+                    currentFiles = files
+                    isLoadingFolders = false
+                }
+            } catch {
+                await MainActor.run {
+                    currentFolders = []
+                    currentFiles = []
+                    isLoadingFolders = false
+                }
+            }
         }
     }
 
@@ -1423,7 +1713,11 @@ struct SimianPostView: View {
     private func flatTreeList(projectId: String) -> [SimianTreeItem] {
         var result: [SimianTreeItem] = []
         enum StackItem { case folders([SimianFolder], Int, String, String?); case files([SimianFile], Int, String, String?) }
-        var stack: [StackItem] = [.folders(currentFolders, 0, "", nil)]
+        var stack: [StackItem] = []
+        if !currentFiles.isEmpty {
+            stack.append(.files(currentFiles, 0, "", currentParentFolderId))
+        }
+        stack.append(.folders(currentFolders, 0, "", nil))
         while !stack.isEmpty && result.count < maxTotalTreeRows {
             switch stack.removeLast() {
             case .folders(let folders, let depth, let pathPrefix, let parentId):

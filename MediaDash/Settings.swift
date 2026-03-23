@@ -502,6 +502,15 @@ struct ProducerRecentProject: Codable, Equatable, Hashable, Identifiable {
     var id: String { projectGid }
 }
 
+// MARK: - Staging clear after filing
+
+/// How the staging area is cleared after a successful prep/work picture filing job.
+enum StagingClearAfterFilingMode: String, Codable, CaseIterable, Equatable {
+    case never
+    case immediately
+    case afterDelay
+}
+
 // MARK: - Settings Model
 
 struct AppSettings: Codable, Equatable {
@@ -579,6 +588,12 @@ struct AppSettings: Codable, Equatable {
     var openWorkPictureFolderWhenDone: Bool
     /// When true, clear the staging area after video conversion finishes (all jobs done).
     var clearStagingWhenDone: Bool?
+    /// When not `false`, clear the staging area after prep/work picture filing completes successfully. `nil` means default (clear). Legacy; prefer `stagingClearAfterFilingMode`.
+    var clearStagingAfterFiling: Bool?
+    /// How to clear staging after filing. `nil` means migrate from `clearStagingAfterFiling`.
+    var stagingClearAfterFilingMode: StagingClearAfterFilingMode?
+    /// Minutes to wait after filing succeeds before clearing staging when mode is `afterDelay`. Clamped when applied.
+    var stagingClearDelayMinutes: Int?
 
     // CSV Column Names
     var csvDocketColumn: String
@@ -752,6 +767,9 @@ struct AppSettings: Codable, Equatable {
             openPrepFolderWhenDone: true,
             openWorkPictureFolderWhenDone: true,
             clearStagingWhenDone: false,
+            clearStagingAfterFiling: nil,
+            stagingClearAfterFilingMode: nil,
+            stagingClearDelayMinutes: 5,
             csvDocketColumn: "Docket",
             csvProjectTitleColumn: "Licensor/Project Title",
             csvClientColumn: "Client",
@@ -840,6 +858,21 @@ struct AppSettings: Codable, Equatable {
             composerInitials: AppSettings.defaultComposerInitials, // Preset out of the box; user can edit in Settings
             displayNameForInitials: AppSettings.defaultDisplayNameForInitials
         )
+    }
+}
+
+extension AppSettings {
+    /// Effective staging clear mode (legacy `clearStagingAfterFiling` when `stagingClearAfterFilingMode` is nil).
+    var resolvedStagingClearAfterFilingMode: StagingClearAfterFilingMode {
+        if let stagingClearAfterFilingMode { return stagingClearAfterFilingMode }
+        if clearStagingAfterFiling == false { return .never }
+        return .immediately
+    }
+
+    /// Clamped delay for timer mode (default 5 minutes).
+    var resolvedStagingClearDelayMinutes: Int {
+        let v = stagingClearDelayMinutes ?? 5
+        return min(max(v, 1), 24 * 60)
     }
 }
 

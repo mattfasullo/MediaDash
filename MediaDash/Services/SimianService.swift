@@ -138,7 +138,9 @@ class SimianService: ObservableObject {
     
     /// Authenticate with Simian API (two-step process)
     private func authenticate() async throws {
-        print("🔐 SimianService.authenticate() called")
+        #if DEBUG
+        print("🔐 SimianService: Authenticating…")
+        #endif
         guard let baseURLString = baseURL, !baseURLString.isEmpty,
               let base = URL(string: baseURLString) else {
             print("❌ SimianService.authenticate() failed: Not configured (no baseURL)")
@@ -151,23 +153,19 @@ class SimianService: ObservableObject {
             throw SimianError.notConfigured
         }
         
-        print("🔐 SimianService.authenticate() Step 1: Getting auth_key from \(baseURLString)")
-        
         // Step 1: Get session auth_key
         let setupURL = base.appendingPathComponent("prjacc")
         var setupRequest = URLRequest(url: setupURL)
         setupRequest.httpMethod = "POST"
         setupRequest.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         
-        print("🔐 SimianService.authenticate() Sending setup request to: \(setupURL.absoluteString)")
         let (setupData, setupResponse) = try await session.data(for: setupRequest)
         
+        #if DEBUG
         if let httpResponse = setupResponse as? HTTPURLResponse {
-            print("🔐 SimianService.authenticate() Setup response status: \(httpResponse.statusCode)")
+            print("🔐 SimianService: Setup HTTP \(httpResponse.statusCode)")
         }
-        
-        let setupResponseString = String(data: setupData, encoding: .utf8) ?? "Unable to decode as string"
-        print("🔐 SimianService.authenticate() Setup raw response: \(setupResponseString.prefix(500))")
+        #endif
         
         guard let setupHttpResponse = setupResponse as? HTTPURLResponse,
               (200...299).contains(setupHttpResponse.statusCode) else {
@@ -209,15 +207,16 @@ class SimianService: ObservableObject {
             .joined(separator: "&")
             .data(using: .utf8)
         
-        print("🔐 SimianService.authenticate() Step 2: Logging in with username: \(username)")
+        #if DEBUG
+        print("🔐 SimianService: Logging in as \(username)…")
+        #endif
         let (loginData, loginResponse) = try await session.data(for: loginRequest)
         
+        #if DEBUG
         if let httpResponse = loginResponse as? HTTPURLResponse {
-            print("🔐 SimianService.authenticate() Login response status: \(httpResponse.statusCode)")
+            print("🔐 SimianService: Login HTTP \(httpResponse.statusCode)")
         }
-        
-        let loginResponseString = String(data: loginData, encoding: .utf8) ?? "Unable to decode as string"
-        print("🔐 SimianService.authenticate() Login raw response: \(loginResponseString.prefix(500))")
+        #endif
         
         guard let loginHttpResponse = loginResponse as? HTTPURLResponse,
               (200...299).contains(loginHttpResponse.statusCode) else {
@@ -232,7 +231,7 @@ class SimianService: ObservableObject {
         } catch {
             let responseString = String(data: loginData, encoding: .utf8) ?? "Unable to decode as string"
             print("❌ SimianService.authenticate() failed to decode login response: \(error.localizedDescription)")
-            print("   Raw login response: \(responseString)")
+            print("   Raw login response (truncated): \(String(responseString.prefix(200)))")
             throw SimianError.apiError("Failed to parse login response: \(error.localizedDescription). Response: \(responseString.prefix(200))")
         }
         guard loginResponseObj.root.status == "success",
@@ -245,31 +244,9 @@ class SimianService: ObservableObject {
         
         self.authToken = authToken
         
-        // #region agent log
-        let logDataAuth: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "F",
-            "location": "SimianService.swift:180",
-            "message": "Login response parsed",
-            "data": [
-                "hasToken": !authToken.isEmpty,
-                "projectAccess": loginResponseObj.root.payload?.project_access ?? "nil",
-                "addProjects": loginResponseObj.root.payload?.add_projects?.description ?? "nil",
-                "userId": loginResponseObj.root.payload?.user_id ?? "nil"
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logDataAuth)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
-        
-        print("✅ SimianService: Successfully authenticated")
+        #if DEBUG
+        print("✅ SimianService: Authenticated as \(username)")
+        #endif
     }
     
     /// Ensure we're authenticated before making API calls
@@ -522,7 +499,6 @@ class SimianService: ObservableObject {
         }
         
         let endpointURL = base.appendingPathComponent("get_project_info").appendingPathComponent(projectId)
-        print("   getProjectInfo endpoint: \(endpointURL.absoluteString)")
         
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"

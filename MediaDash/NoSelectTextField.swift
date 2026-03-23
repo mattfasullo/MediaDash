@@ -49,6 +49,8 @@ struct NoSelectTextField: NSViewRepresentable {
     var onEditingBegan: (() -> Void)? = nil
     var onEditingEnded: (() -> Void)? = nil
     var onNativeFirstResponderChange: ((Bool) -> Void)? = nil
+    /// Increment to request keyboard focus on the NSTextField (SwiftUI `.focused` does not apply to AppKit representables).
+    var focusRequestToken: Int = 0
 
     private static let debugLogPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-simian-keyfocus.log"
 
@@ -137,6 +139,20 @@ struct NoSelectTextField: NSViewRepresentable {
                 }
             }
         }
+
+        if focusRequestToken > 0, focusRequestToken != context.coordinator.lastAppliedFocusRequestToken {
+            context.coordinator.lastAppliedFocusRequestToken = focusRequestToken
+            let field = nsView
+            DispatchQueue.main.async {
+                if let window = field.window {
+                    _ = window.makeFirstResponder(field)
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        _ = field.window?.makeFirstResponder(field)
+                    }
+                }
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -145,6 +161,7 @@ struct NoSelectTextField: NSViewRepresentable {
 
     class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: NoSelectTextField
+        var lastAppliedFocusRequestToken: Int = 0
 
         init(_ parent: NoSelectTextField) {
             self.parent = parent

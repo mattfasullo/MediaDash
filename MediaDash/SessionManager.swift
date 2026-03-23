@@ -210,7 +210,9 @@ class SessionManager: ObservableObject {
         updatedProfile.lastAccessedAt = Date()
         saveProfile(updatedProfile)
                             syncStatus = .synced
+                            #if DEBUG
                             print("SessionManager: Settings in sync, no changes needed")
+                            #endif
                         }
                         
                         lastSyncError = nil
@@ -520,7 +522,9 @@ class SessionManager: ObservableObject {
             
             let data = try Data(contentsOf: settingsURL)
             let settings = try JSONDecoder().decode(AppSettings.self, from: data)
+            #if DEBUG
             print("SessionManager: Successfully loaded settings from \(settingsFile) (modified: \(modificationDate))")
+            #endif
             return (settings, modificationDate)
         } catch {
             print("SessionManager: Failed to load settings from shared storage: \(error.localizedDescription)")
@@ -612,7 +616,9 @@ class SessionManager: ObservableObject {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(profile.settings)
             try data.write(to: settingsURL)
+            #if DEBUG
             print("SessionManager: Successfully saved settings to \(settingsFile)")
+            #endif
             return true
         } catch {
             print("SessionManager: Failed to save settings to shared storage: \(error.localizedDescription)")

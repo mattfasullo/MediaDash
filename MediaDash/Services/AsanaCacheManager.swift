@@ -59,6 +59,11 @@ class AsanaCacheManager: ObservableObject {
     private var lastSharedCacheError: String?
     private var lastEmptyFileCheck: Date?
     
+    /// DEBUG-only: last `newStatus` we logged (avoids spam because `cacheStatus` updates asynchronously).
+    private var lastDebugLoggedCacheStatus: CacheStatus = .unknown
+    /// DEBUG-only: avoids logging every `reloadLastSyncDate()` when the value is unchanged.
+    private var lastDebugLoggedLastSyncDate: Date?
+    
     // Date formatter for YYYY-MM-DD comparison
     private static let dateOnlyFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -496,8 +501,8 @@ class AsanaCacheManager: ObservableObject {
         }
         
         #if DEBUG
-        let statusChanged = newStatus != cacheStatus
-        if statusChanged {
+        if newStatus != lastDebugLoggedCacheStatus {
+            lastDebugLoggedCacheStatus = newStatus
             switch newStatus {
             case .serverConnectedUsingShared:
                 print("🟢 [Cache Status] Server connected, using shared cache")
@@ -735,10 +740,14 @@ class AsanaCacheManager: ObservableObject {
            let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
             lastSyncDate = cached.lastSync
             #if DEBUG
-            print("🔄 [Cache] Reloaded lastSyncDate from shared cache: \(cached.lastSync)")
+            if lastDebugLoggedLastSyncDate != cached.lastSync {
+                lastDebugLoggedLastSyncDate = cached.lastSync
+                print("🔄 [Cache] Reloaded lastSyncDate from shared cache: \(cached.lastSync)")
+            }
             #endif
         } else {
             lastSyncDate = nil
+            lastDebugLoggedLastSyncDate = nil
         }
     }
     

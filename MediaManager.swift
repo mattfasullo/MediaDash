@@ -1317,6 +1317,8 @@ class MediaManager: ObservableObject {
     private var conversionMonitoringTask: Task<Void, Never>? // Track conversion monitoring task for cleanup
     private var prepSummaryRegenerationTask: Task<Void, Never>? // Track prep summary regeneration to cancel previous ones
     private var prepSummaryRegenerationWorkItem: DispatchWorkItem? // For debouncing watcher events
+    /// Scheduled clear of staging after successful filing when using delayed mode (starts only after filing completes).
+    private var pendingStagingClearWorkItem: DispatchWorkItem?
 
     init(settingsManager: SettingsManager, metadataManager: DocketMetadataManager) {
         self.config = AppConfig(settings: settingsManager.currentSettings)
@@ -1652,11 +1654,37 @@ class MediaManager: ObservableObject {
     }
     
     func clearFiles() {
+        cancelPendingStagingClearTimer()
         selectedFiles.removeAll()
         // Clean up progress tracking when files are cleared
         fileProgress.removeAll()
         fileCompletionState.removeAll()
         conversionProgress.removeAll()
+    }
+
+    private func cancelPendingStagingClearTimer() {
+        pendingStagingClearWorkItem?.cancel()
+        pendingStagingClearWorkItem = nil
+    }
+
+    private func applyStagingClearAfterSuccessfulFiling() {
+        let mode = config.settings.resolvedStagingClearAfterFilingMode
+        switch mode {
+        case .never:
+            break
+        case .immediately:
+            clearFiles()
+        case .afterDelay:
+            cancelPendingStagingClearTimer()
+            let minutes = config.settings.resolvedStagingClearDelayMinutes
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingStagingClearWorkItem = nil
+                self.clearFiles()
+            }
+            pendingStagingClearWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + TimeInterval(minutes * 60), execute: work)
+        }
     }
 
     func removeFile(withId id: UUID) {
@@ -1670,6 +1698,7 @@ class MediaManager: ObservableObject {
     func cancelProcessing() {
         cancelRequested = true
         statusMessage = "Cancelling..."
+        cancelPendingStagingClearTimer()
         
         // Cancel any ongoing conversion monitoring
         conversionMonitoringTask?.cancel()
@@ -1699,6 +1728,7 @@ class MediaManager: ObservableObject {
         }
 
         cancelRequested = false
+        cancelPendingStagingClearTimer()
         isProcessing = true; progress = 0; statusMessage = "Starting..."
         fileProgress.removeAll() // Clear any previous progress
         fileCompletionState.removeAll() // Clear completion states
@@ -2212,6 +2242,7 @@ class MediaManager: ObservableObject {
                             NSWorkspace.shared.open(wpFolder)
                         }
                     }
+                    self.applyStagingClearAfterSuccessfulFiling()
                 } else {
                     self.statusMessage = "Completed with \(finalFailedFiles.count) error(s)"
                     self.errorMessage = "Failed to copy these files:\n\(finalFailedFiles.joined(separator: "\n"))"

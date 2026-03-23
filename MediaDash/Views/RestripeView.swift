@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 struct RestripeView: View {
     @StateObject private var config = RestripeConfig()
     @State private var selectedUnassigned: Set<URL> = []
+    @State private var selectedPictureURL: URL?
     @State private var selectedAssignmentIds: Set<UUID> = []
     @State private var selectionAnchorId: UUID?
     @State private var isCreating = false
@@ -27,6 +28,8 @@ struct RestripeView: View {
     @State private var ffmpegAvailable = true
     @State private var showBatchRename = false
     @State private var audioListHeight: CGFloat = 220
+    /// Highlights the assignments column when dragging; also pins `onDrop` to the `[NSItemProvider]` perform overload (not `DropDelegate`).
+    @State private var assignmentsColumnDropTargeted = false
 
     private enum StatusType { case info, success, error }
 
@@ -35,25 +38,25 @@ struct RestripeView: View {
     private static let audioTypes: [UTType] = [.audio, .data]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                if !ffmpegAvailable { ffmpegBanner }
+        VStack(alignment: .leading, spacing: 0) {
+            if !ffmpegAvailable { ffmpegBanner }
 
-                VStack(alignment: .leading, spacing: 28) {
-                    header
-                    picturesSection
-                    Divider()
-                    linkSection
-                    Divider()
-                    outputSection
-                    Divider()
-                    summaryAndAction
-                }
-                .padding(28)
+            VStack(alignment: .leading, spacing: 20) {
+                header
+                linkingWorkspace
+                outputSection
+                summaryAndAction
             }
+            .padding(24)
         }
-        .frame(minWidth: 680, minHeight: 620)
-        .onAppear { checkFFmpeg() }
+        .frame(minWidth: 980, minHeight: 640)
+        .onAppear {
+            checkFFmpeg()
+            ensureSelectedPicture()
+        }
+        .onChange(of: config.pictures) { _, _ in
+            ensureSelectedPicture()
+        }
         .onExitCommand {
             selectedUnassigned = []
             selectedAssignmentIds = []
@@ -92,6 +95,26 @@ struct RestripeView: View {
         config.assignments.filter { selectedAssignmentIds.contains($0.id) }
     }
 
+    private var selectedPictureAssignments: [RestripeAssignment] {
+        guard let selectedPictureURL else { return [] }
+        return config.assignments(for: selectedPictureURL)
+    }
+
+    private var canLinkSelectionToPicture: Bool {
+        selectedPictureURL != nil && !selectedUnassigned.isEmpty
+    }
+
+    private func ensureSelectedPicture() {
+        guard !config.pictures.isEmpty else {
+            selectedPictureURL = nil
+            return
+        }
+        if let selectedPictureURL, config.pictures.contains(selectedPictureURL) {
+            return
+        }
+        selectedPictureURL = config.pictures.first
+    }
+
     // MARK: - FFmpeg banner
 
     private var ffmpegBanner: some View {
@@ -126,76 +149,362 @@ struct RestripeView: View {
             Text("Restriping")
                 .font(.title)
                 .fontWeight(.bold)
-            Text("Drag audio files onto pictures to link them. Each output is trimmed to the shorter duration.")
+            Text("Use Add in each column or click the dashed area to import. Drag from Finder still works everywhere.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: - Pictures section
-
-    private var picturesSection: some View {
+    private var linkingWorkspace: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("1. Pictures / Videos")
-                .font(.headline)
-            ScrollView(.horizontal, showsIndicators: true) {
-                HStack(alignment: .top, spacing: 12) {
-                    if config.pictures.isEmpty {
-                        picturesEmptyDropZone
-                    }
-                    ForEach(Array(config.pictures.enumerated()), id: \.element) { index, url in
-                        PictureCard(
-                            url: url,
-                            config: config,
-                            outputFormat: config.outputFormat,
-                            selectedIds: $selectedAssignmentIds,
-                            selectionAnchorId: $selectionAnchorId,
-                            onRemovePicture: { config.pictures.remove(at: index); config.assignments.removeAll { $0.pictureURL == url } },
-                            onDropAudio: { urls in linkAudio(urls, to: url) },
-                            onBatchRename: { ids in
-                                selectedAssignmentIds = Set(ids)
-                                showBatchRename = true
-                            }
-                        )
-                    }
-                    Button {
-                        FilePickerService.chooseFiles(allowedTypes: Self.videoTypes, allowsMultiple: true) { urls in
-                            config.pictures.append(contentsOf: urls)
-                        }
-                    } label: {
-                        VStack(spacing: 8) {
-                            Image(systemName: "plus.circle.dashed")
-                                .font(.title)
-                            Text("Add videos")
-                                .font(.caption)
-                        }
-                        .frame(width: 120, height: 120)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.accentColor)
-                }
-                .padding(.vertical, 4)
+            HStack(alignment: .top, spacing: 16) {
+                audioPoolColumn
+                picturesColumn
+                assignmentsColumn
             }
+            Button {
+                linkSelectedAudioToSelectedPicture()
+            } label: {
+                Label("Link selected audio to the chosen picture", systemImage: "link")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!canLinkSelectionToPicture)
+        }
+    }
+
+    private var audioPoolColumn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("1. Audio pool")
+                    .font(.headline)
+                Spacer()
+                if !selectedUnassigned.isEmpty {
+                    Button("Remove selected", role: .destructive) {
+                        config.unassignedAudio.removeAll { selectedUnassigned.contains($0) }
+                        selectedUnassigned = []
+                    }
+                }
+                Button(action: addAudioFromPicker) {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+            }
+            UnassignedAudioList(
+                urls: config.unassignedAudio,
+                selected: $selectedUnassigned,
+                height: $audioListHeight,
+                onAdd: addAudioFromPicker,
+                onDrop: { urls in linkDroppedUnassigned(urls) }
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func addAudioFromPicker() {
+        FilePickerService.chooseFiles(allowedTypes: Self.audioTypes, allowsMultiple: true) { urls in
+            let existingPaths = Set(config.unassignedAudio.map(\.path) + config.assignments.map { $0.audioURL.path })
+            let newUrls = urls.filter { !existingPaths.contains($0.path) }
+            if !newUrls.isEmpty {
+                config.unassignedAudio = config.unassignedAudio + newUrls
+            }
+        }
+    }
+
+    private func addVideosFromPicker() {
+        FilePickerService.chooseFiles(allowedTypes: Self.videoTypes, allowsMultiple: true) { urls in
+            let existingPaths = Set(config.pictures.map(\.path))
+            let newUrls = urls.filter { !existingPaths.contains($0.path) }
+            if !newUrls.isEmpty {
+                config.pictures.append(contentsOf: newUrls)
+            }
+        }
+    }
+
+    private var picturesColumn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("2. Pictures / Videos")
+                    .font(.headline)
+                Spacer()
+                Button(action: addVideosFromPicker) {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    picturesColumnRows
+                }
+                .padding(.vertical, 2)
+            }
+            .frame(maxHeight: .infinity)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private var picturesColumnRows: some View {
+        if config.pictures.isEmpty {
+            picturesEmptyDropZone
+                .frame(maxWidth: .infinity)
+        } else {
+            ForEach(config.pictures, id: \.self) { pictureURL in
+                pictureSelectionRow(for: pictureURL)
+            }
+        }
+    }
+
+    private func pictureSelectionRow(for pictureURL: URL) -> some View {
+        let linked = config.assignments(for: pictureURL).count
+        return PictureSelectionRow(
+            url: pictureURL,
+            isSelected: selectedPictureURL == pictureURL,
+            linkedCount: linked,
+            onSelect: {
+                selectedPictureURL = pictureURL
+                selectedAssignmentIds = []
+            },
+            onDropAudio: { urls in
+                selectedPictureURL = pictureURL
+                linkAudio(urls, to: pictureURL)
+            },
+            onRemove: { removePicture(pictureURL) }
+        )
+    }
+
+    private func removePicture(_ pictureURL: URL) {
+        config.pictures.removeAll { $0 == pictureURL }
+        let removedAssignments = config.assignments.filter { $0.pictureURL == pictureURL }
+        config.assignments.removeAll { $0.pictureURL == pictureURL }
+        for assignment in removedAssignments {
+            if !config.unassignedAudio.contains(where: { $0.path == assignment.audioURL.path }) {
+                config.unassignedAudio.append(assignment.audioURL)
+            }
+        }
+        selectedAssignmentIds = []
+        ensureSelectedPicture()
+    }
+
+    private var assignmentsColumn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            assignmentsColumnHeader
+            assignmentsColumnBody
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var assignmentsColumnHeader: some View {
+        HStack {
+            Text("3. Linked to selected picture")
+                .font(.headline)
+            Spacer()
+            if selectedPictureAssignments.count >= 2 {
+                Button("Batch Rename") {
+                    let ids = selectedPictureAssignments.map(\.id)
+                    let selectedInPicture = Set(ids).intersection(selectedAssignmentIds)
+                    selectedAssignmentIds = selectedInPicture.count >= 2 ? selectedInPicture : Set(ids)
+                    showBatchRename = true
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var assignmentsColumnBody: some View {
+        if let url = selectedPictureURL {
+            selectedPictureAssignmentsPanel(pictureURL: url)
+        } else {
+            assignmentsColumnEmptyState
+        }
+    }
+
+    private var assignmentsColumnEmptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "link.circle")
+                .font(.system(size: 32))
+                .foregroundStyle(.secondary)
+            Text("Choose a video in the middle column first. Then you can drop audio here or use Link below.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func selectedPictureAssignmentsPanel(pictureURL: URL) -> some View {
+        let assignments = config.assignments(for: pictureURL)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(pictureURL.lastPathComponent)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if assignments.isEmpty {
+                selectedPictureAssignmentsEmptyHint
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        linkedAudioRowsForSelectedPicture(assignments: assignments)
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .onDrop(
+            of: [.fileURL, .url, UTType.json],
+            isTargeted: $assignmentsColumnDropTargeted
+        ) { providers in
+            handleSelectedPictureDrop(providers: providers)
+        }
+    }
+
+    @ViewBuilder
+    private func linkedAudioRowsForSelectedPicture(assignments: [RestripeAssignment]) -> some View {
+        ForEach(Array(assignments.enumerated()), id: \.element.id) { index, assignment in
+            LinkedAudioRow(
+                assignment: assignment,
+                config: config,
+                outputFormat: config.outputFormat,
+                isSelected: selectedAssignmentIds.contains(assignment.id),
+                assignmentCount: assignments.count,
+                onSelectRow: { handleLinkedAudioSelectionForSelectedPicture(at: index) },
+                onRemove: { removeLinkedAssignment(assignment) },
+                onBatchRename: { prepareBatchRenameForAssignments(assignments) }
+            )
+        }
+    }
+
+    private func removeLinkedAssignment(_ assignment: RestripeAssignment) {
+        config.assignments.removeAll { $0.id == assignment.id }
+        if !config.unassignedAudio.contains(where: { $0.path == assignment.audioURL.path }) {
+            config.unassignedAudio.append(assignment.audioURL)
+        }
+        selectedAssignmentIds.remove(assignment.id)
+    }
+
+    private func prepareBatchRenameForAssignments(_ assignments: [RestripeAssignment]) {
+        let ids = assignments.map(\.id)
+        let selectedInPicture = Set(ids).intersection(selectedAssignmentIds)
+        selectedAssignmentIds = selectedInPicture.count >= 2 ? selectedInPicture : Set(ids)
+        showBatchRename = true
+    }
+
+    private var selectedPictureAssignmentsEmptyHint: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "arrow.left.and.right.circle")
+                .font(.system(size: 32))
+                .foregroundStyle(.secondary)
+            Text("Drag audio here or use “Link selected audio” below.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+
+    private func linkSelectedAudioToSelectedPicture() {
+        guard let selectedPictureURL, !selectedUnassigned.isEmpty else { return }
+        let urls = config.unassignedAudio.filter { selectedUnassigned.contains($0) }
+        linkAudio(urls, to: selectedPictureURL)
+        selectedUnassigned = []
+    }
+
+    private func handleSelectedPictureDrop(providers: [NSItemProvider]) -> Bool {
+        guard let selectedPictureURL else { return false }
+        Task {
+            let urls = await loadAudioURLs(from: providers)
+            await MainActor.run {
+                if !urls.isEmpty {
+                    linkAudio(urls, to: selectedPictureURL)
+                }
+            }
+        }
+        return true
+    }
+
+    private func loadAudioURLs(from providers: [NSItemProvider]) async -> [URL] {
+        var result: [URL] = []
+        for p in providers {
+            if p.hasItemConformingToTypeIdentifier(UTType.json.identifier) {
+                let payload = await withCheckedContinuation { (cont: CheckedContinuation<AudioDropPayload?, Never>) in
+                    _ = p.loadTransferable(type: AudioDropPayload.self) { r in
+                        cont.resume(returning: (try? r.get()))
+                    }
+                }
+                if let payload {
+                    result.append(contentsOf: payload.urls)
+                }
+            } else if p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                let item = await withCheckedContinuation { (cont: CheckedContinuation<Any?, Never>) in
+                    p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                        cont.resume(returning: item)
+                    }
+                }
+                if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
+                    result.append(url)
+                }
+            }
+        }
+        return result
+    }
+
+    private func handleLinkedAudioSelectionForSelectedPicture(at index: Int) {
+        let ids = selectedPictureAssignments.map(\.id)
+        guard index < ids.count else { return }
+        let clickedId = ids[index]
+        let flags = NSEvent.modifierFlags
+
+        if flags.contains(.shift) {
+            if let anchor = selectionAnchorId, let anchorIdx = ids.firstIndex(of: anchor) {
+                let lo = min(anchorIdx, index)
+                let hi = max(anchorIdx, index)
+                let range = Set(ids[lo...hi])
+                selectedAssignmentIds.formUnion(range)
+            } else {
+                selectedAssignmentIds = [clickedId]
+                selectionAnchorId = clickedId
+            }
+        } else if flags.contains(.command) {
+            if selectedAssignmentIds.contains(clickedId) {
+                selectedAssignmentIds.remove(clickedId)
+            } else {
+                selectedAssignmentIds.insert(clickedId)
+            }
+        } else {
+            selectedAssignmentIds = [clickedId]
+            selectionAnchorId = clickedId
         }
     }
 
     @State private var picturesEmptyZoneTargeted = false
 
     private var picturesEmptyDropZone: some View {
-        Button {
-            FilePickerService.chooseFiles(allowedTypes: Self.videoTypes, allowsMultiple: true) { urls in
-                config.pictures.append(contentsOf: urls)
-            }
-        } label: {
+        Button(action: addVideosFromPicker) {
             VStack(spacing: 12) {
                 Image(systemName: "film.stack")
                     .font(.system(size: 32))
                     .foregroundStyle(.secondary)
-                Text("Add videos or drag them here")
+                Text("Add videos or drag files here")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .frame(width: 200, height: 120)
+            .frame(maxWidth: .infinity, minHeight: 120)
             .background(picturesEmptyZoneTargeted ? Color.accentColor.opacity(0.2) : Color(nsColor: .controlBackgroundColor).opacity(0.5))
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
@@ -205,12 +514,18 @@ struct RestripeView: View {
             Task {
                 let urls = await loadVideoURLs(from: providers)
                 await MainActor.run {
-                    if !urls.isEmpty {
-                        config.pictures.append(contentsOf: urls)
-                    }
+                    mergeVideoURLs(urls)
                 }
             }
             return true
+        }
+    }
+
+    private func mergeVideoURLs(_ urls: [URL]) {
+        let existingPaths = Set(config.pictures.map(\.path))
+        let newUrls = urls.filter { !existingPaths.contains($0.path) }
+        if !newUrls.isEmpty {
+            config.pictures.append(contentsOf: newUrls)
         }
     }
 
@@ -241,32 +556,6 @@ struct RestripeView: View {
         }
     }
 
-    // MARK: - Link section (audio pool + instructions)
-
-    private var linkSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("2. Audio pool — drag onto pictures above to link")
-                .font(.headline)
-
-            UnassignedAudioList(
-                urls: config.unassignedAudio,
-                selected: $selectedUnassigned,
-                height: $audioListHeight,
-                onAdd: {
-                    FilePickerService.chooseFiles(allowedTypes: Self.audioTypes, allowsMultiple: true) { urls in
-                        let existingPaths = Set(config.unassignedAudio.map(\.path) + config.assignments.map { $0.audioURL.path })
-                        let newUrls = urls.filter { !existingPaths.contains($0.path) }
-                        if !newUrls.isEmpty {
-                            config.unassignedAudio = config.unassignedAudio + newUrls
-                        }
-                    }
-                },
-                onRemove: { config.unassignedAudio.removeAll { selectedUnassigned.contains($0) }; selectedUnassigned = [] },
-                onDrop: { urls in linkDroppedUnassigned(urls) }
-            )
-        }
-    }
-
     private func linkDroppedUnassigned(_ urls: [URL]) {
         var existingPaths = Set(config.unassignedAudio.map(\.path))
         for url in urls {
@@ -282,7 +571,7 @@ struct RestripeView: View {
 
     private var outputSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("3. Output")
+            Text("4. Output")
                 .font(.headline)
             HStack(spacing: 8) {
                 Picker("Format", selection: Binding(
@@ -472,7 +761,7 @@ struct RestripeView: View {
         completedFilenames = []
 
         Task {
-            var doneCount = 0
+            var processedSoFar = 0
             for (pictureURL, items) in groups {
                 let subset = items.map { (audio: $0.audioURL, outputBasename: $0.outputBasename) }
                 do {
@@ -484,14 +773,14 @@ struct RestripeView: View {
                         audioGainDB: config.audioGainDB
                     ) { current, total, filename in
                         await MainActor.run {
-                            doneCount = current
-                            progressCurrent = doneCount
+                            progressCurrent = processedSoFar + current
                             progressTotal = flatItems.count
                             progressFilename = filename
-                            completedFilenames = flatItems.prefix(max(0, doneCount - 1))
+                            completedFilenames = flatItems.prefix(max(0, progressCurrent - 1))
                                 .map { "\($0.outputBasename).\(config.outputFormat.fileExtension)" }
                         }
                     }
+                    processedSoFar += subset.count
                 } catch {
                     let desc = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                     await MainActor.run {
@@ -659,6 +948,87 @@ private struct PictureCard: View {
     }
 }
 
+private struct PictureSelectionRow: View {
+    let url: URL
+    let isSelected: Bool
+    let linkedCount: Int
+    let onSelect: () -> Void
+    let onDropAudio: ([URL]) -> Void
+    let onRemove: () -> Void
+
+    @State private var isTargeted = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.accentColor.opacity(0.2))
+                .frame(width: 28, height: 28)
+                .overlay { Image(systemName: "film").font(.caption2) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(url.lastPathComponent)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("\(linkedCount) linked")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                onRemove()
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isTargeted ? Color.accentColor.opacity(0.15) : Color.clear)
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture { onSelect() }
+        .onDrop(of: [.fileURL, .url, UTType.json], isTargeted: $isTargeted) { providers in
+            Task {
+                var urls: [URL] = []
+                for provider in providers {
+                    if provider.hasItemConformingToTypeIdentifier(UTType.json.identifier) {
+                        let payload = await withCheckedContinuation { (cont: CheckedContinuation<AudioDropPayload?, Never>) in
+                            _ = provider.loadTransferable(type: AudioDropPayload.self) { result in
+                                cont.resume(returning: try? result.get())
+                            }
+                        }
+                        if let payload {
+                            urls.append(contentsOf: payload.urls)
+                        }
+                    } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                        let item = await withCheckedContinuation { (cont: CheckedContinuation<Any?, Never>) in
+                            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                                cont.resume(returning: item)
+                            }
+                        }
+                        if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
+                            urls.append(url)
+                        }
+                    }
+                }
+                await MainActor.run {
+                    if !urls.isEmpty {
+                        onDropAudio(urls)
+                    }
+                }
+            }
+            return true
+        }
+    }
+}
+
 // MARK: - Linked audio row (under a picture)
 
 private struct LinkedAudioRow: View {
@@ -732,7 +1102,6 @@ private struct UnassignedAudioList: View {
     @Binding var selected: Set<URL>
     @Binding var height: CGFloat
     let onAdd: () -> Void
-    let onRemove: () -> Void
     let onDrop: ([URL]) -> Void
 
     @State private var isTargeted = false
@@ -767,25 +1136,24 @@ private struct UnassignedAudioList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Button("Add audio…", action: onAdd)
-                if !selected.isEmpty {
-                    Button("Remove selected", role: .destructive, action: onRemove)
-                }
-            }
             Group {
                 if urls.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "waveform.circle")
-                            .font(.title2)
-                            .foregroundStyle(.secondary)
-                        Text("All audio linked. Add more or drag from Finder.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+                    Button(action: onAdd) {
+                        VStack(spacing: 12) {
+                            Image(systemName: "waveform.circle")
+                                .font(.system(size: 32))
+                                .foregroundStyle(.secondary)
+                            Text("Add audio or drag files here")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding()
+                        .background(isTargeted ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding()
+                    .buttonStyle(.plain)
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 4) {
@@ -802,8 +1170,12 @@ private struct UnassignedAudioList: View {
                 }
             }
             .frame(height: max(0, height - 10))
-            .background(isTargeted ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .background(
+                urls.isEmpty
+                    ? Color.clear
+                    : (isTargeted ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .onDrop(of: [.fileURL, .url, UTType.json], isTargeted: $isTargeted) { providers in
                 Task {
                     let urls = await loadURLs(from: providers)

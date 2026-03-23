@@ -4051,6 +4051,51 @@ struct GeneralOptionsSection: View {
                     }
                     .toggleStyle(.switch)
                     
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Clear staging after filing")
+                            .font(.system(size: 13))
+                        Text("Applies when prep or work picture filing finishes successfully. The delay timer starts only after the job completes.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+
+                        Picker("", selection: Binding(
+                            get: { settings.resolvedStagingClearAfterFilingMode },
+                            set: { newValue in
+                                settings.stagingClearAfterFilingMode = newValue
+                                settings.clearStagingAfterFiling = (newValue == .never) ? false : true
+                                hasUnsavedChanges = true
+                            }
+                        )) {
+                            Text("Don't clear").tag(StagingClearAfterFilingMode.never)
+                            Text("Immediately").tag(StagingClearAfterFilingMode.immediately)
+                            Text("After delay (timer)").tag(StagingClearAfterFilingMode.afterDelay)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 320, alignment: .leading)
+
+                        if settings.resolvedStagingClearAfterFilingMode == .afterDelay {
+                            HStack(spacing: 10) {
+                                Text("Minutes until clear")
+                                    .font(.system(size: 12))
+                                TextField("", text: Binding(
+                                    get: { String(settings.stagingClearDelayMinutes ?? 5) },
+                                    set: { newValue in
+                                        let digits = newValue.filter { $0.isNumber }
+                                        if let v = Int(digits), v >= 1 {
+                                            settings.stagingClearDelayMinutes = min(v, 24 * 60)
+                                        } else if digits.isEmpty {
+                                            settings.stagingClearDelayMinutes = nil
+                                        }
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 72)
+                                .help("Between 1 and 1440 minutes (24 hours).")
+                            }
+                        }
+                    }
+                    
                     // Advanced Settings Disclosure
                     Divider()
                         .padding(.vertical, 4)
