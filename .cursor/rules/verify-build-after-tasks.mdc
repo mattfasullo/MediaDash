@@ -1,0 +1,28 @@
+---
+description: After code changes, run an Xcode build and fix errors before considering the task done (MediaDash)
+alwaysApply: true
+---
+
+# Verify build after tasks (MediaDash)
+
+Goal: the user should not need to open Xcode to discover compile errors the agent could have caught.
+
+## When to build
+
+After **finishing** work on a task that edits Swift, the Xcode project, entitlements, plists, assets, or anything else that affects compilation or linking, **run a build from the project root** and fix any failures before handing off.
+
+Skip an automated build only when the change cannot affect the build (for example, markdown-only edits with no code impact) or the user explicitly asked for a no-build step.
+
+## Command
+
+From the repository root (`MediaDash` project folder that contains `MediaDash.xcodeproj`):
+
+```bash
+xcodebuild -scheme MediaDash -project MediaDash.xcodeproj -configuration Debug build
+```
+
+If the build fails, read the compiler output, fix the issues, and **run the same command again** until it succeeds (or until blocked by an environment limitation—then say so clearly).
+
+## Handoff
+
+Do not treat a coding task as complete while the project fails to build for the changes you made. Prefer reporting a green `xcodebuild` over asking the user to paste Xcode errors.
