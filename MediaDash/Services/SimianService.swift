@@ -871,6 +871,22 @@ class SimianService: ObservableObject {
         }
     }
 
+    /// Short user-facing description when the server returns non-JSON (e.g. HTML 404/502 pages from a proxy).
+    private static func describeSimianHTTPFailure(status: Int, body: Data, url: URL) -> String {
+        let raw = String(data: body, encoding: .utf8) ?? ""
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("<!DOCTYPE") || trimmed.lowercased().contains("<html") {
+            if let open = raw.range(of: "<title>", options: .caseInsensitive),
+               let close = raw.range(of: "</title>", options: .caseInsensitive, range: open.upperBound..<raw.endIndex) {
+                let title = String(raw[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                return "HTTP \(status) — \(title). Request: \(url.absoluteString)"
+            }
+            return "HTTP \(status) — server returned HTML (not Simian JSON). Request: \(url.absoluteString)"
+        }
+        if trimmed.count > 600 { return String(trimmed.prefix(600)) + "…" }
+        return trimmed.isEmpty ? "HTTP \(status)" : trimmed
+    }
+
     /// Upload a single file to a Simian project (root or into a folder).
     /// - Parameters:
     ///   - projectId: Simian project ID
@@ -880,6 +896,11 @@ class SimianService: ObservableObject {
     func uploadFile(projectId: String, folderId: String?, fileURL: URL) async throws -> String {
         try await ensureAuthenticated()
 
+        let trimmedProjectId = projectId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedProjectId.isEmpty else {
+            throw SimianError.apiError("Upload failed: missing project id")
+        }
+
         guard let baseURLString = baseURL, !baseURLString.isEmpty,
               let base = URL(string: baseURLString),
               let authKey = authKey,
@@ -887,7 +908,7 @@ class SimianService: ObservableObject {
             throw SimianError.notConfigured
         }
 
-        let endpointURL = base.appendingPathComponent("upload_file").appendingPathComponent(projectId)
+        let endpointURL = base.appendingPathComponent("upload_file").appendingPathComponent(trimmedProjectId)
         let boundary = "SimianBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
         var body = Data()
 
@@ -918,7 +939,7 @@ class SimianService: ObservableObject {
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
+        request.setValue("application/json, */*;q=0.8", forHTTPHeaderField: "Accept")
         request.httpBody = body
 
         let uploadSession: URLSession
@@ -939,14 +960,14 @@ class SimianService: ObservableObject {
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
-            let errorMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
+            let errorMessage = Self.describeSimianHTTPFailure(status: httpResponse.statusCode, body: data, url: endpointURL)
             throw SimianError.apiError("Upload failed: \(errorMessage)")
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let root = json["root"] as? [String: Any] else {
-            let snippet = String(data: data.prefix(200), encoding: .utf8) ?? ""
-            throw SimianError.apiError("Invalid upload response (missing root). Response: \(snippet)")
+            let snippet = Self.describeSimianHTTPFailure(status: httpResponse.statusCode, body: data, url: endpointURL)
+            throw SimianError.apiError("Invalid upload response (missing JSON root). \(snippet)")
         }
 
         let status = root["status"] as? String ?? ""
@@ -1703,7 +1724,12 @@ class SimianService: ObservableObject {
             "auth_token": authToken,
             "auth_key": authKey,
             "file_id": fileId,
-            "name": newName
+            // Keep `name` for label/title, and include filename aliases so one
+            // rename action updates both fields when supported by the API.
+            "name": newName,
+            "file_name": newName,
+            "filename": newName,
+            "title": newName
         ]
         request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
             .joined(separator: "&")

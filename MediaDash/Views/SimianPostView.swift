@@ -49,6 +49,8 @@ struct SimianPostView: View {
     @State private var uploadCurrent = 0
     @State private var uploadTotal = 0
     @State private var uploadFileName = ""
+    /// Finder (file URL) drag over list chrome / empty area → upload into current breadcrumb folder (or project root).
+    @State private var isFolderListExternalDropTargeted = false
 
     // Rename sheet (fallback, kept for context menu "Rename…")
     @State private var showRenameSheet = false
@@ -1274,6 +1276,9 @@ struct SimianPostView: View {
                 Text("\u{2192}").font(.caption).foregroundStyle(.secondary)
                 Text(projectName).font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                Button(action: { newFolderParentId = currentParentFolderId; newFolderName = ""; showNewFolderSheet = true }) {
+                    Image(systemName: "folder.badge.plus").font(.system(size: 12))
+                }.buttonStyle(.borderless).help("New Folder")
                 Button(action: { refreshCurrentView() }) { Image(systemName: "arrow.clockwise").font(.system(size: 12)) }.buttonStyle(.borderless).help("Refresh folders and files")
             }.padding(.horizontal, 12).padding(.vertical, 8).background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
 
@@ -1304,6 +1309,9 @@ struct SimianPostView: View {
                     }
                     .listStyle(.inset(alternatesRowBackgrounds: true))
                     .animation(.spring(response: 0.45, dampingFraction: 0.7, blendDuration: 0.15), value: treeListAnimationKey)
+                    .onDrop(of: [UTType.fileURL], isTargeted: $isFolderListExternalDropTargeted) { providers in
+                        handleExternalFileDrop(providers: providers, folderId: currentParentFolderId)
+                    }
                     .focusable()
                     .focused($isFolderListFocused)
                     .onAppear {
@@ -1427,6 +1435,7 @@ struct SimianPostView: View {
             isEditing: isEditing, editText: $inlineRenameText,
             selectedItemIds: selectedItemIds,
             onSelect: { selectedItemIds = ["file-\(file.id)"] },
+            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: currentParentFolderId) },
             onReorderDrop: { draggedIds in reorderItems(projectId: selectedProjectId ?? "", draggedIds: draggedIds, targetId: "file-\(file.id)", treeList: treeList) },
             onReorderInsertAfter: { draggedIds in
                 let nextId = siblings.firstIndex(where: { $0.id == file.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
@@ -1959,7 +1968,13 @@ private struct SimianFolderRow: View {
             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .center)
             .contentShape(Rectangle())
             .background((isDropTargeted || isSimianDropTargeted) ? Color.accentColor.opacity(0.15) : Color.clear)
-            .simultaneousGesture(TapGesture(count: 2).onEnded { onDoubleTap() })
+            .simultaneousGesture(TapGesture().onEnded {
+                if NSApp.currentEvent?.clickCount == 2 {
+                    onDoubleTap()
+                } else {
+                    onSelect()
+                }
+            })
             .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted, perform: onExternalFileDrop)
             .onDrop(of: [.text, .plainText, .utf8PlainText], isTargeted: $isSimianDropTargeted) { providers in
                 guard let p = providers.first else { return false }
@@ -1995,6 +2010,8 @@ private struct SimianFileRow: View {
     @Binding var editText: String
     let selectedItemIds: Set<String>
     let onSelect: () -> Void
+    /// Drop Finder files onto the row body (not a folder row) → upload into the current list location.
+    let onExternalFileDrop: ([NSItemProvider]) -> Bool
     let onReorderDrop: ([String]) -> Void
     let onReorderInsertAfter: ([String]) -> Void
     let onCommitRename: () -> Void
@@ -2002,6 +2019,7 @@ private struct SimianFileRow: View {
 
     @State private var isGapBelow = false
     @State private var isHovered = false
+    @State private var isExternalFileDropTargeted = false
     @FocusState private var isEditFocused: Bool
 
     private var safeDepth: Int { min(depth, 30) }
@@ -2037,6 +2055,8 @@ private struct SimianFileRow: View {
             }
             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .center)
             .contentShape(Rectangle())
+            .background(isExternalFileDropTargeted ? Color.accentColor.opacity(0.15) : Color.clear)
+            .onDrop(of: [UTType.fileURL], isTargeted: $isExternalFileDropTargeted, perform: onExternalFileDrop)
 
             ReorderGapView(expectedType: "file", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
         }
