@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleShortVersionString</key>
-	<string>1.04</string>
+	<string>1.05</string>
 	<key>CFBundleVersion</key>
-	<string>122</string>
+	<string>123</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>SUAllowsAutomaticUpdates</key>

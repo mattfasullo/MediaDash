@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.05</title>
+            <description><![CDATA[
+                <p>Fixes staging Sessions view becoming extremely slow (especially while Asana sync runs). Folder scanning now happens in the background, and sync progress no longer redraws the whole staging column. Also includes calendar, dashboard, Simian post, search, DocketHub, and settings improvements.</p>
+            ]]></description>
+            <pubDate>Mon, 30 Mar 2026 21:36:56 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.05/MediaDash.zip"
+                sparkle:version="123"
+                sparkle:shortVersionString="1.05"
+                sparkle:edSignature="boqGDMeIliT1247BEuY8PaA0NKPi5DI1dIBWxarGt07O6exVQRjzM3gMK+FyVJkctoqnaAG7ifdEt5pTHJ46CQ=="
+                length="10081503"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.04</title>
             <description><![CDATA[
                 <p>Restripe: modern onChange API and SwiftUI type-check fix. Updates for Asana cache, notifications, Simian, email scanning, session, settings, MediaManager, and docket metadata.</p>
