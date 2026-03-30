@@ -46,12 +46,19 @@ final class SimianPostWindowManager: NSObject, ObservableObject, NSWindowDelegat
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
-        window.makeKeyAndOrderFront(nil)
-
-        NSApp.activate(ignoringOtherApps: true)
-
         simianPostWindow = window
         isVisible = true
+
+        // Popover/sheet dismissal (e.g. Portal → Simian) can reclaim key on the same run loop; defer so this window wins.
+        func activateSimianWindow() {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        activateSimianWindow()
+        DispatchQueue.main.async {
+            activateSimianWindow()
+            DispatchQueue.main.async(execute: activateSimianWindow)
+        }
     }
 
     func close() {

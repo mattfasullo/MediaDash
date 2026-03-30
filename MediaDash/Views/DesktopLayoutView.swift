@@ -72,6 +72,7 @@ struct DesktopLayoutView: View {
                 // Main Staging Area (center)
                 DesktopStagingArea(
                     cacheManager: cacheManager,
+                    prepDate: prepDate,
                     selectedFileIndex: $selectedFileIndex
                 )
                 
@@ -649,11 +650,13 @@ struct DesktopStagingArea: View {
     @EnvironmentObject var manager: MediaManager
     @EnvironmentObject var settingsManager: SettingsManager
     let cacheManager: AsanaCacheManager?
+    let prepDate: Date
     @Binding var selectedFileIndex: Int?
     
     @State private var isDragTargeted = false
     @State private var showBatchRenameSheet = false
     @State private var filesToRename: [FileItem] = []
+    @State private var stagingContentMode: StagingCenterContentMode = .files
     
     private var totalFileCount: Int {
         manager.selectedFiles.reduce(0) { $0 + $1.fileCount }
@@ -661,61 +664,82 @@ struct DesktopStagingArea: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                HStack(spacing: 10) {
+            // Header (match compact chrome: caption scale + controlBackground strip)
+            HStack(spacing: 8) {
+                if cacheManager != nil {
+                    StagingHeaderModeToggleButton(selection: $stagingContentMode)
+                } else {
                     Image(systemName: "tray.2.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.blue)
-                    
-                    Text("Staging Area")
-                        .font(.system(size: 15, weight: .semibold))
-                    
-                    if !manager.selectedFiles.isEmpty {
-                        Text("\(totalFileCount) files")
-                            .font(.system(size: 12))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.blue)
-                            .cornerRadius(10)
-                    }
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Text("Staging")
+                        .font(.caption)
+                        .fontWeight(.semibold)
                 }
-                
+                if !manager.selectedFiles.isEmpty {
+                    Text("\(totalFileCount) file\(totalFileCount == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
                 Spacer()
-                
-                HStack(spacing: 8) {
-                    Button(action: { manager.pickFiles() }) {
+                Button(action: { manager.pickFiles() }) {
+                    Color.clear.frame(width: 1, height: 1)
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                .opacity(0.01)
+                .frame(width: 1, height: 1)
+                .accessibilityHidden(true)
+                if !manager.selectedFiles.isEmpty {
+                    Button(action: { manager.clearFiles() }) {
                         HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                            Text("Add Files")
+                            Image(systemName: "trash")
+                            Text("Clear")
                         }
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.caption)
                     }
                     .buttonStyle(.bordered)
-                    .keyboardShortcut("o", modifiers: .command)
-                    
-                    if !manager.selectedFiles.isEmpty {
-                        Button(action: { manager.clearFiles() }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "trash")
-                                Text("Clear All")
-                            }
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.red)
-                        }
-                        .buttonStyle(.bordered)
-                        .keyboardShortcut("w", modifiers: .command)
-                    }
+                    .controlSize(.small)
+                    .tint(.red)
+                    .keyboardShortcut("w", modifiers: .command)
+                    .disabled(stagingContentMode == .sessions)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             
             Divider()
             
-            // File List or Empty State
+            Group {
+                switch stagingContentMode {
+                case .files:
+                    filesStagingBody
+                case .sessions:
+                    if let cache = cacheManager {
+                        StagingSessionsPanel(cacheManager: cache, prepDate: prepDate)
+                    } else {
+                        Text("Connect Asana to use Sessions.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 200)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(isPresented: $showBatchRenameSheet) {
+            BatchRenameSheet(manager: manager, filesToRename: filesToRename)
+                .sheetSizeStabilizer()
+        }
+    }
+    
+    private var filesStagingBody: some View {
+        Group {
             if manager.selectedFiles.isEmpty {
                 DesktopEmptyState(isDragTargeted: $isDragTargeted)
             } else {
@@ -726,14 +750,10 @@ struct DesktopStagingArea: View {
                 )
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onDrop(of: [UTType.fileURL], isTargeted: $isDragTargeted) { providers in
             handleDrop(providers: providers)
             return true
-        }
-        .sheet(isPresented: $showBatchRenameSheet) {
-            BatchRenameSheet(manager: manager, filesToRename: filesToRename)
-                .sheetSizeStabilizer()
         }
     }
     
@@ -762,62 +782,38 @@ struct DesktopStagingArea: View {
 struct DesktopEmptyState: View {
     @EnvironmentObject var manager: MediaManager
     @Binding var isDragTargeted: Bool
-    @State private var pulsePhase: CGFloat = 0
     
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 14) {
             ZStack {
-                // Animated ring when dragging
-                if isDragTargeted {
-                    Circle()
-                        .stroke(Color.blue.opacity(0.4), lineWidth: 3)
-                        .frame(width: 120, height: 120)
-                        .scaleEffect(1 + pulsePhase * 0.1)
-                }
-                
                 Circle()
-                    .fill(isDragTargeted ? Color.blue.opacity(0.15) : Color.gray.opacity(0.1))
-                    .frame(width: 100, height: 100)
-                
-                Image(systemName: isDragTargeted ? "arrow.down.doc.fill" : "doc.badge.plus")
-                    .font(.system(size: 40))
-                    .foregroundColor(isDragTargeted ? .blue : .secondary)
+                    .stroke(isDragTargeted ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.2), lineWidth: 1.5)
+                    .frame(width: 72, height: 72)
+                Image(systemName: isDragTargeted ? "arrow.down.doc" : "doc")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(isDragTargeted ? Color.accentColor : .secondary)
             }
-            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulsePhase)
-            .onAppear {
-                pulsePhase = 1
-            }
-            
-            VStack(spacing: 8) {
-                Text(isDragTargeted ? "Drop files here" : "No files staged")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(isDragTargeted ? .blue : .primary)
-                
-                Text("Drag & drop files or click Add Files to get started")
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
+            VStack(spacing: 4) {
+                Text(isDragTargeted ? "Drop to add" : "No files staged")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Text("Click here, drag files in, or press ⌘O")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            
-            Button(action: { manager.pickFiles() }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus.circle.fill")
-                    Text("Add Files")
-                }
-                .font(.system(size: 14, weight: .medium))
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { manager.pickFiles() }
+        .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(
-                    isDragTargeted ? Color.blue : Color.gray.opacity(0.2),
-                    style: StrokeStyle(lineWidth: 2, dash: [8, 4])
+                    isDragTargeted ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.18),
+                    style: StrokeStyle(lineWidth: 1, dash: [5, 4])
                 )
-                .padding(20)
+                .padding(12)
         )
     }
 }

@@ -570,7 +570,6 @@ struct AppSettings: Codable, Equatable {
     var createPrepChecklistFolder: Bool?
 
     // Search Settings
-    var enableFuzzySearch: Bool
     var defaultSearchFolder: SearchFolder
     var searchFolderPreference: SearchFolderPreference
     var lastUsedSearchFolder: SearchFolder?
@@ -756,7 +755,6 @@ struct AppSettings: Codable, Equatable {
             createPrepAafOmfFolder: true,
             createPrepOtherFolder: true,
             createPrepChecklistFolder: false,
-            enableFuzzySearch: true,
             defaultSearchFolder: .sessions,
             searchFolderPreference: .rememberLast,
             lastUsedSearchFolder: nil,

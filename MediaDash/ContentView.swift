@@ -552,6 +552,7 @@ struct ContentView: View {
                         
                         StagingAreaView(
                             cacheManager: cacheManager,
+                            prepDate: prepDate,
                             isStagingHovered: $isStagingHovered,
                             isStagingPressed: $isStagingPressed,
                             showVideoConverterSheet: $showVideoConverterSheet
@@ -1942,7 +1943,6 @@ struct SearchView: View {
     let initialText: String
     @State private var searchText: String
     @State private var exactResults: [String] = []
-    @State private var fuzzyResults: [String] = []
     @State private var selectedPath: String?
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
@@ -1954,7 +1954,7 @@ struct SearchView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     // Cache search results for all folders
-    @State private var cachedResults: [SearchFolder: (exact: [String], fuzzy: [String])] = [:]
+    @State private var cachedResults: [SearchFolder: [String]] = [:]
 
     // Custom initializer to set searchText immediately
     init(manager: MediaManager, settingsManager: SettingsManager, isPresented: Binding<Bool>, initialText: String) {
@@ -2008,10 +2008,6 @@ struct SearchView: View {
 
     var groupedExactResults: [YearSection] {
         groupByYear(exactResults)
-    }
-
-    var groupedFuzzyResults: [YearSection] {
-        groupByYear(fuzzyResults)
     }
 
     private func folderButton(_ folder: SearchFolder) -> some View {
@@ -2166,50 +2162,6 @@ struct SearchView: View {
                                 }
                             }
                         }
-
-                        // Fuzzy matches section (if any)
-                        if !fuzzyResults.isEmpty {
-                            // Section divider
-                            HStack {
-                                VStack {
-                                    Divider()
-                                }
-                                Text("Similar Results")
-                                    .font(.headline)
-                                    .foregroundColor(.orange)
-                                    .padding(.horizontal, 8)
-                                VStack {
-                                    Divider()
-                                }
-                            }
-                            .padding(.vertical, 12)
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-
-                            ForEach(groupedFuzzyResults) { section in
-                                ForEach(section.paths, id: \.self) { path in
-                                    Button(action: {
-                                        if selectedPath == path {
-                                            // Double click opens folder in Finder
-                                            let url = URL(fileURLWithPath: path)
-                                            NSWorkspace.shared.open(url)
-                                            isPresented = false
-                                        } else {
-                                            selectedPath = path
-                                        }
-                                    }) {
-                                        HStack {
-                                            Image(systemName: "sparkles")
-                                                .font(.caption)
-                                                .foregroundColor(.orange)
-                                            SearchResultRow(path: path, year: section.year)
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                    .tag(path)
-                                }
-                            }
-                        }
                     }
                     .listStyle(.sidebar)
                     .focused($isListFocused)
@@ -2233,7 +2185,7 @@ struct SearchView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.regularMaterial)
-                } else if manager.isIndexing && exactResults.isEmpty && fuzzyResults.isEmpty {
+                } else if manager.isIndexing && exactResults.isEmpty {
                     VStack(spacing: 8) {
                         ProgressView()
                             .scaleEffect(0.8)
@@ -2243,7 +2195,7 @@ struct SearchView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.regularMaterial)
-                } else if exactResults.isEmpty && fuzzyResults.isEmpty && !searchText.isEmpty && !manager.isIndexing {
+                } else if exactResults.isEmpty && !searchText.isEmpty && !manager.isIndexing {
                     VStack(spacing: 8) {
                         ProgressView()
                             .scaleEffect(0.8)
@@ -2331,14 +2283,14 @@ struct SearchView: View {
         .keyboardNavigationHandler(handleKey: { event in
             switch event.keyCode {
             case 125: // down
-                if !exactResults.isEmpty || !fuzzyResults.isEmpty {
+                if !exactResults.isEmpty {
                     isSearchFieldFocused = false
                     isListFocused = true
                     moveSelection(1)
                 }
                 return true
             case 126: // up
-                if !exactResults.isEmpty || !fuzzyResults.isEmpty {
+                if !exactResults.isEmpty {
                     isSearchFieldFocused = false
                     isListFocused = true
                     moveSelection(-1)
@@ -2354,7 +2306,7 @@ struct SearchView: View {
         })
         // Native Keyboard Navigation
         .onKeyPress(.upArrow) {
-            if !exactResults.isEmpty || !fuzzyResults.isEmpty {
+            if !exactResults.isEmpty {
                 isSearchFieldFocused = false
                 isListFocused = true
                 moveSelection(-1)
@@ -2363,7 +2315,7 @@ struct SearchView: View {
             return .ignored
         }
         .onKeyPress(.downArrow) {
-            if !exactResults.isEmpty || !fuzzyResults.isEmpty {
+            if !exactResults.isEmpty {
                 isSearchFieldFocused = false
                 isListFocused = true
                 moveSelection(1)
@@ -2447,7 +2399,6 @@ struct SearchView: View {
         if searchText.isEmpty {
             cachedResults.removeAll()
             exactResults = []
-            fuzzyResults = []
             isSearching = false
             return
         }
@@ -2478,7 +2429,7 @@ struct SearchView: View {
                     
                     await MainActor.run {
                         // Cache result for this folder only
-                        cachedResults[folder] = (results.exactMatches, results.fuzzyMatches)
+                        cachedResults[folder] = results.exactMatches
                         
                         // Display results for currently selected folder
                         updateDisplayedResults()
@@ -2505,9 +2456,9 @@ struct SearchView: View {
 
                     await MainActor.run {
                         // Cache all results - always update cache even if empty
-                        cachedResults[.workPicture] = (workPictureResults.exactMatches, workPictureResults.fuzzyMatches)
-                        cachedResults[.mediaPostings] = (mediaPostingsResults.exactMatches, mediaPostingsResults.fuzzyMatches)
-                        cachedResults[.sessions] = (sessionsResults.exactMatches, sessionsResults.fuzzyMatches)
+                        cachedResults[.workPicture] = workPictureResults.exactMatches
+                        cachedResults[.mediaPostings] = mediaPostingsResults.exactMatches
+                        cachedResults[.sessions] = sessionsResults.exactMatches
 
                         // Display results for currently selected folder
                         // isSearching will be set to false inside updateDisplayedResults after results are displayed
@@ -2537,11 +2488,9 @@ struct SearchView: View {
         // Defer state updates to avoid publishing during view updates
         Task { @MainActor in
             if let cached = cachedResults[selectedFolder] {
-                exactResults = cached.exact
-                fuzzyResults = cached.fuzzy
+                exactResults = cached
 
-                // Auto-select first result (prefer exact matches)
-                if let firstResult = cached.exact.first ?? cached.fuzzy.first {
+                if let firstResult = cached.first {
                     selectedPath = firstResult
                 } else {
                     selectedPath = nil
@@ -2552,7 +2501,6 @@ struct SearchView: View {
             } else {
                 // No cached results for this folder yet
                 exactResults = []
-                fuzzyResults = []
                 selectedPath = nil
 
                 // If there's text to search and we're not already searching, trigger a search
@@ -2584,15 +2532,14 @@ struct SearchView: View {
     }
     
     private func moveSelection(_ direction: Int) {
-        let allResults = exactResults + fuzzyResults
-        guard !allResults.isEmpty else { return }
+        guard !exactResults.isEmpty else { return }
 
         if let currentPath = selectedPath,
-           let currentIndex = allResults.firstIndex(of: currentPath) {
-            let newIndex = min(max(currentIndex + direction, 0), allResults.count - 1)
-            selectedPath = allResults[newIndex]
+           let currentIndex = exactResults.firstIndex(of: currentPath) {
+            let newIndex = min(max(currentIndex + direction, 0), exactResults.count - 1)
+            selectedPath = exactResults[newIndex]
         } else {
-            selectedPath = allResults.first
+            selectedPath = exactResults.first
         }
     }
 
@@ -4351,12 +4298,6 @@ struct SheetsModifier: ViewModifier {
                     settingsManager: settingsManager
                 )
                 .sheetBorder()
-            }
-            .sheet(isPresented: $manager.showPrepSummary, onDismiss: {
-                // Prep summary is one-off
-            }) {
-                PrepSummaryView(summary: manager.prepSummary, isPresented: $manager.showPrepSummary)
-                    .sheetBorder()
             }
             .sheet(isPresented: $showVideoConverterSheet, onDismiss: {
                 // Video converter fresh on next open

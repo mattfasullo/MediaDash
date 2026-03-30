@@ -4241,23 +4241,6 @@ struct GeneralOptionsSection: View {
                         Text("Search Behavior")
                             .font(.system(size: 14, weight: .medium))
 
-                        Toggle(isOn: Binding(
-                            get: { settings.enableFuzzySearch },
-                            set: {
-                                settings.enableFuzzySearch = $0
-                                hasUnsavedChanges = true
-                            }
-                        )) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Smart Search")
-                                    .font(.system(size: 13))
-                                Text("Finds results even with typos and spacing differences")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .toggleStyle(.switch)
-
                         // Default Search Folder
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Default Search Folder")

@@ -2,27 +2,7 @@ import XCTest
 @testable import MediaDash
 
 final class MediaLogicTests: XCTestCase {
-    
-    func testFuzzyMatchExactSubstring() {
-        XCTAssertTrue(MediaLogic.fuzzyMatch(searchTerm: "test", target: "this is a test file"))
-        XCTAssertTrue(MediaLogic.fuzzyMatch(searchTerm: "file", target: "test file name"))
-    }
-    
-    func testFuzzyMatchNoSpaces() {
-        XCTAssertTrue(MediaLogic.fuzzyMatch(searchTerm: "testfile", target: "test file name"))
-        XCTAssertTrue(MediaLogic.fuzzyMatch(searchTerm: "test", target: "testfile"))
-    }
-    
-    func testFuzzyMatchWordBoundary() {
-        XCTAssertTrue(MediaLogic.fuzzyMatch(searchTerm: "test", target: "my test project"))
-        XCTAssertFalse(MediaLogic.fuzzyMatch(searchTerm: "xyz", target: "my test project"))
-    }
-    
-    func testFuzzyMatchTypo() {
-        XCTAssertTrue(MediaLogic.fuzzyMatch(searchTerm: "tes", target: "test file"))
-        XCTAssertTrue(MediaLogic.fuzzyMatch(searchTerm: "tets", target: "test file"))
-    }
-    
+
     func testLevenshteinDistance() {
         XCTAssertEqual(MediaLogic.levenshteinDistance("test", "test"), 0)
         XCTAssertEqual(MediaLogic.levenshteinDistance("test", "tets"), 2)

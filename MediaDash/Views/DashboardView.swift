@@ -113,6 +113,7 @@ struct DashboardView: View {
                     // Center - Staging Area
                     DashboardStagingArea(
                         cacheManager: cacheManager,
+                        prepDate: prepDate,
                         selectedFileIndex: $selectedFileIndex
                     )
                     .frame(minWidth: 400)
@@ -1213,11 +1214,13 @@ struct DashboardStagingArea: View {
     @EnvironmentObject var manager: MediaManager
     @EnvironmentObject var settingsManager: SettingsManager
     let cacheManager: AsanaCacheManager?
+    let prepDate: Date
     @Binding var selectedFileIndex: Int?
     
     @State private var isDragTargeted = false
     @State private var showBatchRenameSheet = false
     @State private var filesToRename: [FileItem] = []
+    @State private var stagingContentMode: StagingCenterContentMode = .files
     
     private var totalFileCount: Int {
         manager.selectedFiles.reduce(0) { $0 + $1.fileCount }
@@ -1225,56 +1228,81 @@ struct DashboardStagingArea: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                if cacheManager != nil {
+                    StagingHeaderModeToggleButton(selection: $stagingContentMode)
+                } else {
                     Image(systemName: "tray.2.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.blue)
-                    
-                    Text("Staging Area")
-                        .font(.system(size: 15, weight: .semibold))
-                    
-                    if !manager.selectedFiles.isEmpty {
-                        Text("\(totalFileCount)")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.blue))
-                    }
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Text("Staging")
+                        .font(.caption)
+                        .fontWeight(.semibold)
                 }
-                
+                if !manager.selectedFiles.isEmpty {
+                    Text("\(totalFileCount) file\(totalFileCount == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
                 Spacer()
-                
-                HStack(spacing: 8) {
-                    Button(action: { manager.pickFiles() }) {
-                        Label("Add", systemImage: "plus")
-                            .font(.system(size: 11, weight: .medium))
+                Button(action: { manager.pickFiles() }) {
+                    Color.clear.frame(width: 1, height: 1)
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                .opacity(0.01)
+                .frame(width: 1, height: 1)
+                .accessibilityHidden(true)
+                if !manager.selectedFiles.isEmpty {
+                    Button(action: { manager.clearFiles() }) {
+                        Label("Clear", systemImage: "trash")
+                            .font(.caption)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .keyboardShortcut("o", modifiers: .command)
-                    
-                    if !manager.selectedFiles.isEmpty {
-                        Button(action: { manager.clearFiles() }) {
-                            Label("Clear", systemImage: "trash")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .tint(.red)
-                        .keyboardShortcut("w", modifiers: .command)
-                    }
+                    .tint(.red)
+                    .keyboardShortcut("w", modifiers: .command)
+                    .disabled(stagingContentMode == .sessions)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             
             Divider()
             
-            // Content
+            Group {
+                switch stagingContentMode {
+                case .files:
+                    filesStagingBody
+                case .sessions:
+                    if let cache = cacheManager {
+                        StagingSessionsPanel(cacheManager: cache, prepDate: prepDate)
+                    } else {
+                        Text("Connect Asana to use Sessions.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 200)
+            
+            // Status Bar
+            dashboardStatusBar
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(isPresented: $showBatchRenameSheet) {
+            BatchRenameSheet(manager: manager, filesToRename: filesToRename)
+                .sheetSizeStabilizer()
+        }
+    }
+    
+    private var filesStagingBody: some View {
+        Group {
             if manager.selectedFiles.isEmpty {
                 DashboardEmptyState(isDragTargeted: $isDragTargeted)
             } else {
@@ -1284,18 +1312,11 @@ struct DashboardStagingArea: View {
                     filesToRename: $filesToRename
                 )
             }
-            
-            // Status Bar
-            dashboardStatusBar
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onDrop(of: [UTType.fileURL], isTargeted: $isDragTargeted) { providers in
             handleDrop(providers: providers)
             return true
-        }
-        .sheet(isPresented: $showBatchRenameSheet) {
-            BatchRenameSheet(manager: manager, filesToRename: filesToRename)
-                .sheetSizeStabilizer()
         }
     }
     
@@ -1418,45 +1439,35 @@ struct DashboardEmptyState: View {
     @Binding var isDragTargeted: Bool
     
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 14) {
             ZStack {
                 Circle()
-                    .stroke(isDragTargeted ? Color.blue.opacity(0.4) : Color.gray.opacity(0.15), lineWidth: 2)
-                    .frame(width: 100, height: 100)
-                
-                Circle()
-                    .fill(isDragTargeted ? Color.blue.opacity(0.1) : Color.gray.opacity(0.05))
-                    .frame(width: 80, height: 80)
-                
-                Image(systemName: isDragTargeted ? "arrow.down.doc.fill" : "doc.badge.plus")
-                    .font(.system(size: 32))
-                    .foregroundColor(isDragTargeted ? .blue : .secondary.opacity(0.6))
+                    .stroke(isDragTargeted ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.2), lineWidth: 1.5)
+                    .frame(width: 64, height: 64)
+                Image(systemName: isDragTargeted ? "arrow.down.doc" : "doc")
+                    .font(.system(size: 26, weight: .light))
+                    .foregroundStyle(isDragTargeted ? Color.accentColor : .secondary)
             }
-            
-            VStack(spacing: 6) {
-                Text(isDragTargeted ? "Drop files here" : "Drop files to stage")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(isDragTargeted ? .blue : .primary)
-                
-                Text("or click Add to select files")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+            VStack(spacing: 4) {
+                Text(isDragTargeted ? "Drop to add" : "No files staged")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Text("Click here or press ⌘O")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            
-            Button(action: { manager.pickFiles() }) {
-                Label("Add Files", systemImage: "plus.circle.fill")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { manager.pickFiles() }
+        .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(
-                    isDragTargeted ? Color.blue : Color.gray.opacity(0.15),
-                    style: StrokeStyle(lineWidth: 2, dash: [8, 4])
+                    isDragTargeted ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.18),
+                    style: StrokeStyle(lineWidth: 1, dash: [5, 4])
                 )
-                .padding(20)
+                .padding(12)
         )
     }
 }

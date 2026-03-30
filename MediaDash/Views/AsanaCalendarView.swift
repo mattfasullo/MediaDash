@@ -2,21 +2,11 @@
 //  AsanaCalendarView.swift
 //  MediaDash
 //
-//  Asana calendar: 2-day lookback plus today through the next 5 business days.
+//  Asana calendar: 2-day lookback plus today through the next 5 business days (data from 4-week session sync).
 //
 
 import SwiftUI
 import AppKit
-
-// MARK: - Calendar Day + Dockets
-
-struct CalendarDaySection: Identifiable {
-    let date: Date
-    let dayLabel: String
-    let isToday: Bool
-    var dockets: [DocketInfo]
-    var id: Date { date }
-}
 
 // MARK: - Asana Calendar View
 
@@ -52,7 +42,7 @@ struct AsanaCalendarView: View {
     private var calendarSections: [CalendarDaySection] {
         let calendar = Calendar.current
         let startOfToday = calendar.startOfDay(for: Date())
-        let sessions = cacheManager.cachedSessions
+        let sessions = cacheManager.cachedSessionsTwoWeeks
 
         func section(for dayDate: Date) -> CalendarDaySection {
             let dateKey = Self.dateOnlyFormatter.string(from: dayDate)
@@ -61,56 +51,12 @@ struct AsanaCalendarView: View {
             
             // Filter sessions for this date and convert to DocketInfo for display
             let sessionsForDate = sessions.filter { session in
-                guard let dueOn = session.due_on, !dueOn.isEmpty else { return false }
-                let normalized = String(dueOn.prefix(10))
+                guard let due = session.effectiveDueDate ?? session.due_on, !due.isEmpty else { return false }
+                let normalized = String(due.prefix(10))
                 return normalized == dateKey
             }
             
-            // Convert AsanaTask sessions to DocketInfo for display
-            let dockets = sessionsForDate.map { session -> DocketInfo in
-                // Extract docket number with priority:
-                // 1. From session name (e.g., "SESSION - 21419 Client Name")
-                // 2. From custom fields
-                // 3. From project name (e.g., "25464_TD Insurance Golden Ticket")
-                // 4. Fallback to "—"
-                var docketNumber = extractDocketNumber(from: session.name) ?? extractDocketFromCustomFields(session)
-                
-                // Try to extract from project name if not found
-                if docketNumber == nil, let memberships = session.memberships {
-                    for membership in memberships {
-                        if let projectName = membership.project?.name, !projectName.isEmpty {
-                            if let projectDocket = extractDocketNumber(from: projectName) {
-                                docketNumber = projectDocket
-                                break
-                            }
-                        }
-                    }
-                }
-                
-                let finalDocketNumber = docketNumber ?? "—"
-                let jobName = cleanSessionName(session.name)
-                
-                // Studio from task tags (e.g. "A - Blue", "B - Green", "C - Red", "M4 - Fuchsia")
-                let firstTag = session.tags?.first
-                let studio = firstTag?.name
-                let studioColor = firstTag?.color
-                
-                return DocketInfo(
-                    number: finalDocketNumber,
-                    jobName: jobName,
-                    fullName: session.name,
-                    updatedAt: session.modified_at,
-                    createdAt: session.created_at,
-                    metadataType: "SESSION",
-                    subtasks: nil,
-                    projectMetadata: nil,
-                    dueDate: session.due_on,
-                    taskGid: session.gid,
-                    studio: studio,
-                    studioColor: studioColor,
-                    completed: session.completed
-                )
-            }
+            let dockets = sessionsForDate.map { cacheManager.docketInfoFromSession($0) }
             
             return CalendarDaySection(
                 date: dayDate,
@@ -156,69 +102,6 @@ struct AsanaCalendarView: View {
         Array(calendarSections.dropFirst(Self.lookbackDays))
     }
     
-    /// Extract docket number from session name (e.g., "SESSION - 21419 Client" -> "21419").
-    /// Only 5 digits or 5 digits + "-US" (or similar suffix) are valid; avoids matching years like 2026.
-    private func extractDocketNumber(from name: String) -> String? {
-        let pattern = #"\d{5}(?:-[A-Z]{1,3})?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: name, options: [], range: NSRange(name.startIndex..., in: name)),
-              let range = Range(match.range, in: name) else {
-            return nil
-        }
-        return String(name[range])
-    }
-    
-    /// Try to extract docket number from custom fields if not found in name
-    private func extractDocketFromCustomFields(_ session: AsanaTask) -> String? {
-        // First, check common custom field names for docket number
-        let docketFieldNames = ["Docket", "Docket Number", "Docket #", "Docket#", "Job Number", "Job #"]
-        for fieldName in docketFieldNames {
-            if let value = session.getCustomFieldValue(name: fieldName), !value.isEmpty {
-                // Extract 5-digit (or 5 + suffix) only
-                if let number = extractDocketNumber(from: value) {
-                    return number
-                }
-                // If it's already just a valid docket (5 digits with optional -US etc), return it
-                let trimmed = value.trimmingCharacters(in: .whitespaces)
-                if trimmed.range(of: #"^\d{5}(?:-[A-Z]{1,3})?$"#, options: .regularExpression) != nil {
-                    return trimmed
-                }
-            }
-        }
-        
-        // If not found in named fields, check ALL custom fields for values that look like docket numbers
-        if let customFields = session.custom_fields {
-            for field in customFields {
-                guard let value = field.display_value, !value.isEmpty else { continue }
-                // Skip if this field name contains "name" or "description" (likely not a docket number)
-                let fieldNameLower = field.name.lowercased()
-                if fieldNameLower.contains("name") || fieldNameLower.contains("description") || fieldNameLower.contains("note") {
-                    continue
-                }
-                // Only accept 5-digit (or 5 + suffix) docket numbers
-                if let number = extractDocketNumber(from: value) {
-                    return number
-                }
-            }
-        }
-        
-        return nil
-    }
-    
-    /// Clean session name for display (remove "SESSION - " prefix, docket number, etc.)
-    private func cleanSessionName(_ name: String) -> String {
-        var cleaned = name
-        // Remove "SESSION" prefix (case insensitive)
-        if let range = cleaned.range(of: "SESSION\\s*[-–]?\\s*", options: [.regularExpression, .caseInsensitive]) {
-            cleaned = String(cleaned[range.upperBound...])
-        }
-        // Remove docket number if at the start
-        if let range = cleaned.range(of: "^\\d{5}(?:-[A-Z]{1,3})?\\s*[-–]?\\s*", options: .regularExpression) {
-            cleaned = String(cleaned[range.upperBound...])
-        }
-        return cleaned.trimmingCharacters(in: .whitespaces)
-    }
-    
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -247,7 +130,7 @@ struct AsanaCalendarView: View {
             
             Divider()
             
-            if isLoadingSessions && cacheManager.cachedSessions.isEmpty {
+            if isLoadingSessions && cacheManager.cachedSessionsTwoWeeks.isEmpty {
                 VStack(spacing: 12) {
                     ProgressView()
                         .scaleEffect(0.8)
@@ -297,7 +180,7 @@ struct AsanaCalendarView: View {
         
         Task {
             do {
-                try await cacheManager.syncUpcomingSessions(workspaceID: settingsManager.currentSettings.asanaWorkspaceID)
+                try await cacheManager.syncSessionsTwoWeeks(workspaceID: settingsManager.currentSettings.asanaWorkspaceID)
             } catch {
                 print("⚠️ [Calendar] Failed to sync sessions: \(error.localizedDescription)")
             }

@@ -667,12 +667,10 @@ struct FileItem: Identifiable, Hashable, Sendable {
 
 struct SearchResults: Sendable {
     let exactMatches: [String]
-    let fuzzyMatches: [String]
 }
 
 // --- PURE LOGIC ---
 enum MediaLogic {
-    // Fuzzy matching helpers
     nonisolated static func levenshteinDistance(_ s1: String, _ s2: String) -> Int {
         let s1 = Array(s1)
         let s2 = Array(s2)
@@ -692,46 +690,6 @@ enum MediaLogic {
         }
 
         return dist[s1.count][s2.count]
-    }
-
-    nonisolated static func fuzzyMatch(searchTerm: String, target: String, maxDistance: Int = 3) -> Bool {
-        let search = searchTerm.lowercased()
-        let targetLower = target.lowercased()
-
-        // Exact substring match
-        if targetLower.contains(search) { return true }
-
-        // Remove spaces and compare
-        let searchNoSpaces = search.replacingOccurrences(of: " ", with: "")
-        let targetNoSpaces = targetLower.replacingOccurrences(of: " ", with: "")
-
-        if targetNoSpaces.contains(searchNoSpaces) { return true }
-
-        // Split target into words and check fuzzy match on each
-        let words = targetLower.split(separator: " ").map { String($0) }
-        for word in words {
-            // More lenient length check - allow bigger differences
-            let minLength = max(3, search.count - maxDistance - 1)
-            if word.count >= minLength &&
-               levenshteinDistance(search, word) <= maxDistance {
-                return true
-            }
-            // Also check without spaces in the word
-            let wordNoSpaces = word.replacingOccurrences(of: " ", with: "")
-            if wordNoSpaces.count >= max(3, searchNoSpaces.count - maxDistance - 1) &&
-               levenshteinDistance(searchNoSpaces, wordNoSpaces) <= maxDistance {
-                return true
-            }
-        }
-
-        // Also try matching against the entire target path (not just words)
-        // This helps catch matches where words are concatenated differently
-        if targetNoSpaces.count >= max(3, searchNoSpaces.count - maxDistance - 1) &&
-           levenshteinDistance(searchNoSpaces, targetNoSpaces) <= maxDistance {
-            return true
-        }
-
-        return false
     }
 
     nonisolated static func scanDockets(config: AppConfig, jobType: JobType = .workPicture) -> [String] {
@@ -868,6 +826,104 @@ enum MediaLogic {
             }
         }
         return folderPaths.sorted { $0.value.modDate > $1.value.modDate }.map { (name: $0.key, path: $0.value.path) }
+    }
+
+    /// Scan year folders for work-picture job directories matching the docket base (same docket normalization as prep).
+    nonisolated static func existingWorkPictureFolders(docketNumber: String, config: AppConfig) -> [(name: String, path: String)] {
+        let fm = FileManager.default
+        let baseNum = docketBaseNumber(docketNumber)
+        let serverBase = URL(fileURLWithPath: config.settings.serverBasePath)
+        let yearPrefix = config.settings.yearPrefix
+        let workPictureFolderName = config.settings.workPictureFolderName
+        var folderPaths: [String: (path: String, modDate: Date)] = [:]
+        guard !serverBase.path.isEmpty,
+              fm.fileExists(atPath: serverBase.path),
+              let yearFolders = try? fm.contentsOfDirectory(at: serverBase, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        for yearFolder in yearFolders where yearFolder.lastPathComponent.hasPrefix(yearPrefix) {
+            let yearString = yearFolder.lastPathComponent.replacingOccurrences(of: yearPrefix, with: "")
+            let workPicPath = yearFolder.appendingPathComponent("\(yearString)_\(workPictureFolderName)")
+            guard fm.fileExists(atPath: workPicPath.path),
+                  let items = try? fm.contentsOfDirectory(at: workPicPath, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+                continue
+            }
+            for item in items {
+                guard item.hasDirectoryPath, !item.lastPathComponent.hasPrefix(".") else { continue }
+                let name = item.lastPathComponent
+                guard name == baseNum || name.hasPrefix("\(baseNum)_") else { continue }
+                let fullPath = item.path
+                let modDate = (try? item.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                if let existing = folderPaths[name] {
+                    if modDate > existing.modDate { folderPaths[name] = (fullPath, modDate) }
+                } else {
+                    folderPaths[name] = (fullPath, modDate)
+                }
+            }
+        }
+        return folderPaths.sorted { $0.value.modDate > $1.value.modDate }.map { (name: $0.key, path: $0.value.path) }
+    }
+
+    /// Create empty category subfolders inside a prep root according to `AppSettings` prep toggles (PICTURE, MUSIC, AAF-OMF, OTHER; optional CHECKLIST).
+    nonisolated static func ensurePrepTemplateSubfolders(at root: URL, settings: AppSettings) throws {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: root.path) {
+            try fm.createDirectory(at: root, withIntermediateDirectories: false)
+        }
+        func mkdirIfNeeded(_ folderName: String, enabled: Bool?) throws {
+            guard enabled ?? true else { return }
+            let u = root.appendingPathComponent(folderName)
+            if !fm.fileExists(atPath: u.path) {
+                try fm.createDirectory(at: u, withIntermediateDirectories: true)
+            }
+        }
+        try mkdirIfNeeded(settings.pictureFolderName, enabled: settings.createPrepPictureFolder)
+        try mkdirIfNeeded(settings.musicFolderName, enabled: settings.createPrepMusicFolder)
+        try mkdirIfNeeded(settings.aafOmfFolderName, enabled: settings.createPrepAafOmfFolder)
+        try mkdirIfNeeded(settings.otherFolderName, enabled: settings.createPrepOtherFolder)
+        if settings.createPrepChecklistFolder ?? false {
+            try mkdirIfNeeded("CHECKLIST", enabled: true)
+        }
+    }
+
+    /// Creates a new prep folder for a session (root + template subfolders). Uses session `dueDate` for naming when parseable, else `prepDateFallback`.
+    @MainActor
+    static func createPrepFolderForSession(
+        docket: DocketInfo,
+        prepDateFallback: Date,
+        config: AppConfig
+    ) throws -> URL {
+        let fm = FileManager.default
+        let display = docket.displayNumber
+        guard display != "—",
+              display.range(of: #"^\d{5}"#, options: .regularExpression) != nil else {
+            throw NSError(domain: "MediaDash", code: 1, userInfo: [NSLocalizedDescriptionKey: "No valid docket number for this session."])
+        }
+        let dateForName: Date = {
+            if let ds = docket.dueDate, ds.count >= 10 {
+                let f = DateFormatter()
+                f.dateFormat = "yyyy-MM-dd"
+                f.timeZone = TimeZone.current
+                if let parsed = f.date(from: String(ds.prefix(10))) {
+                    return Calendar.current.startOfDay(for: parsed)
+                }
+            }
+            return prepDateFallback
+        }()
+        let docketStr = docket.jobName.isEmpty ? display : "\(display)_\(docket.jobName)"
+        let docketForNaming = workPictureFolderNameForPrep(docket: docketStr, config: config) ?? docketStr
+        let folderName = config.prepFolderName(docket: docketForNaming, date: dateForName)
+        try config.ensureYearFolderStructure()
+        let paths = config.getPaths()
+        guard fm.fileExists(atPath: paths.prep.path) else {
+            throw NSError(domain: "MediaDash", code: 2, userInfo: [NSLocalizedDescriptionKey: "Prep parent folder not found:\n\(paths.prep.path)"])
+        }
+        let root = paths.prep.appendingPathComponent(folderName)
+        if !fm.fileExists(atPath: root.path) {
+            try fm.createDirectory(at: root, withIntermediateDirectories: false)
+        }
+        try ensurePrepTemplateSubfolders(at: root, settings: config.settings)
+        return root
     }
 
     /// Returns the work picture folder name to use when building a new prep folder name.
@@ -1045,7 +1101,7 @@ enum MediaLogic {
         return sanitized
     }
 
-    // MARK: - Prep Summary Generation
+    // MARK: - Video duration (shared helpers)
 
     /// Get video duration in seconds
     nonisolated static func getVideoDuration(_ url: URL) async -> TimeInterval? {
@@ -1130,149 +1186,6 @@ enum MediaLogic {
         }
         return name
     }
-
-    /// Generate prep summary text
-    nonisolated static func generatePrepSummary(docket: String, jobName: String, prepFolderPath: String, config: AppConfig) async -> String {
-        let fm = FileManager.default
-        let prepURL = URL(fileURLWithPath: prepFolderPath)
-        var summary = "\(docket) - \(jobName)\n\n"
-
-        guard fm.fileExists(atPath: prepFolderPath) else {
-            return summary + "Prep folder not found."
-        }
-
-        // PICTURE
-        let picturePath = prepURL.appendingPathComponent(config.settings.pictureFolderName)
-        if fm.fileExists(atPath: picturePath.path) {
-            // Exclude z_unconverted folder and its contents from video count
-            let unconvertedPath = picturePath.appendingPathComponent("z_unconverted")
-            let videoFiles = (try? fm.contentsOfDirectory(at: picturePath, includingPropertiesForKeys: nil))?.filter {
-                // Exclude directories (like z_unconverted) and files in z_unconverted
-                !$0.hasDirectoryPath && 
-                config.settings.pictureExtensions.contains($0.pathExtension.lowercased()) &&
-                !$0.path.hasPrefix(unconvertedPath.path)
-            } ?? []
-
-            if !videoFiles.isEmpty {
-                var durationGroups: [String: Int] = [:]
-                // Process videos with limited concurrency (max 3 at a time) to avoid overwhelming the system
-                await withTaskGroup(of: (String, Int)?.self) { group in
-                    for video in videoFiles {
-                        group.addTask {
-                            guard let duration = await getVideoDuration(video) else { return nil }
-                            let formatted = formatDuration(duration)
-                            return (formatted, 1)
-                        }
-                    }
-                    
-                    // Collect results as they complete
-                    for await result in group {
-                        if let (formatted, count) = result {
-                            durationGroups[formatted, default: 0] += count
-                        }
-                    }
-                }
-
-                let durationText = durationGroups.sorted { $0.key < $1.key }
-                    .map { "\($0.value) x \($0.key)" }
-                    .joined(separator: ", ")
-
-                summary += "PICTURE - \(durationText) prepped\n"
-            }
-        }
-
-        // OMF/AAF
-        let aafOmfPath = prepURL.appendingPathComponent(config.settings.aafOmfFolderName)
-        if fm.fileExists(atPath: aafOmfPath.path) {
-            let aafOmfFiles = (try? fm.contentsOfDirectory(at: aafOmfPath, includingPropertiesForKeys: nil))?.filter {
-                config.settings.aafOmfExtensions.contains($0.pathExtension.lowercased())
-            } ?? []
-
-            if !aafOmfFiles.isEmpty {
-                var types: [String] = []
-                if aafOmfFiles.contains(where: { $0.pathExtension.lowercased() == "aaf" }) {
-                    types.append("AAF")
-                }
-                if aafOmfFiles.contains(where: { $0.pathExtension.lowercased() == "omf" }) {
-                    types.append("OMF")
-                }
-                let typeText = types.isEmpty ? "AAF/OMF" : types.joined(separator: "/")
-                summary += "\(typeText) - Tested & prepped\n"
-            }
-        }
-
-        // MUSIC
-        let musicPath = prepURL.appendingPathComponent(config.settings.musicFolderName)
-        if fm.fileExists(atPath: musicPath.path) {
-            let musicFiles = (try? fm.contentsOfDirectory(at: musicPath, includingPropertiesForKeys: nil, options: .skipsHiddenFiles))?.filter {
-                !$0.hasDirectoryPath && config.settings.musicExtensions.contains($0.pathExtension.lowercased())
-            } ?? []
-
-            if !musicFiles.isEmpty {
-                summary += "MUSIC\n"
-                for file in musicFiles.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                    let name = (file.lastPathComponent as NSString).deletingPathExtension
-                    summary += "  - \(name) prepped\n"
-                }
-            }
-
-            // Check for stems folders
-            let folders = (try? fm.contentsOfDirectory(at: musicPath, includingPropertiesForKeys: nil))?.filter {
-                $0.hasDirectoryPath && $0.lastPathComponent.uppercased().contains("STEM")
-            } ?? []
-
-            if !folders.isEmpty {
-                for folder in folders.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                    summary += "  - \(folder.lastPathComponent) prepped\n"
-                }
-            }
-        }
-
-        // SFX
-        let sfxPath = prepURL.appendingPathComponent("SFX")
-        if fm.fileExists(atPath: sfxPath.path) {
-            let ptxFiles = (try? fm.contentsOfDirectory(at: sfxPath, includingPropertiesForKeys: nil))?.filter {
-                $0.pathExtension.lowercased() == "ptx"
-            } ?? []
-
-            if !ptxFiles.isEmpty {
-                summary += "SFX - Prepped (ProTools session found)\n"
-            }
-        }
-
-        // OTHER
-        let otherPath = prepURL.appendingPathComponent(config.settings.otherFolderName)
-        if fm.fileExists(atPath: otherPath.path) {
-            let otherFiles = (try? fm.contentsOfDirectory(at: otherPath, includingPropertiesForKeys: nil))?.filter {
-                !$0.hasDirectoryPath
-            } ?? []
-
-            if !otherFiles.isEmpty {
-                summary += "OTHER - \(otherFiles.count) file(s) prepped\n"
-            }
-        }
-
-        // CHECKLIST (when user assigned files to checklist items from session description)
-        let checklistPath = prepURL.appendingPathComponent("CHECKLIST")
-        if fm.fileExists(atPath: checklistPath.path) {
-            let itemDirs = (try? fm.contentsOfDirectory(at: checklistPath, includingPropertiesForKeys: nil))?.filter {
-                $0.hasDirectoryPath
-            } ?? []
-            for dir in itemDirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?.filter {
-                    !$0.hasDirectoryPath
-                } ?? []
-                if !files.isEmpty {
-                    summary += "\n\(dir.lastPathComponent):\n"
-                    for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                        summary += "  - \(file.lastPathComponent)\n"
-                    }
-                }
-            }
-        }
-
-        return summary.trimmingCharacters(in: .newlines)
-    }
 }
 
 @MainActor
@@ -1290,8 +1203,6 @@ class MediaManager: ObservableObject {
     @Published var errorMessage: String?
     @Published var showError: Bool = false
     @Published var indexingFolders: Set<SearchFolder> = [] // Track which folders are being indexed
-    @Published var prepSummary: String = ""
-    @Published var showPrepSummary: Bool = false
     @Published var connectionWarning: String? = nil
     @Published var showConnectionWarning: Bool = false
     @Published var isConverting: Bool = false
@@ -1307,16 +1218,12 @@ class MediaManager: ObservableObject {
     private var cachedSessions: [String] = [] // Legacy - for backward compatibility
     var folderCaches: [SearchFolder: [String]] = [:] // New cache system - internal for validation
     var config: AppConfig // Internal for DocketSearchView access
-    private var prepFolderWatcher: DispatchSourceFileSystemObject?
-    private var currentPrepFolder: String?
     private var metadataManager: DocketMetadataManager
     var videoConverter: VideoConverterManager?
     var omfAafValidator: OMFAAFValidatorManager?
     @Published var showOMFAAFValidator: Bool = false
     @Published var omfAafFileToValidate: URL?
     private var conversionMonitoringTask: Task<Void, Never>? // Track conversion monitoring task for cleanup
-    private var prepSummaryRegenerationTask: Task<Void, Never>? // Track prep summary regeneration to cancel previous ones
-    private var prepSummaryRegenerationWorkItem: DispatchWorkItem? // For debouncing watcher events
     /// Scheduled clear of staging after successful filing when using delayed mode (starts only after filing completes).
     private var pendingStagingClearWorkItem: DispatchWorkItem?
 
@@ -1543,41 +1450,23 @@ class MediaManager: ObservableObject {
             }
         }
         
-        if term.isEmpty { return SearchResults(exactMatches: [], fuzzyMatches: []) }
+        if term.isEmpty { return SearchResults(exactMatches: []) }
 
         let currentCache = folderCaches[folder] ?? []
-        let fuzzyEnabled = config.settings.enableFuzzySearch
         return await Task.detached(priority: .userInitiated) {
             let lower = term.localizedLowercase
             let searchWords = lower.split(separator: " ").map(String.init)
 
-            // 1. Exact matches - check if all words are present (in any order)
             let exactMatches = currentCache.filter { path in
                 let pathLower = path.lowercased()
-                // If single word or exact phrase match, use contains
                 if searchWords.count == 1 || pathLower.contains(lower) {
                     return pathLower.contains(lower)
                 }
-                // For multiple words, check if ALL words are present (in any order)
                 return searchWords.allSatisfy { word in
                     pathLower.contains(word)
                 }
             }
 
-            // 2. Fuzzy matches - catch typos and spacing differences (if enabled)
-            let fuzzyMatches: [String]
-            if fuzzyEnabled {
-                fuzzyMatches = currentCache.filter { path in
-                    // Skip if already in exact matches
-                    if exactMatches.contains(path) { return false }
-                    // Use fuzzy matching on the path (maxDistance: 3 for lenient matching)
-                    return MediaLogic.fuzzyMatch(searchTerm: term, target: path)
-                }
-            } else {
-                fuzzyMatches = []
-            }
-
-            // Sort both lists
             let sortedExact = exactMatches.prefix(150).sorted { pathA, pathB in
                 let nsPathA = pathA as NSString
                 let nsPathB = pathB as NSString
@@ -1594,26 +1483,7 @@ class MediaManager: ObservableObject {
                 return nsPathA.lastPathComponent < nsPathB.lastPathComponent
             }
 
-            let sortedFuzzy = fuzzyMatches.prefix(50).sorted { pathA, pathB in
-                let nsPathA = pathA as NSString
-                let nsPathB = pathB as NSString
-
-                let parentA = nsPathA.deletingLastPathComponent as NSString
-                let parentB = nsPathB.deletingLastPathComponent as NSString
-
-                let folderA = parentA.lastPathComponent
-                let folderB = parentB.lastPathComponent
-
-                if folderA != folderB {
-                    return folderA > folderB
-                }
-                return nsPathA.lastPathComponent < nsPathB.lastPathComponent
-            }
-
-            return SearchResults(
-                exactMatches: Array(sortedExact),
-                fuzzyMatches: Array(sortedFuzzy)
-            )
+            return SearchResults(exactMatches: Array(sortedExact))
         }.value
     }
     
@@ -2153,47 +2023,15 @@ class MediaManager: ObservableObject {
                     MediaLogic.applyPrepChecklistAssignments(session: session, root: root, stagedFiles: filesForChecklist)
                 }
 
-                // Organize stems and generate summary
+                // Organize stems
                 if type == .prep || type == .both {
-                    print("📁 [DEBUG] Starting stem organization and summary generation")
+                    print("📁 [DEBUG] Starting stem organization")
                     await MainActor.run { self.statusMessage = "Organizing stems..." }
-                    // Run organizeStems in background to avoid blocking
                     await Task.detached(priority: .utility) {
                         print("📁 [DEBUG] Organizing stems in background task")
                         self.organizeStems(in: root, config: currentConfig)
                         print("✅ [DEBUG] Stem organization completed")
                     }.value
-
-                    // Get job name for summary
-                    let jobName = await MainActor.run { self.getJobName(for: docket) }
-
-                    print("📊 [DEBUG] Generating prep summary...")
-                    await MainActor.run { self.statusMessage = "Generating prep summary..." }
-                    let summary = await MediaLogic.generatePrepSummary(
-                        docket: docket,
-                        jobName: jobName,
-                        prepFolderPath: root.path,
-                        config: currentConfig
-                    )
-                    print("✅ [DEBUG] Prep summary generated")
-
-                    // Save summary to file
-                    let summaryFile = root.appendingPathComponent("\(docket)_Prep_Summary.txt")
-                    try? summary.write(to: summaryFile, atomically: true, encoding: .utf8)
-
-                    // Update UI and setup file watching (but delay watcher setup to avoid firing during final operations)
-                    await MainActor.run {
-                        self.prepSummary = summary
-                        self.showPrepSummary = true
-                        self.currentPrepFolder = root.path
-                        
-                        print("⏰ [DEBUG] Scheduling prep folder watcher setup in 2 seconds (to avoid firing during final operations)")
-                        // Delay watcher setup to avoid immediate firing from final file operations
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                            print("⏰ [DEBUG] Setting up prep folder watcher now (2 second delay elapsed)")
-                            self?.setupPrepFolderWatcher(path: root.path, docket: docket)
-                        }
-                    }
                 }
             }
 
@@ -2513,7 +2351,7 @@ class MediaManager: ObservableObject {
         }
     }
 
-    // MARK: - Prep Summary Helpers
+    // MARK: - Prep folder helpers
 
     /// Organize stem files into dedicated folders
     nonisolated private func organizeStems(in prepFolder: URL, config: AppConfig) {
@@ -2569,124 +2407,6 @@ class MediaManager: ObservableObject {
             }
         }
         return docket
-    }
-
-    /// Setup file system monitoring for prep folder
-    func setupPrepFolderWatcher(path: String, docket: String) {
-        print("🔍 [DEBUG] Setting up prep folder watcher for: \(path)")
-        
-        // Stop existing watcher
-        prepFolderWatcher?.cancel()
-        prepFolderWatcher = nil
-        
-        // Cancel any pending regeneration
-        prepSummaryRegenerationWorkItem?.cancel()
-        prepSummaryRegenerationWorkItem = nil
-
-        let fd = open(path, O_EVTONLY)
-        guard fd >= 0 else {
-            print("⚠️ [DEBUG] Failed to open file descriptor for watcher: \(path)")
-            return
-        }
-
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd,
-            eventMask: [.write, .extend, .delete, .rename],
-            queue: DispatchQueue.global(qos: .utility) // Lower priority to avoid interfering with file operations
-        )
-
-        source.setEventHandler { [weak self] in
-            guard let self = self else { return }
-            print("🔍 [DEBUG] Prep folder watcher fired for: \(path), isProcessing: \(self.isProcessing)")
-            
-            // Cancel previous debounce work item
-            self.prepSummaryRegenerationWorkItem?.cancel()
-            
-            // Create new debounced work item with longer delay to avoid firing during active file operations
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self = self else { return }
-                // Only regenerate if we're not currently processing files
-                if self.isProcessing {
-                    print("⏸️ [DEBUG] Skipping summary regeneration - still processing files")
-                    return
-                }
-                print("🔄 [DEBUG] Executing debounced summary regeneration for: \(path)")
-                self.regeneratePrepSummary(path: path, docket: docket)
-            }
-            
-            self.prepSummaryRegenerationWorkItem = workItem
-            
-            // Debounce with 3 second delay to avoid firing during active file operations
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
-        }
-
-        source.setCancelHandler {
-            close(fd)
-        }
-
-        source.resume()
-        prepFolderWatcher = source
-        print("✅ [DEBUG] Prep folder watcher started successfully")
-    }
-
-    /// Regenerate prep summary
-    func regeneratePrepSummary(path: String, docket: String) {
-        // Cancel any existing regeneration task to prevent accumulation
-        if prepSummaryRegenerationTask != nil {
-            print("🛑 [DEBUG] Cancelling previous prep summary regeneration task")
-            prepSummaryRegenerationTask?.cancel()
-        }
-        
-        print("🚀 [DEBUG] Starting prep summary regeneration for: \(path)")
-        prepSummaryRegenerationTask = Task { [weak self] in
-            guard let self = self else {
-                print("⚠️ [DEBUG] Summary regeneration task: self is nil")
-                return
-            }
-            
-            // Check if task was cancelled
-            guard !Task.isCancelled else {
-                print("🛑 [DEBUG] Summary regeneration task cancelled immediately")
-                return
-            }
-            
-            let jobName = await MainActor.run { self.getJobName(for: docket) }
-            
-            // Check again after getting job name
-            guard !Task.isCancelled else {
-                print("🛑 [DEBUG] Summary regeneration task cancelled after getting job name")
-                return
-            }
-            
-            print("📊 [DEBUG] Generating prep summary...")
-            let summary = await MediaLogic.generatePrepSummary(
-                docket: docket,
-                jobName: jobName,
-                prepFolderPath: path,
-                config: self.config
-            )
-
-            // Final cancellation check
-            guard !Task.isCancelled else {
-                print("🛑 [DEBUG] Summary regeneration task cancelled after generating summary")
-                return
-            }
-
-            // Save updated summary
-            let summaryFile = URL(fileURLWithPath: path).appendingPathComponent("\(docket)_Prep_Summary.txt")
-            try? summary.write(to: summaryFile, atomically: true, encoding: .utf8)
-
-            // Update UI only if not cancelled
-            guard !Task.isCancelled else {
-                print("🛑 [DEBUG] Summary regeneration task cancelled before UI update")
-                return
-            }
-            
-            await MainActor.run {
-                self.prepSummary = summary
-            }
-            print("✅ [DEBUG] Prep summary regeneration completed successfully")
-        }
     }
 
     // MARK: - Video Conversion
@@ -2883,13 +2603,7 @@ class MediaManager: ObservableObject {
     
     deinit {
         // Clean up resources when MediaManager is deallocated
-        prepFolderWatcher?.cancel()
-        prepFolderWatcher = nil
         conversionMonitoringTask?.cancel()
         conversionMonitoringTask = nil
-        prepSummaryRegenerationTask?.cancel()
-        prepSummaryRegenerationTask = nil
-        prepSummaryRegenerationWorkItem?.cancel()
-        prepSummaryRegenerationWorkItem = nil
     }
 }

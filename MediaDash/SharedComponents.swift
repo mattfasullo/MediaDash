@@ -168,7 +168,7 @@ struct DocketInfo: Identifiable, Hashable, Codable {
     let completed: Bool?
     
     /// Display number with country suffixes removed (e.g., "25464-US" -> "25464")
-    var displayNumber: String {
+    nonisolated var displayNumber: String {
         // Remove country suffixes like -US, -CA, -UK, etc. (1-3 uppercase letters after a dash)
         if let range = number.range(of: #"-\p{Lu}{1,3}$"#, options: .regularExpression) {
             return String(number[..<range.lowerBound])
@@ -200,6 +200,93 @@ struct DocketInfo: Identifiable, Hashable, Codable {
     static func == (lhs: DocketInfo, rhs: DocketInfo) -> Bool {
         lhs.fullName == rhs.fullName
     }
+}
+
+// MARK: - Asana studio / tag colors (subtle UI)
+
+/// Maps Asana tag API colors and studio labels (e.g. `"C - Red"`) to soft SwiftUI colors for badges and accents.
+enum AsanaStudioColor {
+    /// Color from Asana API `tags[].color` (e.g. `dark-red`, `light-green`). Returns `nil` if unknown or empty.
+    static func colorFromAPIColorName(_ name: String?) -> Color? {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        return mapAPIName(name.lowercased())
+    }
+
+    /// Parses the trailing segment of studio tags like `"B - Green"` or `"M4 - Fuchsia"`.
+    static func colorInferredFromStudioLabel(_ studio: String) -> Color? {
+        let trimmed = studio.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let suffix: String
+        if let range = trimmed.range(of: " - ", options: .backwards) {
+            suffix = String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if let dash = trimmed.lastIndex(of: "-"), dash < trimmed.endIndex {
+            suffix = String(trimmed[trimmed.index(after: dash)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            suffix = trimmed
+        }
+        return mapColorWord(suffix.lowercased())
+    }
+
+    /// Prefer API color, then label suffix; otherwise `nil` (caller uses neutral styling).
+    static func resolvedAccentColor(studio: String?, apiColor: String?) -> Color? {
+        if let c = colorFromAPIColorName(apiColor) { return c }
+        if let studio, let c = colorInferredFromStudioLabel(studio) { return c }
+        return nil
+    }
+
+    /// Foreground and soft capsule background for a studio chip.
+    static func studioChipColors(studio: String?, apiColor: String?) -> (foreground: Color, background: Color) {
+        if let base = resolvedAccentColor(studio: studio, apiColor: apiColor) {
+            return (base.opacity(0.92), base.opacity(0.17))
+        }
+        return (.secondary, Color.secondary.opacity(0.12))
+    }
+
+    private static func mapAPIName(_ n: String) -> Color? {
+        switch n {
+        case "dark-pink", "hot-pink", "light-pink": return .pink
+        case "dark-red", "red", "light-red": return .red
+        case "dark-orange", "orange", "light-orange": return .orange
+        case "dark-warm-gray", "warm-gray", "light-warm-gray": return Color(red: 0.58, green: 0.5, blue: 0.44)
+        case "yellow", "light-yellow": return .yellow
+        case "dark-green", "green", "light-green": return .green
+        case "lime": return Color(red: 0.45, green: 0.78, blue: 0.32)
+        case "dark-teal", "teal", "light-teal", "aqua": return .teal
+        case "dark-blue", "blue", "light-blue": return .blue
+        case "dark-purple", "purple", "light-purple", "fuchsia": return .purple
+        case "dark-brown", "light-brown": return .brown
+        case "cool-gray", "light-gray", "gray", "grey": return .gray
+        default: return nil
+        }
+    }
+
+    private static func mapColorWord(_ w: String) -> Color? {
+        switch w {
+        case "red": return .red
+        case "green": return .green
+        case "blue": return .blue
+        case "yellow": return .yellow
+        case "orange": return .orange
+        case "purple", "violet": return .purple
+        case "pink": return .pink
+        case "teal", "aqua": return .teal
+        case "fuchsia": return Color(red: 0.55, green: 0.22, blue: 0.62)
+        case "gray", "grey": return .gray
+        case "brown": return .brown
+        default: return nil
+        }
+    }
+}
+
+// MARK: - Calendar / staging session day
+
+/// One calendar day with session tasks shown as `DocketInfo` (Asana session prep, staging sessions panel, etc.).
+struct CalendarDaySection: Identifiable {
+    let date: Date
+    let dayLabel: String
+    let isToday: Bool
+    var dockets: [DocketInfo]
+    var id: Date { date }
 }
 
 struct DocketSubtask: Identifiable, Hashable, Codable {

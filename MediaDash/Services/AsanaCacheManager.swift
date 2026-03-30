@@ -15,7 +15,7 @@ class AsanaCacheManager: ObservableObject {
     @Published var isSyncHost: Bool = false  // True when this instance holds the sync lock
     @Published var syncHostDeviceName: String? = nil  // When observing, name from progress file
     @Published var cachedDockets: [DocketInfo] = []
-    @Published var cachedSessions: [AsanaTask] = []  // Session Prep window (2-day lookback + upcoming business days)
+    @Published var cachedSessions: [AsanaTask] = []  // Staging session strip: narrow Asana window (see syncUpcomingSessions)
     @Published var lastSessionSyncDate: Date?
     /// Sessions for the full calendar view (2-day lookback + next 14 calendar days).
     @Published var cachedSessionsTwoWeeks: [AsanaTask] = []
@@ -604,9 +604,19 @@ class AsanaCacheManager: ObservableObject {
     
     /// Returns calendar sessions (as DocketInfo) that match the given docket number/folder name (e.g. "21419" or "21419-US").
     /// Used for "File + Prep" to open prep for a matching session after filing.
+    /// Deduplicated merge of staging-window and calendar-window session caches (matching / hub search).
+    func mergedSessionTasksForMatching() -> [AsanaTask] {
+        var seen = Set<String>()
+        var out: [AsanaTask] = []
+        for t in cachedSessions + cachedSessionsTwoWeeks {
+            if seen.insert(t.gid).inserted { out.append(t) }
+        }
+        return out
+    }
+
     func matchingSessions(for docket: String) -> [DocketInfo] {
         let normalized = docket.trimmingCharacters(in: .whitespaces)
-        let matching = cachedSessions.filter { task in
+        let matching = mergedSessionTasksForMatching().filter { task in
             guard let sessionNum = Self.extractDocketNumber(from: task.name) else { return false }
             return sessionNum == normalized || sessionNum.hasPrefix(normalized + "-") || normalized.hasPrefix(sessionNum)
         }
@@ -627,7 +637,135 @@ class AsanaCacheManager: ObservableObject {
         return String(name[range])
     }
     
-    private func cleanSessionName(_ name: String) -> String {
+    private func docketInfo(from task: AsanaTask) -> DocketInfo {
+        docketInfoFromSession(task)
+    }
+
+    private static let sessionDueDateKeyFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone.current
+        return f
+    }()
+
+    private static let sessionDayLabelFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE, MMM d"
+        f.timeZone = TimeZone.current
+        return f
+    }()
+
+    /// Next `count` calendar days starting today, each with sessions from `cachedSessions` as `DocketInfo`.
+    func sessionDaysStartingToday(count: Int = 3) -> [CalendarDaySection] {
+        let calendar = Calendar.current
+        let startOfToday = calendar.startOfDay(for: Date())
+        let sessions = cachedSessions
+        var result: [CalendarDaySection] = []
+        for i in 0..<max(0, count) {
+            guard let dayDate = calendar.date(byAdding: .day, value: i, to: startOfToday) else { continue }
+            result.append(calendarDaySection(for: dayDate, startOfToday: startOfToday, sessions: sessions, calendar: calendar))
+        }
+        return result
+    }
+
+    /// Today always, plus the next calendar day that has at least one session (for staging strip — keeps UI and scanning light).
+    func sessionDaysTodayAndNextWithSessions(maxFutureScan: Int = 21) -> [CalendarDaySection] {
+        let calendar = Calendar.current
+        let startOfToday = calendar.startOfDay(for: Date())
+        let sessions = cachedSessions
+        var result: [CalendarDaySection] = [calendarDaySection(for: startOfToday, startOfToday: startOfToday, sessions: sessions, calendar: calendar)]
+        let dateOnly = Self.sessionDueDateKeyFormatter
+        for offset in 1...max(0, maxFutureScan) {
+            guard let dayDate = calendar.date(byAdding: .day, value: offset, to: startOfToday) else { break }
+            let dateKey = dateOnly.string(from: dayDate)
+            let hasSession = sessions.contains { task in
+                guard let due = task.effectiveDueDate ?? task.due_on, !due.isEmpty else { return false }
+                return String(due.prefix(10)) == dateKey
+            }
+            if hasSession {
+                result.append(calendarDaySection(for: dayDate, startOfToday: startOfToday, sessions: sessions, calendar: calendar))
+                break
+            }
+        }
+        return result
+    }
+
+    private func calendarDaySection(for dayDate: Date, startOfToday: Date, sessions: [AsanaTask], calendar: Calendar) -> CalendarDaySection {
+        let dateKey = Self.sessionDueDateKeyFormatter.string(from: dayDate)
+        let dayLabel = Self.sessionDayLabelFormatter.string(from: dayDate)
+        let isToday = calendar.isDate(dayDate, inSameDayAs: startOfToday)
+        let sessionsForDate = sessions.filter { task in
+            guard let due = task.effectiveDueDate ?? task.due_on, !due.isEmpty else { return false }
+            return String(due.prefix(10)) == dateKey
+        }
+        let dockets = sessionsForDate.map { docketInfoFromSession($0) }
+        return CalendarDaySection(date: dayDate, dayLabel: dayLabel, isToday: isToday, dockets: dockets)
+    }
+
+    /// Public conversion for calendar, staging sessions panel, and other callers.
+    /// Docket resolution matches the former Asana calendar logic: task name, custom fields, then project name.
+    func docketInfoFromSession(_ task: AsanaTask) -> DocketInfo {
+        var docketNumber = Self.extractDocketNumber(from: task.name) ?? Self.extractDocketFromCustomFields(task)
+        if docketNumber == nil, let memberships = task.memberships {
+            for membership in memberships {
+                if let projectName = membership.project?.name, !projectName.isEmpty {
+                    if let projectDocket = Self.extractDocketNumber(from: projectName) {
+                        docketNumber = projectDocket
+                        break
+                    }
+                }
+            }
+        }
+        let finalDocket = docketNumber ?? "—"
+        let jobName = Self.cleanSessionDisplayName(task.name)
+        let firstTag = task.tags?.first
+        return DocketInfo(
+            number: finalDocket,
+            jobName: jobName,
+            fullName: task.name,
+            updatedAt: task.modified_at,
+            createdAt: task.created_at,
+            metadataType: "SESSION",
+            subtasks: nil,
+            projectMetadata: nil,
+            dueDate: task.effectiveDueDate ?? task.due_on,
+            taskGid: task.gid,
+            studio: firstTag?.name,
+            studioColor: firstTag?.color,
+            completed: task.completed
+        )
+    }
+
+    /// Try to extract docket number from custom fields if not found in name.
+    private static func extractDocketFromCustomFields(_ session: AsanaTask) -> String? {
+        let docketFieldNames = ["Docket", "Docket Number", "Docket #", "Docket#", "Job Number", "Job #"]
+        for fieldName in docketFieldNames {
+            if let value = session.getCustomFieldValue(name: fieldName), !value.isEmpty {
+                if let number = extractDocketNumber(from: value) {
+                    return number
+                }
+                let trimmed = value.trimmingCharacters(in: .whitespaces)
+                if trimmed.range(of: #"^\d{5}(?:-[A-Z]{1,3})?$"#, options: .regularExpression) != nil {
+                    return trimmed
+                }
+            }
+        }
+        if let customFields = session.custom_fields {
+            for field in customFields {
+                guard let value = field.display_value, !value.isEmpty else { continue }
+                let fieldNameLower = field.name.lowercased()
+                if fieldNameLower.contains("name") || fieldNameLower.contains("description") || fieldNameLower.contains("note") {
+                    continue
+                }
+                if let number = extractDocketNumber(from: value) {
+                    return number
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func cleanSessionDisplayName(_ name: String) -> String {
         var cleaned = name
         if let range = cleaned.range(of: "SESSION\\s*[-–]?\\s*", options: [.regularExpression, .caseInsensitive]) {
             cleaned = String(cleaned[range.upperBound...])
@@ -636,32 +774,6 @@ class AsanaCacheManager: ObservableObject {
             cleaned = String(cleaned[range.upperBound...])
         }
         return cleaned.trimmingCharacters(in: .whitespaces)
-    }
-    
-    private func docketInfo(from task: AsanaTask) -> DocketInfo {
-        docketInfoFromSession(task)
-    }
-
-    /// Public conversion for use by full calendar view and other callers.
-    func docketInfoFromSession(_ task: AsanaTask) -> DocketInfo {
-        let docketNumber = Self.extractDocketNumber(from: task.name) ?? "SESSION"
-        let jobName = cleanSessionName(task.name)
-        let firstTag = task.tags?.first
-        return DocketInfo(
-            number: docketNumber,
-            jobName: jobName,
-            fullName: task.name,
-            updatedAt: task.modified_at,
-            createdAt: task.created_at,
-            metadataType: "SESSION",
-            subtasks: nil,
-            projectMetadata: nil,
-            dueDate: task.effectiveDueDate,
-            taskGid: task.gid,
-            studio: firstTag?.name,
-            studioColor: firstTag?.color,
-            completed: task.completed
-        )
     }
     
     /// Load from shared cache synchronously (returns both dockets and cache metadata)
@@ -1155,15 +1267,15 @@ class AsanaCacheManager: ObservableObject {
         }
     }
     
-    /// Sync Session Prep window (2-day lookback + 5 business days ahead; ~9 calendar days).
+    /// Sync sessions for the staging strip (small window: today + near-future days only).
     func syncUpcomingSessions(workspaceID: String?) async throws {
         guard asanaService.isAuthenticated else {
             print("⚠️ [Sessions] Not authenticated, skipping session sync")
             return
         }
-        print("📅 [Sessions] Syncing session prep window (2-day lookback + upcoming days)...")
+        print("📅 [Sessions] Syncing staging session window (compact lookback + ahead)...")
         do {
-            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 7, daysBack: 2)
+            let sessions = try await asanaService.searchUpcomingSessions(workspaceID: workspaceID, daysAhead: 4, daysBack: 1)
             self.cachedSessions = sessions
             self.lastSessionSyncDate = Date()
             print("📅 [Sessions] Synced \(sessions.count) session prep tasks")

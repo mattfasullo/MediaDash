@@ -116,21 +116,18 @@ struct SearchUseCase {
         return index
     }
     
-    /// Search sessions with fuzzy matching
     func searchSessions(
         term: String,
-        folder: SearchFolder,
-        index: [String],
-        enableFuzzy: Bool
+        folder _: SearchFolder,
+        index: [String]
     ) async -> SearchResults {
         if term.isEmpty {
-            return SearchResults(exactMatches: [], fuzzyMatches: [])
+            return SearchResults(exactMatches: [])
         }
-        
+
         let lower = term.localizedLowercase
         let searchWords = lower.split(separator: " ").map(String.init)
-        
-        // Exact matches - check if all words are present (in any order)
+
         let exactMatches = index.filter { path in
             let pathLower = path.lowercased()
             if searchWords.count == 1 || pathLower.contains(lower) {
@@ -140,55 +137,24 @@ struct SearchUseCase {
                 pathLower.contains(word)
             }
         }
-        
-        // Fuzzy matches
-        let fuzzyMatches: [String]
-        if enableFuzzy {
-            fuzzyMatches = index.filter { path in
-                if exactMatches.contains(path) { return false }
-                return MediaLogic.fuzzyMatch(searchTerm: term, target: path)
-            }
-        } else {
-            fuzzyMatches = []
-        }
-        
-        // Sort both lists
+
         let sortedExact = exactMatches.prefix(150).sorted { pathA, pathB in
             let nsPathA = pathA as NSString
             let nsPathB = pathB as NSString
-            
+
             let parentA = nsPathA.deletingLastPathComponent as NSString
             let parentB = nsPathB.deletingLastPathComponent as NSString
-            
+
             let folderA = parentA.lastPathComponent
             let folderB = parentB.lastPathComponent
-            
+
             if folderA != folderB {
                 return folderA > folderB
             }
             return nsPathA.lastPathComponent < nsPathB.lastPathComponent
         }
-        
-        let sortedFuzzy = fuzzyMatches.prefix(50).sorted { pathA, pathB in
-            let nsPathA = pathA as NSString
-            let nsPathB = pathB as NSString
-            
-            let parentA = nsPathA.deletingLastPathComponent as NSString
-            let parentB = nsPathB.deletingLastPathComponent as NSString
-            
-            let folderA = parentA.lastPathComponent
-            let folderB = parentB.lastPathComponent
-            
-            if folderA != folderB {
-                return folderA > folderB
-            }
-            return nsPathA.lastPathComponent < nsPathB.lastPathComponent
-        }
-        
-        return SearchResults(
-            exactMatches: Array(sortedExact),
-            fuzzyMatches: Array(sortedFuzzy)
-        )
+
+        return SearchResults(exactMatches: Array(sortedExact))
     }
 }
 

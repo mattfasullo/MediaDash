@@ -6,16 +6,20 @@ import Combine
 
 struct StagingAreaView: View {
     @EnvironmentObject var manager: MediaManager
-    @ObservedObject var cacheManager: AsanaCacheManager
+    @EnvironmentObject var settingsManager: SettingsManager
+    /// Not `@ObservedObject`: sync progress updates many times per second; observing here re-renders the whole
+    /// staging column (including sessions rows that scan the server for folders). Status UI observes separately.
+    let cacheManager: AsanaCacheManager
+    let prepDate: Date
     @Binding var isStagingHovered: Bool
     @Binding var isStagingPressed: Bool
     @Binding var showVideoConverterSheet: Bool
     @Environment(\.layoutMode) var layoutMode
     @Environment(\.windowSize) var windowSize
     
+    @State private var stagingContentMode: StagingCenterContentMode = .files
     // Drag and drop state
     @State private var isDragTargeted: Bool = false
-    @State private var dragPulsePhase: CGFloat = 0
     
     // Batch rename state
     @State private var showBatchRenameSheet: Bool = false
@@ -23,14 +27,6 @@ struct StagingAreaView: View {
     
     private var totalFileCount: Int {
         manager.selectedFiles.reduce(0) { $0 + $1.fileCount }
-    }
-    
-    private var stagingSyncPhaseText: String {
-        let phase = cacheManager.syncPhase.isEmpty ? "Syncing from Asana..." : cacheManager.syncPhase
-        if let name = cacheManager.syncHostDeviceName, !name.isEmpty {
-            return "\(phase) (\(name))"
-        }
-        return phase
     }
     
     // Fixed padding for compact mode
@@ -42,7 +38,7 @@ struct StagingAreaView: View {
         VStack(alignment: .leading, spacing: 0) {
             stagingHeader
             stagingContent
-            statusBar
+            StagingAreaStatusBar(cacheManager: cacheManager, manager: manager)
         }
         .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -54,60 +50,45 @@ struct StagingAreaView: View {
     
     private var stagingHeader: some View {
             VStack(spacing: 0) {
-                HStack {
-                    HStack(spacing: 8) {
-                        Image(systemName: "tray.2")
-                            .foregroundColor(.blue)
-                        Text("STAGING")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.primary)
-
-                        if !manager.selectedFiles.isEmpty {
-                            Text("\(totalFileCount)")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.blue)
-                                .cornerRadius(10)
-                        }
+                HStack(spacing: 8) {
+                    StagingHeaderModeToggleButton(selection: $stagingContentMode)
+                    if !manager.selectedFiles.isEmpty {
+                        Text("\(totalFileCount) file\(totalFileCount == 1 ? "" : "s")")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.9))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
-
                     Spacer()
-
-                    // Always show Add Files button
                     Button(action: { manager.pickFiles() }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11))
-                            Text("Add Files")
-                                .font(.system(size: 12, weight: .medium))
-                        }
+                        Color.clear.frame(width: 1, height: 1)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                     .keyboardShortcut("o", modifiers: .command)
-
+                    .opacity(0.01)
+                    .frame(width: 1, height: 1)
+                    .accessibilityHidden(true)
                     if !manager.selectedFiles.isEmpty {
                         HoverableButton(action: { manager.clearFiles() }) { isHovered in
                             HStack(spacing: 4) {
                                 Image(systemName: "trash")
                                     .font(.system(size: 11))
                                 Text("Clear")
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(.caption)
                             }
-                            .foregroundColor(isHovered ? .red.opacity(0.8) : .red)
+                            .foregroundColor(isHovered ? .red.opacity(0.85) : .red)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(isHovered ? Color.red.opacity(0.1) : Color.clear)
+                            .background(isHovered ? Color.red.opacity(0.08) : Color.clear)
                             .cornerRadius(6)
                         }
                         .keyboardShortcut("w", modifiers: .command)
+                        .disabled(stagingContentMode == .sessions)
                     }
                 }
                 .padding(.horizontal, contentPadding)
-                .padding(.top, 16)
-                .padding(.bottom, 16)
+                .padding(.vertical, 12)
                 .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
                 
                 Divider()
@@ -116,212 +97,110 @@ struct StagingAreaView: View {
             }
             
     private var stagingContent: some View {
-            ZStack {
-                if manager.selectedFiles.isEmpty {
-                    // Empty State with enhanced drag feedback
-                    VStack(spacing: 16) {
-                        ZStack {
-                            // Pulsing ring when dragging
-                            if isDragTargeted {
-                                Circle()
-                                    .stroke(Color.blue.opacity(0.6), lineWidth: 3)
-                                    .frame(width: 110, height: 110)
-                                    .scaleEffect(1.0 + dragPulsePhase * 0.1)
-                                    .opacity(1.0 - dragPulsePhase * 0.5)
-                            }
-                            
-                            Circle()
-                                .fill(isDragTargeted ? Color.blue.opacity(0.3) : (isStagingPressed ? Color.blue.opacity(0.2) : (isStagingHovered ? Color.gray.opacity(0.15) : Color.gray.opacity(0.1))))
-                                .frame(width: 100, height: 100)
-                            
-                            Image(systemName: isDragTargeted ? "arrow.down.doc.fill" : "doc.on.doc.fill")
-                                .font(.system(size: 40))
-                                .foregroundColor(isDragTargeted ? .blue : (isStagingPressed ? .blue : .secondary))
-                                .scaleEffect(isDragTargeted ? 1.1 : 1.0)
-                        }
-                        .scaleEffect(isDragTargeted ? 1.15 : (isStagingPressed ? 0.95 : (isStagingHovered ? 1.05 : 1.0)))
-                        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isDragTargeted)
-                        .animation(.easeInOut(duration: 0.15), value: isStagingPressed)
-                        .animation(.easeInOut(duration: 0.15), value: isStagingHovered)
-
-                        VStack(spacing: 6) {
-                            Text(isDragTargeted ? "Drop files here" : "No files staged")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(isDragTargeted ? .blue : .primary)
-                            Text(isDragTargeted ? "Release to add to staging" : "Click here or use ⌘O to add files")
-                                .font(.system(size: 13))
-                                .foregroundColor(isDragTargeted ? .blue.opacity(0.8) : (isStagingPressed ? .blue : .secondary))
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    // File List with drag overlay
-                    ZStack {
-                        StagingFileListView(
-                            manager: manager,
-                            showBatchRenameSheet: $showBatchRenameSheet,
-                            filesToRename: $filesToRename,
-                            showVideoConverterSheet: $showVideoConverterSheet
-                        )
-                        
-                        // Drag overlay when files are being dragged
-                        if isDragTargeted {
-                            VStack(spacing: 12) {
-                                Image(systemName: "plus.circle.fill")
-                                    .font(.system(size: 48))
-                                    .foregroundColor(.white)
-                                Text("Drop to add files")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.blue.opacity(0.85))
-                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                        }
-                    }
-                }
+        Group {
+            switch stagingContentMode {
+            case .sessions:
+                StagingSessionsPanel(cacheManager: cacheManager, prepDate: prepDate)
+            case .files:
+                filesStagingContent
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .background(
-                Group {
-                    if isDragTargeted {
-                        Color.blue.opacity(0.1)
-                    } else if isStagingPressed {
-                        Color.blue.opacity(0.15)
-                    } else if isStagingHovered {
-                        Color.gray.opacity(0.05)
-                    } else {
-                        Color.clear
-                    }
-                }
-            )
-            .overlay(
-                // Glowing border when dragging
-                RoundedRectangle(cornerRadius: 0)
-                    .stroke(Color.blue, lineWidth: isDragTargeted ? 3 : 0)
-                    .opacity(isDragTargeted ? 0.8 : 0)
-                    .animation(.easeInOut(duration: 0.2), value: isDragTargeted)
-            )
-            .scaleEffect(isDragTargeted ? 1.01 : (isStagingPressed ? 0.998 : 1.0))
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDragTargeted)
-            .animation(.easeInOut(duration: 0.1), value: isStagingPressed)
-            .onHover { hovering in
-                isStagingHovered = hovering
-            }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        if !isStagingPressed {
-                            isStagingPressed = true
-                        }
-                    }
-                    .onEnded { _ in
-                        isStagingPressed = false
-                        manager.pickFiles()
-                    }
-            )
-            .onDrop(of: [UTType.fileURL], isTargeted: $isDragTargeted) { providers in
-                return handleFileDrop(providers: providers)
-            }
-            .onChange(of: isDragTargeted) { _, isTargeted in
-                if isTargeted {
-                    // Start pulse animation
-                    withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                        dragPulsePhase = 1.0
-                    }
-                } else {
-                    // Stop pulse animation
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        dragPulsePhase = 0
-                    }
-                }
-            }
-            .onHover { hovering in
-                if hovering {
-                    NSCursor.pointingHand.push()
-                } else {
-                    NSCursor.pop()
-                }
-                }
-            }
-
-    private var statusBar: some View {
-            HStack {
-                // Left side - Scanning and Asana sync indicators
-                HStack(spacing: 12) {
-                    if manager.isIndexing {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .frame(width: 12, height: 12)
-                            Text("Scanning")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.orange)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(6)
-                    }
-                    
-                    if cacheManager.isSyncing {
-                        HStack(spacing: 8) {
-                            if cacheManager.isSyncHost {
-                                Circle().fill(Color.green).frame(width: 6, height: 6)
-                            }
-                            if cacheManager.syncProgress > 0 {
-                                ProgressView(value: cacheManager.syncProgress)
-                                    .progressViewStyle(.linear)
-                                    .frame(width: 60)
-                                Text("\(Int(cacheManager.syncProgress * 100))%")
-                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.blue)
-                            } else {
-                                ProgressView()
-                                    .scaleEffect(0.6)
-                                    .frame(width: 12, height: 12)
-                            }
-                            Text(stagingSyncPhaseText)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.blue)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(6)
-                    }
-                }
-
-                Spacer()
-
-                // Center/Right - Processing or hover info
-                if manager.isProcessing {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            ProgressView(value: max(0, min(1, manager.progress)))
-                                .progressViewStyle(.linear)
-                                .frame(maxWidth: 200)
-                            Text("\(Int(max(0, min(1, manager.progress)) * 100))%")
-                                .font(.caption)
-                                .monospacedDigit()
-                                .frame(width: 40, alignment: .trailing)
-                            Button("Cancel") {
-                                manager.cancelProcessing()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                        Text(manager.statusMessage)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
+        }
     }
+
+    private var filesStagingContent: some View {
+        ZStack {
+            if manager.selectedFiles.isEmpty {
+                VStack(spacing: 14) {
+                    ZStack {
+                        Circle()
+                            .stroke(isDragTargeted ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.2), lineWidth: 1.5)
+                            .frame(width: 72, height: 72)
+                        Image(systemName: isDragTargeted ? "arrow.down.doc" : "doc")
+                            .font(.system(size: 28, weight: .light))
+                            .foregroundStyle(isDragTargeted ? Color.accentColor : .secondary)
+                    }
+                    VStack(spacing: 4) {
+                        Text(isDragTargeted ? "Drop to add" : "No files staged")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Text(isDragTargeted ? "Release to add" : "Click or press ⌘O")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(12)
+            } else {
+                ZStack {
+                    StagingFileListView(
+                        manager: manager,
+                        showBatchRenameSheet: $showBatchRenameSheet,
+                        filesToRename: $filesToRename,
+                        showVideoConverterSheet: $showVideoConverterSheet
+                    )
+                    if isDragTargeted {
+                        VStack(spacing: 10) {
+                            Image(systemName: "arrow.down.doc")
+                                .font(.system(size: 34, weight: .medium))
+                                .foregroundStyle(.secondary)
+                            Text("Drop to add files")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.94))
+                        .transition(.opacity)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .background(
+            Group {
+                if isDragTargeted {
+                    Color.accentColor.opacity(0.06)
+                } else if isStagingPressed {
+                    Color.accentColor.opacity(0.05)
+                } else if isStagingHovered {
+                    Color.secondary.opacity(0.04)
+                } else {
+                    Color.clear
+                }
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 0)
+                .stroke(Color.accentColor.opacity(0.45), lineWidth: isDragTargeted ? 2 : 0)
+        )
+        .animation(.easeInOut(duration: 0.18), value: isDragTargeted)
+        .animation(.easeInOut(duration: 0.1), value: isStagingPressed)
+        .onHover { hovering in
+            isStagingHovered = hovering
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !isStagingPressed {
+                        isStagingPressed = true
+                    }
+                }
+                .onEnded { _ in
+                    isStagingPressed = false
+                    manager.pickFiles()
+                }
+        )
+        .onDrop(of: [UTType.fileURL], isTargeted: $isDragTargeted) { providers in
+            handleFileDrop(providers: providers)
+        }
+    }
+
+
     
     private func handleFileDrop(providers: [NSItemProvider]) -> Bool {
         for provider in providers {
@@ -341,6 +220,97 @@ struct StagingAreaView: View {
             }
         }
         return true
+    }
+}
+
+// MARK: - Staging status bar (isolated observation)
+
+/// Observes `AsanaCacheManager` here only so high-frequency `syncProgress` updates do not rebuild the whole staging column.
+private struct StagingAreaStatusBar: View {
+    @ObservedObject var cacheManager: AsanaCacheManager
+    @ObservedObject var manager: MediaManager
+
+    private var stagingSyncPhaseText: String {
+        let phase = cacheManager.syncPhase.isEmpty ? "Syncing from Asana..." : cacheManager.syncPhase
+        if let name = cacheManager.syncHostDeviceName, !name.isEmpty {
+            return "\(phase) (\(name))"
+        }
+        return phase
+    }
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 12) {
+                if manager.isIndexing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                            .frame(width: 12, height: 12)
+                        Text("Scanning")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.orange)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(6)
+                }
+
+                if cacheManager.isSyncing {
+                    HStack(spacing: 8) {
+                        if cacheManager.isSyncHost {
+                            Circle().fill(Color.green).frame(width: 6, height: 6)
+                        }
+                        if cacheManager.syncProgress > 0 {
+                            ProgressView(value: cacheManager.syncProgress)
+                                .progressViewStyle(.linear)
+                                .frame(width: 60)
+                            Text("\(Int(cacheManager.syncProgress * 100))%")
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundColor(.blue)
+                        } else {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .frame(width: 12, height: 12)
+                        }
+                        Text(stagingSyncPhaseText)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.blue)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(6)
+                }
+            }
+
+            Spacer()
+
+            if manager.isProcessing {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        ProgressView(value: max(0, min(1, manager.progress)))
+                            .progressViewStyle(.linear)
+                            .frame(maxWidth: 200)
+                        Text("\(Int(max(0, min(1, manager.progress)) * 100))%")
+                            .font(.caption)
+                            .monospacedDigit()
+                            .frame(width: 40, alignment: .trailing)
+                        Button("Cancel") {
+                            manager.cancelProcessing()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    Text(manager.statusMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 }
 

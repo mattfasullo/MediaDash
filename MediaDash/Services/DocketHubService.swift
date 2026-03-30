@@ -183,9 +183,8 @@ class DocketHubService: ObservableObject {
             results.append(hubTask)
         }
         
-        // Also search in cached sessions (for calendar items)
-        let cachedSessions = asanaCacheManager.cachedSessions
-        for session in cachedSessions {
+        // Also search in cached sessions (staging + calendar windows, deduped)
+        for session in asanaCacheManager.mergedSessionTasksForMatching() {
             if let sessionDocket = extractDocketNumber(from: session.name),
                matchesDocket(sessionDocket, docketNumber: normalizedDocket) {
                 
