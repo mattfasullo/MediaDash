@@ -311,7 +311,7 @@ This app is not notarized (no Developer ID certificate). macOS may show a securi
 $RELEASE_NOTES"
 
 # Create release (pre-release for beta versions, full release for 1.0+)
-if [ "$VERSION" = "1.0" ] || [ "$VERSION" = "1.01" ] || [ "$VERSION" = "1.02" ] || [ "$VERSION" = "1.03" ] || [ "$VERSION" = "1.04" ] || [ "$VERSION" = "1.05" ]; then
+if [ "$VERSION" = "1.0" ] || [ "$VERSION" = "1.01" ] || [ "$VERSION" = "1.02" ] || [ "$VERSION" = "1.03" ] || [ "$VERSION" = "1.04" ] || [ "$VERSION" = "1.05" ] || [ "$VERSION" = "1.06" ]; then
     gh release create "v$VERSION" \
         "$RELEASE_DIR/$APP_NAME.zip" \
         "install_mediadash.sh" \

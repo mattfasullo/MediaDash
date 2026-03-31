@@ -342,6 +342,32 @@ class GmailService: ObservableObject {
         let listResponse = try JSONDecoder().decode(GmailListResponse.self, from: data)
         return listResponse.messages ?? []
     }
+
+    /// List all labels (system and user). Used to resolve user label IDs for new-docket scanning.
+    func listMailboxLabels() async throws -> [GmailLabelListItem] {
+        agentLogApiCall(method: "listMailboxLabels")
+        let url = URL(string: "\(baseURL)/users/me/labels")!
+        var request = URLRequest(url: url)
+        let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
+        if httpResponse.statusCode == 401 {
+            throw GmailError.notAuthenticated
+        }
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw GmailError.apiError("HTTP \(httpResponse.statusCode): \(errorMessage)")
+        }
+        let decoded = try JSONDecoder().decode(GmailLabelListResponse.self, from: data)
+        return decoded.labels ?? []
+    }
+
+    /// Gmail API label ID for a **user** label with this display name (case-insensitive, exact match).
+    func userLabelId(matchingName name: String) async throws -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let lower = trimmed.lowercased()
+        let labels = try await listMailboxLabels()
+        return labels.first { $0.type == "user" && $0.name.lowercased() == lower }?.id
+    }
     
     /// Get full email message by ID
     /// - Parameter messageId: The message ID from fetchEmails

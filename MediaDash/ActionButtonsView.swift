@@ -17,8 +17,6 @@ struct ActionButtonsView: View {
     let dateFormatter: DateFormatter
     let attempt: (JobType) -> Void
     let cacheManager: AsanaCacheManager
-    /// Opens Prep window (sessions list for today + 5 business days).
-    var onOpenPrep: () -> Void = {}
     /// Opens full 2-week Asana calendar view.
     var onOpenFullCalendar: () -> Void = {}
     /// Right-click "File + Prep": file first, then open prep for a matching calendar session.
@@ -41,7 +39,7 @@ struct ActionButtonsView: View {
     
     var body: some View {
         VStack(spacing: 8) {
-            // Row 1: File and Prep
+            // Row 1: File and Simian
             HStack(spacing: 8) {
                 ActionButtonWithShortcut(
                     title: "File",
@@ -79,19 +77,19 @@ struct ActionButtonsView: View {
                 .keyboardShortcut("1", modifiers: .command)
 
                 ActionButtonWithShortcut(
-                    title: "Prep",
-                    subtitle: "Sessions",
+                    title: "Simian",
+                    subtitle: "Upload",
                     shortcut: "⌘2",
-                    color: currentTheme.buttonColors.prep,
+                    color: currentTheme.buttonColors.simian,
                     isPrimary: false,
-                    isFocused: keyboardFocus.focusedButton == .prep,
+                    isFocused: keyboardFocus.focusedButton == .simian,
                     showShortcut: isCommandKeyHeld,
                     theme: currentTheme,
-                    iconName: "list.clipboard"
+                    iconName: "arrow.up.circle"
                 ) {
-                    onOpenPrep()
+                    SimianPostWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager, manager: manager)
                 }
-                .focused(focusedButton, equals: .prep)
+                .focused(focusedButton, equals: .simian)
                 .focusEffectDisabled()
                 .onHover { hovering in
                     if hovering {
@@ -100,7 +98,7 @@ struct ActionButtonsView: View {
                         isKeyboardMode = false
                     }
                     hoverInfo = hovering ?
-                        "Open sessions (today + 5 business days) to prep from calendar" :
+                        "Open Simian posting (search projects, upload files)" :
                         "Ready."
                 }
                 .keyboardShortcut("2", modifiers: .command)
@@ -157,7 +155,7 @@ struct ActionButtonsView: View {
                         isKeyboardMode = false
                     }
                     hoverInfo = hovering ?
-                        "Media layups: video conversion, restriping, Simian" :
+                        "Media layups: video conversion, restriping" :
                         "Ready."
                 }
                 .keyboardShortcut("4", modifiers: .command)
@@ -171,17 +169,14 @@ struct ActionButtonsView: View {
                         onOpenRestripe: {
                             showPortalSheet = false
                             RestripeWindowManager.shared.show()
-                        },
-                        onOpenSimian: {
-                            showPortalSheet = false
-                            SimianPostWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager, manager: manager)
                         }
                     )
                     .compactSheetBorder()
-                    .frame(width: 380, height: 300)
+                    .frame(width: 380, height: 220)
                 }
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

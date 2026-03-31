@@ -44,7 +44,6 @@ struct NotificationCenterView: View {
     
     @ObservedObject var notificationCenter: NotificationCenter
     @ObservedObject var emailScanningService: EmailScanningService
-    @ObservedObject var asanaDocketScanningService: AsanaDocketScanningService
     @ObservedObject var mediaManager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
     @EnvironmentObject var sessionManager: SessionManager
@@ -63,10 +62,6 @@ struct NotificationCenterView: View {
     @State private var cacheInfo: String?
     @State private var showCacheInfo = false
     @State private var isLoadingCache = false // Keep for fallback if file write fails
-    
-    private var detectionMode: NewDocketDetectionMode {
-        settingsManager.currentSettings.newDocketDetectionMode ?? .email
-    }
     
     // Computed properties for filtered notifications
     // Active notifications exclude completed ones (those go to history section)
@@ -139,9 +134,9 @@ struct NotificationCenterView: View {
             
             Divider()
             
-            gmailStatusBanner
+            emailStatusBannerContent
             
-            mainNotificationContent
+            emailModeContent
         }
         .frame(minWidth: 400, minHeight: 500)
         .background(
@@ -177,7 +172,11 @@ struct NotificationCenterView: View {
                         .foregroundColor(.secondary)
                 }
                 
-                modeAwareRefreshButton
+                EmailRefreshButton(
+                    notificationCenter: notificationCenter,
+                    grabbedIndicatorService: notificationCenter.grabbedIndicatorService
+                )
+                .environmentObject(emailScanningService)
                 
                 Button(action: {
                     NotificationWindowManager.shared.hideNotificationWindow()
@@ -190,56 +189,10 @@ struct NotificationCenterView: View {
                 .help("Close")
             }
             
-            detectionModeToggle
         }
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
         .contentShape(Rectangle())
-    }
-    
-    private var detectionModeToggle: some View {
-        Picker("Detection Source", selection: Binding(
-            get: { detectionMode },
-            set: { newMode in
-                settingsManager.currentSettings.newDocketDetectionMode = newMode
-                settingsManager.saveCurrentProfile()
-                handleModeSwitch(to: newMode)
-            }
-        )) {
-            ForEach(NewDocketDetectionMode.allCases, id: \.self) { mode in
-                Label(mode.displayName, systemImage: mode.icon)
-                    .tag(mode)
-            }
-        }
-        .pickerStyle(.segmented)
-    }
-    
-    @ViewBuilder
-    private var modeAwareRefreshButton: some View {
-        switch detectionMode {
-        case .email:
-            EmailRefreshButton(
-                notificationCenter: notificationCenter,
-                grabbedIndicatorService: notificationCenter.grabbedIndicatorService
-            )
-            .environmentObject(emailScanningService)
-        case .asanaProjects:
-            AsanaRefreshButton(
-                asanaDocketScanningService: asanaDocketScanningService,
-                notificationCenter: notificationCenter
-            )
-        }
-    }
-    
-    private var gmailStatusBanner: some View {
-        Group {
-            switch detectionMode {
-            case .email:
-                emailStatusBannerContent
-            case .asanaProjects:
-                asanaStatusBannerContent
-            }
-        }
     }
     
     private var emailStatusBannerContent: some View {
@@ -254,84 +207,6 @@ struct NotificationCenterView: View {
             } else if gmailEnabled && isGmailConnected, let retryAfter = emailScanningService.lastRateLimitRetryAfter, retryAfter > Date() {
                 rateLimitBanner(retryAfter: retryAfter)
             }
-        }
-    }
-    
-    private var asanaStatusBannerContent: some View {
-        Group {
-            let hasAsanaToken = SharedKeychainService.getAsanaAccessToken() != nil
-
-            if !hasAsanaToken {
-                asanaNotConnectedBanner
-            } else if let error = asanaDocketScanningService.lastError {
-                asanaErrorBanner(message: error)
-            }
-        }
-    }
-    
-    private var asanaNotConnectedBanner: some View {
-        asanaBanner(
-            title: "Asana Not Connected",
-            subtitle: "Connect Asana in Settings to detect dockets from Asana projects"
-        )
-    }
-    
-    private func asanaBanner(title: String, subtitle: String) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.orange)
-                    .font(.system(size: 14))
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 12, weight: .medium))
-                    Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-                
-                Button("Settings") {
-                    SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
-                    NotificationWindowManager.shared.hideNotificationWindow()
-                    isExpanded = false
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.orange.opacity(0.1))
-            
-            Divider()
-        }
-    }
-    
-    private func asanaErrorBanner(message: String) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.red)
-                    .font(.system(size: 14))
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Asana Scan Error")
-                        .font(.system(size: 12, weight: .medium))
-                    Text(message)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                }
-                
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.red.opacity(0.1))
-            
-            Divider()
         }
     }
     
@@ -406,17 +281,6 @@ struct NotificationCenterView: View {
         }
     }
     
-    private var mainNotificationContent: some View {
-        Group {
-            switch detectionMode {
-            case .email:
-                emailModeContent
-            case .asanaProjects:
-                asanaModeContent
-            }
-        }
-    }
-    
     private var emailModeContent: some View {
         Group {
             let isGmailConnected = emailScanningService.gmailService.isAuthenticated
@@ -432,99 +296,6 @@ struct NotificationCenterView: View {
                 notificationListContent
             }
         }
-    }
-    
-    private var asanaModeContent: some View {
-        Group {
-            let hasAsanaToken = SharedKeychainService.getAsanaAccessToken() != nil
-
-            if !hasAsanaToken {
-                asanaNotConnectedEmptyState
-            } else if asanaDocketScanningService.isScanning {
-                asanaScanningState
-            } else if mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
-                asanaNoNotificationsEmptyState
-            } else {
-                notificationListContent
-            }
-        }
-    }
-    
-    private var asanaNotConnectedEmptyState: some View {
-        asanaEmptyState(
-            title: "Asana Not Connected",
-            subtitle: "Connect Asana in Settings to detect new dockets from Asana projects"
-        )
-    }
-    
-    private func asanaEmptyState(title: String, subtitle: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "list.bullet.rectangle")
-                .font(.system(size: 40))
-                .foregroundColor(.secondary)
-            
-            VStack(spacing: 8) {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.primary)
-                
-                Text(subtitle)
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
-            }
-            
-            Button("Open Settings") {
-                showSettings = true
-                NotificationWindowManager.shared.hideNotificationWindow()
-                isExpanded = false
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-    }
-    
-    private var asanaScanningState: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .scaleEffect(0.8)
-            Text("Scanning Asana projects...")
-                .font(.system(size: 14))
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-    }
-    
-    private var asanaNoNotificationsEmptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bell.slash")
-                .font(.system(size: 40))
-                .foregroundColor(.secondary)
-            
-            Text("No new dockets from Asana")
-                .font(.system(size: 14))
-                .foregroundColor(.secondary)
-            
-            if let resultMessage = asanaDocketScanningService.scanResultMessage {
-                Text(resultMessage)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .padding(.top, 4)
-            }
-            
-            Button(action: triggerAsanaScan) {
-                Label("Scan Asana projects", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-            .padding(.top, 8)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
     }
     
     private var gmailNotConnectedEmptyState: some View {
@@ -1052,31 +823,7 @@ struct NotificationCenterView: View {
             await notificationCenter.syncCompletionStatus()
         }
         
-        // Auto-fetch based on current detection mode
-        switch detectionMode {
-        case .email:
-            autoFetchEmail()
-        case .asanaProjects:
-            autoFetchAsana()
-        }
-    }
-    
-    private func handleModeSwitch(to newMode: NewDocketDetectionMode) {
-        switch newMode {
-        case .email:
-            // Stop Asana scanning (no-op since it's on-demand, not periodic)
-            // Start email scanning if enabled
-            if settingsManager.currentSettings.gmailEnabled {
-                emailScanningService.startScanning()
-            }
-            // Auto-fetch emails
-            triggerManualScan()
-        case .asanaProjects:
-            // Stop email periodic scanning to save API usage
-            emailScanningService.stopScanning()
-            // Auto-fetch from Asana
-            triggerAsanaScan()
-        }
+        autoFetchEmail()
     }
     
     private func autoFetchEmail() {
@@ -1110,21 +857,6 @@ struct NotificationCenterView: View {
                 let minutesAgo = timeAgo / 60
                 lastScanStatus = "Last scan: \(minutesAgo)m ago"
             }
-        }
-    }
-    
-    private func autoFetchAsana() {
-        let timeSinceLastScan = asanaDocketScanningService.lastScanTime.map { Date().timeIntervalSince($0) } ?? Double.infinity
-        let scanThreshold: TimeInterval = 30
-        
-        if timeSinceLastScan > scanThreshold {
-            triggerAsanaScan()
-        }
-    }
-    
-    private func triggerAsanaScan() {
-        Task {
-            await asanaDocketScanningService.scanForNewDockets()
         }
     }
     
@@ -2034,7 +1766,10 @@ struct NotificationRowView: View {
                 .padding(.vertical, 2)
             }
             
-            approveArchiveButtons(notification: notification)
+            approveArchiveButtons(
+                notification: currentNotification,
+                hideApprove: wasPreExistingInWorkPicture && wasPreExistingInSimian
+            )
         }
         .padding(.top, 4)
         .onAppear {
@@ -2138,25 +1873,41 @@ struct NotificationRowView: View {
     
     
     @ViewBuilder
-    private func approveArchiveButtons(notification: Notification) -> some View {
+    private func approveArchiveButtons(notification: Notification, hideApprove: Bool) -> some View {
         HStack(spacing: 8) {
-            Button("Approve") {
-                if notification.docketNumber == nil || notification.docketNumber == "TBD" {
-                    isDocketInputForApproval = true
-                    showDocketInputDialog = true
+            if !hideApprove {
+                Button("Approve") {
+                    if notification.docketNumber == nil || notification.docketNumber == "TBD" {
+                        isDocketInputForApproval = true
+                        showDocketInputDialog = true
+                    } else {
+                        handleApprove()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(processingNotification == notificationId)
+            }
+            
+            Group {
+                if hideApprove {
+                    Button("Remove") {
+                        Task {
+                            await notificationCenter.remove(notification, emailScanningService: emailScanningService)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
                 } else {
-                    handleApprove()
+                    Button("Remove") {
+                        Task {
+                            await notificationCenter.remove(notification, emailScanningService: emailScanningService)
+                        }
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
-            .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .disabled(processingNotification == notificationId)
-            
-            Button("Archive") {
-                notificationCenter.archive(notification, emailScanningService: emailScanningService)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
         }
     }
     
@@ -2486,12 +2237,8 @@ struct NotificationRowView: View {
                     
                     let existenceInfo = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
                     
-                    if existenceInfo.existsAnywhere {
-                        docketExistenceWarningView(
-                            existenceInfo: existenceInfo,
-                            notification: notification,
-                            existsInSimian: notification.isInSimian
-                        )
+                    if existenceInfo.existsInAsana {
+                        docketAsanaExistenceChip(existenceInfo: existenceInfo)
                     }
                 } else {
                     Text("Docket \(docketNumber)")
@@ -2513,80 +2260,26 @@ struct NotificationRowView: View {
         }
     }
     
-    /// Helper view for where docket exists. Show a warning when it's in Work Picture or Simian (so user doesn't duplicate). Asana is informational (bubbles only).
+    /// Asana match chip only — Work Picture / Simian status is shown in the row below (Already in Work Picture / Simian).
     @ViewBuilder
-    private func docketExistenceWarningView(
-        existenceInfo: DocketExistenceInfo,
-        notification: Notification,
-        existsInSimian: Bool = false
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Warning when already in Work Picture or Simian (not for Asana — that's expected)
-            let showWarning = existenceInfo.existsInWorkPicture || existsInSimian
-            if showWarning {
-                let preExistingParts: [String] = [
-                    (existenceInfo.existsInWorkPicture && !notification.workPictureCreatedByUs) ? "Work Picture" : nil,
-                    (existsInSimian && !notification.simianCreatedByUs) ? "Simian" : nil
-                ].compactMap { $0 }
-                let addedParts: [String] = [
-                    (existenceInfo.existsInWorkPicture && notification.workPictureCreatedByUs) ? "Work Picture" : nil,
-                    (existsInSimian && notification.simianCreatedByUs) ? "Simian" : nil
-                ].compactMap { $0 }
-
-                let (warningText, warningColor, warningIcon): (String, Color, String) = {
-                    if preExistingParts.isEmpty && !addedParts.isEmpty {
-                        return ("Docket added to \(addedParts.joined(separator: " & "))", .green, "checkmark.circle.fill")
-                    } else if !preExistingParts.isEmpty && addedParts.isEmpty {
-                        return ("Docket already exists in \(preExistingParts.joined(separator: " & "))", .orange, "exclamationmark.triangle.fill")
-                    } else {
-                        return ("Docket already exists in \(preExistingParts.joined(separator: " & ")); added to \(addedParts.joined(separator: " & "))", .orange, "exclamationmark.triangle.fill")
-                    }
-                }()
-
-                HStack(spacing: 4) {
-                    Image(systemName: warningIcon)
-                        .font(.system(size: 10))
-                        .foregroundColor(warningColor)
-                    Text(warningText)
-                        .font(.system(size: 10))
-                        .foregroundColor(warningColor)
+    private func docketAsanaExistenceChip(existenceInfo: DocketExistenceInfo) -> some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 3) {
+                Image(systemName: "list.bullet.rectangle")
+                    .font(.system(size: 8))
+                Text("Asana")
+                    .font(.system(size: 9, weight: .medium))
+                if let asanaInfo = existenceInfo.asanaDocketInfo {
+                    Text("(\(asanaInfo.jobName))")
+                        .font(.system(size: 8))
+                        .opacity(0.8)
                 }
             }
-            
-            HStack(spacing: 6) {
-                if existenceInfo.existsInWorkPicture {
-                    HStack(spacing: 3) {
-                        Image(systemName: "folder.fill")
-                            .font(.system(size: 8))
-                        Text("Work Picture")
-                            .font(.system(size: 9, weight: .medium))
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.8))
-                    .cornerRadius(4)
-                }
-                
-                if existenceInfo.existsInAsana {
-                    HStack(spacing: 3) {
-                        Image(systemName: "list.bullet.rectangle")
-                            .font(.system(size: 8))
-                        Text("Asana")
-                            .font(.system(size: 9, weight: .medium))
-                        if let asanaInfo = existenceInfo.asanaDocketInfo {
-                            Text("(\(asanaInfo.jobName))")
-                                .font(.system(size: 8))
-                                .opacity(0.8)
-                        }
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.purple.opacity(0.8))
-                    .cornerRadius(4)
-                }
-            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.purple.opacity(0.8))
+            .cornerRadius(4)
         }
     }
     

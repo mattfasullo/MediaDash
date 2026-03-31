@@ -52,8 +52,6 @@ struct SidebarView: View {
     var onPrepElementsFromCalendar: ((DocketInfo) -> Void)?
     /// Right-click File → "File + Prep": file then open prep for matching session.
     var onFileThenPrep: (() -> Void)? = nil
-    /// Open Prep window (sessions, today + 5 business days).
-    var onOpenPrep: (() -> Void)? = nil
     /// Open full 2-week Asana calendar view.
     var onOpenFullCalendar: (() -> Void)? = nil
     /// Portal popover visibility (attach popover to button for correct arrow alignment).
@@ -83,9 +81,10 @@ struct SidebarView: View {
     
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            // Background that extends to top
+            // Fill only the fixed sidebar width — unconstrained Color in ZStack would expand with the window.
             currentTheme.sidebarBackground
                 .ignoresSafeArea(.all, edges: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             
             VStack(alignment: .leading, spacing: 12) {
                 // App Logo
@@ -126,15 +125,6 @@ struct SidebarView: View {
                     dateFormatter: dateFormatter,
                     attempt: attempt,
                     cacheManager: cacheManager ?? AsanaCacheManager(),
-                    onOpenPrep: {
-                        if let cm = cacheManager {
-                            AsanaCalendarWindowManager.shared.show(
-                                cacheManager: cm,
-                                settingsManager: settingsManager,
-                                onPrepElements: onPrepElementsFromCalendar
-                            )
-                        }
-                    },
                     onOpenFullCalendar: onOpenFullCalendar ?? {
                         if let cm = cacheManager {
                             AsanaFullCalendarWindowManager.shared.show(
@@ -149,11 +139,9 @@ struct SidebarView: View {
                 )
                 .draggableLayout(id: "actionButtons")
 
-                Spacer()
-
                 Divider()
 
-                // Bottom actions
+                // Search, Job Info, Archiver — fixed below the main grid (not pushed down by a spacer)
                 VStack(spacing: 8) {
                     FocusableNavButton(
                         icon: "magnifyingglass",
@@ -210,11 +198,16 @@ struct SidebarView: View {
                             isKeyboardMode = false
                         }
                     }
+                }
+                .draggableLayout(id: "sidebarSecondaryNav")
 
+                Spacer(minLength: 0)
+
+                // Workspace / log out — only this block stays pinned to the bottom
+                VStack(spacing: 8) {
                     Divider()
                         .padding(.vertical, 4)
 
-                    // Workspace Button (where log out button was)
                     if case .loggedIn(let profile) = sessionManager.authenticationState {
                         WorkspaceMenuButton(profile: profile, sessionManager: sessionManager)
                     }
@@ -223,7 +216,7 @@ struct SidebarView: View {
                 .draggableLayout(id: "sidebarBottomActions")
             }
             .padding(16)
-            .frame(width: 300)
+            .frame(width: sidebarWidth)
             .background(currentTheme.sidebarBackground)
             .frame(maxHeight: .infinity, alignment: .top)
             .clipped() // Prevent overflow
@@ -241,6 +234,10 @@ struct SidebarView: View {
             .padding(.top, 8)
             .padding(.trailing, 16)
         }
+        .frame(width: sidebarWidth)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .fixedSize(horizontal: true, vertical: false)
+        .clipped()
     }
 }
 

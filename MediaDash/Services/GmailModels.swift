@@ -8,6 +8,16 @@ struct GmailListResponse: Codable {
     let resultSizeEstimate: Int
 }
 
+struct GmailLabelListResponse: Codable {
+    let labels: [GmailLabelListItem]?
+}
+
+struct GmailLabelListItem: Codable {
+    let id: String
+    let name: String
+    let type: String?
+}
+
 struct GmailThread: Codable {
     let id: String
     let messages: [GmailMessage]?

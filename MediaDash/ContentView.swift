@@ -34,7 +34,7 @@ enum DebugSessionLog {
 
 // Focus management for all navigable buttons
 enum ActionButtonFocus: Hashable {
-    case file, prep, calendar, convert, search, jobInfo, archiver
+    case file, simian, calendar, convert, search, jobInfo, archiver
 }
 
 /// Shared keyboard focus state so the NSEvent key handler can update focus and the view observes it.
@@ -50,9 +50,9 @@ final class MainWindowKeyboardFocus: ObservableObject {
         switch direction {
         case .up:
             switch cur {
-            case .file, .prep: return .archiver
+            case .file, .simian: return .archiver
             case .calendar: return .file
-            case .convert: return .prep
+            case .convert: return .simian
             case .search: return .calendar
             case .jobInfo: return .search
             case .archiver: return .jobInfo
@@ -60,7 +60,7 @@ final class MainWindowKeyboardFocus: ObservableObject {
         case .down:
             switch cur {
             case .file: return .calendar
-            case .prep: return .convert
+            case .simian: return .convert
             case .calendar, .convert: return .search
             case .search: return .jobInfo
             case .jobInfo: return .archiver
@@ -68,13 +68,13 @@ final class MainWindowKeyboardFocus: ObservableObject {
             }
         case .left:
             switch cur {
-            case .prep: return .file
+            case .simian: return .file
             case .convert: return .calendar
             default: return cur
             }
         case .right:
             switch cur {
-            case .file: return .prep
+            case .file: return .simian
             case .calendar: return .convert
             default: return cur
             }
@@ -106,7 +106,6 @@ struct ContentView: View {
     @FocusState private var mainViewFocused: Bool
     @EnvironmentObject var notificationCenter: NotificationCenter
     @EnvironmentObject var emailScanningService: EmailScanningService
-    @EnvironmentObject var asanaDocketScanningService: AsanaDocketScanningService
 
     // Task handle for hourly cache sync
     @State private var hourlySyncTask: Task<Void, Never>?
@@ -345,7 +344,6 @@ struct ContentView: View {
                         NotificationCenterView(
                             notificationCenter: notificationCenter,
                             emailScanningService: emailScanningService,
-                            asanaDocketScanningService: asanaDocketScanningService,
                             mediaManager: manager,
                             settingsManager: settingsManager,
                             isExpanded: $showNotificationCenter,
@@ -558,6 +556,7 @@ struct ContentView: View {
                             showVideoConverterSheet: $showVideoConverterSheet
                         )
                         .environmentObject(manager)
+                        .layoutPriority(1)
                         .draggableLayout(id: "stagingArea")
                     }
                     .frame(minWidth: LayoutMode.minWidth, maxWidth: .infinity, minHeight: LayoutMode.minHeight, maxHeight: .infinity)
@@ -813,7 +812,7 @@ struct ContentView: View {
     }
 
     private func moveGridFocus(direction: GridDirection) {
-        // Grid layout: [file, prep]
+        // Grid layout: [file, simian]
         //              [calendar, convert]
         // Then linear: [search, jobInfo, archiver]
 
@@ -827,12 +826,12 @@ struct ContentView: View {
         switch direction {
         case .up:
             switch current {
-            case .file, .prep:
+            case .file, .simian:
                 focusedButton = .archiver
             case .calendar:
                 focusedButton = .file
             case .convert:
-                focusedButton = .prep
+                focusedButton = .simian
             case .search:
                 focusedButton = .calendar
             case .jobInfo:
@@ -845,7 +844,7 @@ struct ContentView: View {
             switch current {
             case .file:
                 focusedButton = .calendar
-            case .prep:
+            case .simian:
                 focusedButton = .convert
             case .calendar, .convert:
                 focusedButton = .search
@@ -859,7 +858,7 @@ struct ContentView: View {
 
         case .left:
             switch current {
-            case .prep:
+            case .simian:
                 focusedButton = .file
             case .convert:
                 focusedButton = .calendar
@@ -870,7 +869,7 @@ struct ContentView: View {
         case .right:
             switch current {
             case .file:
-                focusedButton = .prep
+                focusedButton = .simian
             case .calendar:
                 focusedButton = .convert
             default:
@@ -882,7 +881,7 @@ struct ContentView: View {
 
     private func moveFocus(direction: Int) {
         // Linear navigation fallback
-        let mainButtons: [ActionButtonFocus] = [.file, .prep, .calendar, .convert, .search, .jobInfo, .archiver]
+        let mainButtons: [ActionButtonFocus] = [.file, .simian, .calendar, .convert, .search, .jobInfo, .archiver]
 
         // If no button is focused, auto-focus the first one when using arrow keys
         if focusedButton == nil {
@@ -910,18 +909,8 @@ struct ContentView: View {
         switch focus {
         case .file:
             attempt(type: .workPicture)
-        case .prep:
-            AsanaCalendarWindowManager.shared.show(
-                cacheManager: cacheManager,
-                settingsManager: settingsManager,
-                onPrepElements: { session in
-                    CalendarPrepWindowManager.shared.show(
-                        session: session,
-                        asanaService: cacheManager.service,
-                        manager: manager
-                    )
-                }
-            )
+        case .simian:
+            SimianPostWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager, manager: manager)
         case .calendar:
             AsanaFullCalendarWindowManager.shared.show(
                 cacheManager: cacheManager,
@@ -1242,6 +1231,10 @@ struct ActionButtonWithShortcut: View {
     let action: () -> Void
     @State private var isHovered = false
 
+    /// Fixed content height so the 2×2 grid does not stretch when the window grows vertically.
+    private static let gridCellContentHeight: CGFloat = 68
+    private static let gridCellVerticalPadding: CGFloat = 10
+
     var body: some View {
         Button(action: action) {
             ZStack {
@@ -1254,7 +1247,7 @@ struct ActionButtonWithShortcut: View {
                 }
 
                 VStack(spacing: 0) {
-                    Spacer()
+                    Spacer(minLength: 0)
 
                     // Main content - centered
                     Text(title)
@@ -1265,8 +1258,7 @@ struct ActionButtonWithShortcut: View {
                         .frame(maxWidth: .infinity)
                         .rotationEffect(.degrees(0))
 
-                    Spacer()
-                    Spacer()
+                    Spacer(minLength: 0)
 
                     // Shortcut - positioned in lower third
                     Text(shortcut)
@@ -1279,10 +1271,11 @@ struct ActionButtonWithShortcut: View {
                         .opacity(showShortcut ? 1 : 0)
                         .padding(.bottom, 8)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
+            .frame(height: Self.gridCellContentHeight)
+            .padding(.vertical, Self.gridCellVerticalPadding)
             .background(
                 (isHovered || isFocused ? color.brightened(by: 0.15) : color)
             )
@@ -4571,74 +4564,6 @@ struct EmailRefreshButton: View {
             }
             
             // Status message
-            if let status = statusMessage {
-                Text(status)
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .transition(.opacity.combined(with: .move(edge: .leading)))
-                    .animation(.easeInOut, value: statusMessage)
-            }
-        }
-        .onDisappear {
-            statusTimer?.invalidate()
-        }
-    }
-}
-
-// MARK: - Asana Refresh Button
-
-struct AsanaRefreshButton: View {
-    @ObservedObject var asanaDocketScanningService: AsanaDocketScanningService
-    var notificationCenter: NotificationCenter? = nil
-    @State private var isHovered = false
-    @State private var statusMessage: String?
-    @State private var statusTimer: Timer?
-    
-    var body: some View {
-        HStack(spacing: 4) {
-            Button(action: {
-                guard !asanaDocketScanningService.isScanning else { return }
-                statusMessage = nil
-                
-                let beforeCount = notificationCenter?.notifications.filter { $0.status == .pending }.count ?? 0
-                
-                Task { @MainActor in
-                    await asanaDocketScanningService.scanForNewDockets()
-                    
-                    let afterCount = notificationCenter?.notifications.filter { $0.status == .pending }.count ?? 0
-                    let newCount = afterCount - beforeCount
-                    
-                    if newCount > 0 {
-                        statusMessage = "Found \(newCount) new docket\(newCount == 1 ? "" : "s")"
-                    } else {
-                        statusMessage = "Up to date"
-                    }
-                    
-                    statusTimer?.invalidate()
-                    statusTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-                        statusMessage = nil
-                    }
-                }
-            }) {
-                ZStack {
-                    Circle()
-                        .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
-                        .frame(width: 24, height: 24)
-                    
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .rotationEffect(.degrees(asanaDocketScanningService.isScanning ? 360 : 0))
-                        .animation(asanaDocketScanningService.isScanning ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: asanaDocketScanningService.isScanning)
-                }
-            }
-            .buttonStyle(.plain)
-            .help(statusMessage ?? "Refresh Asana projects")
-            .disabled(asanaDocketScanningService.isScanning)
-            .onHover { hovering in
-                isHovered = hovering
-            }
-            
             if let status = statusMessage {
                 Text(status)
                     .font(.system(size: 10))

@@ -41,6 +41,44 @@ class EmailScanningService: ObservableObject {
     #else
     private func emailScanDebug(_ message: @autoclosure () -> String) {}
     #endif
+
+    /// Gmail user label for new-docket mail; must match the label name in Gmail exactly (including nested `Parent/Child` if used).
+    private static let newDocketGmailUserLabelName = "New Docket"
+
+    /// Gmail `label:` search term with quoting for spaces/special characters.
+    private static func gmailQuotedLabelSearchTerm(_ name: String) -> String {
+        let escaped = name
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
+    }
+
+    /// Gmail list query: **unread and** user label (both required — space is AND in Gmail search).
+    /// Resolves label ID so we can double-check `labelIds` after fetch.
+    private func newDocketScanQueryAndLabelId() async -> (query: String, newDocketLabelId: String?) {
+        let trimmedName = Self.newDocketGmailUserLabelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        var resolvedId: String?
+        do {
+            resolvedId = try await gmailService.userLabelId(matchingName: trimmedName)
+            if resolvedId == nil {
+                emailScanDebug("EmailScanningService: ⚠️ No Gmail user label named '\(trimmedName)' — scan uses is:unread label:… but client cannot verify label IDs until this label exists")
+            }
+        } catch {
+            emailScanDebug("EmailScanningService: ⚠️ Could not list Gmail labels (\(error.localizedDescription))")
+        }
+        let query = "is:unread label:\(Self.gmailQuotedLabelSearchTerm(trimmedName))"
+        return (query, resolvedId)
+    }
+
+    /// Unread is mandatory; New Docket label is required (verified via `labelIds` when we have a resolved label ID).
+    private func isNewDocketScanCandidate(_ message: GmailMessage, newDocketLabelId: String?) -> Bool {
+        guard let labelIds = message.labelIds, labelIds.contains("UNREAD") else { return false }
+        if let id = newDocketLabelId {
+            return labelIds.contains(id)
+        }
+        // Could not resolve label ID; query already enforced `label:` — only UNREAD is verified here.
+        return true
+    }
     
     init(gmailService: GmailService, parser: EmailDocketParser) {
         self.gmailService = gmailService
@@ -126,7 +164,9 @@ class EmailScanningService: ObservableObject {
     
     /// Start automatic email scanning and pattern syncing
     func startScanning() {
-        guard !isScanning else { return }
+        // Use `isEnabled` here — not `isScanning`. `isScanning` means a fetch is in flight; setting it before
+        // `scanNow()` would make every periodic scan return immediately at the top of `scanNow()`.
+        guard !isEnabled else { return }
         guard let settings = settingsManager?.currentSettings, settings.gmailEnabled else {
             lastError = "Gmail integration is not enabled in settings"
             return
@@ -137,7 +177,6 @@ class EmailScanningService: ObservableObject {
             return
         }
         
-        isScanning = true
         isEnabled = true
         lastError = nil
         
@@ -164,6 +203,7 @@ class EmailScanningService: ObservableObject {
         #if DEBUG
         emailScanDebug("🔍 EmailScanningService.scanNow() called")
         #endif
+        // Skip if a scan is already running (do not conflate with `isEnabled` / periodic scanning).
         if isScanning {
             return
         }
@@ -208,13 +248,12 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Scan all unread emails to find new docket emails
-            let query = "is:unread"
+            let (query, newDocketLabelId) = await newDocketScanQueryAndLabelId()
             
             emailScanDebug("EmailScanningService: 🔍 Starting scan...")
             emailScanDebug("  📧 Gmail enabled: \(settings.gmailEnabled)")
             emailScanDebug("  🔑 Gmail authenticated: \(gmailService.isAuthenticated)")
-            emailScanDebug("  🔎 Query: \(query) (scanning all unread emails)")
+            emailScanDebug("  🔎 Query: \(query)")
             
             emailScanDebug("EmailScanningService: Starting email scan - query: \(query), gmailEnabled: \(settings.gmailEnabled), gmailAuthenticated: \(gmailService.isAuthenticated)")
             // Fetch emails matching query
@@ -242,15 +281,12 @@ class EmailScanningService: ObservableObject {
                 emailScanDebug("    \(index + 1). \"\(subject)\" | From: \(from) | Unread: \(isUnread)")
             }
             
-            // Filter to only unread emails (double-check labelIds)
-            let unreadMessages = messages.filter { message in
-                guard let labelIds = message.labelIds else { return false }
-                return labelIds.contains("UNREAD")
-            }
-            emailScanDebug("  ✅ \(unreadMessages.count) are unread (filtered out \(messages.count - unreadMessages.count) already-read emails)")
+            // Unread, or (if configured) messages carrying the new-docket user label (e.g. read but labeled)
+            let candidateMessages = messages.filter { isNewDocketScanCandidate($0, newDocketLabelId: newDocketLabelId) }
+            emailScanDebug("  ✅ \(candidateMessages.count) are scan candidates (unread and '\(Self.newDocketGmailUserLabelName)' label); filtered out \(messages.count - candidateMessages.count)")
             
             // DEBUG: Check if Kids Help Phone email is in the unread list
-            let kidsHelpPhoneEmails = unreadMessages.filter { message in
+            let kidsHelpPhoneEmails = candidateMessages.filter { message in
                 let subject = message.subject ?? ""
                 let from = message.from ?? ""
                 return subject.localizedCaseInsensitiveContains("kids help phone") ||
@@ -262,22 +298,22 @@ class EmailScanningService: ObservableObject {
                     emailScanDebug("    - Subject: \(email.subject ?? "none") | From: \(email.from ?? "none") | ID: \(email.id)")
                 }
             } else {
-                emailScanDebug("  ⚠️  WARNING: Kids Help Phone email NOT found in unread list")
+                emailScanDebug("  ⚠️  WARNING: Kids Help Phone email NOT found in candidate list")
                 emailScanDebug("     This could mean:")
-                emailScanDebug("     1. Email is marked as read in Gmail")
-                emailScanDebug("     2. Email is not in the first 50 unread emails (Gmail query limit)")
+                emailScanDebug("     1. Email is read, or missing the '\(Self.newDocketGmailUserLabelName)' Gmail label (both unread + label are required)")
+                emailScanDebug("     2. Email is not in the first 50 matching messages (Gmail query limit)")
                 emailScanDebug("     3. Email was already processed and is in processedEmailIds/processedThreadIds")
             }
             
-            // Cache unread emails for reuse in checklist flow
+            // Cache scan candidates for reuse in checklist flow
             await MainActor.run {
-                self.cachedUnreadMessages = unreadMessages
+                self.cachedUnreadMessages = candidateMessages
             }
             
-            // Log ALL unread emails found
-            if !unreadMessages.isEmpty {
-                emailScanDebug("  📝 Found \(unreadMessages.count) unread email(s):")
-                for (index, message) in unreadMessages.enumerated() {
+            // Log ALL candidate emails found
+            if !candidateMessages.isEmpty {
+                emailScanDebug("  📝 Found \(candidateMessages.count) candidate email(s):")
+                for (index, message) in candidateMessages.enumerated() {
                     let subject = message.subject ?? "(no subject)"
                     let from = message.from ?? "(no sender)"
                     let isProcessed = processedEmailIds.contains(message.id)
@@ -296,9 +332,9 @@ class EmailScanningService: ObservableObject {
                 }
             }
             
-            // Process ALL unread emails - parser will determine if they contain new docket information
-            let initialEmails = unreadMessages
-            emailScanDebug("  📬 Processing all \(initialEmails.count) unread emails - parser will determine relevance")
+            // Process all candidates — parser will determine if they contain new docket information
+            let initialEmails = candidateMessages
+            emailScanDebug("  📬 Processing all \(initialEmails.count) candidate emails - parser will determine relevance")
             
             // Filter out already processed emails AND threads (unless force rescan)
             // This prevents duplicate notifications from the same email thread
@@ -354,7 +390,7 @@ class EmailScanningService: ObservableObject {
                 let from = message.from ?? "(no sender)"
                 emailScanDebug("  🔄 Processing email \(processedCount)/\(newMessages.count): \"\(subject)\" from \(from)")
                 
-                if await processEmailAndCreateNotification(message) {
+                if await processEmailAndCreateNotification(message, newDocketLabelId: newDocketLabelId) {
                     notificationCount += 1
                     emailScanDebug("    ✅ Created notification")
                     // Mark email AND thread as processed (prevents duplicate notifications from same thread)
@@ -377,7 +413,7 @@ class EmailScanningService: ObservableObject {
             // Print diagnostic summary
             emailScanDebug("EmailScanningService: 📊 Scan Summary:")
             emailScanDebug("  📧 Total emails found: \(messageRefs.count)")
-            emailScanDebug("  ✅ Unread: \(unreadMessages.count)")
+            emailScanDebug("  ✅ Scan candidates: \(candidateMessages.count)")
             emailScanDebug("  📬 Initial (not reply/forward): \(initialEmails.count)")
             emailScanDebug("  🆕 New (not processed): \(newMessages.count)")
             emailScanDebug("  ✅ Notifications created: \(notificationCount)")
@@ -465,11 +501,20 @@ class EmailScanningService: ObservableObject {
     }
     
     /// Process a single email and create notification (don't auto-create docket)
-    func processEmailAndCreateNotification(_ message: GmailMessage) async -> Bool {
-        // Safety check: Only process unread emails
-        guard let labelIds = message.labelIds, labelIds.contains("UNREAD") else {
-            emailScanDebug("    ❌ REJECTED: Email already marked as read")
+    func processEmailAndCreateNotification(_ message: GmailMessage, newDocketLabelId: String? = nil) async -> Bool {
+        guard let labelIds = message.labelIds else {
+            emailScanDebug("    ❌ REJECTED: No label IDs on message")
             return false
+        }
+        guard labelIds.contains("UNREAD") else {
+            emailScanDebug("    ❌ REJECTED: Email is not unread")
+            return false
+        }
+        if let lid = newDocketLabelId {
+            guard labelIds.contains(lid) else {
+                emailScanDebug("    ❌ REJECTED: Email does not have the '\(Self.newDocketGmailUserLabelName)' Gmail label")
+                return false
+            }
         }
         
         // Use parser with custom patterns if configured
@@ -594,12 +639,11 @@ class EmailScanningService: ObservableObject {
             return false
         }
         
-        // Check if docket already exists
+        // Work Picture may already list this docket — still create a notification so the email appears in New Dockets;
+        // checkDuplicatesForNotification marks pre-existing WP / Simian for the UI.
         if let manager = mediaManager,
            manager.dockets.contains("\(parsedDocket.docketNumber)_\(parsedDocket.jobName)") {
-            // Docket already exists - mark as processed but don't create notification
-            emailScanDebug("    ❌ REJECTED: Docket already exists: \(parsedDocket.docketNumber)_\(parsedDocket.jobName)")
-            return false
+            emailScanDebug("    ℹ️ Work Picture already has \(parsedDocket.docketNumber)_\(parsedDocket.jobName) — creating notification anyway (duplicate check will flag WP)")
         }
         
         // Create notification instead of auto-creating docket
@@ -1244,18 +1288,17 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
-            // Scan all unread emails to find new docket emails
-            let query = "is:unread"
-            emailScanDebug("EmailScanningService: Scanning all unread emails for new docket notifications")
+            let (query, newDocketLabelId) = await newDocketScanQueryAndLabelId()
+            emailScanDebug("EmailScanningService: Scanning Gmail for new docket notifications — query: \(query)")
             let messageRefs = try await gmailService.fetchEmails(
                 query: query,
                 maxResults: 50
             )
             
-            emailScanDebug("EmailScanningService: Found \(messageRefs.count) unread emails")
+            emailScanDebug("EmailScanningService: Found \(messageRefs.count) message(s) matching query")
             
             guard !messageRefs.isEmpty else {
-                emailScanDebug("EmailScanningService: No unread emails found")
+                emailScanDebug("EmailScanningService: No messages matched the scan query")
                 return
             }
             
@@ -1263,16 +1306,12 @@ class EmailScanningService: ObservableObject {
             let messages = try await gmailService.getEmails(messageReferences: messageRefs)
             emailScanDebug("EmailScanningService: Fetched \(messages.count) full email messages")
             
-            // Filter to only unread emails (check labelIds)
-            let unreadMessages = messages.filter { message in
-                guard let labelIds = message.labelIds else { return false }
-                return labelIds.contains("UNREAD")
-            }
-            emailScanDebug("EmailScanningService: \(unreadMessages.count) emails are actually unread (out of \(messages.count) total)")
+            let candidateMessages = messages.filter { isNewDocketScanCandidate($0, newDocketLabelId: newDocketLabelId) }
+            emailScanDebug("EmailScanningService: \(candidateMessages.count) scan candidates (unread + '\(Self.newDocketGmailUserLabelName)' label) out of \(messages.count) fetched")
             
             // Don't filter out replies/forwards - let the parser determine if they contain new docket info
-            let initialEmails = unreadMessages
-            emailScanDebug("EmailScanningService: Processing \(initialEmails.count) unread emails (including replies/forwards - parser will determine relevance)")
+            let initialEmails = candidateMessages
+            emailScanDebug("EmailScanningService: Processing \(initialEmails.count) candidate emails (including replies/forwards - parser will determine relevance)")
             
             let existingEmailIds = await MainActor.run {
                 return forceRescan ? Set<String>() : Set(notificationCenter.notifications.compactMap { $0.emailId })
@@ -1309,7 +1348,7 @@ class EmailScanningService: ObservableObject {
                 }
                 
                 emailScanDebug("EmailScanningService: Email \(message.id) - attempting to process as new docket email...")
-                let isNewDocket = await processEmailAndCreateNotification(message)
+                let isNewDocket = await processEmailAndCreateNotification(message, newDocketLabelId: newDocketLabelId)
                 
                 if isNewDocket {
                     createdCount += 1
@@ -1427,11 +1466,10 @@ class EmailScanningService: ObservableObject {
             return
         }
         
-        // Check if docket already exists
+        // Work Picture may already list this docket — still add notification; duplicate UI comes from checkDuplicatesForNotification.
         if let manager = mediaManager,
            manager.dockets.contains("\(docketNumber)_\(jobName)") {
-            emailScanDebug("EmailScanningService: Docket already exists: \(docketNumber)_\(jobName)")
-            return
+            emailScanDebug("EmailScanningService: Work Picture already has \(docketNumber)_\(jobName) — creating notification anyway")
         }
         
         // Check if notification already exists for this docket + email/thread combo

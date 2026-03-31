@@ -240,26 +240,11 @@ enum DocketSource: String, Codable, CaseIterable {
 
 enum NewDocketDetectionMode: String, Codable, CaseIterable {
     case email = "Email"
-    case asanaProjects = "Asana Projects"
     
-    var displayName: String {
-        self.rawValue
-    }
-    
-    var icon: String {
-        switch self {
-        case .email: return "envelope.fill"
-        case .asanaProjects: return "list.bullet.rectangle.fill"
-        }
-    }
-    
-    var description: String {
-        switch self {
-        case .email:
-            return "Detect new dockets from incoming emails"
-        case .asanaProjects:
-            return "Detect new dockets from recently created Asana projects"
-        }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self)
+        self = Self(rawValue: raw) ?? .email
     }
 }
 
@@ -409,12 +394,12 @@ enum AppTheme: String, Codable, CaseIterable {
         }
     }
 
-    var buttonColors: (file: Color, prep: Color, both: Color) {
+    var buttonColors: (file: Color, simian: Color, both: Color) {
         switch self {
         case .modern:
             return (
                 Color(red: 0.25, green: 0.35, blue: 0.50),  // Subtle slate blue
-                Color(red: 0.50, green: 0.40, blue: 0.25),  // Subtle amber/brown
+                Color(red: 0.50, green: 0.40, blue: 0.25),  // Subtle amber/brown (Simian quick action)
                 Color(red: 0.25, green: 0.45, blue: 0.45)   // Subtle teal
             )
         case .retroDesktop:
@@ -649,7 +634,7 @@ struct AppSettings: Codable, Equatable {
     // Gmail Integration
     var gmailEnabled: Bool
     var gmailQuery: String // Gmail search query (deprecated - now always scans all unread emails)
-    var gmailPollInterval: TimeInterval // Polling interval in seconds (default: 300 = 5 minutes)
+    var gmailPollInterval: TimeInterval // Polling interval in seconds (default: 3600 = 1 hour)
     var docketParsingPatterns: [String] // Regex patterns for extracting docket info
     
     // Simian Integration (via API)
@@ -662,7 +647,7 @@ struct AppSettings: Codable, Equatable {
     
     // Notification Window Settings
     var notificationWindowLocked: Bool // Whether notification window follows main window
-    var newDocketDetectionMode: NewDocketDetectionMode? // Email vs Asana Projects for detecting new dockets
+    var newDocketDetectionMode: NewDocketDetectionMode? // New dockets: email (legacy "Asana Projects" decodes as .email)
     
     // Browser Preference
     var defaultBrowser: BrowserPreference // Default browser for opening email links
@@ -807,7 +792,7 @@ struct AppSettings: Codable, Equatable {
             useSharedCache: true,
             gmailEnabled: true,
             gmailQuery: "",
-            gmailPollInterval: 300, // 5 minutes
+            gmailPollInterval: 3600, // 1 hour
             docketParsingPatterns: [],
             simianEnabled: true,
             simianAPIBaseURL: "https://graysonmusic.gosimian.com/api/prjacc",
@@ -917,6 +902,30 @@ class SettingsManager: ObservableObject {
         // If this was first launch, save the default profile after reset
         if availableProfiles.count == 1 && availableProfiles.first == "Default" {
             saveProfile(settings: .default, name: "Default")
+        }
+
+        migrateGmailPollIntervalFromLegacyDefaultIfNeeded()
+    }
+
+    /// One-time: former default was 300s (5 min); new-docket auto-scan policy is hourly (3600s).
+    private func migrateGmailPollIntervalFromLegacyDefaultIfNeeded() {
+        let key = "didMigrateGmailPollIntervalToHourly"
+        guard !userDefaults.bool(forKey: key) else { return }
+        defer { userDefaults.set(true, forKey: key) }
+
+        var profiles = loadAllProfiles()
+        var changed = false
+        for name in profiles.keys {
+            guard var profile = profiles[name], profile.gmailPollInterval == 300 else { continue }
+            profile.gmailPollInterval = 3600
+            profiles[name] = profile
+            changed = true
+        }
+        guard changed, let encoded = try? JSONEncoder().encode(profiles) else { return }
+        userDefaults.set(encoded, forKey: profilesKey)
+        let activeName = userDefaults.string(forKey: currentProfileKey) ?? currentSettings.profileName
+        if let updated = profiles[activeName] {
+            currentSettings = updated
         }
     }
     

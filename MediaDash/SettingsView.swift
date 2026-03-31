@@ -2490,7 +2490,7 @@ struct GmailIntegrationSection: View {
                                     Text("Scan Interval (seconds)")
                                         .font(.system(size: 13))
                                     
-                                    TextField("300", value: Binding(
+                                    TextField("3600", value: Binding(
                                         get: { settings.gmailPollInterval },
                                         set: {
                                             settings.gmailPollInterval = max(60, $0)
@@ -2500,11 +2500,11 @@ struct GmailIntegrationSection: View {
                                     .textFieldStyle(.roundedBorder)
                                     .frame(width: 120)
                                     
-                                    Text("How often to check for new emails (minimum: 60 seconds)")
+                                    Text("How often to auto-scan for new dockets (default: 3600 = 1 hour; minimum: 60 seconds)")
                                         .font(.system(size: 11))
                                         .foregroundColor(.secondary)
                                 }
-                                
+
                                 Divider()
                                     .padding(.vertical, 8)
                                 

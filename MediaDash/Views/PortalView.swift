@@ -8,21 +8,18 @@
 import SwiftUI
 
 struct PortalView: View {
-    @Environment(\.dismiss) private var dismiss
     @Binding var isPresented: Bool
     /// Dismiss portal and open Video Converter sheet.
     var onOpenVideoConverter: () -> Void
     /// Dismiss portal and open Restripe window (or no-op if not implemented).
     var onOpenRestripe: () -> Void
-    /// Dismiss portal and open Simian posting (or no-op / coming soon).
-    var onOpenSimian: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Portal")
                 .font(.title)
                 .fontWeight(.bold)
-            Text("Media layups: convert video, restripe picture+audio, Simian uploads.")
+            Text("Media layups: convert video, restripe picture+audio.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -44,28 +41,10 @@ struct PortalView: View {
                     isPresented = false
                     onOpenRestripe()
                 }
-
-                if let onOpenSimian = onOpenSimian {
-                    PortalOptionRow(
-                        title: "Simian",
-                        subtitle: "Upload to Simian",
-                        icon: "arrow.up.circle"
-                    ) {
-                        isPresented = false
-                        onOpenSimian()
-                    }
-                } else {
-                    PortalOptionRow(
-                        title: "Simian",
-                        subtitle: "Coming soon",
-                        icon: "arrow.up.circle",
-                        disabled: true
-                    ) {}
-                }
             }
         }
         .padding(20)
-        .frame(minWidth: 380, maxWidth: 380, minHeight: 300, maxHeight: 300)
+        .frame(minWidth: 380, maxWidth: 380, minHeight: 220, maxHeight: 220)
     }
 }
 
@@ -123,7 +102,6 @@ private struct PortalOptionRow: View {
     PortalView(
         isPresented: .constant(true),
         onOpenVideoConverter: {},
-        onOpenRestripe: {},
-        onOpenSimian: nil
+        onOpenRestripe: {}
     )
 }

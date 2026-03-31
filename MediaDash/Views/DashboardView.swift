@@ -285,13 +285,13 @@ struct DashboardTopBar: View {
                 }
                 
                 DashboardQuickAction(
-                    title: "Prep",
-                    icon: "list.clipboard.fill",
-                    color: currentTheme.buttonColors.prep,
+                    title: "Simian",
+                    icon: "arrow.up.circle.fill",
+                    color: currentTheme.buttonColors.simian,
                     shortcut: "⌘2",
-                    disabled: manager.selectedFiles.isEmpty
+                    disabled: false
                 ) {
-                    attempt(.prep)
+                    SimianPostWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager, manager: manager)
                 }
                 
                 DashboardQuickAction(

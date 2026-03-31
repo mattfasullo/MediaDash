@@ -147,7 +147,6 @@ struct AuthenticatedRootView: View {
                 .environmentObject(sessionManager)
                 .environmentObject(emailScanningService)
                 .environmentObject(notificationCenter)
-                .environmentObject(asanaDocketScanningService)
                 .opacity(showSplashScreen ? 0 : 1)
             
             // Show splash screen on top during initialization
@@ -274,11 +273,7 @@ struct AuthenticatedRootView: View {
                         #endif
                         emailScanningService.gmailService.setAccessToken(accessToken, refreshToken: refreshToken)
                         
-                        // Only start periodic email scanning if detection mode is email (saves API usage in Asana mode)
-                        let currentDetectionMode = settingsManager.currentSettings.newDocketDetectionMode ?? .email
-                        if currentDetectionMode == .email {
-                            emailScanningService.startScanning()
-                        }
+                        emailScanningService.startScanning()
                     } else {
                         #if DEBUG
                         print("GmailService: No access token found in Keychain")
