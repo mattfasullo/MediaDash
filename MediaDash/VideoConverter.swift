@@ -208,7 +208,9 @@ class VideoConverterManager: ObservableObject {
 
     // Start conversion process
     /// - Parameter playCompletionSound: If false, caller will play the done sound (e.g. when conversion is part of a larger prep flow).
-    func startConversion(playCompletionSound: Bool = true) async {
+    /// - Parameter glassSoundEnabled: When false, never plays Glass even if `playCompletionSound` is true.
+    /// - Parameter glassVolume: 0...1; when `<= 0`, Glass is not played.
+    func startConversion(playCompletionSound: Bool = true, glassSoundEnabled: Bool = true, glassVolume: Float = 1) async {
         guard !jobs.isEmpty else { return }
         guard !isConverting else { return }
 
@@ -229,8 +231,10 @@ class VideoConverterManager: ObservableObject {
 
         isConverting = false
 
-        if playCompletionSound {
-            NSSound(named: "Glass")?.play()
+        if playCompletionSound && glassSoundEnabled && glassVolume > 0,
+           let glass = NSSound(named: "Glass") {
+            glass.volume = glassVolume
+            glass.play()
         }
     }
 
@@ -785,7 +789,10 @@ struct VideoConverterView: View {
 
         // Start conversion in background
         Task {
-            await converter.startConversion()
+            await converter.startConversion(
+                glassSoundEnabled: settingsManager.currentSettings.resolvedSoundGlassCompletionEnabled,
+                glassVolume: settingsManager.currentSettings.resolvedSoundGlassCompletionVolume
+            )
         }
     }
 }

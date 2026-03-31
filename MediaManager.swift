@@ -2067,7 +2067,12 @@ class MediaManager: ObservableObject {
                 if finalFailedFiles.isEmpty {
                     self.statusMessage = "Done!"
                     FloatingProgressManager.shared.complete(message: "Done!")
-                    NSSound(named: "Glass")?.play()
+                    let glassVol = self.config.settings.resolvedSoundGlassCompletionVolume
+                    if self.config.settings.resolvedSoundGlassCompletionEnabled, glassVol > 0,
+                       let glass = NSSound(named: "Glass") {
+                        glass.volume = glassVol
+                        glass.play()
+                    }
 
                     // Open folders if settings are enabled
                     if jobType == .prep || jobType == .both {
@@ -2454,7 +2459,10 @@ class MediaManager: ObservableObject {
         }
 
         // Start the actual conversion
-        await converter.startConversion()
+        await converter.startConversion(
+            glassSoundEnabled: config.settings.resolvedSoundGlassCompletionEnabled,
+            glassVolume: config.settings.resolvedSoundGlassCompletionVolume
+        )
 
         // Mark conversion as complete and cleanup
         isConverting = false
@@ -2538,7 +2546,11 @@ class MediaManager: ObservableObject {
             }
         }
 
-        await converter.startConversion(playCompletionSound: false)
+        await converter.startConversion(
+            playCompletionSound: false,
+            glassSoundEnabled: config.settings.resolvedSoundGlassCompletionEnabled,
+            glassVolume: config.settings.resolvedSoundGlassCompletionVolume
+        )
 
         progressTask.cancel()
         progress = 1.0
@@ -2590,7 +2602,10 @@ class MediaManager: ObservableObject {
         showConvertVideosPrompt = false
         pendingPrepConversion = nil
 
-        await converter.startConversion()
+        await converter.startConversion(
+            glassSoundEnabled: config.settings.resolvedSoundGlassCompletionEnabled,
+            glassVolume: config.settings.resolvedSoundGlassCompletionVolume
+        )
 
         statusMessage = "Conversion complete"
     }

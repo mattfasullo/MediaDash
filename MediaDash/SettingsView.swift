@@ -342,6 +342,8 @@ struct SettingsView: View {
                     // Theme Selection
                     ThemeSelectionSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
 
+                    SoundEffectsSettingsSection(settings: $settings, hasUnsavedChanges: $hasUnsavedChanges)
+
                     // Producer Quick Setup (one-click style)
                     if isProducer {
                         ProducerQuickSetupCard(
@@ -4525,6 +4527,115 @@ struct ThemeSelectionSection: View {
         case .retroDesktop:
             return "Nostalgic retro desktop OS aesthetic with bold colors and window-based interface (Beta)"
         }
+    }
+}
+
+// MARK: - Sound Effects
+
+struct SoundEffectsSettingsSection: View {
+    @Binding var settings: AppSettings
+    @Binding var hasUnsavedChanges: Bool
+
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Image(systemName: "speaker.wave.2")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 18))
+                    Text("Sounds")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+
+                Text("Enable or disable each sound and set its volume app-wide.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    soundRow(
+                        title: "New docket — loading",
+                        subtitle: "While Work Picture folder and/or Simian project are being created",
+                        enabledPath: \.soundDocketAddingEnabled,
+                        volumePath: \.soundDocketAddingVolume
+                    )
+
+                    soundRow(
+                        title: "New docket — added",
+                        subtitle: "When docket creation finishes successfully",
+                        enabledPath: \.soundDocketAddedEnabled,
+                        volumePath: \.soundDocketAddedVolume
+                    )
+
+                    soundRow(
+                        title: "Job complete (Glass)",
+                        subtitle: "Prep, work picture filing, and standalone video conversion",
+                        enabledPath: \.soundGlassCompletionEnabled,
+                        volumePath: \.soundGlassCompletionVolume
+                    )
+                }
+            }
+        }
+    }
+
+    private func soundRow(
+        title: String,
+        subtitle: String,
+        enabledPath: WritableKeyPath<AppSettings, Bool?>,
+        volumePath: WritableKeyPath<AppSettings, Double?>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: soundBinding(for: enabledPath)) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 13))
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .toggleStyle(.checkbox)
+
+            HStack(spacing: 10) {
+                Text("Volume")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .frame(width: 52, alignment: .leading)
+                Slider(value: volumeBinding(for: volumePath), in: 0...1)
+                Text("\(volumePercentLabel(for: volumePath))%")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(width: 40, alignment: .trailing)
+            }
+            .padding(.leading, 20)
+        }
+    }
+
+    private func volumePercentLabel(for keyPath: KeyPath<AppSettings, Double?>) -> Int {
+        let v = settings[keyPath: keyPath] ?? 1.0
+        return Int(round(min(max(v, 0), 1) * 100))
+    }
+
+    private func soundBinding(for keyPath: WritableKeyPath<AppSettings, Bool?>) -> Binding<Bool> {
+        Binding(
+            get: { settings[keyPath: keyPath] ?? true },
+            set: {
+                settings[keyPath: keyPath] = $0
+                hasUnsavedChanges = true
+            }
+        )
+    }
+
+    private func volumeBinding(for keyPath: WritableKeyPath<AppSettings, Double?>) -> Binding<Double> {
+        Binding(
+            get: {
+                let v = settings[keyPath: keyPath] ?? 1.0
+                return min(max(v, 0), 1)
+            },
+            set: {
+                settings[keyPath: keyPath] = $0
+                hasUnsavedChanges = true
+            }
+        )
     }
 }
 

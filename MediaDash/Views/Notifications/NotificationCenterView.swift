@@ -1105,6 +1105,14 @@ struct NotificationRowView: View {
             print("🔔 createSimianProject: Using Asana name for creation: \(effectiveDocketNumber)_\(effectiveJobName)")
         }
         
+        let playAddingSound = settingsManager.currentSettings.resolvedSoundDocketAddingEnabled
+        let playAddedSound = settingsManager.currentSettings.resolvedSoundDocketAddedEnabled
+        let addingVolume = settingsManager.currentSettings.resolvedSoundDocketAddingVolume
+        let addedVolume = settingsManager.currentSettings.resolvedSoundDocketAddedVolume
+        await MainActor.run {
+            DocketAddSounds.startLoading(enabled: playAddingSound, volume: addingVolume)
+        }
+        
         var simianError: Error?
         var workPictureError: Error?
         
@@ -1181,7 +1189,14 @@ struct NotificationRowView: View {
         }
         
         // Handle results and cleanup
+        let wpCreationOK = !shouldCreateWorkPicture || workPictureError == nil
+        let simCreationOK = !shouldCreateSimian || simianError == nil
+        let attemptedCreation = shouldCreateWorkPicture || shouldCreateSimian
         await MainActor.run {
+            DocketAddSounds.stopLoading()
+            if attemptedCreation && wpCreationOK && simCreationOK {
+                DocketAddSounds.playDocketAdded(enabled: playAddedSound, volume: addedVolume)
+            }
             processingNotification = nil
             processingStatusById[notificationId] = nil
         }

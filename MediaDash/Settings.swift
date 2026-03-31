@@ -677,6 +677,19 @@ struct AppSettings: Codable, Equatable {
     /// Folder initials/nickname → display name to show (and use for new Asana subtasks). Right-click "Edit display name" updates this.
     var displayNameForInitials: [String: String]?
 
+    // Sounds (`nil` = enabled; optional for Codable backward compatibility)
+    /// Looping sound while creating a new docket in Work Picture / Simian after approval.
+    var soundDocketAddingEnabled: Bool?
+    /// Short sound when docket creation finishes successfully.
+    var soundDocketAddedEnabled: Bool?
+    /// System "Glass" sound when prep / work picture filing or standalone video conversion completes successfully.
+    var soundGlassCompletionEnabled: Bool?
+
+    /// Per-sound volume 0...1 (`nil` = 1.0). Optional for Codable backward compatibility.
+    var soundDocketAddingVolume: Double?
+    var soundDocketAddedVolume: Double?
+    var soundGlassCompletionVolume: Double?
+
     /// Built-in preset: composer name → initials/nickname. Customizable in Settings; user values override these.
     static let defaultComposerInitials: [String: String] = [
         "Mark Domitric": "MD",
@@ -839,7 +852,13 @@ struct AppSettings: Codable, Equatable {
             enableCursedImageReplies: false, // Fun feature disabled by default
             cursedImageSubreddit: "cursedimages", // Default subreddit
             composerInitials: AppSettings.defaultComposerInitials, // Preset out of the box; user can edit in Settings
-            displayNameForInitials: AppSettings.defaultDisplayNameForInitials
+            displayNameForInitials: AppSettings.defaultDisplayNameForInitials,
+            soundDocketAddingEnabled: nil,
+            soundDocketAddedEnabled: nil,
+            soundGlassCompletionEnabled: nil,
+            soundDocketAddingVolume: nil,
+            soundDocketAddedVolume: nil,
+            soundGlassCompletionVolume: nil
         )
     }
 }
@@ -856,6 +875,20 @@ extension AppSettings {
     var resolvedStagingClearDelayMinutes: Int {
         let v = stagingClearDelayMinutes ?? 5
         return min(max(v, 1), 24 * 60)
+    }
+
+    var resolvedSoundDocketAddingEnabled: Bool { soundDocketAddingEnabled ?? true }
+    var resolvedSoundDocketAddedEnabled: Bool { soundDocketAddedEnabled ?? true }
+    var resolvedSoundGlassCompletionEnabled: Bool { soundGlassCompletionEnabled ?? true }
+
+    /// Clamped 0...1 for `NSSound.volume`.
+    var resolvedSoundDocketAddingVolume: Float { Self.resolvedSoundVolume(soundDocketAddingVolume) }
+    var resolvedSoundDocketAddedVolume: Float { Self.resolvedSoundVolume(soundDocketAddedVolume) }
+    var resolvedSoundGlassCompletionVolume: Float { Self.resolvedSoundVolume(soundGlassCompletionVolume) }
+
+    private static func resolvedSoundVolume(_ stored: Double?) -> Float {
+        let v = stored ?? 1.0
+        return Float(min(max(v, 0), 1))
     }
 }
 
