@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.06</title>
+            <description><![CDATA[
+                <p>Gmail and email scanning improvements; streamlined notification center; updates to dashboard, desktop layout, portal, sidebar, settings, and gatekeeper.</p>
+            ]]></description>
+            <pubDate>Tue, 31 Mar 2026 18:54:49 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.06/MediaDash.zip"
+                sparkle:version="160"
+                sparkle:shortVersionString="1.06"
+                sparkle:edSignature="WVDfQgKQEJZ3bik60cOy/KSkB9O/tjHbjNhA2ExJmbhIxCuUjXc0EE9FeIU0AoTGYaXa1CismCef0YgYg51xBw=="
+                length="10027538"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.05</title>
             <description><![CDATA[
                 <p>Fixes staging Sessions view becoming extremely slow (especially while Asana sync runs). Folder scanning now happens in the background, and sync progress no longer redraws the whole staging column. Also includes calendar, dashboard, Simian post, search, DocketHub, and settings improvements.</p>
