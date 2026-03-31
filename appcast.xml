@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.07</title>
+            <description><![CDATA[
+                <p>Optional sounds when adding items to the docket (loading and confirmation), with settings for toggles and volume. Notification center, settings, MediaManager, and video converter updates.</p>
+            ]]></description>
+            <pubDate>Tue, 31 Mar 2026 21:07:10 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.07/MediaDash.zip"
+                sparkle:version="170"
+                sparkle:shortVersionString="1.07"
+                sparkle:edSignature="2wDw0k++rWm052+O2HebJBrIYdzfv+WVa7KZESMQdQcQYHTKT77T11SzDwHILQi50BFOAdMLKI6SbiqpcK5xDQ=="
+                length="14714207"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.06</title>
             <description><![CDATA[
                 <p>Gmail and email scanning improvements; streamlined notification center; updates to dashboard, desktop layout, portal, sidebar, settings, and gatekeeper.</p>
