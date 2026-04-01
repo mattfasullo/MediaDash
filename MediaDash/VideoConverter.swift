@@ -271,7 +271,8 @@ class VideoConverterManager: ObservableObject {
             "-i", job.sourceURL.path,
             "-c:v", "prores_ks",        // ProRes encoder
             "-profile:v", "0",           // Profile 0 = ProRes Proxy
-            "-c:a", "pcm_s16le",         // PCM audio
+            "-c:a", "pcm_s24le",         // PCM 24-bit audio
+            "-ar", "48000",              // 48 kHz (session-prep / editorial standard)
             "-threads", "0",             // Use all available CPU cores
         ]
 

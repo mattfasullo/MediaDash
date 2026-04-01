@@ -20,10 +20,10 @@ When creating new sheet views with **fixed or compact content** (dialogs, option
 
 ## When to use
 
-- **Use** for: Portal-style menus, simple forms, confirmation dialogs, option pickers, small input sheets
+- **Use** for: compact popover menus, simple forms, confirmation dialogs, option pickers, small input sheets
 - **Don't use** for: Sheets with ScrollViews, Lists, or variable-height content that needs to grow
 
 ## Examples in this codebase
 
-- `PortalView` — compact menu with option cards
+- `VideoView` — compact menu with option cards
 - `NewDocketView` — simple form (docket number + job name)

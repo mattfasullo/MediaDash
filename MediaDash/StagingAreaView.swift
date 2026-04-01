@@ -42,6 +42,13 @@ struct StagingAreaView: View {
         }
         .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
+        // Cosmetic: paint the bottom window inset seam (behind content; does not shift layout).
+        .background(alignment: .bottom) {
+            Color(nsColor: .controlBackgroundColor)
+                .frame(maxWidth: .infinity)
+                .frame(height: 16)
+                .ignoresSafeArea(.all, edges: .bottom)
+        }
         .sheet(isPresented: $showBatchRenameSheet) {
             BatchRenameSheet(manager: manager, filesToRename: filesToRename)
                 .sheetSizeStabilizer()
@@ -88,8 +95,8 @@ struct StagingAreaView: View {
                     }
                 }
                 .padding(.horizontal, contentPadding)
-                .padding(.vertical, 12)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                .padding(.vertical, 5)
+                .background(Color(nsColor: .controlBackgroundColor))
                 
                 Divider()
                     .opacity(0.3)
@@ -261,18 +268,13 @@ private struct StagingAreaStatusBar: View {
                         if cacheManager.isSyncHost {
                             Circle().fill(Color.green).frame(width: 6, height: 6)
                         }
-                        if cacheManager.syncProgress > 0 {
-                            ProgressView(value: cacheManager.syncProgress)
-                                .progressViewStyle(.linear)
-                                .frame(width: 60)
-                            Text("\(Int(cacheManager.syncProgress * 100))%")
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundColor(.blue)
-                        } else {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .frame(width: 12, height: 12)
-                        }
+                        let syncBar = min(1, max(0, cacheManager.syncProgress))
+                        ProgressView(value: syncBar)
+                            .progressViewStyle(.linear)
+                            .frame(width: 60)
+                        Text("\(Int(syncBar * 100))%")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(.blue)
                         Text(stagingSyncPhaseText)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.blue)

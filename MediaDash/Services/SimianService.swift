@@ -1388,6 +1388,86 @@ class SimianService: ObservableObject {
         try fileManager.moveItem(at: tempURL, to: destinationURL)
     }
 
+    // MARK: - Folder / multi-file download (Simian Post browser)
+
+    /// Sanitize a single path segment for local filenames (matches SimianArchiver-style naming).
+    static func sanitizeFileNameForDownload(_ value: String) -> String {
+        let invalidCharacters = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let cleaned = value.components(separatedBy: invalidCharacters).joined(separator: "_")
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Preferred local filename for a Simian file (title + extension from media URL when present).
+    static func buildDownloadFileName(for file: SimianFile, mediaURL: URL?) -> String {
+        let sanitizedTitle = sanitizeFileNameForDownload(file.title.isEmpty ? "file_\(file.id)" : file.title)
+        guard let mediaURL = mediaURL else { return sanitizedTitle }
+        let fileExtension = mediaURL.pathExtension
+        if fileExtension.isEmpty { return sanitizedTitle }
+        if sanitizedTitle.lowercased().hasSuffix(".\(fileExtension.lowercased())") { return sanitizedTitle }
+        return "\(sanitizedTitle).\(fileExtension)"
+    }
+
+    /// Lists every file under `folderId` (or project root when `folderId` is nil), with paths relative to that folder (e.g. `Subfolder/clip.wav`).
+    func enumerateFilesInFolderSubtree(projectId: String, folderId: String?) async throws -> [(relativePath: String, file: SimianFile)] {
+        try await ensureAuthenticated()
+        return try await collectFilesRecursive(projectId: projectId, folderId: folderId, relativePrefix: "")
+    }
+
+    private func collectFilesRecursive(projectId: String, folderId: String?, relativePrefix: String) async throws -> [(relativePath: String, file: SimianFile)] {
+        var result: [(relativePath: String, file: SimianFile)] = []
+        let files = try await getProjectFiles(projectId: projectId, folderId: folderId)
+        for file in files {
+            let baseName = Self.buildDownloadFileName(for: file, mediaURL: file.mediaURL)
+            let rel = relativePrefix.isEmpty ? baseName : "\(relativePrefix)/\(baseName)"
+            result.append((rel, file))
+        }
+        let folders = try await getProjectFolders(projectId: projectId, parentFolderId: folderId)
+        for folder in folders {
+            let seg = Self.sanitizeFileNameForDownload(folder.name)
+            guard !seg.isEmpty else { continue }
+            let nextPrefix = relativePrefix.isEmpty ? seg : "\(relativePrefix)/\(seg)"
+            result.append(contentsOf: try await collectFilesRecursive(projectId: projectId, folderId: folder.id, relativePrefix: nextPrefix))
+        }
+        return result
+    }
+
+    /// Downloads enumerated files into `destinationRootURL`, preserving relative paths. Skips entries with no `mediaURL`.
+    /// - Parameter progress: Called on the main actor with (completedCount, totalWithURLs, lastRelativePath).
+    func downloadFilesWithRelativePaths(
+        _ items: [(relativePath: String, file: SimianFile)],
+        to destinationRootURL: URL,
+        progress: ((Int, Int, String) -> Void)? = nil
+    ) async throws {
+        try await ensureAuthenticated()
+        let fm = FileManager.default
+        try fm.createDirectory(at: destinationRootURL, withIntermediateDirectories: true)
+
+        let withURLs: [(String, SimianFile, URL)] = items.compactMap { item in
+            guard let u = item.file.mediaURL else { return nil }
+            return (item.relativePath, item.file, u)
+        }
+        guard !withURLs.isEmpty else {
+            throw SimianError.apiError("No files with download URLs in this folder.")
+        }
+        let total = withURLs.count
+        for (idx, entry) in withURLs.enumerated() {
+            try Task.checkCancellation()
+            let (relPath, file, mediaURL) = entry
+            var destinationURL = destinationRootURL.appendingPathComponent(relPath)
+            try fm.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: destinationURL.path) {
+                let ext = mediaURL.pathExtension
+                let base = destinationURL.deletingPathExtension().lastPathComponent
+                let deduped = ext.isEmpty ? "\(base)_\(file.id)" : "\(base)_\(file.id).\(ext)"
+                destinationURL = destinationURL.deletingLastPathComponent().appendingPathComponent(deduped)
+            }
+            try await downloadFile(from: mediaURL, to: destinationURL)
+            await MainActor.run {
+                progress?(idx + 1, total, relPath)
+            }
+        }
+    }
+
     /// Download a project ZIP archive from the Simian web UI
     func downloadProjectArchive(
         projectId: String,
@@ -1983,37 +2063,6 @@ class SimianService: ObservableObject {
         return URL(string: path)
     }
 
-    /// Get the next folder number in sequence for numbered folders (01_, 02_, 03_, etc.)
-    /// Only applies numbering when the destination already has numbered folders.
-    /// - Parameters:
-    ///   - existingFolderNames: Names of folders already in the destination
-    ///   - sourceFolderName: The folder name we're uploading (may have number prefix)
-    /// - Returns: Folder name with correct sequence number (e.g. "04_Delivery"), or source name if no numbering needed
-    static func nextNumberedFolderName(existingFolderNames: [String], sourceFolderName: String) -> String {
-        let numberPrefixPattern = try? NSRegularExpression(pattern: "^([0-9]{1,3})_(.+)$")
-        let existingNumbers: Set<Int> = existingFolderNames.reduce(into: []) { result, name in
-            if let match = numberPrefixPattern?.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
-               let numRange = Range(match.range(at: 1), in: name),
-               let num = Int(name[numRange]) {
-                result.insert(num)
-            }
-        }
-        // Only apply numbering when destination already has numbered folders
-        guard !existingNumbers.isEmpty else {
-            return sourceFolderName
-        }
-        let nextNum = (existingNumbers.max() ?? 0) + 1
-        let prefix = String(format: "%02d_", nextNum)
-        let baseName: String
-        if let match = numberPrefixPattern?.firstMatch(in: sourceFolderName, range: NSRange(sourceFolderName.startIndex..., in: sourceFolderName)),
-           let restRange = Range(match.range(at: 2), in: sourceFolderName) {
-            baseName = String(sourceFolderName[restRange])
-        } else {
-            baseName = sourceFolderName
-        }
-        return prefix + baseName
-    }
-    
     /// Copy folder structure from template project to new project
     /// - Parameters:
     ///   - fromTemplateProjectId: The template project ID

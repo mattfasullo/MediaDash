@@ -5,7 +5,35 @@
 //  Adds a faint border to SwiftUI sheets and fixes the macOS sheet resizing bug
 //
 
+import AppKit
 import SwiftUI
+
+// MARK: - New Docket sheet frame persistence
+
+private enum NewDocketSheetWindowPersistence {
+    static let autosaveName = "MediaDashNewDocketSheet"
+}
+
+/// Attaches to sheet content so the hosting `NSWindow` uses AppKit frame autosave (UserDefaults).
+private final class NewDocketSheetFrameAutosaveNSView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window = window else { return }
+        guard window.sheetParent != nil || window.styleMask.contains(.docModalWindow) else { return }
+        if window.frameAutosaveName != NewDocketSheetWindowPersistence.autosaveName {
+            window.setFrameAutosaveName(NewDocketSheetWindowPersistence.autosaveName)
+        }
+        window.setFrameUsingName(NewDocketSheetWindowPersistence.autosaveName)
+    }
+}
+
+private struct NewDocketSheetFrameAutosaveView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        NewDocketSheetFrameAutosaveNSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
 
 struct SheetBorderModifier: ViewModifier {
     func body(content: Content) -> some View {
@@ -74,5 +102,10 @@ extension View {
     /// Use instead of or before .sheetBorder() for dialogs, option pickers, etc.
     func compactSheetContent() -> some View {
         fixedSize(horizontal: true, vertical: true)
+    }
+
+    /// Persists the sheet window’s frame across opens (New Docket). Do not combine with `compactSheetContent()`.
+    func newDocketSheetFramePersistence() -> some View {
+        background(NewDocketSheetFrameAutosaveView())
     }
 }

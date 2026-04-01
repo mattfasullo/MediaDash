@@ -21,7 +21,7 @@ struct ActionButtonsView: View {
     var onOpenFullCalendar: () -> Void = {}
     /// Right-click "File + Prep": file first, then open prep for a matching calendar session.
     var onFileThenPrep: (() -> Void)? = nil
-    @Binding var showPortalSheet: Bool
+    @Binding var showVideoSheet: Bool
 
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
@@ -134,7 +134,7 @@ struct ActionButtonsView: View {
                 .keyboardShortcut("3", modifiers: .command)
 
                 ActionButtonWithShortcut(
-                    title: "Portal",
+                    title: "Video",
                     subtitle: "",
                     shortcut: "⌘4",
                     color: Color(red: 0.50, green: 0.25, blue: 0.25),  // Subtle dark red
@@ -144,7 +144,7 @@ struct ActionButtonsView: View {
                     theme: currentTheme,
                     iconName: "film"
                 ) {
-                    showPortalSheet = true
+                    showVideoSheet = true
                 }
                 .focused(focusedButton, equals: .convert)
                 .focusEffectDisabled()
@@ -159,20 +159,20 @@ struct ActionButtonsView: View {
                         "Ready."
                 }
                 .keyboardShortcut("4", modifiers: .command)
-                .popover(isPresented: $showPortalSheet, arrowEdge: .leading) {
-                    PortalView(
-                        isPresented: $showPortalSheet,
+                .popover(isPresented: $showVideoSheet, arrowEdge: .leading) {
+                    VideoView(
+                        isPresented: $showVideoSheet,
                         onOpenVideoConverter: {
-                            showPortalSheet = false
+                            showVideoSheet = false
                             showVideoConverterSheet = true
                         },
                         onOpenRestripe: {
-                            showPortalSheet = false
+                            showVideoSheet = false
                             RestripeWindowManager.shared.show()
                         }
                     )
                     .compactSheetBorder()
-                    .frame(width: 380, height: 220)
+                    .frame(width: 380, height: 180)
                 }
             }
         }

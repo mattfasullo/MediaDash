@@ -3771,16 +3771,17 @@ struct CacheVisualizationView: View {
                                 if cacheManager.isSyncHost {
                                     Circle().fill(Color.green).frame(width: 6, height: 6)
                                 }
-                                ProgressView(value: cacheManager.syncProgress > 0 ? cacheManager.syncProgress : nil)
+                                let syncBar = min(1, max(0, cacheManager.syncProgress))
+                                ProgressView(value: syncBar)
+                                    .progressViewStyle(.linear)
                                     .scaleEffect(0.7)
+                                    .frame(width: 100)
                                 Text(settingsSyncPhaseText)
                                     .font(.system(size: 11))
                                     .foregroundColor(.secondary)
-                                if cacheManager.syncProgress > 0 {
-                                    Text("\(Int(cacheManager.syncProgress * 100))%")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary.opacity(0.7))
-                                }
+                                Text("\(Int(syncBar * 100))%")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary.opacity(0.7))
                             }
                             Text(cacheManager.isSyncHost ? "This app is updating the shared cache." : "The external service is updating the shared cache. This may take several minutes.")
                                 .font(.system(size: 10))

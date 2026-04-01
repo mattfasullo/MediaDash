@@ -1,5 +1,5 @@
 //
-//  PortalView.swift
+//  VideoView.swift
 //  MediaDash
 //
 //  Media layups hub: Video conversion, Restriping, Post to Simian, etc.
@@ -7,48 +7,39 @@
 
 import SwiftUI
 
-struct PortalView: View {
+struct VideoView: View {
     @Binding var isPresented: Bool
-    /// Dismiss portal and open Video Converter sheet.
+    /// Dismiss popover and open Video Converter sheet.
     var onOpenVideoConverter: () -> Void
-    /// Dismiss portal and open Restripe window (or no-op if not implemented).
+    /// Dismiss popover and open Restripe window (or no-op if not implemented).
     var onOpenRestripe: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Portal")
-                .font(.title)
-                .fontWeight(.bold)
-            Text("Media layups: convert video, restripe picture+audio.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        VStack(spacing: 8) {
+            VideoOptionRow(
+                title: "Video conversion",
+                subtitle: "Convert to ProRes Proxy, adjust aspect ratio",
+                icon: "film"
+            ) {
+                isPresented = false
+                onOpenVideoConverter()
+            }
 
-            VStack(spacing: 8) {
-                PortalOptionRow(
-                    title: "Video conversion",
-                    subtitle: "Convert to ProRes Proxy, adjust aspect ratio",
-                    icon: "film"
-                ) {
-                    isPresented = false
-                    onOpenVideoConverter()
-                }
-
-                PortalOptionRow(
-                    title: "Restriping",
-                    subtitle: "Combine picture/video with multiple audio files",
-                    icon: "waveform"
-                ) {
-                    isPresented = false
-                    onOpenRestripe()
-                }
+            VideoOptionRow(
+                title: "Restriping",
+                subtitle: "Combine picture/video with multiple audio files",
+                icon: "waveform"
+            ) {
+                isPresented = false
+                onOpenRestripe()
             }
         }
         .padding(20)
-        .frame(minWidth: 380, maxWidth: 380, minHeight: 220, maxHeight: 220)
+        .frame(minWidth: 380, maxWidth: 380)
     }
 }
 
-private struct PortalOptionRow: View {
+private struct VideoOptionRow: View {
     let title: String
     let subtitle: String
     let icon: String
@@ -99,7 +90,7 @@ private struct PortalOptionRow: View {
 }
 
 #Preview {
-    PortalView(
+    VideoView(
         isPresented: .constant(true),
         onOpenVideoConverter: {},
         onOpenRestripe: {}

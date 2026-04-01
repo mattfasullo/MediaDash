@@ -94,7 +94,7 @@ struct ContentView: View {
     @State private var showQuickSearchSheet = false
     @State private var showSettingsSheet = false
     @State private var showVideoConverterSheet = false
-    @State private var showPortalSheet = false
+    @State private var showVideoSheet = false
     @State private var showAlert = false
     @State private var alertMessage = ""
     @State private var hoverInfo: String = "Ready."
@@ -258,7 +258,7 @@ struct ContentView: View {
                 showQuickSearchSheet: $showQuickSearchSheet,
                 showSettingsSheet: $showSettingsSheet,
                 showVideoConverterSheet: $showVideoConverterSheet,
-                showPortalSheet: $showPortalSheet,
+                showVideoSheet: $showVideoSheet,
                 showNewDocketSheet: $showNewDocketSheet,
                 showDocketSelectionSheet: $showDocketSelectionSheet,
                 initialSearchText: $initialSearchText
@@ -543,9 +543,8 @@ struct ContentView: View {
                                 )
                             },
                             onFileThenPrep: attemptFileThenPrep,
-                            showPortalSheet: $showPortalSheet
+                            showVideoSheet: $showVideoSheet
                         )
-                        .offset(x: 0, y: -4) // Layout edit: sidebar offset
                         .draggableLayout(id: "sidebar")
                         
                         StagingAreaView(
@@ -560,6 +559,17 @@ struct ContentView: View {
                         .draggableLayout(id: "stagingArea")
                     }
                     .frame(minWidth: LayoutMode.minWidth, maxWidth: .infinity, minHeight: LayoutMode.minHeight, maxHeight: .infinity)
+                    // Full-width titlebar seam paint (behind both columns; ZStack sibling was easy to miss or clip).
+                    .background(alignment: .top) {
+                        HStack(spacing: 0) {
+                            currentTheme.sidebarBackground
+                                .frame(width: 300)
+                            Color(nsColor: .windowBackgroundColor)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 64)
+                        .ignoresSafeArea(.all, edges: .top)
+                    }
                     .focusable()
                     .focused($mainViewFocused)
                     .focusEffectDisabled()
@@ -926,7 +936,7 @@ struct ContentView: View {
         case .search:
             showSearchSheet = true
         case .convert:
-            showPortalSheet = true
+            showVideoSheet = true
         case .jobInfo:
             showQuickSearchSheet = true
         case .archiver:
@@ -2820,17 +2830,18 @@ struct QuickDocketSearchView: View {
                     if cacheManager.isSyncHost {
                         Circle().fill(Color.green).frame(width: 6, height: 6)
                     }
-                    ProgressView(value: cacheManager.syncProgress > 0 ? cacheManager.syncProgress : nil)
+                    let syncBar = min(1, max(0, cacheManager.syncProgress))
+                    ProgressView(value: syncBar)
+                        .progressViewStyle(.linear)
                         .scaleEffect(0.7)
+                        .frame(maxWidth: 120)
                     Text(syncStatusPhaseText)
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
-                    if cacheManager.syncProgress > 0 {
-                        Text("\(Int(cacheManager.syncProgress * 100))%")
-                            .font(.caption2)
-                            .foregroundColor(.secondary.opacity(0.7))
-                    }
+                    Text("\(Int(syncBar * 100))%")
+                        .font(.caption2)
+                        .foregroundColor(.secondary.opacity(0.7))
                 }
                 if let lastSync = cacheManager.lastSyncDate {
                     Text("Last sync: \(lastSync, style: .relative)")
@@ -3937,7 +3948,7 @@ struct KeyboardHandlersModifier: ViewModifier {
     @Binding var showQuickSearchSheet: Bool
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
-    @Binding var showPortalSheet: Bool
+    @Binding var showVideoSheet: Bool
     @Binding var showNewDocketSheet: Bool
     @Binding var showDocketSelectionSheet: Bool
     @Binding var initialSearchText: String
@@ -4059,7 +4070,7 @@ struct KeyboardHandlersModifier: ViewModifier {
                     isKeyboardMode = true
                 }
 
-                guard !showSearchSheet && !showQuickSearchSheet && !SettingsWindowManager.shared.isVisible && !showVideoConverterSheet && !showPortalSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
+                guard !showSearchSheet && !showQuickSearchSheet && !SettingsWindowManager.shared.isVisible && !showVideoConverterSheet && !showVideoSheet && !showNewDocketSheet && !showDocketSelectionSheet else {
                     return .ignored
                 }
                 
@@ -4211,7 +4222,6 @@ struct SheetsModifier: ViewModifier {
                     manager: manager,
                     settingsManager: settingsManager
                 )
-                .compactSheetContent()
                 .sheetBorder()
             }
             .sheet(isPresented: $showSearchSheet, onDismiss: {

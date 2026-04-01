@@ -53,7 +53,7 @@ struct NewDocketView: View {
                         }
                 }
             }
-            .frame(width: 280)
+            .frame(minWidth: 280)
             .onAppear {
                 // Set initial values when view appears - do this first
                 print("NewDocketView onAppear - initialDocketNumber: \(initialDocketNumber ?? "nil"), initialJobName: \(initialJobName ?? "nil")")
@@ -96,7 +96,7 @@ struct NewDocketView: View {
                     .foregroundColor(.red)
                     .font(.caption)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 280)
+                    .frame(maxWidth: .infinity)
                     .padding(.horizontal, 4)
             }
             
@@ -115,6 +115,8 @@ struct NewDocketView: View {
             .padding(.top, 4)
         }
         .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .newDocketSheetFramePersistence()
     }
 
     private func createDocket() {

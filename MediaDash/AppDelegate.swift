@@ -129,9 +129,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApplication.shared.terminate(nil)
                 return nil
             }
+            let keyWindowEarly = NSApplication.shared.keyWindow
+            let keyCodes: [UInt16] = [123, 124, 125, 126, 36] // left, right, down, up, return
+            // #region agent log
+            if keyWindowEarly?.title == "Simian", !keyCodes.contains(event.keyCode) {
+                let fr = keyWindowEarly?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+                appendDebugA92964Log(
+                    location: "AppDelegate.swift:keyDown",
+                    message: "non-arrow key while Simian is keyWindow",
+                    hypothesisId: "H3_H4",
+                    data: [
+                        "keyCode": Int(event.keyCode),
+                        "firstResponder": fr,
+                        "isEditingText": KeyboardNavigationCoordinator.isEditingText(in: keyWindowEarly)
+                    ]
+                )
+            }
+            // #endregion
             // Arrow keys and return: for the main app window, pass through so SwiftUI's .onKeyPress receives them.
             // Only intercept for other windows (e.g. sheets) so we can drive list navigation there.
-            let keyCodes: [UInt16] = [123, 124, 125, 126, 36] // left, right, down, up, return
             if keyCodes.contains(event.keyCode) {
                 let keyWindow = NSApplication.shared.keyWindow
                 let isEditing = KeyboardNavigationCoordinator.isEditingText(in: keyWindow)
@@ -141,6 +157,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let isMainWindow = (keyWindow === WindowConfiguration.mainAppWindow)
                 // Try coordinator first - if it handles, use it. Otherwise pass through for .onKeyPress
                 let handled = KeyboardNavigationCoordinator.shared.handle(event: event)
+                // #region agent log
+                let frName = keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+                appendDebugA92964Log(
+                    location: "AppDelegate.swift:keyDown",
+                    message: "arrow/return after coordinator",
+                    hypothesisId: "H1_H2_H3",
+                    data: [
+                        "keyCode": Int(event.keyCode),
+                        "keyWindowTitle": keyWindow?.title ?? "nil",
+                        "isSimianKey": keyWindow?.title == "Simian",
+                        "isMainWindow": isMainWindow,
+                        "firstResponder": frName,
+                        "coordinatorHandled": handled
+                    ]
+                )
+                // #endregion
                 if handled {
                     // #region agent log
                     KeyboardNavigationCoordinator.logDebug(
@@ -219,3 +251,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateNow
     }
 }
+
+// MARK: - Debug session a92964
+// #region agent log
+fileprivate func appendDebugA92964Log(location: String, message: String, hypothesisId: String, data: [String: Any]) {
+    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-a92964.log"
+    var payload: [String: Any] = [
+        "sessionId": "a92964",
+        "timestamp": Int64(Date().timeIntervalSince1970 * 1000),
+        "location": location,
+        "message": message,
+        "hypothesisId": hypothesisId,
+        "data": data
+    ]
+    guard JSONSerialization.isValidJSONObject(payload),
+          let json = try? JSONSerialization.data(withJSONObject: payload),
+          let line = String(data: json, encoding: .utf8) else { return }
+    if !FileManager.default.fileExists(atPath: path) {
+        FileManager.default.createFile(atPath: path, contents: nil)
+    }
+    guard let h = FileHandle(forWritingAtPath: path) else { return }
+    h.seekToEndOfFile()
+    h.write(Data((line + "\n").utf8))
+    h.closeFile()
+}
+// #endregion

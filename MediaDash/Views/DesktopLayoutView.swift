@@ -182,14 +182,14 @@ struct DesktopToolbar: View {
                     .frame(height: 28)
                 
                 ToolbarActionButton(
-                    title: "Portal",
+                    title: "Video",
                     subtitle: "",
                     icon: "film.fill",
                     color: Color(red: 0.50, green: 0.25, blue: 0.25),
                     shortcut: "⌘4",
                     disabled: false
                 ) {
-                    // Portal functionality to be implemented later
+                    // Video functionality to be implemented later
                 }
             }
             
@@ -709,8 +709,8 @@ struct DesktopStagingArea: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            .padding(.vertical, 5)
+            .background(Color(nsColor: .controlBackgroundColor))
             
             Divider()
             

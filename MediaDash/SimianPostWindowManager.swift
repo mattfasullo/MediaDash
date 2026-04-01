@@ -49,10 +49,23 @@ final class SimianPostWindowManager: NSObject, ObservableObject, NSWindowDelegat
         simianPostWindow = window
         isVisible = true
 
-        // Popover/sheet dismissal (e.g. Portal → Simian) can reclaim key on the same run loop; defer so this window wins.
+        // Popover/sheet dismissal (e.g. Video → Simian) can reclaim key on the same run loop; defer so this window wins.
         func activateSimianWindow() {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            // #region agent log
+            let kw = NSApp.keyWindow
+            appendSimianDebugA92964(
+                location: "SimianPostWindowManager.activateSimianWindow",
+                message: "after makeKeyAndOrderFront",
+                hypothesisId: "H1_H5",
+                data: [
+                    "keyWindowIsSelf": kw === window,
+                    "keyWindowTitle": kw?.title ?? "nil",
+                    "mainWindowTitle": NSApp.mainWindow?.title ?? "nil"
+                ]
+            )
+            // #endregion
         }
         activateSimianWindow()
         DispatchQueue.main.async {
@@ -69,4 +82,57 @@ final class SimianPostWindowManager: NSObject, ObservableObject, NSWindowDelegat
         isVisible = false
         simianPostWindow = nil
     }
+
+    func windowDidBecomeKey(_ notification: Foundation.Notification) {
+        // #region agent log
+        appendSimianDebugA92964(
+            location: "SimianPostWindowManager.windowDidBecomeKey",
+            message: "Simian became key",
+            hypothesisId: "H1_H5",
+            data: [
+                "keyWindowTitle": NSApp.keyWindow?.title ?? "nil",
+                "mainWindowTitle": NSApp.mainWindow?.title ?? "nil"
+            ]
+        )
+        // #endregion
+    }
+
+    func windowDidResignKey(_ notification: Foundation.Notification) {
+        // #region agent log
+        appendSimianDebugA92964(
+            location: "SimianPostWindowManager.windowDidResignKey",
+            message: "Simian resigned key",
+            hypothesisId: "H1_H5",
+            data: [
+                "keyWindowTitle": NSApp.keyWindow?.title ?? "nil",
+                "mainWindowTitle": NSApp.mainWindow?.title ?? "nil"
+            ]
+        )
+        // #endregion
+    }
 }
+
+// MARK: - Debug session a92964
+// #region agent log
+private func appendSimianDebugA92964(location: String, message: String, hypothesisId: String, data: [String: Any]) {
+    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-a92964.log"
+    var payload: [String: Any] = [
+        "sessionId": "a92964",
+        "timestamp": Int64(Date().timeIntervalSince1970 * 1000),
+        "location": location,
+        "message": message,
+        "hypothesisId": hypothesisId,
+        "data": data
+    ]
+    guard JSONSerialization.isValidJSONObject(payload),
+          let json = try? JSONSerialization.data(withJSONObject: payload),
+          let line = String(data: json, encoding: .utf8) else { return }
+    if !FileManager.default.fileExists(atPath: path) {
+        FileManager.default.createFile(atPath: path, contents: nil)
+    }
+    guard let h = FileHandle(forWritingAtPath: path) else { return }
+    h.seekToEndOfFile()
+    h.write(Data((line + "\n").utf8))
+    h.closeFile()
+}
+// #endregion

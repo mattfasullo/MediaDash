@@ -305,13 +305,13 @@ struct DashboardTopBar: View {
                 }
                 
                 DashboardQuickAction(
-                    title: "Portal",
+                    title: "Video",
                     icon: "film.fill",
                     color: Color(red: 0.50, green: 0.25, blue: 0.35),
                     shortcut: "⌘4",
                     disabled: false
                 ) {
-                    // Portal functionality to be implemented later
+                    // Video functionality to be implemented later
                 }
             }
             
@@ -914,17 +914,13 @@ struct RecentDocketsView: View {
                         if cache.isSyncHost {
                             Circle().fill(Color.green).frame(width: 6, height: 6)
                         }
-                        if cache.syncProgress > 0 {
-                            ProgressView(value: cache.syncProgress)
-                                .progressViewStyle(.linear)
-                                .frame(width: 50)
-                            Text("\(Int(cache.syncProgress * 100))%")
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundColor(.blue)
-                        } else {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                        }
+                        let syncBar = min(1, max(0, cache.syncProgress))
+                        ProgressView(value: syncBar)
+                            .progressViewStyle(.linear)
+                            .frame(width: 50)
+                        Text("\(Int(syncBar * 100))%")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundColor(.blue)
                     } else if isLoading {
                         ProgressView()
                             .scaleEffect(0.6)
@@ -1269,8 +1265,8 @@ struct DashboardStagingArea: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            .padding(.vertical, 5)
+            .background(Color(nsColor: .controlBackgroundColor))
             
             Divider()
             
@@ -1352,18 +1348,13 @@ struct DashboardStagingArea: View {
                         if cache.isSyncHost {
                             Circle().fill(Color.green).frame(width: 6, height: 6)
                         }
-                        if cache.syncProgress > 0 {
-                            ProgressView(value: cache.syncProgress)
-                                .progressViewStyle(.linear)
-                                .frame(width: 80)
-                            Text("\(Int(cache.syncProgress * 100))%")
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundColor(.blue)
-                        } else {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .frame(width: 12, height: 12)
-                        }
+                        let syncBar = min(1, max(0, cache.syncProgress))
+                        ProgressView(value: syncBar)
+                            .progressViewStyle(.linear)
+                            .frame(width: 80)
+                        Text("\(Int(syncBar * 100))%")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(.blue)
                         Text(dashboardSyncPhaseText(cache: cache))
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.blue)
@@ -1408,8 +1399,8 @@ struct DashboardStagingArea: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .padding(.vertical, 8)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
     
     private func handleDrop(providers: [NSItemProvider]) {

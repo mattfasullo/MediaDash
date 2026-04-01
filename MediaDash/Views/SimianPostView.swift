@@ -52,6 +52,10 @@ struct SimianPostView: View {
     /// Finder (file URL) drag over list chrome / empty area → upload into current breadcrumb folder (or project root).
     @State private var isFolderListExternalDropTargeted = false
 
+    /// Right-click → Download file or folder (Simian → disk).
+    @State private var isDownloadingFromSimian = false
+    @State private var showDownloadEntireProjectConfirmation = false
+
     // Rename sheet (fallback, kept for context menu "Rename…")
     @State private var showRenameSheet = false
     @State private var renameIsFolder = true
@@ -96,6 +100,8 @@ struct SimianPostView: View {
     @FocusState private var isFolderListFocused: Bool
     /// True when the Simian `NoSelectTextField` is key (AppKit); SwiftUI `isSearchFocused` is not auto-synced for `NSViewRepresentable`.
     @State private var simianSearchFieldIsFirstResponder = false
+    /// Bumped to resign the AppKit search field without `makeFirstResponder(nil)` (see `NoSelectTextField.blurRequestToken`).
+    @State private var simianSearchBlurRequestToken = 0
 
     private var filteredProjects: [SimianProject] {
         let term = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -128,23 +134,26 @@ struct SimianPostView: View {
         isSearchFocused || simianSearchFieldIsFirstResponder
     }
 
-    /// Drop AppKit focus from the search field so the list can receive selection/keys.
+    /// Move SwiftUI focus to the project or folder list, then resign the AppKit search field (no `makeFirstResponder(nil)`).
     private func resignSimianSearchFieldForListNavigation() {
         isSearchFocused = false
         simianSearchFieldIsFirstResponder = false
-        DispatchQueue.main.async {
-            NSApp.keyWindow?.makeFirstResponder(nil)
+        if selectedProjectName == nil {
+            isProjectListFocused = true
+        } else {
+            isFolderListFocused = true
         }
+        simianSearchBlurRequestToken += 1
     }
 
     private static let simianKeyDebugLog = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-simian-keyfocus.log"
-    /// Session `5a89d5`: NDJSON focus / key routing (do not remove until verified).
-    private static let agentDebugLogPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-5a89d5.log"
+    /// Debug session: focus / key routing (do not remove until verified).
+    private static let agentDebugLogPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-a92964.log"
 
     // #region agent log
     private func logAgentFocus(_ message: String, hypothesisId: String, data: [String: Any]) {
         let payload: [String: Any] = [
-            "sessionId": "5a89d5",
+            "sessionId": "a92964",
             "timestamp": Int(Date().timeIntervalSince1970 * 1000),
             "location": "SimianPostView",
             "message": message,
@@ -227,6 +236,21 @@ struct SimianPostView: View {
             Text(pendingDeleteIsFolder
                  ? "\u{201C}\(name)\u{201D} and its contents will be removed from Simian. This cannot be undone."
                  : "\u{201C}\(name)\u{201D} will be removed from Simian. This cannot be undone.")
+        }
+        .alert("Download entire project?", isPresented: $showDownloadEntireProjectConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Download") {
+                guard let projectId = selectedProjectId, let name = selectedProjectName else { return }
+                presentSubtreeDownloadSavePanel(
+                    projectId: projectId,
+                    folderId: nil,
+                    rootFolderLabel: name,
+                    panelMessage: "A folder will be created here with all files from the project “\(name)”.",
+                    emptyResultMessage: "No files to download in this project."
+                )
+            }
+        } message: {
+            Text("This downloads every file in the project from Simian. Large projects may take a long time and use a lot of disk space.")
         }
         .onKeyPress(.leftArrow) { handleKeyLeft() }
         .onKeyPress(.rightArrow) { handleKeyRight() }
@@ -317,10 +341,8 @@ struct SimianPostView: View {
         }
         if selectedProjectName == nil && (isSimianSearchInputActive || fromSimianSearchField) {
             resignSimianSearchFieldForListNavigation()
-            isProjectListFocused = true
         } else if selectedProjectName != nil && isSimianSearchInputActive {
             resignSimianSearchFieldForListNavigation()
-            isFolderListFocused = true
         }
         if selectedProjectName == nil {
             let projects = filteredProjects
@@ -357,10 +379,8 @@ struct SimianPostView: View {
         }
         if selectedProjectName == nil && (isSimianSearchInputActive || fromSimianSearchField) {
             resignSimianSearchFieldForListNavigation()
-            isProjectListFocused = true
         } else if selectedProjectName != nil && isSimianSearchInputActive {
             resignSimianSearchFieldForListNavigation()
-            isFolderListFocused = true
         }
         if selectedProjectName == nil {
             let projects = filteredProjects
@@ -422,10 +442,8 @@ struct SimianPostView: View {
         if shouldIgnoreKeyPress(allowSearchFocusInProjectList: true, allowSearchFocusInProjectView: true) { return .ignored }
         if selectedProjectName == nil && isSimianSearchInputActive {
             resignSimianSearchFieldForListNavigation()
-            isProjectListFocused = true
         } else if selectedProjectName != nil && isSimianSearchInputActive {
             resignSimianSearchFieldForListNavigation()
-            isFolderListFocused = true
         }
         if inlineRenameItemId != nil { return .ignored }
         // Project list mode: Enter opens selected project.
@@ -460,12 +478,10 @@ struct SimianPostView: View {
         if isSimianSearchInputActive {
             resignSimianSearchFieldForListNavigation()
             if selectedProjectName == nil {
-                isProjectListFocused = true
                 if selectedProjectId == nil, let firstId = filteredProjects.first?.id {
                     selectedProjectId = firstId
                 }
             } else {
-                isFolderListFocused = true
                 if selectedItemIds.isEmpty,
                    let projectId = selectedProjectId {
                     let treeList = flatTreeList(projectId: projectId)
@@ -541,7 +557,6 @@ struct SimianPostView: View {
             if selectedProjectName == nil {
                 if isSimianSearchInputActive {
                     resignSimianSearchFieldForListNavigation()
-                    isProjectListFocused = true
                 }
                 guard let selectedId = selectedProjectId,
                       let project = filteredProjects.first(where: { $0.id == selectedId }) else {
@@ -1218,7 +1233,8 @@ struct SimianPostView: View {
                         ])
                         // #endregion
                         simianSearchFieldIsFirstResponder = isKey
-                    }
+                    },
+                    blurRequestToken: simianSearchBlurRequestToken
                 )
                 .padding(10)
                 if !searchText.isEmpty {
@@ -1272,6 +1288,12 @@ struct SimianPostView: View {
                         // #endregion
                         if selectedProjectId == nil, let firstId = filteredProjects.first?.id {
                             selectedProjectId = firstId
+                        }
+                        // List rebuild (search filter, navigation) recreates the outline; AppKit can leave `NSWindow` as first responder while `@FocusState` still says list (logs: onAppear then NSWindow + beep).
+                        DispatchQueue.main.async {
+                            guard selectedProjectName == nil, isProjectListFocused else { return }
+                            isProjectListFocused = false
+                            isProjectListFocused = true
                         }
                     }
                     .onChange(of: selectedProjectId) { _, newValue in
@@ -1346,7 +1368,7 @@ struct SimianPostView: View {
                         }
                         .listStyle(.inset(alternatesRowBackgrounds: true))
                         .onDrop(of: [UTType.fileURL], isTargeted: $isFolderListExternalDropTargeted) { providers in
-                            handleExternalFileDrop(providers: providers, folderId: currentParentFolderId)
+                            handleExternalFileDrop(providers: providers, folderId: currentParentFolderId, destinationFolderName: folderBreadcrumb.last?.name)
                         }
                         .focusable()
                         .focused($isFolderListFocused)
@@ -1354,6 +1376,11 @@ struct SimianPostView: View {
                             isFolderListFocused = true
                             if selectedItemIds.isEmpty, !treeList.isEmpty {
                                 selectedItemIds = [treeList[0].id]
+                            }
+                            DispatchQueue.main.async {
+                                guard isFolderListFocused else { return }
+                                isFolderListFocused = false
+                                isFolderListFocused = true
                             }
                         }
                         .onChange(of: selectedItemIds) { _, newValue in
@@ -1398,20 +1425,20 @@ struct SimianPostView: View {
 
     // MARK: - Upload via context menu
 
-    private func uploadToFolder(folderId: String?) {
+    private func uploadToFolder(folderId: String?, destinationFolderName: String?) {
         guard let projectId = selectedProjectId else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
         panel.message = "Select files or folders to upload"
         panel.begin { response in
             guard response == .OK, !panel.urls.isEmpty else { return }
-            DispatchQueue.main.async { uploadDroppedFiles(projectId: projectId, folderId: folderId, fileURLs: panel.urls) }
+            DispatchQueue.main.async { uploadDroppedFiles(projectId: projectId, folderId: folderId, destinationFolderName: destinationFolderName, fileURLs: panel.urls) }
         }
     }
 
-    private func uploadStagedFiles(folderId: String?) {
+    private func uploadStagedFiles(folderId: String?, destinationFolderName: String?) {
         guard let projectId = selectedProjectId, !manager.selectedFiles.isEmpty else { return }
-        uploadDroppedFiles(projectId: projectId, folderId: folderId, fileURLs: manager.selectedFiles.map { $0.url })
+        uploadDroppedFiles(projectId: projectId, folderId: folderId, destinationFolderName: destinationFolderName, fileURLs: manager.selectedFiles.map { $0.url })
     }
 
     /// Selected tree rows whose parent folder matches the folder we are currently browsing (for empty-area context menu).
@@ -1438,9 +1465,9 @@ struct SimianPostView: View {
     @ViewBuilder
     private func folderBrowserEmptyAreaContextMenu(projectId: String, treeList: [SimianTreeItem]) -> some View {
         let selectionInFolder = selectedTreeIdsInCurrentFolder(treeList: treeList)
-        Button("Upload to\u{2026}") { uploadToFolder(folderId: currentParentFolderId) }
+        Button("Upload to\u{2026}") { uploadToFolder(folderId: currentParentFolderId, destinationFolderName: folderBreadcrumb.last?.name) }
         if !manager.selectedFiles.isEmpty {
-            Button("Upload \(manager.selectedFiles.count) staged file(s) here") { uploadStagedFiles(folderId: currentParentFolderId) }
+            Button("Upload \(manager.selectedFiles.count) staged file(s) here") { uploadStagedFiles(folderId: currentParentFolderId, destinationFolderName: folderBreadcrumb.last?.name) }
         }
         Divider()
         Button("New Folder with Selection") { startNewFolderWithSelectionFromCurrentDirectory(treeList: treeList) }
@@ -1466,6 +1493,16 @@ struct SimianPostView: View {
                 showRenameSheet = true
             }
             Button("Copy Link") { copyFolderLink(projectId: projectId, folderId: folderId) }
+            Button("Download folder contents\u{2026}") {
+                presentSubtreeDownloadSavePanel(
+                    projectId: projectId,
+                    folderId: folderId,
+                    rootFolderLabel: folderName,
+                    panelMessage: "A folder will be created here with all files from “\(folderName)”.",
+                    emptyResultMessage: "Folder is empty."
+                )
+            }
+            .disabled(isDownloadingFromSimian)
             Divider()
             Button("Remove from Simian\u{2026}", role: .destructive) {
                 pendingDeleteIsFolder = true
@@ -1474,6 +1511,11 @@ struct SimianPostView: View {
                 pendingDeleteParentFolderId = folderBreadcrumb.dropLast().last?.id
                 showDeleteConfirmation = true
             }
+        } else if selectedProjectId != nil, selectedProjectName != nil {
+            Button("Download entire project\u{2026}") {
+                showDownloadEntireProjectConfirmation = true
+            }
+            .disabled(isDownloadingFromSimian)
         }
     }
 
@@ -1492,7 +1534,7 @@ struct SimianPostView: View {
             isEditing: isEditing, editText: $inlineRenameText,
             selectedItemIds: selectedItemIds,
             onChevronTap: { selectedItemIds = ["f-\(folder.id)"]; toggleExpand(projectId: projectId, folderId: folder.id) },
-            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: folder.id) },
+            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: folder.id, destinationFolderName: folder.name) },
             onMoveIntoFolder: { draggedIds in
                 handleFolderRowSimianDrop(projectId: projectId, itemIds: draggedIds, targetFolderId: folder.id, targetSiblingParentId: parentFolderId, treeList: treeList)
             },
@@ -1504,9 +1546,9 @@ struct SimianPostView: View {
             onCancelRename: { inlineRenameItemId = nil; inlineRenameText = "" }
         )
         .contextMenu {
-            Button("Upload to\u{2026}") { uploadToFolder(folderId: folder.id) }
+            Button("Upload to\u{2026}") { uploadToFolder(folderId: folder.id, destinationFolderName: folder.name) }
             if !manager.selectedFiles.isEmpty {
-                Button("Upload \(manager.selectedFiles.count) staged file(s) here") { uploadStagedFiles(folderId: folder.id) }
+                Button("Upload \(manager.selectedFiles.count) staged file(s) here") { uploadStagedFiles(folderId: folder.id, destinationFolderName: folder.name) }
             }
             Divider()
             Button("New Folder with Selection") { startNewFolderWithSelection(projectId: projectId, treeList: treeList, rightClickedId: "f-\(folder.id)") }
@@ -1519,6 +1561,16 @@ struct SimianPostView: View {
                 renameCurrentName = folder.name; renameNewName = folder.name; showRenameSheet = true
             }
             Button("Copy Link") { copyFolderLink(projectId: projectId, folderId: folder.id) }
+            Button("Download folder contents\u{2026}") {
+                presentSubtreeDownloadSavePanel(
+                    projectId: projectId,
+                    folderId: folder.id,
+                    rootFolderLabel: folder.name,
+                    panelMessage: "A folder will be created here with all files from “\(folder.name)”.",
+                    emptyResultMessage: "Folder is empty."
+                )
+            }
+            .disabled(isDownloadingFromSimian)
             Divider()
             Button("Remove from Simian\u{2026}", role: .destructive) {
                 pendingDeleteIsFolder = true; pendingDeleteItemId = folder.id; pendingDeleteItemName = folder.name
@@ -1535,7 +1587,7 @@ struct SimianPostView: View {
             isEditing: isEditing, editText: $inlineRenameText,
             selectedItemIds: selectedItemIds,
             onSelect: { selectedItemIds = ["file-\(file.id)"] },
-            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: currentParentFolderId) },
+            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: currentParentFolderId, destinationFolderName: folderBreadcrumb.last?.name) },
             onReorderInsertAfter: { draggedIds in
                 let nextId = siblings.firstIndex(where: { $0.id == file.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
                 reorderItems(projectId: selectedProjectId ?? "", draggedIds: draggedIds, targetId: nextId.map { "file-\($0)" }, treeList: treeList)
@@ -1552,6 +1604,8 @@ struct SimianPostView: View {
                 renameIsFolder = false; renameItemId = file.id; renameParentFolderId = parentFolderId
                 renameCurrentName = file.title; renameNewName = file.title; showRenameSheet = true
             }
+            Button("Download\u{2026}") { beginDownloadSimianFile(file) }
+                .disabled(file.mediaURL == nil || isDownloadingFromSimian)
             Divider()
             Button("Remove from Simian\u{2026}", role: .destructive) {
                 pendingDeleteIsFolder = false; pendingDeleteItemId = file.id; pendingDeleteItemName = file.title
@@ -1733,6 +1787,108 @@ struct SimianPostView: View {
         }
     }
 
+    private func uniqueSimianDownloadSubfolderURL(under parent: URL, name: String) -> URL {
+        let fm = FileManager.default
+        let base = SimianService.sanitizeFileNameForDownload(name.isEmpty ? "SimianFolder" : name)
+        var candidate = parent.appendingPathComponent(base)
+        var n = 1
+        while fm.fileExists(atPath: candidate.path) {
+            candidate = parent.appendingPathComponent("\(base) (\(n))")
+            n += 1
+        }
+        return candidate
+    }
+
+    private func beginDownloadSimianFile(_ file: SimianFile) {
+        guard let mediaURL = file.mediaURL else {
+            statusMessage = "This file has no download URL."
+            statusIsError = true
+            return
+        }
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = SimianService.buildDownloadFileName(for: file, mediaURL: mediaURL)
+        panel.begin { response in
+            guard response == .OK, let destURL = panel.url else { return }
+            isDownloadingFromSimian = true
+            statusMessage = "Downloading\u{2026}"
+            statusIsError = false
+            Task {
+                do {
+                    try await simianService.downloadFile(from: mediaURL, to: destURL)
+                    await MainActor.run {
+                        isDownloadingFromSimian = false
+                        statusMessage = "Downloaded to \(destURL.lastPathComponent)"
+                        statusIsError = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        isDownloadingFromSimian = false
+                        statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                        statusIsError = true
+                    }
+                }
+            }
+        }
+    }
+
+    /// Enumerate and download a folder subtree (or project root when `folderId` is nil) after the user picks a parent directory.
+    private func presentSubtreeDownloadSavePanel(
+        projectId: String,
+        folderId: String?,
+        rootFolderLabel: String,
+        panelMessage: String,
+        emptyResultMessage: String
+    ) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose Destination"
+        panel.message = panelMessage
+        panel.begin { response in
+            guard response == .OK, let parentURL = panel.url else { return }
+            let destRoot = uniqueSimianDownloadSubfolderURL(under: parentURL, name: rootFolderLabel)
+            isDownloadingFromSimian = true
+            statusMessage = "Preparing download\u{2026}"
+            statusIsError = false
+            Task {
+                do {
+                    let items = try await simianService.enumerateFilesInFolderSubtree(projectId: projectId, folderId: folderId)
+                    if items.isEmpty {
+                        await MainActor.run {
+                            isDownloadingFromSimian = false
+                            statusMessage = emptyResultMessage
+                            statusIsError = false
+                        }
+                        return
+                    }
+                    let skipped = items.filter { $0.file.mediaURL == nil }.count
+                    try await simianService.downloadFilesWithRelativePaths(items, to: destRoot) { completed, total, path in
+                        statusMessage = "Downloading \(path) (\(completed)/\(total))"
+                        statusIsError = false
+                    }
+                    await MainActor.run {
+                        isDownloadingFromSimian = false
+                        let base = destRoot.lastPathComponent
+                        if skipped > 0 {
+                            statusMessage = "Downloaded \(base) (\(skipped) file(s) had no URL and were skipped)"
+                        } else {
+                            statusMessage = "Downloaded folder \(base)"
+                        }
+                        statusIsError = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        isDownloadingFromSimian = false
+                        statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                        statusIsError = true
+                    }
+                }
+            }
+        }
+    }
+
     private func copyFolderLink(projectId: String, folderId: String) {
         Task {
             do {
@@ -1878,9 +2034,12 @@ struct SimianPostView: View {
 
     // MARK: - File drop handling
 
-    private func handleExternalFileDrop(providers: [NSItemProvider], folderId: String?) -> Bool {
+    private func handleExternalFileDrop(providers: [NSItemProvider], folderId: String?, destinationFolderName: String?) -> Bool {
         guard let projectId = selectedProjectId else { return false }
-        loadURLsFromProviders(providers) { urls in guard !urls.isEmpty else { return }; uploadDroppedFiles(projectId: projectId, folderId: folderId, fileURLs: urls) }
+        loadURLsFromProviders(providers) { urls in
+            guard !urls.isEmpty else { return }
+            uploadDroppedFiles(projectId: projectId, folderId: folderId, destinationFolderName: destinationFolderName, fileURLs: urls)
+        }
         return true
     }
 
@@ -1896,28 +2055,45 @@ struct SimianPostView: View {
         group.notify(queue: .main) { completion(urls) }
     }
 
-    private func uploadDroppedFiles(projectId: String, folderId: String?, fileURLs: [URL]) {
+    private func uploadDroppedFiles(projectId: String, folderId: String?, destinationFolderName: String?, fileURLs: [URL]) {
         let itemsToUpload = fileURLs.map { FileItem(url: $0) }
         let totalFiles = itemsToUpload.reduce(0) { $0 + $1.fileCount }
         isUploading = true; statusMessage = "Uploading\u{2026}"; statusIsError = false; uploadTotal = totalFiles; uploadCurrent = 0; uploadFileName = ""
         Task {
             do {
                 let progressCounter = ProgressCounter()
-                for fileItem in itemsToUpload {
+                let looseItems = itemsToUpload.filter { !$0.isDirectory }
+                let dirItems = itemsToUpload.filter { $0.isDirectory }
+                let shouldNestLoose = SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: destinationFolderName)
+                    && folderId != nil
+                    && !looseItems.isEmpty
+
+                var looseFolderId = folderId
+                if shouldNestLoose, let parentId = folderId {
+                    let siblings = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: parentId)
+                    let newName = SimianFolderNaming.nextDateStampedLooseFileFolderName(existingFolderNames: siblings.map { $0.name })
+                    looseFolderId = try await simianService.createFolderPublic(projectId: projectId, folderName: newName, parentFolderId: parentId)
+                }
+
+                for fileItem in looseItems {
+                    progressCounter.increment()
+                    await MainActor.run { uploadCurrent = progressCounter.value; uploadTotal = totalFiles; uploadFileName = fileItem.name }
+                    _ = try await simianService.uploadFile(projectId: projectId, folderId: looseFolderId, fileURL: fileItem.url)
+                }
+
+                for fileItem in dirItems {
                     let existingFolders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: folderId)
-                    if fileItem.isDirectory {
-                        try await uploadFolderWithStructure(projectId: projectId, destinationFolderId: folderId, localFolderURL: fileItem.url, existingFolderNames: existingFolders.map { $0.name }) { fileName in
-                            progressCounter.increment(); Task { @MainActor in uploadCurrent = progressCounter.value; uploadTotal = totalFiles; uploadFileName = fileName }
-                        }
-                    } else {
-                        progressCounter.increment(); await MainActor.run { uploadCurrent = progressCounter.value; uploadTotal = totalFiles; uploadFileName = fileItem.name }
-                        _ = try await simianService.uploadFile(projectId: projectId, folderId: folderId, fileURL: fileItem.url)
+                    try await uploadFolderWithStructure(projectId: projectId, destinationFolderId: folderId, localFolderURL: fileItem.url, existingFolderNames: existingFolders.map { $0.name }) { fileName in
+                        progressCounter.increment(); Task { @MainActor in uploadCurrent = progressCounter.value; uploadTotal = totalFiles; uploadFileName = fileName }
                     }
                 }
                 await MainActor.run {
                     isUploading = false; statusMessage = "Uploaded \(progressCounter.value) file(s)."; statusIsError = false
                     if selectedProjectId == projectId {
                         if let destId = folderId { folderChildrenCache.removeValue(forKey: destId); folderFilesCache.removeValue(forKey: destId) }
+                        if let nestedId = looseFolderId, shouldNestLoose, nestedId != folderId {
+                            folderChildrenCache.removeValue(forKey: nestedId); folderFilesCache.removeValue(forKey: nestedId)
+                        }
                         loadFolders(projectId: projectId, parentFolderId: currentParentFolderId)
                     }
                 }
@@ -1929,7 +2105,7 @@ struct SimianPostView: View {
 
     private func uploadFolderWithStructure(projectId: String, destinationFolderId: String?, localFolderURL: URL, existingFolderNames: [String], uploadProgress: @escaping (String) -> Void) async throws {
         let fm = FileManager.default
-        let folderName = SimianService.nextNumberedFolderName(existingFolderNames: existingFolderNames, sourceFolderName: localFolderURL.lastPathComponent)
+        let folderName = SimianFolderNaming.nextNumberedFolderName(existingFolderNames: existingFolderNames, sourceFolderName: localFolderURL.lastPathComponent)
         let simianFolderId = try await simianService.createFolderPublic(projectId: projectId, folderName: folderName, parentFolderId: destinationFolderId)
         guard let contents = try? fm.contentsOfDirectory(at: localFolderURL, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey], options: [.skipsHiddenFiles]) else { return }
         var filesHere: [URL] = []; var subfolders: [URL] = []
@@ -2069,10 +2245,10 @@ private struct SimianFolderRow: View {
                                 .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary).frame(width: 14, height: 14)
                         } else { Rectangle().fill(Color.clear).frame(width: 14, height: 14) }
                     }
-                    .offset(y: 3.5)
+                    .offset(y: 5)
                 }.buttonStyle(.plain)
 
-                Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(.secondary).offset(y: 3.5).allowsHitTesting(false)
+                Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(.secondary).offset(y: 5).allowsHitTesting(false)
                 if isEditing {
                     TextField("", text: $editText, onCommit: { onCommitRename() })
                         .textFieldStyle(.roundedBorder).font(.system(size: 13))
@@ -2080,10 +2256,10 @@ private struct SimianFolderRow: View {
                         .onAppear { isEditFocused = true }
                         .onExitCommand { onCancelRename() }
                 } else {
-                    Text(folderName).font(.system(size: 13)).lineLimit(1).offset(y: 3.5).allowsHitTesting(false)
+                    Text(folderName).font(.system(size: 13)).lineLimit(1).offset(y: 5).allowsHitTesting(false)
                 }
                 Spacer()
-                if isDropTargeted { Image(systemName: "plus.circle.fill").font(.system(size: 12)).foregroundStyle(Color.accentColor) }
+                if isDropTargeted { Image(systemName: "plus.circle.fill").font(.system(size: 12)).foregroundStyle(Color.accentColor).offset(y: 5) }
             }
             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .center)
             .contentShape(Rectangle())
@@ -2155,7 +2331,7 @@ private struct SimianFileRow: View {
             HStack(spacing: 5) {
                 ForEach(0..<safeDepth, id: \.self) { _ in Rectangle().fill(Color.clear).frame(width: 10) }
                 Rectangle().fill(Color.clear).frame(width: 14)
-                Image(systemName: "doc").font(.system(size: 11)).foregroundStyle(.secondary).offset(y: 3.5).allowsHitTesting(false)
+                Image(systemName: "doc").font(.system(size: 11)).foregroundStyle(.secondary).offset(y: 5).allowsHitTesting(false)
                 if isEditing {
                     TextField("", text: $editText, onCommit: { onCommitRename() })
                         .textFieldStyle(.roundedBorder).font(.system(size: 13))
@@ -2163,7 +2339,7 @@ private struct SimianFileRow: View {
                         .onAppear { isEditFocused = true }
                         .onExitCommand { onCancelRename() }
                 } else {
-                    Text(fileName).font(.system(size: 13)).lineLimit(1).offset(y: 3.5).allowsHitTesting(false)
+                    Text(fileName).font(.system(size: 13)).lineLimit(1).offset(y: 5).allowsHitTesting(false)
                 }
                 Spacer()
             }

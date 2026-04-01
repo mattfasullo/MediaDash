@@ -54,8 +54,8 @@ struct SidebarView: View {
     var onFileThenPrep: (() -> Void)? = nil
     /// Open full 2-week Asana calendar view.
     var onOpenFullCalendar: (() -> Void)? = nil
-    /// Portal popover visibility (attach popover to button for correct arrow alignment).
-    @Binding var showPortalSheet: Bool
+    /// Video popover visibility (attach popover to button for correct arrow alignment).
+    @Binding var showVideoSheet: Bool
 
     private var currentTheme: AppTheme {
         settingsManager.currentSettings.appTheme
@@ -81,11 +81,10 @@ struct SidebarView: View {
     
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            // Fill only the fixed sidebar width — unconstrained Color in ZStack would expand with the window.
+            // Base fill — no ignoresSafeArea so the toolbar layout stays anchored to the content safe area.
             currentTheme.sidebarBackground
-                .ignoresSafeArea(.all, edges: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            
+
             VStack(alignment: .leading, spacing: 12) {
                 // App Logo
                 logoImage
@@ -135,7 +134,7 @@ struct SidebarView: View {
                         }
                     },
                     onFileThenPrep: onFileThenPrep,
-                    showPortalSheet: $showPortalSheet
+                    showVideoSheet: $showVideoSheet
                 )
                 .draggableLayout(id: "actionButtons")
 
@@ -217,7 +216,6 @@ struct SidebarView: View {
             }
             .padding(16)
             .frame(width: sidebarWidth)
-            .background(currentTheme.sidebarBackground)
             .frame(maxHeight: .infinity, alignment: .top)
             .clipped() // Prevent overflow
             .animation(.easeInOut(duration: 0.2), value: layoutMode)
@@ -238,6 +236,12 @@ struct SidebarView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .fixedSize(horizontal: true, vertical: false)
         .clipped()
+        .background(alignment: .bottom) {
+            currentTheme.sidebarBackground
+                .frame(maxWidth: .infinity)
+                .frame(height: 16)
+                .ignoresSafeArea(.all, edges: .bottom)
+        }
     }
 }
 
