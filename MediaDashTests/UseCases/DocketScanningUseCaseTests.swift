@@ -17,8 +17,9 @@ final class DocketScanningUseCaseTests: XCTestCase {
     func testScanDocketsWorkPicture() async throws {
         let useCase = DocketScanningUseCase(fileSystem: mockFileSystem, config: config)
         
-        // Setup mock file system
-        let workPicPath = URL(fileURLWithPath: "/test/server/GM_2024/2024_WORK PICTURE")
+        let year = Calendar.current.component(.year, from: Date())
+        // Must match AppConfig.getPaths() layout: …/GM_<year>/<year>_WORK PICTURE
+        let workPicPath = URL(fileURLWithPath: "/test/server/GM_\(year)/\(year)_WORK PICTURE")
         let docket1 = workPicPath.appendingPathComponent("12345")
         let docket2 = workPicPath.appendingPathComponent("12346")
         
@@ -37,8 +38,8 @@ final class DocketScanningUseCaseTests: XCTestCase {
     func testScanDocketsPrep() async throws {
         let useCase = DocketScanningUseCase(fileSystem: mockFileSystem, config: config)
         
-        // Setup mock file system
-        let prepPath = URL(fileURLWithPath: "/test/server/GM_2024/2024_SESSION PREP")
+        let year = Calendar.current.component(.year, from: Date())
+        let prepPath = URL(fileURLWithPath: "/test/server/GM_\(year)/\(year)_SESSION PREP")
         let prepFolder1 = prepPath.appendingPathComponent("12345_PREP_Jan1.24")
         let prepFolder2 = prepPath.appendingPathComponent("12346_PREP_Jan2.24")
         

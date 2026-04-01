@@ -88,6 +88,7 @@ class GmailService: ObservableObject {
     /// Note: This stores to personal Keychain. Shared keys are set separately by admins.
     func setAccessToken(_ token: String, refreshToken: String? = nil) {
         self.accessToken = token
+        invalidateUserLabelIdCache()
         // Store to personal Keychain (shared keys are managed separately)
         _ = KeychainService.store(key: "gmail_access_token", value: token)
         
@@ -95,12 +96,21 @@ class GmailService: ObservableObject {
             self.refreshToken = refreshToken
         }
     }
+
+    /// Lowercased user label display name → API label id. Cleared when tokens change.
+    private var userLabelIdCache: [String: String] = [:]
+
+    /// Clears cached Gmail user label IDs (e.g. after account switch or label rename in Gmail).
+    func invalidateUserLabelIdCache() {
+        userLabelIdCache.removeAll(keepingCapacity: false)
+    }
     
     /// Clear access token and refresh token
     func clearAccessToken() {
         self.accessToken = nil
         KeychainService.delete(key: "gmail_access_token")
         KeychainService.delete(key: "gmail_refresh_token")
+        invalidateUserLabelIdCache()
     }
     
     /// Check if authenticated
@@ -361,45 +371,69 @@ class GmailService: ObservableObject {
     }
 
     /// Gmail API label ID for a **user** label with this display name (case-insensitive, exact match).
+    /// Caches all user labels from one `listMailboxLabels` call until `invalidateUserLabelIdCache()`.
     func userLabelId(matchingName name: String) async throws -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
+        if let cached = userLabelIdCache[lower] {
+            return cached
+        }
         let labels = try await listMailboxLabels()
-        return labels.first { $0.type == "user" && $0.name.lowercased() == lower }?.id
+        for label in labels where label.type == "user" {
+            userLabelIdCache[label.name.lowercased()] = label.id
+        }
+        return userLabelIdCache[lower]
     }
     
-    /// Get full email message by ID
-    /// - Parameter messageId: The message ID from fetchEmails
-    /// - Returns: Full GmailMessage object
-    func getEmail(messageId: String) async throws -> GmailMessage {
-        agentLogApiCall(method: "getEmail")
+    /// Fetch a single message. Use `format: "metadata"` for label/header filtering without full bodies; `"full"` for parsing.
+    func getEmail(messageId: String, format: String = "full") async throws -> GmailMessage {
+        var lastError: Error?
+        for attempt in 1...3 {
+            do {
+                return try await getEmailOnce(messageId: messageId, format: format)
+            } catch {
+                lastError = error
+                let msg = error.localizedDescription
+                let is429 = msg.contains("429") || msg.contains("RESOURCE_EXHAUSTED")
+                if attempt < 3, is429 {
+                    let delaySec = pow(2.0, Double(attempt - 1))
+                    try await Task.sleep(nanoseconds: UInt64(delaySec * 1_000_000_000))
+                    continue
+                }
+                throw error
+            }
+        }
+        throw lastError ?? GmailError.apiError("Gmail message fetch failed")
+    }
+
+    private func getEmailOnce(messageId: String, format: String) async throws -> GmailMessage {
+        agentLogApiCall(method: "getEmail", data: ["format": format])
         isFetching = true
         lastError = nil
         defer { isFetching = false }
-        
-        // Request full format to get body content
+
         var components = URLComponents(string: "\(baseURL)/users/me/messages/\(messageId)")!
         components.queryItems = [
-            URLQueryItem(name: "format", value: "full")
+            URLQueryItem(name: "format", value: format)
         ]
-        
+
         guard let url = components.url else {
             throw GmailError.invalidURL
         }
-        
+
         var request = URLRequest(url: url)
         let (data, httpResponse) = try await makeAuthenticatedRequest(&request)
-        
+
         if httpResponse.statusCode == 401 {
             throw GmailError.notAuthenticated
         }
-        
+
         guard httpResponse.statusCode == 200 else {
             let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
             throw GmailError.apiError("HTTP \(httpResponse.statusCode): \(errorMessage)")
         }
-        
+
         do {
             let message = try JSONDecoder().decode(GmailMessage.self, from: data)
             return message
@@ -446,64 +480,74 @@ class GmailService: ObservableObject {
         }
     }
     
-    /// Batch fetch full email messages
-    /// - Parameter messageReferences: Array of message references from fetchEmails
-    /// - Returns: Array of full GmailMessage objects
-    func getEmails(messageReferences: [GmailMessageReference]) async throws -> [GmailMessage] {
-        var messages: [GmailMessage] = []
+    /// Batch fetch messages. Use `format: "metadata"` to filter by labels cheaply, then `full` only for survivors.
+    /// - Returns: Messages in the **same order** as `messageReferences` (missing IDs omitted).
+    func getEmails(messageReferences: [GmailMessageReference], format: String = "full") async throws -> [GmailMessage] {
         debugLog(
             "GmailService.getEmails:entry",
             message: "getEmails called",
             data: [
-                "messageRefs": messageReferences.count
+                "messageRefs": messageReferences.count,
+                "format": format
             ],
             hypothesisId: "H2"
         )
-        
-        // Fetch messages with limited concurrency to avoid rate limits
+
         let maxConcurrent = 5
-        var tasks: [Task<GmailMessage?, Never>] = []
-        
-        for ref in messageReferences {
-            // Wait if we have too many concurrent tasks
-            if tasks.count >= maxConcurrent {
-                // Wait for one to complete
-                if let firstTask = tasks.first {
-                    if let message = await firstTask.value {
-                        messages.append(message)
+        var results: [(Int, GmailMessage?)] = []
+        results.reserveCapacity(messageReferences.count)
+
+        await withTaskGroup(of: (Int, GmailMessage?).self) { group in
+            var nextIndex = 0
+            var inFlight = 0
+
+            func startNext() {
+                while inFlight < maxConcurrent, nextIndex < messageReferences.count {
+                    let idx = nextIndex
+                    nextIndex += 1
+                    inFlight += 1
+                    let ref = messageReferences[idx]
+                    group.addTask {
+                        do {
+                            let msg = try await self.getEmail(messageId: ref.id, format: format)
+                            return (idx, msg)
+                        } catch {
+                            print("Error fetching email \(ref.id) format=\(format): \(error.localizedDescription)")
+                            return (idx, nil)
+                        }
                     }
-                    tasks.removeFirst()
                 }
             }
-            
-            // Create new task
-            let task = Task<GmailMessage?, Never> {
-                do {
-                    return try await self.getEmail(messageId: ref.id)
-                } catch {
-                    print("Error fetching email \(ref.id): \(error.localizedDescription)")
-                    return nil
-                }
-            }
-            tasks.append(task)
-        }
-        
-        // Wait for remaining tasks
-        for task in tasks {
-            if let message = await task.value {
-                messages.append(message)
+
+            startNext()
+
+            while let (idx, msg) = await group.next() {
+                inFlight -= 1
+                results.append((idx, msg))
+                startNext()
             }
         }
+
+        let sorted = results.sorted { $0.0 < $1.0 }
+        var ordered: [GmailMessage] = []
+        ordered.reserveCapacity(messageReferences.count)
+        for (_, opt) in sorted {
+            if let msg = opt {
+                ordered.append(msg)
+            }
+        }
+
         debugLog(
             "GmailService.getEmails:exit",
             message: "getEmails completed",
             data: [
-                "messages": messages.count
+                "messages": ordered.count,
+                "format": format
             ],
             hypothesisId: "H2"
         )
-        
-        return messages
+
+        return ordered
     }
 
     private func parseRetryAfterDate(from data: Data) -> Date? {

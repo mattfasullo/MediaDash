@@ -13,6 +13,10 @@ class NotificationCenter: ObservableObject {
 
     private let notificationsKey = "mediadash_notifications"
 
+    /// Last created instance — used to flush debounced saves on app termination.
+    private static weak var persistenceSingleton: NotificationCenter?
+    private var pendingSaveWorkItem: DispatchWorkItem?
+
     // MARK: - Index Caches for O(1) Lookups
     // These dictionaries provide fast lookups instead of linear array searches
     private var notificationById: [UUID: Int] = [:]        // id -> array index
@@ -20,6 +24,7 @@ class NotificationCenter: ObservableObject {
     private var notificationByThreadId: [String: Set<Int>] = [:] // threadId -> set of array indices
 
     init() {
+        Self.persistenceSingleton = self
         Task { @MainActor in
             await Task.yield()
             loadNotifications()
@@ -899,11 +904,32 @@ class NotificationCenter: ObservableObject {
         unreadCount = pendingCount
     }
     
-    /// Save notifications to UserDefaults
+    /// Debounced persist — coalesces rapid updates (dismissals, batch edits).
     private func saveNotifications() {
+        pendingSaveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.saveNotificationsImmediate()
+        }
+        pendingSaveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    private func saveNotificationsImmediate() {
         if let data = try? JSONEncoder().encode(notifications) {
             UserDefaults.standard.set(data, forKey: notificationsKey)
         }
+    }
+
+    /// Synchronous write; cancel pending debounced work. Call on app quit / backgrounding.
+    func flushPendingNotificationSaveToDisk() {
+        pendingSaveWorkItem?.cancel()
+        pendingSaveWorkItem = nil
+        saveNotificationsImmediate()
+    }
+
+    /// Flush debounced notification persistence if a `NotificationCenter` instance exists (app termination).
+    static func flushPendingPersistenceIfAny() {
+        persistenceSingleton?.flushPendingNotificationSaveToDisk()
     }
     
     /// Load notifications from UserDefaults

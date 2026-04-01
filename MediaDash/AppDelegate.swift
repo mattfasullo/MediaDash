@@ -175,7 +175,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    func applicationDidResignActive(_ notification: Foundation.Notification) {
+        // Ensure debounced notification persistence is written before long background stretches
+        NotificationCenter.flushPendingPersistenceIfAny()
+    }
+
     func applicationWillTerminate(_ aNotification: Foundation.Notification) {
+        NotificationCenter.flushPendingPersistenceIfAny()
         // Clean up event monitor
         if let monitor = quitEventMonitor {
             NSEvent.removeMonitor(monitor)

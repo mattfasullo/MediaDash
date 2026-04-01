@@ -2,7 +2,8 @@ import Foundation
 import Combine
 import SwiftUI
 
-/// Service for scanning emails and creating notifications for new dockets
+/// Service for scanning emails and creating notifications for new dockets.
+/// Uses metadata-first Gmail fetches and cached label IDs to reduce work; class uses the target’s default `MainActor` isolation.
 @MainActor
 class EmailScanningService: ObservableObject {
     @Published var isScanning = false
@@ -266,15 +267,14 @@ class EmailScanningService: ObservableObject {
             
             emailScanDebug("  📨 Found \(messageRefs.count) email references matching query")
             
-            // Get full email messages
-            let messages = try await gmailService.getEmails(messageReferences: messageRefs)
-            
-            emailScanDebug("  📦 Retrieved \(messages.count) full email messages")
+            // Metadata first (cheap), then full fetch only for scan candidates — avoids large payloads for non-matching mail
+            let metaMessages = try await gmailService.getEmails(messageReferences: messageRefs, format: "metadata")
+            emailScanDebug("  📦 Retrieved \(metaMessages.count) messages (metadata) for label filtering")
             
             // DEBUG: Log ALL messages retrieved (before filtering)
-            emailScanDebug("  🔍 DEBUG: All messages retrieved from Gmail:")
-            for (index, message) in messages.enumerated() {
-                let subject = message.subject ?? "(no subject)"
+            emailScanDebug("  🔍 DEBUG: All messages retrieved from Gmail (metadata):")
+            for (index, message) in metaMessages.enumerated() {
+                let subject = message.subject ?? message.snippet ?? "(no subject)"
                 let from = message.from ?? "(no sender)"
                 let labelIds = message.labelIds ?? []
                 let isUnread = labelIds.contains("UNREAD")
@@ -282,8 +282,17 @@ class EmailScanningService: ObservableObject {
             }
             
             // Unread, or (if configured) messages carrying the new-docket user label (e.g. read but labeled)
-            let candidateMessages = messages.filter { isNewDocketScanCandidate($0, newDocketLabelId: newDocketLabelId) }
-            emailScanDebug("  ✅ \(candidateMessages.count) are scan candidates (unread and '\(Self.newDocketGmailUserLabelName)' label); filtered out \(messages.count - candidateMessages.count)")
+            let candidateMeta = metaMessages.filter { isNewDocketScanCandidate($0, newDocketLabelId: newDocketLabelId) }
+            emailScanDebug("  ✅ \(candidateMeta.count) are scan candidates (unread and '\(Self.newDocketGmailUserLabelName)' label); filtered out \(metaMessages.count - candidateMeta.count)")
+            
+            let candidateRefs = candidateMeta.map { GmailMessageReference(id: $0.id, threadId: $0.threadId) }
+            let candidateMessages: [GmailMessage]
+            if candidateRefs.isEmpty {
+                candidateMessages = []
+            } else {
+                candidateMessages = try await gmailService.getEmails(messageReferences: candidateRefs, format: "full")
+                emailScanDebug("  📦 Retrieved \(candidateMessages.count) full messages for candidates only")
+            }
             
             // DEBUG: Check if Kids Help Phone email is in the unread list
             let kidsHelpPhoneEmails = candidateMessages.filter { message in
@@ -413,7 +422,7 @@ class EmailScanningService: ObservableObject {
             // Print diagnostic summary
             emailScanDebug("EmailScanningService: 📊 Scan Summary:")
             emailScanDebug("  📧 Total emails found: \(messageRefs.count)")
-            emailScanDebug("  ✅ Scan candidates: \(candidateMessages.count)")
+            emailScanDebug("  ✅ Scan candidates: \(candidateMeta.count) (full fetched: \(candidateMessages.count))")
             emailScanDebug("  📬 Initial (not reply/forward): \(initialEmails.count)")
             emailScanDebug("  🆕 New (not processed): \(newMessages.count)")
             emailScanDebug("  ✅ Notifications created: \(notificationCount)")
@@ -1302,12 +1311,20 @@ class EmailScanningService: ObservableObject {
                 return
             }
             
-            // Get full email messages
-            let messages = try await gmailService.getEmails(messageReferences: messageRefs)
-            emailScanDebug("EmailScanningService: Fetched \(messages.count) full email messages")
+            let metaMessages = try await gmailService.getEmails(messageReferences: messageRefs, format: "metadata")
+            emailScanDebug("EmailScanningService: Fetched \(metaMessages.count) messages (metadata)")
             
-            let candidateMessages = messages.filter { isNewDocketScanCandidate($0, newDocketLabelId: newDocketLabelId) }
-            emailScanDebug("EmailScanningService: \(candidateMessages.count) scan candidates (unread + '\(Self.newDocketGmailUserLabelName)' label) out of \(messages.count) fetched")
+            let candidateMeta = metaMessages.filter { isNewDocketScanCandidate($0, newDocketLabelId: newDocketLabelId) }
+            emailScanDebug("EmailScanningService: \(candidateMeta.count) scan candidates (unread + '\(Self.newDocketGmailUserLabelName)' label) out of \(metaMessages.count) listed")
+            
+            let candidateRefs = candidateMeta.map { GmailMessageReference(id: $0.id, threadId: $0.threadId) }
+            let candidateMessages: [GmailMessage]
+            if candidateRefs.isEmpty {
+                candidateMessages = []
+            } else {
+                candidateMessages = try await gmailService.getEmails(messageReferences: candidateRefs, format: "full")
+                emailScanDebug("EmailScanningService: Fetched \(candidateMessages.count) full messages for candidates")
+            }
             
             // Don't filter out replies/forwards - let the parser determine if they contain new docket info
             let initialEmails = candidateMessages

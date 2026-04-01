@@ -19,14 +19,14 @@ final class FileJobUseCaseTests: XCTestCase {
         let useCase = FileJobUseCase(fileSystem: mockFileSystem, config: config)
         let mockMetadata = MockMetadataManager()
         
-        // Setup mock file system
-        let docketFolder = URL(fileURLWithPath: "/test/server/GM_2024/2024_WORK PICTURE/12345")
+        let year = Calendar.current.component(.year, from: Date())
+        let docketFolder = URL(fileURLWithPath: "/test/server/GM_\(year)/\(year)_WORK PICTURE/12345")
         let dateFolder = docketFolder.appendingPathComponent("01_Jan1.24")
         mockFileSystem.files[docketFolder.path] = true
         mockFileSystem.directoryContents[docketFolder.path] = []
         
         let testFileURL = URL(fileURLWithPath: "/test/source/file.txt")
-        let testFile = FileItem(url: testFileURL, name: "file.txt", fileCount: 1)
+        let testFile = FileItem(url: testFileURL)
         mockFileSystem.files[testFileURL.path] = false
         
         let result = try await useCase.execute(
@@ -46,13 +46,13 @@ final class FileJobUseCaseTests: XCTestCase {
         let useCase = FileJobUseCase(fileSystem: mockFileSystem, config: config)
         let mockMetadata = MockMetadataManager()
         
-        // Setup mock file system
-        let prepRoot = URL(fileURLWithPath: "/test/server/GM_2024/2024_SESSION PREP")
+        let year = Calendar.current.component(.year, from: Date())
+        let prepRoot = URL(fileURLWithPath: "/test/server/GM_\(year)/\(year)_SESSION PREP")
         mockFileSystem.files[prepRoot.path] = true
         mockFileSystem.directoryContents[prepRoot.path] = []
         
         let testFileURL = URL(fileURLWithPath: "/test/source/file.wav")
-        let testFile = FileItem(url: testFileURL, name: "file.wav", fileCount: 1)
+        let testFile = FileItem(url: testFileURL)
         mockFileSystem.files[testFileURL.path] = false
         
         let result = try await useCase.execute(

@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 /// Manages shared cache access for Asana docket information
 /// MediaDash relies solely on the shared cache - no local cache is maintained
@@ -42,6 +43,9 @@ class AsanaCacheManager: ObservableObject {
     // Note: Using nonisolated(unsafe) to allow cleanup from deinit.
     // This is safe because timers are only invalidated (not created) from nonisolated context.
     nonisolated(unsafe) private var statusCheckTimer: Timer?
+
+    private var appLifecycleObservers: [NSObjectProtocol] = []
+    private var didRegisterAppLifecycleObservers = false
 
     // Periodic sync timer for automatic change detection
     nonisolated(unsafe) private var syncTimer: Timer?
@@ -122,6 +126,7 @@ class AsanaCacheManager: ObservableObject {
         
         // Start periodic status checking for cache status
         startPeriodicStatusCheck()
+        registerAppLifecycleObserversIfNeeded()
 
         // Preload cache data so views can render immediately
         Task { @MainActor in
@@ -162,6 +167,43 @@ class AsanaCacheManager: ObservableObject {
             RunLoop.main.add(timer, forMode: .common)
         }
     }
+
+    /// Pause status polling while the app is in the background to reduce file I/O; resume on activation.
+    private func registerAppLifecycleObserversIfNeeded() {
+        guard !didRegisterAppLifecycleObservers else { return }
+        didRegisterAppLifecycleObservers = true
+        let nc = Foundation.NotificationCenter.default
+        let resign = nc.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.pauseStatusCheckTimerForBackground()
+            }
+        }
+        let become = nc.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.resumeStatusCheckTimerAfterForeground()
+            }
+        }
+        appLifecycleObservers = [resign, become]
+    }
+
+    private func pauseStatusCheckTimerForBackground() {
+        guard !isShuttingDown else { return }
+        statusCheckTimer?.invalidate()
+        statusCheckTimer = nil
+    }
+
+    private func resumeStatusCheckTimerAfterForeground() {
+        guard !isShuttingDown else { return }
+        startPeriodicStatusCheck()
+    }
     
     /// Stop periodic status checking
     nonisolated private func stopPeriodicStatusCheck() {
@@ -182,6 +224,11 @@ class AsanaCacheManager: ObservableObject {
     /// Call this to cleanly shut down the cache manager before releasing it
     func shutdown() {
         isShuttingDown = true
+
+        for ob in appLifecycleObservers {
+            Foundation.NotificationCenter.default.removeObserver(ob)
+        }
+        appLifecycleObservers.removeAll()
 
         statusCheckTimer?.invalidate()
         statusCheckTimer = nil
