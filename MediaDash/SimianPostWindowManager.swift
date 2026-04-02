@@ -116,7 +116,7 @@ final class SimianPostWindowManager: NSObject, ObservableObject, NSWindowDelegat
 // #region agent log
 private func appendSimianDebugA92964(location: String, message: String, hypothesisId: String, data: [String: Any]) {
     let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-a92964.log"
-    var payload: [String: Any] = [
+    let payload: [String: Any] = [
         "sessionId": "a92964",
         "timestamp": Int64(Date().timeIntervalSince1970 * 1000),
         "location": location,
