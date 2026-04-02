@@ -37,12 +37,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationWillFinishLaunching(_ notification: Foundation.Notification) {
-        // Migrate keychain items BEFORE views initialize
-        // This is critical after Sparkle updates where code signature changes
-        // cause macOS to treat the new version as a different app
-        // Running here ensures migration completes before any @StateObject
-        // properties in SwiftUI views can access keychain
-        KeychainService.migrateAllExistingItems()
+        // Load or migrate keychain credentials blob BEFORE views initialize.
+        // Legacy per-key items are merged into a single JSON blob once; then only
+        // one Keychain item is used for all secrets (fewer login-keychain prompts).
+        KeychainService.migrateCredentialsToBlobIfNeededAtLaunch()
     }
 
     func applicationDidFinishLaunching(_ aNotification: Foundation.Notification) {
@@ -70,10 +68,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // #endregion
-        // Keychain migration now happens in applicationWillFinishLaunching
-        // which runs before SwiftUI views initialize, ensuring migration completes
-        // before any @StateObject properties can access keychain
-        
         // Initialize Sparkle updater
         // Each app (MediaDash vs MediaDash-Dev) has its own appcast URL in Info.plist
         updaterController = SPUStandardUpdaterController(
