@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.08</title>
+            <description><![CDATA[
+                <p>Latest update</p>
+            ]]></description>
+            <pubDate>Wed, 08 Apr 2026 17:02:17 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.08/MediaDash.zip"
+                sparkle:version="180"
+                sparkle:shortVersionString="1.08"
+                sparkle:edSignature="52Un6A/hNMYCs9yfPJzjqWV3ceAm1cZ1x8SNzgz0QObYTCZMphDng6/SW4TU0t3XDuZm8pF1D/AS9keDbyHDCw=="
+                length="14909018"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.07</title>
             <description><![CDATA[
                 <p>Optional sounds when adding items to the docket (loading and confirmation), with settings for toggles and volume. Notification center, settings, MediaManager, and video converter updates.</p>

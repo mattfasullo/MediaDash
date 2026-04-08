@@ -3,21 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleShortVersionString</key>
-	<string>1.07</string>
-	<key>CFBundleVersion</key>
-	<string>170</string>
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.productivity</string>
-	<key>SUAllowsAutomaticUpdates</key>
-	<true/>
-	<key>SUAutomaticallyUpdate</key>
-	<false/>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
-	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>mkwmbcnLrJH+vvLx8Y4rs6OfEEU11wSA3b+ea84rZbQ=</string>
+	<string>1.08</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -41,5 +27,19 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleVersion</key>
+	<string>180</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>mkwmbcnLrJH+vvLx8Y4rs6OfEEU11wSA3b+ea84rZbQ=</string>
 </dict>
 </plist>
