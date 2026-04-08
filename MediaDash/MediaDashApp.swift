@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AppKit
+import FinderSync
 
 @main
 struct MediaDashApp: App {
@@ -31,6 +32,9 @@ struct MediaDashApp: App {
                 .onAppear {
                     configureAllWindows()
                 }
+                .onOpenURL { url in
+                    _ = FinderCommandBridge.shared.handleOpenURL(url)
+                }
         }
         .windowResizability(.contentMinSize) // Resizable with minimum size
         .windowStyle(.hiddenTitleBar)
@@ -46,6 +50,10 @@ struct MediaDashApp: App {
             
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView()
+                Divider()
+                Button("Manage Finder Extensions…") {
+                    FIFinderSyncController.showExtensionManagementInterface()
+                }
             }
             
             CommandGroup(after: .toolbar) {

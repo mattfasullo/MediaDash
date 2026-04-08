@@ -18,5 +18,28 @@
 	<string>https://raw.githubusercontent.com/mattfasullo/MediaDash/dev-builds/appcast-dev.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>mkwmbcnLrJH+vvLx8Y4rs6OfEEU11wSA3b+ea84rZbQ=</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>mediadash</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>mediadash</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>mediadash-dev</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>mediadash-dev</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

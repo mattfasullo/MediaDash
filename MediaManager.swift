@@ -1509,6 +1509,21 @@ class MediaManager: ObservableObject {
             }
         }
     }
+
+    /// Add files/folders to staging (same rules as `pickFiles`, without a panel). Used by Finder Sync / URL handler.
+    func addFilesFromExternalURLs(_ urls: [URL]) {
+        let currentURLs = Set(selectedFiles.map { $0.url })
+        let newURLs = urls.filter { !currentURLs.contains($0) }
+        guard !newURLs.isEmpty else { return }
+        checkForOMFAAFFiles(in: newURLs)
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let items = newURLs.map { FileItem(url: $0) }
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.selectedFiles.append(contentsOf: items)
+            }
+        }
+    }
     
     func checkForOMFAAFFiles(in urls: [URL]) {
         let aafOmfExtensions = ["aaf", "omf"]

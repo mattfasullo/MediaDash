@@ -128,6 +128,9 @@ struct ProducerRootView: View {
             .padding(.trailing, 8)
             .zIndex(1000)
         }
+        .onAppear {
+            FinderCommandBridge.shared.clearPending()
+        }
         .sheet(isPresented: $showServicesSetupPrompt) {
             let (gmail, asana, simian) = ServicesSetupPromptBuilder.buildStatus(
                 settings: settingsManager.currentSettings,

@@ -50,6 +50,46 @@ enum SimianFolderNaming {
         return f.string(from: date)
     }
 
+    /// Trailing date stamp for file/folder labels: `_Apr08.26` (same calendar piece as loose-file folders, with a leading underscore).
+    static func simianDateStampSuffix(for date: Date = Date(), timeZone: TimeZone? = nil) -> String {
+        "_" + looseFileDateFolderSuffix(for: date, timeZone: timeZone)
+    }
+
+    /// `true` when the name stem already ends with `_Mmmdd.yy` or `_MmmD.yy` (e.g. `_Apr8.26`, `_Apr08.26`).
+    static func stemHasSimianDateSuffix(_ stem: String) -> Bool {
+        guard let re = simianDateStemSuffixRegex else { return false }
+        let range = NSRange(stem.startIndex..., in: stem)
+        return re.firstMatch(in: stem, options: [], range: range) != nil
+    }
+
+    /// Returns a new full file/folder label with today’s stamp appended before any extension, or `nil` if the stem already has a Simian date suffix.
+    static func fullLabelByAppendingDateStamp(_ fullLabel: String, date: Date = Date(), timeZone: TimeZone? = nil) -> String? {
+        // `NSString.pathExtension` treats `.26` in `…_Apr08.26` as extension `26`, so the “stem” no longer ends in
+        // `_Apr08.26` and we’d append again → `…_Apr08.26.26`. Split using `stemAndExtensionPreservingDateYear` first.
+        let (stem, ext) = stemAndExtensionPreservingDateYear(in: fullLabel)
+        guard !stemHasSimianDateSuffix(stem) else { return nil }
+        let suffix = simianDateStampSuffix(for: date, timeZone: timeZone)
+        if ext.isEmpty { return stem + suffix }
+        return stem + suffix + "." + ext
+    }
+
+    /// Split stem / extension for appending a date. A final component that is exactly two digits is treated as the `yy`
+    /// in `_Mmmdd.yy`, not a file extension (so `…_Apr08.26` stays one stem). Real extensions like `.mov` still split normally.
+    private static func stemAndExtensionPreservingDateYear(in fullLabel: String) -> (stem: String, ext: String) {
+        let ns = fullLabel as NSString
+        let ext = ns.pathExtension
+        if ext.isEmpty { return (fullLabel, "") }
+        if ext.count == 2, ext.allSatisfy(\.isNumber) {
+            return (fullLabel, "")
+        }
+        return ((ns.deletingPathExtension as String), ext)
+    }
+
+    private static let simianDateStemSuffixRegex = try? NSRegularExpression(
+        pattern: #"_([A-Za-z]{3})(\d{1,2})\.(\d{2})$"#,
+        options: []
+    )
+
     /// Get the next folder number in sequence for numbered folders (01_, 02_, 03_, etc.)
     /// Only applies numbering when the destination already has numbered folders.
     static func nextNumberedFolderName(existingFolderNames: [String], sourceFolderName: String) -> String {

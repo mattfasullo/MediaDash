@@ -175,6 +175,15 @@ struct AuthenticatedRootView: View {
                 simianStatus: simian
             )
         }
+        .onReceive(Foundation.NotificationCenter.default.publisher(for: .mediaDashFinderCommandsPending)) { _ in
+            guard !showSplashScreen, initializationComplete else { return }
+            applyPendingFinderCommandsIfReady()
+        }
+        .onChange(of: showSplashScreen) { _, newValue in
+            if !newValue, initializationComplete {
+                applyPendingFinderCommandsIfReady()
+            }
+        }
         .onAppear {
                 // #region agent log
                 DebugSessionLog.write(location: "GatekeeperView.swift:AuthenticatedRootView.onAppear", message: "AuthenticatedRootView onAppear (launch)", hypothesisId: "H4", data: [:])
@@ -574,6 +583,14 @@ struct AuthenticatedRootView: View {
         }
     }
     
+    private func applyPendingFinderCommandsIfReady() {
+        FinderCommandBridge.shared.applyPendingCommands(
+            manager: manager,
+            settingsManager: settingsManager,
+            sessionManager: sessionManager
+        )
+    }
+
     /// Check if initialization is complete and hide splash screen
     private func checkInitializationComplete() {
         guard !initializationComplete else { return }

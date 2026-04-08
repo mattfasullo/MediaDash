@@ -6,6 +6,7 @@
 //
 
 import Cocoa
+import CoreServices
 import SwiftUI
 import Sparkle
 
@@ -110,8 +111,85 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Initialize floating progress window manager (it auto-shows/hides based on FloatingProgressManager.shared.isVisible)
         _ = FloatingProgressWindowManager.shared
+
+        // Finder Sync is registered with Launch Services when the host app is registered.
+        // Re-register on launch so the embedded .appex is discoverable (helps after copy to /Applications, etc.).
+        registerEmbeddedFinderSyncWithLaunchServices()
         
         // Cache sync status item removed - sync is now handled internally by AsanaCacheManager
+    }
+
+    /// Registers the app bundle and embedded Finder Sync extension with Launch Services.
+    /// Finder Sync does not appear in the same System Settings sheet as Apple’s Quick Actions (Rotate, Markup, …).
+    /// On Sequoia, management also appears under System Settings → General → Login Items & Extensions → **File Providers** (15.2+).
+    private func registerEmbeddedFinderSyncWithLaunchServices() {
+        let appURL = Bundle.main.bundleURL
+        LSRegisterURL(appURL as CFURL, true)
+        let appex = appURL.appendingPathComponent("Contents/PlugIns/MediaDashFinderSync.appex", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: appex.path) else { return }
+        LSRegisterURL(appex as CFURL, true)
+
+        // Sequoia: after LS registration, PlugInKit may still need an explicit “use” for the Finder Sync plugin.
+        // Order matches common guidance: quarantine strip → registration (above) → pluginkit (async below).
+        let extensionBundleID = Bundle(url: appex)?.bundleIdentifier
+        DispatchQueue.global(qos: .utility).async {
+            if Self.bundleHasQuarantineAttribute(at: appURL) {
+                Self.stripQuarantineFromBundle(at: appURL)
+            }
+            if let id = extensionBundleID {
+                Self.runPlugInKitEnableFinderSync(bundleID: id)
+            }
+        }
+    }
+
+    private static func bundleHasQuarantineAttribute(at bundleURL: URL) -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        task.arguments = ["-l", bundleURL.path]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let listing = String(data: data, encoding: .utf8) else { return false }
+            return listing.contains("com.apple.quarantine")
+        } catch {
+            return false
+        }
+    }
+
+    /// Removes the download quarantine flag so PlugInKit / Finder can load the embedded extension.
+    private static func stripQuarantineFromBundle(at bundleURL: URL) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        task.arguments = ["-dr", "com.apple.quarantine", bundleURL.path]
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            // Ignore: insufficient privileges or attribute already cleared.
+        }
+    }
+
+    /// Enables the Finder Sync `.appex` in PlugInKit (non-sandboxed host only; same pattern as manual `pluginkit -e use -i …`).
+    private static func runPlugInKitEnableFinderSync(bundleID: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        task.arguments = ["-e", "use", "-i", bundleID]
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            // Ignore: pluginkit unavailable or extension not yet visible to PK.
+        }
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            _ = FinderCommandBridge.shared.handleOpenURL(url)
+        }
     }
     
     private func setupGlobalQuitHandler() {

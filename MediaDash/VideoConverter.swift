@@ -3,6 +3,7 @@ import AVFoundation
 import SwiftUI
 import AppKit
 import Combine
+import UniformTypeIdentifiers
 
 // MARK: - Video Format Options
 
@@ -517,6 +518,7 @@ struct VideoConverterView: View {
     @State private var showAlert = false
     @State private var alertMessage = ""
     @State private var hasStartedConversion = false
+    @State private var isConverterDropTargeted = false
 
     // Filter staging area files to only video files
     private var videoFiles: [FileItem] {
@@ -533,7 +535,8 @@ struct VideoConverterView: View {
     
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack {
+            VStack(spacing: 0) {
             // Header
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
@@ -697,7 +700,7 @@ struct VideoConverterView: View {
                         Text("No video files in staging area")
                             .font(.headline)
                             .foregroundColor(.secondary)
-                        Text("Add video files to the staging area first")
+                        Text("Drop files here or add them in the staging area")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
@@ -714,6 +717,27 @@ struct VideoConverterView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+
+            if isConverterDropTargeted {
+                VStack(spacing: 10) {
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 34, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("Drop to add to staging")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.85))
+                .allowsHitTesting(false)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .animation(.easeInOut(duration: 0.18), value: isConverterDropTargeted)
+        .onDrop(of: [UTType.fileURL], isTargeted: $isConverterDropTargeted) { providers in
+            handleStagingDrop(providers: providers)
         }
         .alert("Error", isPresented: $showAlert) {
             Button("OK") { }
@@ -745,6 +769,27 @@ struct VideoConverterView: View {
                 manager.clearFiles()
             }
         }
+    }
+
+    /// Same behavior as staging column drop: sheet sits above the window so drops must be handled here too.
+    private func handleStagingDrop(providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+                    if let data = item as? Data,
+                       let url = URL(dataRepresentation: data, relativeTo: nil) {
+                        DispatchQueue.main.async {
+                            let fileItem = FileItem(url: url)
+                            let currentIDs = Set(self.manager.selectedFiles.map { $0.url })
+                            if !currentIDs.contains(fileItem.url) {
+                                self.manager.selectedFiles.append(fileItem)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return true
     }
 
     // Select output directory

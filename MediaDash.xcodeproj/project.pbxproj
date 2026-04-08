@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		EF7B667D2ECD49B80002FEED /* MediaManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7B667C2ECD49B10002FEED /* MediaManager.swift */; };
 		EF9222E22ECFA7D500DD3992 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = EF9222E12ECFA7D500DD3992 /* Sparkle */; };
+		EFA100032ECD48C90002FEED /* FinderSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFA100002ECD48C90002FEED /* FinderSync.swift */; };
+		EFA100042ECD48C90002FEED /* MediaDashFinderSync.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = EFA100012ECD48C90002FEED /* MediaDashFinderSync.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -26,13 +28,36 @@
 			remoteGlobalIDString = EF7B66512ECD48C80002FEED;
 			remoteInfo = MediaDash;
 		};
+		EFA100072ECD48C90002FEED /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = EF7B664A2ECD48C80002FEED /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EFA100052ECD48C90002FEED;
+			remoteInfo = MediaDashFinderSync;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		EFA100062ECD48C90002FEED /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				EFA100042ECD48C90002FEED /* MediaDashFinderSync.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		EF7B66522ECD48C80002FEED /* MediaDash.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MediaDash.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EF7B665F2ECD48C90002FEED /* MediaDashTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MediaDashTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		EF7B66692ECD48C90002FEED /* MediaDashUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MediaDashUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		EF7B667C2ECD49B10002FEED /* MediaManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaManager.swift; sourceTree = "<group>"; };
+		EFA100002ECD48C90002FEED /* FinderSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderSync.swift; sourceTree = "<group>"; };
+		EFA100012ECD48C90002FEED /* MediaDashFinderSync.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MediaDashFinderSync.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -89,6 +114,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		EFA1000C2ECD48C90002FEED /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -97,6 +129,7 @@
 			children = (
 				EF7B667C2ECD49B10002FEED /* MediaManager.swift */,
 				EF7B66542ECD48C80002FEED /* MediaDash */,
+				EFA1000A2ECD48C90002FEED /* MediaDashFinderSync */,
 				EF7B66622ECD48C90002FEED /* MediaDashTests */,
 				EF7B666C2ECD48C90002FEED /* MediaDashUITests */,
 				EF7B66532ECD48C80002FEED /* Products */,
@@ -107,10 +140,19 @@
 			isa = PBXGroup;
 			children = (
 				EF7B66522ECD48C80002FEED /* MediaDash.app */,
+				EFA100012ECD48C90002FEED /* MediaDashFinderSync.appex */,
 				EF7B665F2ECD48C90002FEED /* MediaDashTests.xctest */,
 				EF7B66692ECD48C90002FEED /* MediaDashUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		EFA1000A2ECD48C90002FEED /* MediaDashFinderSync */ = {
+			isa = PBXGroup;
+			children = (
+				EFA100002ECD48C90002FEED /* FinderSync.swift */,
+			);
+			path = MediaDashFinderSync;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -123,10 +165,12 @@
 				EF7B664E2ECD48C80002FEED /* Sources */,
 				EF7B664F2ECD48C80002FEED /* Frameworks */,
 				EF7B66502ECD48C80002FEED /* Resources */,
+				EFA100062ECD48C90002FEED /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				EFA100082ECD48C90002FEED /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				EF7B66542ECD48C80002FEED /* MediaDash */,
@@ -185,6 +229,25 @@
 			productReference = EF7B66692ECD48C90002FEED /* MediaDashUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		EFA100052ECD48C90002FEED /* MediaDashFinderSync */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EFA1000B2ECD48C90002FEED /* Build configuration list for PBXNativeTarget "MediaDashFinderSync" */;
+			buildPhases = (
+				EFA100092ECD48C90002FEED /* Sources */,
+				EFA1000C2ECD48C90002FEED /* Frameworks */,
+				EFA1000D2ECD48C90002FEED /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MediaDashFinderSync;
+			packageProductDependencies = (
+			);
+			productName = MediaDashFinderSync;
+			productReference = EFA100012ECD48C90002FEED /* MediaDashFinderSync.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -206,6 +269,9 @@
 						CreatedOnToolsVersion = 26.1.1;
 						TestTargetID = EF7B66512ECD48C80002FEED;
 					};
+					EFA100052ECD48C90002FEED = {
+						CreatedOnToolsVersion = 26.1.1;
+					};
 				};
 			};
 			buildConfigurationList = EF7B664D2ECD48C80002FEED /* Build configuration list for PBXProject "MediaDash" */;
@@ -226,6 +292,7 @@
 			projectRoot = "";
 			targets = (
 				EF7B66512ECD48C80002FEED /* MediaDash */,
+				EFA100052ECD48C90002FEED /* MediaDashFinderSync */,
 				EF7B665E2ECD48C90002FEED /* MediaDashTests */,
 				EF7B66682ECD48C90002FEED /* MediaDashUITests */,
 			);
@@ -248,6 +315,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		EF7B66672ECD48C90002FEED /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EFA1000D2ECD48C90002FEED /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -279,6 +353,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		EFA100092ECD48C90002FEED /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EFA100032ECD48C90002FEED /* FinderSync.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -291,6 +373,11 @@
 			isa = PBXTargetDependency;
 			target = EF7B66512ECD48C80002FEED /* MediaDash */;
 			targetProxy = EF7B666A2ECD48C90002FEED /* PBXContainerItemProxy */;
+		};
+		EFA100082ECD48C90002FEED /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EFA100052ECD48C90002FEED /* MediaDashFinderSync */;
+			targetProxy = EFA100072ECD48C90002FEED /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -424,6 +511,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MediaDash/MediaDash.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 170;
@@ -460,6 +548,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MediaDash/MediaDash.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 170;
@@ -575,6 +664,74 @@
 			};
 			name = Release;
 		};
+		EFA1000E2ECD48C90002FEED /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MediaDashFinderSync/MediaDashFinderSync.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 170;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 9XPBY59H89;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MediaDashFinderSync/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "MediaDash Finder";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 1.07;
+				PRODUCT_BUNDLE_IDENTIFIER = mattfasullo.MediaDash.FinderSync;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		EFA1000F2ECD48C90002FEED /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MediaDashFinderSync/MediaDashFinderSync.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 170;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 9XPBY59H89;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MediaDashFinderSync/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "MediaDash Finder";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 1.07;
+				PRODUCT_BUNDLE_IDENTIFIER = mattfasullo.MediaDash.FinderSync;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -610,6 +767,15 @@
 			buildConfigurations = (
 				EF7B667A2ECD48C90002FEED /* Debug */,
 				EF7B667B2ECD48C90002FEED /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EFA1000B2ECD48C90002FEED /* Build configuration list for PBXNativeTarget "MediaDashFinderSync" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EFA1000E2ECD48C90002FEED /* Debug */,
+				EFA1000F2ECD48C90002FEED /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

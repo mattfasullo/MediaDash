@@ -1742,7 +1742,12 @@ struct SimianPostView: View {
                 try await simianService.updateFolderSort(projectId: projectId, parentFolderId: parentFolderId, folderIds: ids)
                 await MainActor.run {
                     withAnimation(SimianReorderMotion.listSpring) {
-                        if let pid = parentFolderId { folderChildrenCache[pid] = reordered } else { currentFolders = reordered }
+                        if let pid = parentFolderId {
+                            folderChildrenCache[pid] = reordered
+                            if pid == currentParentFolderId { currentFolders = reordered }
+                        } else {
+                            currentFolders = reordered
+                        }
                     }
                     statusMessage = moved.count > 1 ? "\(moved.count) folders moved" : "Folder moved"; statusIsError = false
                 }
@@ -1778,6 +1783,7 @@ struct SimianPostView: View {
                 await MainActor.run {
                     withAnimation(SimianReorderMotion.listSpring) {
                         folderFilesCache[pid] = reordered
+                        if pid == currentParentFolderId { currentFiles = reordered }
                     }
                     statusMessage = moved.count > 1 ? "\(moved.count) files moved" : "File moved"; statusIsError = false
                 }
@@ -1984,10 +1990,14 @@ struct SimianPostView: View {
     private let maxTotalTreeRows = 500
 
     private func folderSiblings(parentId: String?) -> [SimianFolder] {
-        parentId == nil ? currentFolders : (folderChildrenCache[parentId!] ?? [])
+        guard let parentId else { return currentFolders }
+        if parentId == currentParentFolderId { return currentFolders }
+        return folderChildrenCache[parentId] ?? []
     }
     private func fileSiblings(parentFolderId: String?) -> [SimianFile] {
-        guard let id = parentFolderId else { return [] }; return folderFilesCache[id] ?? []
+        guard let id = parentFolderId else { return [] }
+        if id == currentParentFolderId { return currentFiles }
+        return folderFilesCache[id] ?? []
     }
 
     enum SimianTreeItem: Identifiable {
@@ -2005,7 +2015,7 @@ struct SimianPostView: View {
         if !currentFiles.isEmpty {
             stack.append(.files(currentFiles, 0, "", currentParentFolderId))
         }
-        stack.append(.folders(currentFolders, 0, "", nil))
+        stack.append(.folders(currentFolders, 0, "", currentParentFolderId))
         while !stack.isEmpty && result.count < maxTotalTreeRows {
             switch stack.removeLast() {
             case .folders(let folders, let depth, let pathPrefix, let parentId):

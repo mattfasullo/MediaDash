@@ -200,6 +200,9 @@ struct ContentView: View {
                 // #endregion
                 mainViewFocused = true
             }
+            .onReceive(Foundation.NotificationCenter.default.publisher(for: .mediaDashOpenVideoConverterSheet)) { _ in
+                showVideoConverterSheet = true
+            }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
                 if notification.object as? NSWindow === WindowConfiguration.mainAppWindow {
                     mainViewFocused = true
