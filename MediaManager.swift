@@ -828,6 +828,35 @@ enum MediaLogic {
         return folderPaths.sorted { $0.value.modDate > $1.value.modDate }.map { (name: $0.key, path: $0.value.path) }
     }
 
+    /// Calendar day used for prep folder naming for this session (same rules as `createPrepFolderForSession`).
+    nonisolated static func calendarDayForSessionPrepNaming(docket: DocketInfo, prepDateFallback: Date) -> Date {
+        if let ds = docket.dueDate, ds.count >= 10 {
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd"
+            f.timeZone = TimeZone.current
+            if let parsed = f.date(from: String(ds.prefix(10))) {
+                return Calendar.current.startOfDay(for: parsed)
+            }
+        }
+        return prepDateFallback
+    }
+
+    /// Parses the `MMMdd.yy` date token embedded in a prep folder name (`FolderNamingService.standardDateFormat`).
+    /// Returns a date in the current calendar (same interpretation as naming). Nil if no recognizable token.
+    nonisolated static func prepEmbeddedDateFromFolderName(_ folderName: String) -> Date? {
+        let pattern = #"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(\d{1,2})\.(\d{2})"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+        let matches = regex.matches(in: folderName, range: NSRange(folderName.startIndex..., in: folderName))
+        guard let last = matches.last, let swiftRange = Range(last.range, in: folderName) else { return nil }
+        let token = String(folderName[swiftRange])
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMdd.yy"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        if let d = formatter.date(from: token) { return d }
+        formatter.dateFormat = "MMMd.yy"
+        return formatter.date(from: token)
+    }
+
     /// Scan year folders for work-picture job directories matching the docket base (same docket normalization as prep).
     nonisolated static func existingWorkPictureFolders(docketNumber: String, config: AppConfig) -> [(name: String, path: String)] {
         let fm = FileManager.default
@@ -864,25 +893,23 @@ enum MediaLogic {
         return folderPaths.sorted { $0.value.modDate > $1.value.modDate }.map { (name: $0.key, path: $0.value.path) }
     }
 
-    /// Create empty category subfolders inside a prep root according to `AppSettings` prep toggles (PICTURE, MUSIC, AAF-OMF, OTHER; optional CHECKLIST).
+    /// Empty subfolders for a new prep folder created from Sessions staging: PICTURE, AAF-OMF, MUSIC, SFX only.
     nonisolated static func ensurePrepTemplateSubfolders(at root: URL, settings: AppSettings) throws {
         let fm = FileManager.default
         if !fm.fileExists(atPath: root.path) {
             try fm.createDirectory(at: root, withIntermediateDirectories: false)
         }
-        func mkdirIfNeeded(_ folderName: String, enabled: Bool?) throws {
-            guard enabled ?? true else { return }
-            let u = root.appendingPathComponent(folderName)
+        let templateFolders = [
+            settings.pictureFolderName,
+            settings.aafOmfFolderName,
+            settings.musicFolderName,
+            "SFX"
+        ]
+        for name in templateFolders {
+            let u = root.appendingPathComponent(name)
             if !fm.fileExists(atPath: u.path) {
                 try fm.createDirectory(at: u, withIntermediateDirectories: true)
             }
-        }
-        try mkdirIfNeeded(settings.pictureFolderName, enabled: settings.createPrepPictureFolder)
-        try mkdirIfNeeded(settings.musicFolderName, enabled: settings.createPrepMusicFolder)
-        try mkdirIfNeeded(settings.aafOmfFolderName, enabled: settings.createPrepAafOmfFolder)
-        try mkdirIfNeeded(settings.otherFolderName, enabled: settings.createPrepOtherFolder)
-        if settings.createPrepChecklistFolder ?? false {
-            try mkdirIfNeeded("CHECKLIST", enabled: true)
         }
     }
 
@@ -899,17 +926,7 @@ enum MediaLogic {
               display.range(of: #"^\d{5}"#, options: .regularExpression) != nil else {
             throw NSError(domain: "MediaDash", code: 1, userInfo: [NSLocalizedDescriptionKey: "No valid docket number for this session."])
         }
-        let dateForName: Date = {
-            if let ds = docket.dueDate, ds.count >= 10 {
-                let f = DateFormatter()
-                f.dateFormat = "yyyy-MM-dd"
-                f.timeZone = TimeZone.current
-                if let parsed = f.date(from: String(ds.prefix(10))) {
-                    return Calendar.current.startOfDay(for: parsed)
-                }
-            }
-            return prepDateFallback
-        }()
+        let dateForName = calendarDayForSessionPrepNaming(docket: docket, prepDateFallback: prepDateFallback)
         let docketStr = docket.jobName.isEmpty ? display : "\(display)_\(docket.jobName)"
         let docketForNaming = workPictureFolderNameForPrep(docket: docketStr, config: config) ?? docketStr
         let folderName = config.prepFolderName(docket: docketForNaming, date: dateForName)
@@ -1185,6 +1202,89 @@ enum MediaLogic {
             }
         }
         return name
+    }
+
+    // MARK: - Prep summary text (from on-disk prep folder)
+
+    private static let prepSummaryVideoExtensions: Set<String> = ["mp4", "mov", "avi", "mxf", "m4v", "prores"]
+
+    /// Spot length label like `06`, `15`, `30`, or `1:00` for summary lines (matches common Slack/prep style).
+    static func compactSpotLengthLabel(roundedSeconds: TimeInterval) -> String {
+        let s = max(0, Int(roundedSeconds.rounded()))
+        if s <= 0 { return "?" }
+        if s < 60 { return String(format: "%02d", s) }
+        let m = s / 60
+        let rem = s % 60
+        return rem == 0 ? "\(m):00" : String(format: "%d:%02d", m, rem)
+    }
+
+    /// Scans a prep folder and builds a short bullet list (job line + assets). Used when generating prep text from Sessions staging.
+    static func buildPrepSummaryText(prepRoot: URL, settings: AppSettings, docket: DocketInfo, assigneeName: String?) async -> String {
+        let fm = FileManager.default
+        var lines: [String] = []
+        let mention = assigneeName.map { "@\($0)" } ?? "[@producer]"
+        lines.append("\(mention) \(docket.jobName)".trimmingCharacters(in: .whitespaces))
+
+        let pictureDir = prepRoot.appendingPathComponent(settings.pictureFolderName)
+        let aafDir = prepRoot.appendingPathComponent(settings.aafOmfFolderName)
+        let musicDir = prepRoot.appendingPathComponent(settings.musicFolderName)
+        let voRefsDir = prepRoot.appendingPathComponent("VO REFS")
+
+        // Picture / spots: duration buckets
+        if fm.fileExists(atPath: pictureDir.path),
+           let picItems = try? fm.contentsOfDirectory(at: pictureDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+            let videos = picItems.filter { url in
+                guard !url.hasDirectoryPath else { return false }
+                return prepSummaryVideoExtensions.contains(url.pathExtension.lowercased())
+            }
+            if !videos.isEmpty {
+                var counts: [String: Int] = [:]
+                for url in videos {
+                    let secs = await getVideoDuration(url).map { roundToStandardDuration($0) } ?? 0
+                    let label = secs > 0 ? compactSpotLengthLabel(roundedSeconds: secs) : "?"
+                    counts[label, default: 0] += 1
+                }
+                let parts = counts.keys.sorted { a, b in
+                    if a == "?" { return false }
+                    if b == "?" { return true }
+                    return a.localizedStandardCompare(b) == .orderedAscending
+                }.map { label in "\(counts[label] ?? 0)x\(label)" }
+                lines.append("• \(parts.joined(separator: ", ")) prepped and converted")
+            }
+        }
+
+        if fm.fileExists(atPath: aafDir.path),
+           let aafItems = try? fm.contentsOfDirectory(at: aafDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            let hasAaf = aafItems.contains { !$0.hasDirectoryPath && settings.aafOmfExtensions.contains($0.pathExtension.lowercased()) }
+            if hasAaf {
+                lines.append("• OMF prepped")
+            }
+        }
+
+        if fm.fileExists(atPath: musicDir.path),
+           let musicItems = try? fm.contentsOfDirectory(at: musicDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+            let audioFiles = musicItems.filter { url in
+                guard !url.hasDirectoryPath else { return false }
+                return settings.musicExtensions.contains(url.pathExtension.lowercased())
+            }
+            for url in audioFiles.sorted(by: { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }) {
+                let base = (url.lastPathComponent as NSString).deletingPathExtension
+                lines.append("• Music - \(base)")
+            }
+        }
+
+        if fm.fileExists(atPath: voRefsDir.path),
+           let voItems = try? fm.contentsOfDirectory(at: voRefsDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            let names = voItems.filter { !$0.hasDirectoryPath }.map { ($0.lastPathComponent as NSString).deletingPathExtension }
+            if !names.isEmpty {
+                lines.append("• Vo ref - \(names.joined(separator: ", "))")
+            }
+        }
+
+        if lines.count == 1 {
+            lines.append("• (Add media to PICTURE, \(settings.aafOmfFolderName), \(settings.musicFolderName), or VO REFS to populate this summary.)")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -1596,8 +1696,18 @@ class MediaManager: ObservableObject {
         conversionProgress.removeAll()
     }
     
-    func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date, existingPrepFolderName: String? = nil) {
-        if selectedFiles.isEmpty {
+    /// - Parameter filesOverride: When non-nil (prep only), uses these files instead of staging — e.g. Finder drop onto a prep chip. Skips clearing staging after success.
+    func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date, existingPrepFolderName: String? = nil, filesOverride: [FileItem]? = nil) {
+        let files: [FileItem]
+        if let o = filesOverride {
+            guard type == .prep else { return }
+            guard !o.isEmpty else {
+                errorMessage = "No files to prep."
+                showError = true
+                return
+            }
+            files = o
+        } else if selectedFiles.isEmpty {
             if type == .prep || type == .both {
                 errorMessage = "No files staged.\n\nAdd files in the Staging area before starting Prep."
                 showError = true
@@ -1605,7 +1715,10 @@ class MediaManager: ObservableObject {
             }
             pickFiles()
             return
+        } else {
+            files = selectedFiles
         }
+        let skipStagingClearAfterFilingSuccess = filesOverride != nil
 
         // Check directory access before starting
         if !checkDirectoryAccess(for: type.rawValue) {
@@ -1617,7 +1730,6 @@ class MediaManager: ObservableObject {
         isProcessing = true; progress = 0; statusMessage = "Starting..."
         fileProgress.removeAll() // Clear any previous progress
         fileCompletionState.removeAll() // Clear completion states
-        let files = selectedFiles
         let checklistSession = (type == .prep || type == .both) ? pendingPrepChecklistSession : nil
         let checklistAssignedFileIds = checklistSession?.allAssignedFileIds ?? []
         let prepFileOverrides = (type == .prep || type == .both) ? pendingPrepFileOverrides : nil
@@ -2100,7 +2212,9 @@ class MediaManager: ObservableObject {
                             NSWorkspace.shared.open(wpFolder)
                         }
                     }
-                    self.applyStagingClearAfterSuccessfulFiling()
+                    if !skipStagingClearAfterFilingSuccess {
+                        self.applyStagingClearAfterSuccessfulFiling()
+                    }
                 } else {
                     self.statusMessage = "Completed with \(finalFailedFiles.count) error(s)"
                     self.errorMessage = "Failed to copy these files:\n\(finalFailedFiles.joined(separator: "\n"))"

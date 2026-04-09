@@ -9,6 +9,9 @@ struct JobResult {
 
 /// Use case for executing file jobs (Work Picture, Prep, Both)
 struct FileJobUseCase {
+    /// Progress 0…1, optional status line, optional current file name. Invoked from a background thread.
+    typealias DroppedSourceProgressHandler = @Sendable (_ overall: Double, _ status: String?, _ currentFile: String?) -> Void
+
     nonisolated(unsafe) let fileSystem: FileSystem
     let config: AppConfig
     
@@ -125,6 +128,82 @@ struct FileJobUseCase {
             failedFiles: failedFiles,
             prepFolderPath: prepFolderPath
         )
+    }
+
+    /// Copies dropped files or folders into an **existing** prep folder root using the same category rules as prep (`execute` prep branch).
+    func copyDroppedSourcesIntoExistingPrepFolder(sourceURLs: [URL], prepRoot: URL, progress: DroppedSourceProgressHandler? = nil) throws -> JobResult {
+        let fm = fileSystem
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: prepRoot.path, isDirectory: &isDir), isDir.boolValue else {
+            throw NSError(domain: "MediaDash", code: 3, userInfo: [NSLocalizedDescriptionKey: "Prep folder not found: \(prepRoot.path)"])
+        }
+        progress?(0, "Prepping…", nil)
+        var failedFiles: [String] = []
+        var flats: [URL] = []
+        for url in sourceURLs {
+            flats.append(contentsOf: getAllFiles(at: url, fileSystem: fm))
+        }
+        let total = max(flats.count, 1)
+        var done = 0
+        for flatFile in flats {
+            guard let category = getPrepCategory(flatFile, config: config) else {
+                done += 1
+                progress?(Double(done) / Double(total), "Prepping…", flatFile.lastPathComponent)
+                continue
+            }
+            let dir = prepRoot.appendingPathComponent(category)
+            if !fm.fileExists(atPath: dir.path) {
+                try fm.createDirectory(at: dir, withIntermediateDirectories: false, attributes: nil)
+            }
+            let destFile = dir.appendingPathComponent(flatFile.lastPathComponent)
+            if !fm.fileExists(atPath: destFile.path) {
+                do {
+                    try fm.copyItem(from: flatFile, to: destFile)
+                } catch {
+                    failedFiles.append(flatFile.lastPathComponent)
+                }
+            }
+            done += 1
+            progress?(Double(done) / Double(total), "Prepping…", flatFile.lastPathComponent)
+        }
+        progress?(0.97, "Organizing stems…", nil)
+        organizeStems(in: prepRoot, config: config, fileSystem: fm)
+        progress?(1.0, nil, nil)
+        return JobResult(success: failedFiles.isEmpty, failedFiles: failedFiles, prepFolderPath: prepRoot.path)
+    }
+
+    /// Drops onto a **known** work-picture job folder (full path to the docket folder on disk): creates the next dated subfolder (`01_date`, …) and copies each dropped item into it — same as `execute` work picture, without resolving docket/year from a string.
+    func copyDroppedSourcesIntoWorkPictureDatedFolder(workPictureBaseURL: URL, sourceURLs: [URL], wpDate: Date, progress: DroppedSourceProgressHandler? = nil) throws -> JobResult {
+        let fm = fileSystem
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: workPictureBaseURL.path, isDirectory: &isDir), isDir.boolValue else {
+            throw NSError(domain: "MediaDash", code: 4, userInfo: [NSLocalizedDescriptionKey: "Work picture folder not found: \(workPictureBaseURL.path)"])
+        }
+        progress?(0, "Filing…", nil)
+        let dateStr = config.namingService.formatDate(wpDate)
+        let destFolder = getNextFolder(base: workPictureBaseURL, date: dateStr, fileSystem: fm)
+        if !fm.fileExists(atPath: destFolder.path) {
+            try fm.createDirectory(at: destFolder, withIntermediateDirectories: false, attributes: nil)
+        }
+        var failedFiles: [String] = []
+        let total = max(sourceURLs.count, 1)
+        for (index, url) in sourceURLs.enumerated() {
+            var srcIsDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &srcIsDir) else { continue }
+            let dest = destFolder.appendingPathComponent(url.lastPathComponent)
+            if fm.fileExists(atPath: dest.path) {
+                progress?(Double(index + 1) / Double(total), "Filing…", url.lastPathComponent)
+                continue
+            }
+            do {
+                try fm.copyItem(from: url, to: dest)
+            } catch {
+                failedFiles.append(url.lastPathComponent)
+            }
+            progress?(Double(index + 1) / Double(total), "Filing…", url.lastPathComponent)
+        }
+        progress?(1.0, nil, nil)
+        return JobResult(success: failedFiles.isEmpty, failedFiles: failedFiles, prepFolderPath: nil)
     }
     
     // MARK: - Helper Methods

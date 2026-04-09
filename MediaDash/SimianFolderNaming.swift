@@ -73,6 +73,28 @@ enum SimianFolderNaming {
         return stem + suffix + "." + ext
     }
 
+    /// Append `_MMMdd.yy` before the real extension, or replace a trailing “similar” date segment with the canonical stamp for that calendar day.
+    /// Uses `referenceDate`’s calendar year when the parsed label has no year. Returns the new full label (may equal input when already canonical).
+    static func fullLabelByAddingOrNormalizingSimianDate(
+        _ fullLabel: String,
+        referenceDate: Date = Date(),
+        timeZone: TimeZone? = nil
+    ) -> String {
+        let (stem, ext) = stemAndExtensionPreservingDateYear(in: fullLabel)
+        let tz = timeZone ?? TimeZone.current
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = tz
+        let refYear = cal.component(.year, from: referenceDate)
+        if let parsed = parseTrailingSimianDateStemSuffix(stem, referenceYear: refYear) {
+            let canonical = canonicalSimianDateStampSuffix(month: parsed.month, day: parsed.day, year: parsed.year, timeZone: tz)
+            let newStem = stem.replacingCharacters(in: parsed.range, with: canonical)
+            return joinStemAndExtension(stem: newStem, ext: ext)
+        }
+        let suffix = simianDateStampSuffix(for: referenceDate, timeZone: tz)
+        if ext.isEmpty { return stem + suffix }
+        return stem + suffix + "." + ext
+    }
+
     /// Split stem / extension for appending a date. A final component that is exactly two digits is treated as the `yy`
     /// in `_Mmmdd.yy`, not a file extension (so `…_Apr08.26` stays one stem). Real extensions like `.mov` still split normally.
     private static func stemAndExtensionPreservingDateYear(in fullLabel: String) -> (stem: String, ext: String) {
@@ -89,6 +111,112 @@ enum SimianFolderNaming {
         pattern: #"_([A-Za-z]{3})(\d{1,2})\.(\d{2})$"#,
         options: []
     )
+
+    /// `_NOV.13.26` — extra dot between month letters and day.
+    private static let trailingDateExtraDotRegex = try? NSRegularExpression(
+        pattern: #"_([A-Za-z]{3,4})\.(\d{1,2})\.(\d{2})$"#,
+        options: []
+    )
+    /// `_Apr9.26`, `_Sept9.26` — month letters immediately before day.
+    private static let trailingDateCompactRegex = try? NSRegularExpression(
+        pattern: #"_([A-Za-z]{3,4})(\d{1,2})\.(\d{2})$"#,
+        options: []
+    )
+    /// `_Sep22`, `_Sept22` — no year; use `referenceDate`’s year when applying.
+    private static let trailingDateNoYearRegex = try? NSRegularExpression(
+        pattern: #"_([A-Za-z]{3,4})(\d{1,2})$"#,
+        options: []
+    )
+
+    private struct ParsedTrailingDate {
+        let range: Range<String.Index>
+        let month: Int
+        let day: Int
+        let year: Int
+    }
+
+    /// Trailing `_…` date on `stem` (end only): extra-dot (`_NOV.13.26`), compact (`_Apr9.26`), then month+day without year (`_Sep22`) using `referenceYear`.
+    private static func parseTrailingSimianDateStemSuffix(_ stem: String, referenceYear: Int) -> ParsedTrailingDate? {
+        let full = NSRange(stem.startIndex..., in: stem)
+        if let re = trailingDateExtraDotRegex,
+           let m = re.firstMatch(in: stem, options: [], range: full),
+           let monthStr = Range(m.range(at: 1), in: stem).map({ String(stem[$0]) }),
+           let dayStr = Range(m.range(at: 2), in: stem).map({ String(stem[$0]) }),
+           let yyStr = Range(m.range(at: 3), in: stem).map({ String(stem[$0]) }),
+           let month = monthIndex(fromAbbrev: monthStr),
+           let day = Int(dayStr), let yy = Int(yyStr),
+           let range = Range(m.range, in: stem) {
+            let year = 2000 + yy
+            if isValidCalendarDay(year: year, month: month, day: day) {
+                return ParsedTrailingDate(range: range, month: month, day: day, year: year)
+            }
+        }
+        if let re = trailingDateCompactRegex,
+           let m = re.firstMatch(in: stem, options: [], range: full),
+           let monthStr = Range(m.range(at: 1), in: stem).map({ String(stem[$0]) }),
+           let dayStr = Range(m.range(at: 2), in: stem).map({ String(stem[$0]) }),
+           let yyStr = Range(m.range(at: 3), in: stem).map({ String(stem[$0]) }),
+           let month = monthIndex(fromAbbrev: monthStr),
+           let day = Int(dayStr), let yy = Int(yyStr),
+           let range = Range(m.range, in: stem) {
+            let year = 2000 + yy
+            if isValidCalendarDay(year: year, month: month, day: day) {
+                return ParsedTrailingDate(range: range, month: month, day: day, year: year)
+            }
+        }
+        if let re = trailingDateNoYearRegex,
+           let m = re.firstMatch(in: stem, options: [], range: full),
+           let monthStr = Range(m.range(at: 1), in: stem).map({ String(stem[$0]) }),
+           let dayStr = Range(m.range(at: 2), in: stem).map({ String(stem[$0]) }),
+           let month = monthIndex(fromAbbrev: monthStr),
+           let day = Int(dayStr),
+           let range = Range(m.range, in: stem),
+           isValidCalendarDay(year: referenceYear, month: month, day: day) {
+            return ParsedTrailingDate(range: range, month: month, day: day, year: referenceYear)
+        }
+        return nil
+    }
+
+    private static func canonicalSimianDateStampSuffix(month: Int, day: Int, year: Int, timeZone: TimeZone) -> String {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        guard let date = cal.date(from: DateComponents(year: year, month: month, day: day)) else {
+            return simianDateStampSuffix(for: Date(), timeZone: timeZone)
+        }
+        return simianDateStampSuffix(for: date, timeZone: timeZone)
+    }
+
+    private static func isValidCalendarDay(year: Int, month: Int, day: Int) -> Bool {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let d = cal.date(from: DateComponents(year: year, month: month, day: day)) else { return false }
+        let c = cal.dateComponents([.year, .month, .day], from: d)
+        return c.year == year && c.month == month && c.day == day
+    }
+
+    /// Maps English month abbreviations (incl. `SEPT`, `NOV`, etc.) to 1...12.
+    private static func monthIndex(fromAbbrev raw: String) -> Int? {
+        switch raw.uppercased() {
+        case "JAN": return 1
+        case "FEB": return 2
+        case "MAR": return 3
+        case "APR": return 4
+        case "MAY": return 5
+        case "JUN": return 6
+        case "JUL": return 7
+        case "AUG": return 8
+        case "SEP", "SEPT": return 9
+        case "OCT": return 10
+        case "NOV": return 11
+        case "DEC": return 12
+        default: return nil
+        }
+    }
+
+    private static func joinStemAndExtension(stem: String, ext: String) -> String {
+        if ext.isEmpty { return stem }
+        return stem + "." + ext
+    }
 
     /// Get the next folder number in sequence for numbered folders (01_, 02_, 03_, etc.)
     /// Only applies numbering when the destination already has numbered folders.

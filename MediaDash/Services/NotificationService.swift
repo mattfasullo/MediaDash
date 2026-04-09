@@ -52,5 +52,29 @@ class NotificationService {
             }
         }
     }
+
+    /// Softer OS alert for parser hits without the Gmail "New Docket" label (review queue).
+    func showDocketReviewCandidateNotification(docketNumber: String?, jobName: String) {
+        let content = UNMutableNotificationContent()
+        if let docketNumber = docketNumber, docketNumber != "TBD" {
+            content.title = "Docket candidate (needs review)"
+            content.body = "Docket \(docketNumber): \(jobName) — confirm in MediaDash"
+        } else {
+            content.title = "Docket candidate (needs review)"
+            content.body = "\(jobName)"
+        }
+        content.sound = nil
+        content.categoryIdentifier = "NEW_DOCKET_REVIEW"
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("NotificationService: Failed to show review candidate notification: \(error.localizedDescription)")
+            }
+        }
+    }
 }
 

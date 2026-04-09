@@ -67,5 +67,48 @@ final class FileJobUseCaseTests: XCTestCase {
         XCTAssertTrue(result.success)
         XCTAssertNotNil(result.prepFolderPath)
     }
+
+    func testCopyDroppedSourcesIntoExistingPrepFolderOrganizesByType() throws {
+        let useCase = FileJobUseCase(fileSystem: mockFileSystem, config: config)
+        let year = Calendar.current.component(.year, from: Date())
+        let prepRoot = URL(fileURLWithPath: "/test/server/GM_\(year)/\(year)_SESSION PREP/12345_PREP")
+        mockFileSystem.files[prepRoot.path] = true
+        mockFileSystem.directoryContents[prepRoot.path] = []
+
+        let musicFile = URL(fileURLWithPath: "/tmp/incoming/track.wav")
+        mockFileSystem.files[musicFile.path] = false
+
+        let result = try useCase.copyDroppedSourcesIntoExistingPrepFolder(sourceURLs: [musicFile], prepRoot: prepRoot)
+
+        XCTAssertTrue(result.success)
+        let musicFolderName = config.settings.musicFolderName
+        let expectedDest = prepRoot.appendingPathComponent(musicFolderName).appendingPathComponent("track.wav")
+        XCTAssertTrue(mockFileSystem.copyOperations.contains { $0.from == musicFile && $0.to == expectedDest })
+    }
+
+    func testCopyDroppedSourcesIntoWorkPictureDatedFolderUsesNextDatedSubfolder() throws {
+        let useCase = FileJobUseCase(fileSystem: mockFileSystem, config: config)
+        let base = URL(fileURLWithPath: "/test/wp/26044_Job")
+        mockFileSystem.files[base.path] = true
+        mockFileSystem.directoryContents[base.path] = []
+
+        let src = URL(fileURLWithPath: "/incoming/spot.mov")
+        mockFileSystem.files[src.path] = false
+
+        let wpDate = Date()
+        let dateStr = config.namingService.formatDate(wpDate)
+        let expectedFolder = base.appendingPathComponent(String(format: "01_%@", dateStr))
+        let expectedDest = expectedFolder.appendingPathComponent("spot.mov")
+
+        let result = try useCase.copyDroppedSourcesIntoWorkPictureDatedFolder(
+            workPictureBaseURL: base,
+            sourceURLs: [src],
+            wpDate: wpDate
+        )
+
+        XCTAssertTrue(result.success)
+        XCTAssertTrue(mockFileSystem.createDirectoryOperations.contains(expectedFolder))
+        XCTAssertTrue(mockFileSystem.copyOperations.contains { $0.from == src && $0.to == expectedDest })
+    }
 }
 

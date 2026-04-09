@@ -107,6 +107,8 @@ struct StagingSessionsPanel: View {
     /// session list changes (`cachedSessions` / `lastSessionSyncDate`).
     let cacheManager: AsanaCacheManager
     @EnvironmentObject var settingsManager: SettingsManager
+    /// Same as the main **File** action (typically today).
+    let wpDate: Date
     let prepDate: Date
 
     @State private var refreshToken = UUID()
@@ -131,6 +133,8 @@ struct StagingSessionsPanel: View {
                     ForEach(sessionsSections) { section in
                         StagingSessionsCollapsibleDay(
                             section: section,
+                            cacheManager: cacheManager,
+                            wpDate: wpDate,
                             prepDate: prepDate,
                             refreshToken: refreshToken,
                             creatingSessionKey: $creatingSessionKey,
@@ -220,6 +224,8 @@ private enum PrepStagingDayExpansion {
 
 private struct StagingSessionsCollapsibleDay: View {
     let section: CalendarDaySection
+    let cacheManager: AsanaCacheManager
+    let wpDate: Date
     let prepDate: Date
     let refreshToken: UUID
     @Binding var creatingSessionKey: String?
@@ -287,6 +293,8 @@ private struct StagingSessionsCollapsibleDay: View {
                         ForEach(section.dockets, id: \.fullName) { docket in
                             StagingSessionFolderRow(
                                 docket: docket,
+                                cacheManager: cacheManager,
+                                wpDate: wpDate,
                                 prepDate: prepDate,
                                 refreshToken: refreshToken,
                                 creatingSessionKey: $creatingSessionKey,
@@ -321,6 +329,8 @@ private struct StagingSessionsCollapsibleDay: View {
 
 private struct StagingSessionFolderRow: View {
     let docket: DocketInfo
+    let cacheManager: AsanaCacheManager
+    let wpDate: Date
     let prepDate: Date
     let refreshToken: UUID
     @Binding var creatingSessionKey: String?
@@ -331,6 +341,8 @@ private struct StagingSessionFolderRow: View {
 
     @State private var wpFolders: [(name: String, path: String)] = []
     @State private var prepFolders: [(name: String, path: String)] = []
+    /// Until true, empty `wp`/`prep` arrays only mean "not scanned yet", not "no folders on server".
+    @State private var folderScanComplete = false
 
     private var sessionKey: String {
         docket.taskGid ?? docket.fullName
@@ -395,7 +407,9 @@ private struct StagingSessionFolderRow: View {
                     title: "Work picture",
                     folders: wpFolders,
                     emptyLabel: "No work picture folder",
-                    sectionTint: workPictureSectionTint
+                    sectionTint: workPictureSectionTint,
+                    scanComplete: folderScanComplete,
+                    wpDate: wpDate
                 )
 
                 prepRow
@@ -420,12 +434,14 @@ private struct StagingSessionFolderRow: View {
     /// `MediaLogic.existing*` walks every year folder on the server; must not run during SwiftUI body recomputation
     /// (e.g. on every Asana sync progress tick).
     private func scanFoldersFromServer() async {
+        folderScanComplete = false
         let docketNum = docket.displayNumber
         let valid = docketHasValidNumber
         let config = AppConfig(settings: settingsManager.currentSettings)
         guard valid else {
             wpFolders = []
             prepFolders = []
+            folderScanComplete = true
             return
         }
         async let wp = Task.detached {
@@ -436,15 +452,22 @@ private struct StagingSessionFolderRow: View {
         }.value
         let (w, p) = await (wp, prep)
         wpFolders = w
-        prepFolders = p
+        let sessionDay = MediaLogic.calendarDayForSessionPrepNaming(docket: docket, prepDateFallback: prepDate)
+        prepFolders = p.filter { item in
+            guard let embedded = MediaLogic.prepEmbeddedDateFromFolderName(item.name) else { return false }
+            return Calendar.current.isDate(embedded, inSameDayAs: sessionDay)
+        }
+        folderScanComplete = true
     }
 
     @ViewBuilder
     private var prepRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             sectionHeading("Prep", tint: prepSectionTint)
-            if !prepFolders.isEmpty {
-                FlowFolderChips(folders: prepFolders)
+            if !folderScanComplete {
+                folderScanLoadingLine()
+            } else if !prepFolders.isEmpty {
+                FlowFolderChips(folders: prepFolders, prepContext: (docket: docket, cacheManager: cacheManager, prepDate: prepDate))
             } else if docketHasValidNumber {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("No prep folder yet")
@@ -469,6 +492,15 @@ private struct StagingSessionFolderRow: View {
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
+        }
+    }
+
+    private func folderScanLoadingLine() -> some View {
+        HStack(spacing: 6) {
+            ProgressView().scaleEffect(0.55)
+            Text("Checking server for folders…")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -507,16 +539,20 @@ private struct StagingSessionFolderRow: View {
         title: String,
         folders: [(name: String, path: String)],
         emptyLabel: String,
-        sectionTint: Color
+        sectionTint: Color,
+        scanComplete: Bool,
+        wpDate: Date
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             sectionHeading(title, tint: sectionTint)
-            if folders.isEmpty {
+            if !scanComplete {
+                folderScanLoadingLine()
+            } else if folders.isEmpty {
                 Text(emptyLabel)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } else {
-                FlowFolderChips(folders: folders)
+                FlowFolderChips(folders: folders, workPictureDatedDrop: wpDate)
             }
         }
     }
@@ -526,12 +562,21 @@ private struct StagingSessionFolderRow: View {
 
 private struct FlowFolderChips: View {
     let folders: [(name: String, path: String)]
+    /// When set (prep chips only), drops use full prep pipeline (incl. video conversion), and prep summary is available from the context menu.
+    var prepContext: (docket: DocketInfo, cacheManager: AsanaCacheManager, prepDate: Date)? = nil
+    /// When set (work-picture chips only), drops go into the next dated subfolder under the chip, same as **File** with that docket folder.
+    var workPictureDatedDrop: Date? = nil
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(folders, id: \.path) { item in
-                    FolderDropChip(label: item.name, path: item.path)
+                    FolderDropChip(
+                        label: item.name,
+                        path: item.path,
+                        prepContext: prepContext,
+                        workPictureDatedDrop: workPictureDatedDrop
+                    )
                 }
             }
         }
@@ -541,7 +586,12 @@ private struct FlowFolderChips: View {
 private struct FolderDropChip: View {
     let label: String
     let path: String
+    var prepContext: (docket: DocketInfo, cacheManager: AsanaCacheManager, prepDate: Date)? = nil
+    /// When non-nil and `prepContext` is nil, drop uses work-picture dated filing for this date.
+    var workPictureDatedDrop: Date? = nil
 
+    @EnvironmentObject private var settingsManager: SettingsManager
+    @EnvironmentObject private var manager: MediaManager
     @State private var isTargeted = false
 
     var body: some View {
@@ -563,19 +613,174 @@ private struct FolderDropChip: View {
             )
         }
         .buttonStyle(.plain)
-        .help("Open in Finder — drop files to copy here")
+        .help(dropTargetHelp)
+        .contextMenu {
+            if prepContext != nil {
+                Button("Generate prep text…") {
+                    Task { await generatePrepTextDocument() }
+                }
+            }
+        }
         .onDrop(of: [UTType.fileURL], isTargeted: $isTargeted) { providers in
-            copyDroppedFiles(from: providers, toDirectory: URL(fileURLWithPath: path))
+            let settingsSnapshot = settingsManager.currentSettings
+            if let prep = prepContext {
+                collectURLsFromDropProviders(providers, completionQueue: .global(qos: .userInitiated)) { urls in
+                    guard !urls.isEmpty else { return }
+                    runStagingChipPrepDrop(
+                        manager: manager,
+                        urls: urls,
+                        prepRootPath: path,
+                        docketLabel: prep.docket.displayNumber,
+                        prepDate: prep.prepDate
+                    )
+                }
+            } else if let wpDate = workPictureDatedDrop {
+                collectURLsFromDropProviders(providers, completionQueue: .global(qos: .userInitiated)) { urls in
+                    guard !urls.isEmpty else { return }
+                    let base = URL(fileURLWithPath: path)
+                    runStagingChipWorkPictureDrop(
+                        settings: settingsSnapshot,
+                        urls: urls,
+                        workPictureBaseURL: base,
+                        wpDate: wpDate,
+                        docketLabel: label
+                    )
+                }
+            } else {
+                copyDroppedFiles(from: providers, toDirectory: URL(fileURLWithPath: path))
+            }
             return true
         }
+    }
+
+    private var dropTargetHelp: String {
+        if prepContext != nil {
+            return "Open in Finder — drop for prep (same as Prep: convert videos when prompted)"
+        }
+        if workPictureDatedDrop != nil {
+            return "Open in Finder — drop files into a new dated folder here (same as File)"
+        }
+        return "Open in Finder — drop files to copy here"
     }
 
     private func openInFinder() {
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
+
+    private func generatePrepTextDocument() async {
+        guard let ctx = prepContext else { return }
+        let text = await MediaLogic.buildPrepSummaryText(
+            prepRoot: URL(fileURLWithPath: path),
+            settings: settingsManager.currentSettings,
+            docket: ctx.docket,
+            assigneeName: ctx.cacheManager.assigneeName(forSessionDocket: ctx.docket)
+        )
+        let safe = label.replacingOccurrences(of: "/", with: "-")
+        let fileName = "Prep summary \(safe).txt"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        guard let data = text.data(using: .utf8) else { return }
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+            try data.write(to: url)
+            await MainActor.run {
+                NSWorkspace.shared.open(url)
+            }
+        } catch {
+            print("⚠️ [StagingSessions] could not write prep summary: \(error.localizedDescription)")
+        }
+    }
+}
+
+// MARK: - Staging chip filing (background + floating progress)
+
+/// Uses `MediaManager.runJob` prep pipeline (video conversion prompt, ProRes conversion, stem pass) — same as **Prep** from staging.
+private func runStagingChipPrepDrop(
+    manager: MediaManager,
+    urls: [URL],
+    prepRootPath: String,
+    docketLabel: String,
+    prepDate: Date
+) {
+    let items = urls.map { FileItem(url: $0) }
+    Task { @MainActor in
+        manager.runJob(
+            type: .prep,
+            docket: docketLabel,
+            wpDate: Date(),
+            prepDate: prepDate,
+            existingPrepFolderName: prepRootPath,
+            filesOverride: items
+        )
+    }
+}
+
+private func runStagingChipWorkPictureDrop(
+    settings: AppSettings,
+    urls: [URL],
+    workPictureBaseURL: URL,
+    wpDate: Date,
+    docketLabel: String
+) {
+    Task.detached(priority: .userInitiated) {
+        let config = AppConfig(settings: settings)
+        let progress: FileJobUseCase.DroppedSourceProgressHandler = { overall, msg, file in
+            Task { @MainActor in
+                FloatingProgressManager.shared.updateProgress(overall, message: msg, currentFile: file)
+            }
+        }
+        await MainActor.run {
+            FloatingProgressManager.shared.startOperation(.filing(docket: docketLabel), totalFiles: 0, totalBytes: 0)
+        }
+        let useCase = FileJobUseCase(config: config)
+        do {
+            _ = try useCase.copyDroppedSourcesIntoWorkPictureDatedFolder(
+                workPictureBaseURL: workPictureBaseURL,
+                sourceURLs: urls,
+                wpDate: wpDate,
+                progress: progress
+            )
+            await MainActor.run {
+                FloatingProgressManager.shared.complete(message: "Done!")
+            }
+        } catch {
+            await MainActor.run {
+                FloatingProgressManager.shared.hide()
+            }
+            print("⚠️ [StagingSessions] work picture file failed: \(error.localizedDescription)")
+        }
+    }
 }
 
 // MARK: - File copy helpers
+
+private func collectURLsFromDropProviders(
+    _ providers: [NSItemProvider],
+    completionQueue: DispatchQueue = .main,
+    completion: @escaping ([URL]) -> Void
+) {
+    let group = DispatchGroup()
+    let lock = NSLock()
+    var urls: [URL] = []
+    for provider in providers {
+        guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { continue }
+        group.enter()
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+            defer { group.leave() }
+            guard let data = item as? Data,
+                  let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return }
+            lock.lock()
+            urls.append(url)
+            lock.unlock()
+        }
+    }
+    group.notify(queue: completionQueue) {
+        completion(urls)
+    }
+}
 
 private func copyDroppedFiles(from providers: [NSItemProvider], toDirectory destDir: URL) {
     let fm = FileManager.default
@@ -586,7 +791,7 @@ private func copyDroppedFiles(from providers: [NSItemProvider], toDirectory dest
                   let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return }
-            DispatchQueue.main.async {
+            DispatchQueue.global(qos: .userInitiated).async {
                 if isDir.boolValue {
                     copyDirectoryContents(from: url, to: destDir, fm: fm)
                 } else {

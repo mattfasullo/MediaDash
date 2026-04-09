@@ -558,7 +558,7 @@ class SimianService: ObservableObject {
         
         return false
     }
-    
+
     /// Fetch list of projects current user has access to
     func getProjectList() async throws -> [SimianProject] {
         try await ensureAuthenticated()
@@ -866,7 +866,8 @@ class SimianService: ObservableObject {
             return SimianFolder(
                 id: id,
                 name: name,
-                parentId: SimianService.stringValue(folder["parent"])
+                parentId: SimianService.stringValue(folder["parent"]),
+                uploadedAt: SimianService.uploadDateFromPayload(folder)
             )
         }
     }
@@ -885,6 +886,52 @@ class SimianService: ObservableObject {
         }
         if trimmed.count > 600 { return String(trimmed.prefix(600)) + "…" }
         return trimmed.isEmpty ? "HTTP \(status)" : trimmed
+    }
+
+    /// Parses date strings from Simian list/detail payloads (`upload_date`, etc.).
+    nonisolated static func parseSimianMetadataDate(_ raw: String?) -> Date? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty { return nil }
+        let formats = [
+            "yyyy-MM-dd h:mm a",
+            "yyyy-MM-dd hh:mm a",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd'T'HH:mm:ssZZZZZ",
+            "yyyy-MM-dd'T'HH:mm:ss.SSSZZZZZ",
+            "MM/dd/yyyy",
+            "MM/dd/yy"
+        ]
+        for format in formats {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = format
+            if let date = formatter.date(from: trimmed) {
+                return date
+            }
+        }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: trimmed) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: trimmed)
+    }
+
+    /// Best-effort “added to Simian” time from folder/file payload dictionaries.
+    nonisolated private static func uploadDateFromPayload(_ dict: [String: Any]) -> Date? {
+        let keys = ["upload_date", "upload_date_time", "date_added", "created_at", "created", "time", "date"]
+        for k in keys {
+            if let n = dict[k] as? Int, n > 946_684_800 {
+                return Date(timeIntervalSince1970: TimeInterval(n))
+            }
+            if let n = dict[k] as? Double, n > 946_684_800 {
+                return Date(timeIntervalSince1970: n)
+            }
+            if let s = stringValue(dict[k]), let d = parseSimianMetadataDate(s) {
+                return d
+            }
+        }
+        return nil
     }
 
     /// Upload a single file to a Simian project (root or into a folder).
@@ -1258,7 +1305,8 @@ class SimianService: ObservableObject {
                 fileType: SimianService.stringValue(fileDict["file_type"]),
                 mediaURL: mediaFileURL,
                 folderId: folderId,
-                projectId: projectId
+                projectId: projectId,
+                uploadedAt: SimianService.uploadDateFromPayload(fileDict)
             )
         }
     }
@@ -2950,39 +2998,12 @@ struct SimianProjectInfo: Identifiable, Hashable {
         guard let rawValue = rawValue, !rawValue.isEmpty else {
             return nil
         }
-        return SimianProjectInfo.parseDate(rawValue)
+        return SimianService.parseSimianMetadataDate(rawValue)
     }
 
     var projectSizeBytes: Int64? {
         guard let projectSize = projectSize else { return nil }
         return SimianService.parseMediaSize(projectSize)
-    }
-    
-    private nonisolated static func parseDate(_ rawValue: String) -> Date? {
-        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return nil
-        }
-        
-        let formats = [
-            "yyyy-MM-dd h:mm a",
-            "yyyy-MM-dd hh:mm a",
-            "yyyy-MM-dd HH:mm:ss",
-            "MM/dd/yyyy",
-            "MM/dd/yy"
-        ]
-        
-        for format in formats {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = TimeZone.current
-            formatter.dateFormat = format
-            if let date = formatter.date(from: trimmed) {
-                return date
-            }
-        }
-        
-        return nil
     }
 }
 
@@ -2990,6 +3011,8 @@ struct SimianFolder: Identifiable, Hashable {
     let id: String
     let name: String
     let parentId: String?
+    /// When the API includes it (e.g. `upload_date`), the time the folder was added to Simian.
+    let uploadedAt: Date?
 }
 
 struct SimianFile: Identifiable, Hashable {
@@ -2999,6 +3022,8 @@ struct SimianFile: Identifiable, Hashable {
     let mediaURL: URL?
     let folderId: String?
     let projectId: String?
+    /// When the API includes it (e.g. `upload_date`), the time the file was added to Simian.
+    let uploadedAt: Date?
 }
 
 // MARK: - Project Date Filter
@@ -3096,7 +3121,7 @@ struct SimianLoginResponse: Codable {
 // MARK: - Helpers
 
 extension SimianService {
-    fileprivate static func stringValue(_ value: Any?) -> String? {
+    nonisolated fileprivate static func stringValue(_ value: Any?) -> String? {
         if let stringValue = value as? String, !stringValue.isEmpty {
             return stringValue
         }

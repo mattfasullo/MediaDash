@@ -40,6 +40,9 @@ struct MediaDashApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: LayoutMode.minWidth, height: LayoutMode.minHeight)
         .commands {
+            // WindowGroup adds File ▸ New Window (⌘N) by default; remove it so ⌘N is free for in-app actions (e.g. Simian).
+            CommandGroup(replacing: .newItem) { }
+
             // Override quit command to always work
             CommandGroup(replacing: .appTermination) {
                 Button("Quit MediaDash") {
@@ -53,6 +56,9 @@ struct MediaDashApp: App {
                 Divider()
                 Button("Manage Finder Extensions…") {
                     FIFinderSyncController.showExtensionManagementInterface()
+                }
+                Button("Finder Sync missing from Settings?…") {
+                    Self.showFinderSyncSettingsHelpAlert()
                 }
             }
             
@@ -132,6 +138,37 @@ struct MediaDashApp: App {
             for window in NSApplication.shared.windows {
                 WindowConfiguration.configureWindow(window)
             }
+        }
+    }
+
+    /// Finder Sync often does not appear under System Settings → Extensions on Sequoia; `pluginkit` is the reliable toggle.
+    private static func showFinderSyncSettingsHelpAlert() {
+        let extensionID = "mattfasullo.MediaDash.FinderSync"
+        let enableCommand = "pluginkit -e use -i \(extensionID)"
+        let alert = NSAlert()
+        alert.messageText = "Finder Sync and System Settings"
+        alert.informativeText = """
+        On macOS Sequoia, “Manage Finder Extensions…” often opens the general Extensions list. MediaDash will not appear next to Rotate/Markup—that list is for different extension types.
+
+        Your Login Items page may show only “Open at Login” and “Allow in the Background” with no Finder Sync section. That is a known Apple UI issue, not a missing MediaDash install.
+
+        Enable the extension from Terminal (install MediaDash, open it once, then run):
+
+        \(enableCommand)
+
+        Verify it is registered:
+
+        pluginkit -m -v | grep -i MediaDash
+
+        Then restart Finder: killall Finder
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Copy enable command")
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(enableCommand, forType: .string)
         }
     }
 }

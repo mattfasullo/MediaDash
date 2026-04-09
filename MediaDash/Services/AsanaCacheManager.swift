@@ -661,6 +661,13 @@ class AsanaCacheManager: ObservableObject {
         return out
     }
 
+    /// Primary assignee name for a calendar session task (for prep text / Slack lines).
+    func assigneeName(forSessionDocket docket: DocketInfo) -> String? {
+        guard let gid = docket.taskGid else { return nil }
+        let tasks = cachedSessions + cachedSessionsTwoWeeks
+        return tasks.first { $0.gid == gid }?.assignee?.name
+    }
+
     func matchingSessions(for docket: String) -> [DocketInfo] {
         let normalized = docket.trimmingCharacters(in: .whitespaces)
         let matching = mergedSessionTasksForMatching().filter { task in

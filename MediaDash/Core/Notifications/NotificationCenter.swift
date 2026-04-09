@@ -553,6 +553,15 @@ class NotificationCenter: ObservableObject {
         }
     }
     
+    /// User confirmed a review-queue item (no Gmail "New Docket" label) as a real new docket.
+    func confirmDocketCandidate(_ notification: Notification) {
+        guard let index = notifications.firstIndex(where: { $0.id == notification.id }) else { return }
+        notifications[index].requiresDocketConfirmation = false
+        notifications[index].title = "New Docket Detected"
+        saveNotifications()
+        updateUnreadCount()
+    }
+    
     /// Update notification job name (does not affect docket number)
     func updateJobName(_ notification: Notification, to jobName: String) {
         if let index = notifications.firstIndex(where: { $0.id == notification.id }) {

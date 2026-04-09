@@ -29,6 +29,9 @@ class EmailScanningService: ObservableObject {
     weak var metadataManager: DocketMetadataManager?
     weak var asanaCacheManager: AsanaCacheManager?
     var simianService: SimianService?
+
+    /// Cached Simian project list for the current scan batch (avoid N× `getProjectList` per message).
+    private var scanBatchSimianProjects: [SimianProject]?
     
     private var companyNameCache: CompanyNameCache {
         CompanyNameCache.shared
@@ -54,31 +57,37 @@ class EmailScanningService: ObservableObject {
         return "\"\(escaped)\""
     }
 
-    /// Gmail list query: **unread and** user label (both required — space is AND in Gmail search).
-    /// Resolves label ID so we can double-check `labelIds` after fetch.
+    /// Days of inbox history for unlabeled mail to the company media address (paired with `label:"New Docket"` via OR).
+    private static let newDocketScanUnlabeledToMediaNewerThanDays = 14
+
+    /// Gmail list query: unread and (New Docket label **or** recent mail to company media). Resolves label ID for in-app checks.
     private func newDocketScanQueryAndLabelId() async -> (query: String, newDocketLabelId: String?) {
         let trimmedName = Self.newDocketGmailUserLabelName.trimmingCharacters(in: .whitespacesAndNewlines)
         var resolvedId: String?
         do {
             resolvedId = try await gmailService.userLabelId(matchingName: trimmedName)
             if resolvedId == nil {
-                emailScanDebug("EmailScanningService: ⚠️ No Gmail user label named '\(trimmedName)' — scan uses is:unread label:… but client cannot verify label IDs until this label exists")
+                emailScanDebug("EmailScanningService: ⚠️ No Gmail user label named '\(trimmedName)' — cannot verify label membership by ID")
             }
         } catch {
             emailScanDebug("EmailScanningService: ⚠️ Could not list Gmail labels (\(error.localizedDescription))")
         }
-        let query = "is:unread label:\(Self.gmailQuotedLabelSearchTerm(trimmedName))"
+        let labelTerm = "label:\(Self.gmailQuotedLabelSearchTerm(trimmedName))"
+        let mediaEmail = settingsManager?.currentSettings.companyMediaEmail.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let query: String
+        if mediaEmail.isEmpty {
+            query = "is:unread \(labelTerm)"
+            emailScanDebug("EmailScanningService: No company media email — scan query is label-only")
+        } else {
+            // Labeled new dockets (any age) OR recent unread to media inbox (may lack label → review queue in-app).
+            query = "is:unread (\(labelTerm) OR (newer_than:\(Self.newDocketScanUnlabeledToMediaNewerThanDays)d to:\(mediaEmail)))"
+        }
         return (query, resolvedId)
     }
 
-    /// Unread is mandatory; New Docket label is required (verified via `labelIds` when we have a resolved label ID).
-    private func isNewDocketScanCandidate(_ message: GmailMessage, newDocketLabelId: String?) -> Bool {
-        guard let labelIds = message.labelIds, labelIds.contains("UNREAD") else { return false }
-        if let id = newDocketLabelId {
-            return labelIds.contains(id)
-        }
-        // Could not resolve label ID; query already enforced `label:` — only UNREAD is verified here.
-        return true
+    /// Scan query already constrains candidates; require unread for safety.
+    private func isNewDocketScanMetadataCandidate(_ message: GmailMessage) -> Bool {
+        message.labelIds?.contains("UNREAD") == true
     }
     
     init(gmailService: GmailService, parser: EmailDocketParser) {
@@ -249,6 +258,7 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
+            defer { clearSimianProjectsScanCache() }
             let (query, newDocketLabelId) = await newDocketScanQueryAndLabelId()
             
             emailScanDebug("EmailScanningService: 🔍 Starting scan...")
@@ -281,9 +291,8 @@ class EmailScanningService: ObservableObject {
                 emailScanDebug("    \(index + 1). \"\(subject)\" | From: \(from) | Unread: \(isUnread)")
             }
             
-            // Unread, or (if configured) messages carrying the new-docket user label (e.g. read but labeled)
-            let candidateMeta = metaMessages.filter { isNewDocketScanCandidate($0, newDocketLabelId: newDocketLabelId) }
-            emailScanDebug("  ✅ \(candidateMeta.count) are scan candidates (unread and '\(Self.newDocketGmailUserLabelName)' label); filtered out \(metaMessages.count - candidateMeta.count)")
+            let candidateMeta = metaMessages.filter { isNewDocketScanMetadataCandidate($0) }
+            emailScanDebug("  ✅ \(candidateMeta.count) are scan candidates (unread); filtered out \(metaMessages.count - candidateMeta.count)")
             
             let candidateRefs = candidateMeta.map { GmailMessageReference(id: $0.id, threadId: $0.threadId) }
             let candidateMessages: [GmailMessage]
@@ -387,6 +396,8 @@ class EmailScanningService: ObservableObject {
                     emailScanDebug("      ✅ Kids Help Phone email WILL BE PROCESSED")
                 }
             }
+
+            await prefetchSimianProjectsForCurrentScan()
             
             // Parse and create notifications (don't auto-create dockets)
             var notificationCount = 0
@@ -519,12 +530,7 @@ class EmailScanningService: ObservableObject {
             emailScanDebug("    ❌ REJECTED: Email is not unread")
             return false
         }
-        if let lid = newDocketLabelId {
-            guard labelIds.contains(lid) else {
-                emailScanDebug("    ❌ REJECTED: Email does not have the '\(Self.newDocketGmailUserLabelName)' Gmail label")
-                return false
-            }
-        }
+        let hasNewDocketLabel = hasNewDocketGmailLabel(labelIds: labelIds, newDocketLabelId: newDocketLabelId)
         
         // Use parser with custom patterns if configured
         guard let settingsManager = settingsManager else {
@@ -606,21 +612,32 @@ class EmailScanningService: ObservableObject {
             if multipleDockets.count > 1 {
                 // Multiple dockets detected - create notifications for each
                 emailScanDebug("EmailScanningService: ✅ Parser detected \(multipleDockets.count) docket numbers: \(multipleDockets)")
-                
-                await MainActor.run {
-                    for docket in multipleDockets {
-                        guard let parsed = parsedDocket else { continue }
+                var anyCreated = false
+                var skippedProvisioned = 0
+                for docket in multipleDockets {
+                    guard let parsed = parsedDocket else { continue }
+                    if shouldSkipDocketExistsInWorkPictureAndSimian(docketNumber: docket) {
+                        skippedProvisioned += 1
+                        continue
+                    }
+                    await MainActor.run {
                         createNotificationForDocket(
                             docketNumber: docket,
                             jobName: parsed.jobName,
                             message: message,
                             subject: subject,
                             body: body,
-                            originalSenderEmail: originalSenderEmail
+                            originalSenderEmail: originalSenderEmail,
+                            requiresDocketConfirmation: hasNewDocketLabel ? nil : true
                         )
                     }
+                    anyCreated = true
                 }
-                return true // All notifications created
+                if !anyCreated, skippedProvisioned == multipleDockets.count, !multipleDockets.isEmpty {
+                    markEmailProcessedForScan(message)
+                    emailScanDebug("EmailScanningService: All multi-docket numbers skipped (WP+Simian); marked email processed")
+                }
+                return anyCreated
             }
         }
         
@@ -647,13 +664,14 @@ class EmailScanningService: ObservableObject {
             emailScanDebug("    ⚠️ DOCKET NUMBERS ARE MANDATORY - This email will NOT create a notification")
             return false
         }
-        
-        // Work Picture may already list this docket — still create a notification so the email appears in New Dockets;
-        // checkDuplicatesForNotification marks pre-existing WP / Simian for the UI.
-        if let manager = mediaManager,
-           manager.dockets.contains("\(parsedDocket.docketNumber)_\(parsedDocket.jobName)") {
-            emailScanDebug("    ℹ️ Work Picture already has \(parsedDocket.docketNumber)_\(parsedDocket.jobName) — creating notification anyway (duplicate check will flag WP)")
+
+        if shouldSkipDocketExistsInWorkPictureAndSimian(docketNumber: parsedDocket.docketNumber) {
+            markEmailProcessedForScan(message)
+            emailScanDebug("    ℹ️ Skipping notification (WP+Simian); marked email processed so it is not rescanned")
+            return false
         }
+
+        let needsReview = !hasNewDocketLabel
         
         // Create notification instead of auto-creating docket
         await MainActor.run {
@@ -681,7 +699,7 @@ class EmailScanningService: ObservableObject {
             
             let notification = Notification(
                 type: .newDocket,
-                title: "New Docket Detected",
+                title: needsReview ? "Possible new docket (review)" : "New Docket Detected",
                 message: messageText,
                 docketNumber: docketNumber,
                 jobName: parsedDocket.jobName,
@@ -689,7 +707,8 @@ class EmailScanningService: ObservableObject {
                 sourceEmail: parsedDocket.sourceEmail,
                 emailSubject: emailSubjectToStore,
                 emailBody: emailBodyToStore,
-                threadId: message.threadId  // Track thread to prevent duplicates
+                threadId: message.threadId,
+                requiresDocketConfirmation: needsReview ? true : nil
             )
             
             
@@ -702,11 +721,17 @@ class EmailScanningService: ObservableObject {
                 await checkDuplicatesForNotification(notification)
             }
             
-            // Show system notification
-            NotificationService.shared.showNewDocketNotification(
-                docketNumber: docketNumber,
-                jobName: parsedDocket.jobName
-            )
+            if needsReview {
+                NotificationService.shared.showDocketReviewCandidateNotification(
+                    docketNumber: docketNumber,
+                    jobName: parsedDocket.jobName
+                )
+            } else {
+                NotificationService.shared.showNewDocketNotification(
+                    docketNumber: docketNumber,
+                    jobName: parsedDocket.jobName
+                )
+            }
         }
         
         return true
@@ -1297,6 +1322,7 @@ class EmailScanningService: ObservableObject {
         }
         
         do {
+            defer { clearSimianProjectsScanCache() }
             let (query, newDocketLabelId) = await newDocketScanQueryAndLabelId()
             emailScanDebug("EmailScanningService: Scanning Gmail for new docket notifications — query: \(query)")
             let messageRefs = try await gmailService.fetchEmails(
@@ -1314,8 +1340,8 @@ class EmailScanningService: ObservableObject {
             let metaMessages = try await gmailService.getEmails(messageReferences: messageRefs, format: "metadata")
             emailScanDebug("EmailScanningService: Fetched \(metaMessages.count) messages (metadata)")
             
-            let candidateMeta = metaMessages.filter { isNewDocketScanCandidate($0, newDocketLabelId: newDocketLabelId) }
-            emailScanDebug("EmailScanningService: \(candidateMeta.count) scan candidates (unread + '\(Self.newDocketGmailUserLabelName)' label) out of \(metaMessages.count) listed")
+            let candidateMeta = metaMessages.filter { isNewDocketScanMetadataCandidate($0) }
+            emailScanDebug("EmailScanningService: \(candidateMeta.count) scan candidates (unread) out of \(metaMessages.count) listed")
             
             let candidateRefs = candidateMeta.map { GmailMessageReference(id: $0.id, threadId: $0.threadId) }
             let candidateMessages: [GmailMessage]
@@ -1339,6 +1365,8 @@ class EmailScanningService: ObservableObject {
             var skippedCount = 0
             var failedCount = 0
             var interactedCount = 0
+
+            await prefetchSimianProjectsForCurrentScan()
             
             for message in initialEmails {
                 if !forceRescan && existingEmailIds.contains(message.id) {
@@ -1470,7 +1498,8 @@ class EmailScanningService: ObservableObject {
         message: GmailMessage,
         subject: String,
         body: String,
-        originalSenderEmail: String? = nil
+        originalSenderEmail: String? = nil,
+        requiresDocketConfirmation: Bool? = nil
     ) {
         guard let notificationCenter = notificationCenter else {
             print("EmailScanningService: ERROR - notificationCenter is nil when trying to add notification")
@@ -1482,11 +1511,11 @@ class EmailScanningService: ObservableObject {
             emailScanDebug("EmailScanningService: ❌ REJECTED: Invalid docket number format: '\(docketNumber)' (must be exactly 5 digits, optionally with -US suffix)")
             return
         }
-        
-        // Work Picture may already list this docket — still add notification; duplicate UI comes from checkDuplicatesForNotification.
-        if let manager = mediaManager,
-           manager.dockets.contains("\(docketNumber)_\(jobName)") {
-            emailScanDebug("EmailScanningService: Work Picture already has \(docketNumber)_\(jobName) — creating notification anyway")
+
+        // Caller should pre-check skip; double-check here if called from another path
+        if shouldSkipDocketExistsInWorkPictureAndSimian(docketNumber: docketNumber) {
+            emailScanDebug("EmailScanningService: Skipping notification — docket exists in Work Picture and Simian")
+            return
         }
         
         // Check if notification already exists for this docket + email/thread combo
@@ -1511,10 +1540,11 @@ class EmailScanningService: ObservableObject {
         let messageText = "Docket \(docketNumber): \(jobName)"
         let emailSubjectToStore = subject.isEmpty ? nil : subject
         let emailBodyToStore = body.isEmpty ? nil : body
+        let needsReview = requiresDocketConfirmation == true
 
         let notification = Notification(
             type: .newDocket,
-            title: "New Docket Detected",
+            title: needsReview ? "Possible new docket (review)" : "New Docket Detected",
             message: messageText,
             docketNumber: docketNumber,
             jobName: jobName,
@@ -1522,7 +1552,8 @@ class EmailScanningService: ObservableObject {
             sourceEmail: sourceEmail,
             emailSubject: emailSubjectToStore,
             emailBody: emailBodyToStore,
-            threadId: message.threadId  // Track thread to prevent duplicates
+            threadId: message.threadId,
+            requiresDocketConfirmation: requiresDocketConfirmation
         )
         
         
@@ -1535,13 +1566,80 @@ class EmailScanningService: ObservableObject {
             await checkDuplicatesForNotification(notification)
         }
         
-        // Show system notification
-        NotificationService.shared.showNewDocketNotification(
-            docketNumber: docketNumber,
-            jobName: jobName
-        )
+        if needsReview {
+            NotificationService.shared.showDocketReviewCandidateNotification(
+                docketNumber: docketNumber,
+                jobName: jobName
+            )
+        } else {
+            NotificationService.shared.showNewDocketNotification(
+                docketNumber: docketNumber,
+                jobName: jobName
+            )
+        }
     }
     
+    private func markEmailProcessedForScan(_ message: GmailMessage) {
+        processedEmailIds.insert(message.id)
+        processedThreadIds.insert(message.threadId)
+        saveProcessedEmailIds()
+    }
+
+    private func clearSimianProjectsScanCache() {
+        scanBatchSimianProjects = nil
+    }
+
+    /// Loads Simian projects once per scan when Simian is enabled (used for duplicate-skip and cached checks).
+    private func prefetchSimianProjectsForCurrentScan() async {
+        guard let settings = settingsManager?.currentSettings,
+              settings.simianEnabled,
+              let simian = simianService,
+              simian.isConfigured else {
+            scanBatchSimianProjects = nil
+            return
+        }
+        do {
+            scanBatchSimianProjects = try await simian.getProjectList()
+            emailScanDebug("EmailScanningService: Cached \(scanBatchSimianProjects?.count ?? 0) Simian project(s) for this scan")
+        } catch {
+            emailScanDebug("EmailScanningService: ⚠️ Could not fetch Simian project list for scan cache: \(error.localizedDescription)")
+            scanBatchSimianProjects = nil
+        }
+    }
+
+    private func hasNewDocketGmailLabel(labelIds: [String], newDocketLabelId: String?) -> Bool {
+        guard let lid = newDocketLabelId else { return false }
+        return labelIds.contains(lid)
+    }
+
+    /// Skip creating a notification only when the docket number exists in **both** Work Picture and Simian (job names may differ).
+    /// If Simian is disabled or the project list could not be loaded, the Simian side is unknown — **do not skip** (strict "both").
+    private func shouldSkipDocketExistsInWorkPictureAndSimian(docketNumber: String) -> Bool {
+        let inWP: Bool = {
+            guard let mm = mediaManager else { return false }
+            return DocketDuplicateDetection.workPictureContainsDocketNumber(docketNumber, dockets: mm.dockets)
+        }()
+        if !inWP { return false }
+
+        guard let settings = settingsManager?.currentSettings, settings.simianEnabled,
+              let simian = simianService, simian.isConfigured else {
+            emailScanDebug("    ℹ️ Duplicate-skip: Work Picture has docket but Simian unavailable — not skipping (require both)")
+            return false
+        }
+        guard let projects = scanBatchSimianProjects, !projects.isEmpty else {
+            emailScanDebug("    ℹ️ Duplicate-skip: Simian project list missing this scan — not skipping (require both)")
+            return false
+        }
+        let inSim = DocketDuplicateDetection.simianProjectListContainsDocketNumber(
+            docketNumber,
+            projectNames: projects.map(\.name)
+        )
+        if inWP && inSim {
+            emailScanDebug("    ℹ️ Duplicate-skip: docket \(docketNumber) exists in Work Picture and Simian (number-only) — skipping notification")
+        }
+        return inWP && inSim
+    }
+
     /// Check for existing Work Picture folder and Simian project when notification is added
     private func checkDuplicatesForNotification(_ notification: Notification) async {
         guard let docketNumber = notification.docketNumber, docketNumber != "TBD",

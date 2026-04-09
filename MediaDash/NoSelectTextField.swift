@@ -42,8 +42,9 @@ struct NoSelectTextField: NSViewRepresentable {
     var isEnabled: Bool
     var onSubmit: () -> Void
     var onTextChange: () -> Void
-    var onMoveUp: (() -> Bool)? = nil
-    var onMoveDown: (() -> Bool)? = nil
+    /// Parameter is whether Shift is held (for range selection in lists).
+    var onMoveUp: ((Bool) -> Bool)? = nil
+    var onMoveDown: ((Bool) -> Bool)? = nil
     var onTab: (() -> Bool)? = nil
     /// Fires when this field becomes the key editor (AppKit focus). SwiftUI `@FocusState` is not wired for `NSViewRepresentable`.
     var onEditingBegan: (() -> Void)? = nil
@@ -83,11 +84,13 @@ struct NoSelectTextField: NSViewRepresentable {
         textField.onSpecialKeyDown = { event in
             switch event.keyCode {
             case 126: // up
-                let handled = context.coordinator.parent.onMoveUp?() ?? false
+                let shift = event.modifierFlags.contains(.shift)
+                let handled = context.coordinator.parent.onMoveUp?(shift) ?? false
                 NoSelectTextField.logDebug("keyDown up handled=\(handled)")
                 return handled
             case 125: // down
-                let handled = context.coordinator.parent.onMoveDown?() ?? false
+                let shift = event.modifierFlags.contains(.shift)
+                let handled = context.coordinator.parent.onMoveDown?(shift) ?? false
                 NoSelectTextField.logDebug("keyDown down handled=\(handled)")
                 return handled
             case 48: // tab / shift-tab
@@ -113,11 +116,13 @@ struct NoSelectTextField: NSViewRepresentable {
         nsView.onSpecialKeyDown = { event in
             switch event.keyCode {
             case 126: // up
-                let handled = context.coordinator.parent.onMoveUp?() ?? false
+                let shift = event.modifierFlags.contains(.shift)
+                let handled = context.coordinator.parent.onMoveUp?(shift) ?? false
                 NoSelectTextField.logDebug("keyDown up handled=\(handled)")
                 return handled
             case 125: // down
-                let handled = context.coordinator.parent.onMoveDown?() ?? false
+                let shift = event.modifierFlags.contains(.shift)
+                let handled = context.coordinator.parent.onMoveDown?(shift) ?? false
                 NoSelectTextField.logDebug("keyDown down handled=\(handled)")
                 return handled
             case 48: // tab / shift-tab
@@ -203,12 +208,14 @@ struct NoSelectTextField: NSViewRepresentable {
 
             // Optional explicit handlers for list navigation from search field.
             if commandSelector == #selector(NSResponder.moveUp(_:)) {
-                let handled = parent.onMoveUp?() ?? false
+                let shift = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
+                let handled = parent.onMoveUp?(shift) ?? false
                 NoSelectTextField.logDebug("doCommand moveUp handled=\(handled)")
                 return handled
             }
             if commandSelector == #selector(NSResponder.moveDown(_:)) {
-                let handled = parent.onMoveDown?() ?? false
+                let shift = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
+                let handled = parent.onMoveDown?(shift) ?? false
                 NoSelectTextField.logDebug("doCommand moveDown handled=\(handled)")
                 return handled
             }

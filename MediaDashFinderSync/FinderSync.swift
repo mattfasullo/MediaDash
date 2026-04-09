@@ -87,9 +87,10 @@ final class FinderSync: FIFinderSync {
         writePayloadAndOpenURL(action: "audioOnly", paths: paths)
     }
 
+    @objc
     func menuForMenuKind(_ menuKind: FIMenuKind) -> NSMenu? {
-        // Right‑click on file(s) in a Finder window.
-        guard menuKind == .contextualMenuForItems else { return nil }
+        // Item menu in the file list; sidebar is a separate `FIMenuKind`.
+        guard menuKind == .contextualMenuForItems || menuKind == .contextualMenuForSidebar else { return nil }
         let menu = NSMenu(title: "")
         let stageItem = NSMenuItem(title: "File in MediaDash", action: #selector(stage(_:)), keyEquivalent: "")
         stageItem.target = self

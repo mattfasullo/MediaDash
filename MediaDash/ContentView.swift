@@ -361,21 +361,6 @@ struct ContentView: View {
                     NotificationWindowManager.shared.hideNotificationWindow()
                 }
             }
-            .background(
-                Button(action: {
-                    // Don't allow opening notification centre in dashboard mode
-                    if settingsManager.currentSettings.windowMode != .dashboard {
-                        if !showNotificationCenter {
-                            showNotificationCenter = true
-                        }
-                    }
-                }) {
-                    EmptyView()
-                }
-                .keyboardShortcut("`", modifiers: .command)
-                .disabled(showNotificationCenter)
-                .hidden()
-            )
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("OpenSettings"))) { _ in
                 // Open settings when requested (e.g., from menu bar status item)
                 SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
@@ -552,6 +537,7 @@ struct ContentView: View {
                         
                         StagingAreaView(
                             cacheManager: cacheManager,
+                            wpDate: wpDate,
                             prepDate: prepDate,
                             isStagingHovered: $isStagingHovered,
                             isStagingPressed: $isStagingPressed,

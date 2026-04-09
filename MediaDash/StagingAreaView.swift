@@ -10,6 +10,7 @@ struct StagingAreaView: View {
     /// Not `@ObservedObject`: sync progress updates many times per second; observing here re-renders the whole
     /// staging column (including sessions rows that scan the server for folders). Status UI observes separately.
     let cacheManager: AsanaCacheManager
+    let wpDate: Date
     let prepDate: Date
     @Binding var isStagingHovered: Bool
     @Binding var isStagingPressed: Bool
@@ -107,7 +108,7 @@ struct StagingAreaView: View {
         Group {
             switch stagingContentMode {
             case .sessions:
-                StagingSessionsPanel(cacheManager: cacheManager, prepDate: prepDate)
+                StagingSessionsPanel(cacheManager: cacheManager, wpDate: wpDate, prepDate: prepDate)
             case .files:
                 filesStagingContent
             }

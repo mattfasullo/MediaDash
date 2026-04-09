@@ -82,16 +82,19 @@ struct NotificationCenterView: View {
         return allActiveNotifications
     }
     
-    // Regular new docket notifications (only type we process now, excludes completed which go to history)
-    private var regularNewDocketNotifications: [Notification] {
-        // Filter to new dockets that are NOT completed (completed ones go to history section)
-        let filtered = regularNotifications.filter { $0.type == .newDocket && $0.status != .completed }
-        // Debug logging to understand why notifications might not appear
-        if notificationCenter.unreadCount > 0 && filtered.isEmpty {
+    /// New docket rows that still need user confirmation (no Gmail "New Docket" label).
+    private var reviewNewDocketNotifications: [Notification] {
+        regularNotifications.filter { $0.type == .newDocket && $0.status != .completed && $0.requiresDocketConfirmation == true }
+    }
+
+    /// Confirmed new docket notifications (excludes review queue and completed).
+    private var confirmedNewDocketNotifications: [Notification] {
+        let filtered = regularNotifications.filter { $0.type == .newDocket && $0.status != .completed && $0.requiresDocketConfirmation != true }
+        if notificationCenter.unreadCount > 0 && filtered.isEmpty && reviewNewDocketNotifications.isEmpty {
             let allPending = notificationCenter.notifications.filter { $0.status == .pending }
             let allActive = notificationCenter.activeNotifications
             let allRegular = regularNotifications
-            print("📋 [NotificationCenterView] DEBUG: unreadCount=\(notificationCenter.unreadCount), but regularNewDocketNotifications is empty")
+            print("📋 [NotificationCenterView] DEBUG: unreadCount=\(notificationCenter.unreadCount), but confirmed/review new docket lists are empty")
             print("📋 [NotificationCenterView] DEBUG: Total notifications: \(notificationCenter.notifications.count)")
             print("📋 [NotificationCenterView] DEBUG: Pending notifications: \(allPending.count)")
             print("📋 [NotificationCenterView] DEBUG: Active notifications: \(allActive.count)")
@@ -399,8 +402,46 @@ struct NotificationCenterView: View {
             // Content - no tabs needed since we only show new dockets
             ScrollView {
                 VStack(spacing: 0) {
-                    if !regularNewDocketNotifications.isEmpty {
-                        ForEach(regularNewDocketNotifications) { notification in
+                    if !reviewNewDocketNotifications.isEmpty {
+                        HStack {
+                            Text("Needs review")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.orange)
+                            Spacer()
+                        }
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+                        ForEach(reviewNewDocketNotifications) { notification in
+                            NotificationRowView(
+                                notificationId: notification.id,
+                                notificationCenter: notificationCenter,
+                                emailScanningService: emailScanningService,
+                                mediaManager: mediaManager,
+                                settingsManager: settingsManager,
+                                processingNotification: $processingNotification,
+                                processingStatusById: $processingStatusById,
+                                debugInfo: $debugInfo,
+                                showDebugInfo: $showDebugInfo
+                            )
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            Divider()
+                        }
+                    }
+                    if !confirmedNewDocketNotifications.isEmpty {
+                        if !reviewNewDocketNotifications.isEmpty {
+                            HStack {
+                                Text("New dockets")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            .padding(.horizontal)
+                            .padding(.top, 8)
+                            .padding(.bottom, 4)
+                        }
+                        ForEach(confirmedNewDocketNotifications) { notification in
                             NotificationRowView(
                                 notificationId: notification.id,
                                 notificationCenter: notificationCenter,
@@ -417,7 +458,8 @@ struct NotificationCenterView: View {
                             
                             Divider()
                         }
-                    } else {
+                    }
+                    if reviewNewDocketNotifications.isEmpty && confirmedNewDocketNotifications.isEmpty {
                         // Empty state - no new docket notifications
                         VStack(spacing: 12) {
                             Image(systemName: "doc.text")
@@ -1073,6 +1115,14 @@ struct NotificationRowView: View {
             }
             return
         }
+        guard updatedNotification.requiresDocketConfirmation != true else {
+            print("⚠️ createSimianProject blocked: notification still requires docket confirmation")
+            await MainActor.run {
+                processingNotification = nil
+                processingStatusById[notificationId] = nil
+            }
+            return
+        }
         
         // Update notification with the job name and docket number from dialog
         notificationCenter.updateJobName(updatedNotification, to: jobName)
@@ -1393,6 +1443,10 @@ struct NotificationRowView: View {
                     // If this is from the Approve button, approve and create docket
                     // Otherwise, just update the docket number
                     if isDocketInputForApproval {
+                        if let n = notificationCenter.notifications.first(where: { $0.id == notificationId }),
+                           n.requiresDocketConfirmation == true {
+                            return
+                        }
                         handleApproveWithDocket(inputDocketNumber.isEmpty ? nil : inputDocketNumber)
                     } else {
                         // Just update the docket number without approving
@@ -1683,6 +1737,31 @@ struct NotificationRowView: View {
         let neitherConnected = !isServerConnected && !isSimianConnected
         
         VStack(alignment: .leading, spacing: 8) {
+            if currentNotification.requiresDocketConfirmation == true {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("This message was not tagged “New Docket” in Gmail. Confirm if it’s a real new docket or dismiss.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 8) {
+                        Button("Confirm new docket") {
+                            notificationCenter.confirmDocketCandidate(currentNotification)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        Button("Not a docket") {
+                            Task {
+                                await notificationCenter.skip(currentNotification, emailScanningService: emailScanningService)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.12))
+                .cornerRadius(6)
+            }
             // Warning when not connected to either server or Simian
             if neitherConnected {
                 HStack(spacing: 6) {
@@ -1889,6 +1968,7 @@ struct NotificationRowView: View {
     
     @ViewBuilder
     private func approveArchiveButtons(notification: Notification, hideApprove: Bool) -> some View {
+        let awaitingReviewConfirmation = notification.requiresDocketConfirmation == true
         HStack(spacing: 8) {
             if !hideApprove {
                 Button("Approve") {
@@ -1901,7 +1981,8 @@ struct NotificationRowView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(processingNotification == notificationId)
+                .disabled(processingNotification == notificationId || awaitingReviewConfirmation)
+                .help(awaitingReviewConfirmation ? "Confirm this is a new docket using the banner above before approving." : "Approve and create Work Picture / Simian as selected")
             }
             
             Group {
@@ -2590,9 +2671,13 @@ struct NotificationRowView: View {
               let jobName = currentNotification.jobName else {
             return
         }
+        guard currentNotification.requiresDocketConfirmation != true else {
+            return
+        }
         
         // Check if docket number is missing
         if currentNotification.docketNumber == nil || currentNotification.docketNumber == "TBD" {
+            isDocketInputForApproval = true
             showDocketInputDialog = true
             return
         }
@@ -2629,6 +2714,13 @@ struct NotificationRowView: View {
         guard let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }),
               currentNotification.type == .newDocket,
               let jobName = currentNotification.jobName else {
+            return
+        }
+        guard currentNotification.requiresDocketConfirmation != true else {
+            await MainActor.run {
+                processingNotification = nil
+                processingStatusById[notificationId] = nil
+            }
             return
         }
         

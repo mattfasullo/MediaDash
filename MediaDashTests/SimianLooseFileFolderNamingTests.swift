@@ -74,4 +74,56 @@ final class SimianLooseFileFolderNamingTests: XCTestCase {
             )
         )
     }
+
+    // MARK: - fullLabelByAddingOrNormalizingSimianDate
+
+    func testFullLabelByAddingOrNormalizing_appendsBeforeExtension() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let ref = cal.date(from: DateComponents(year: 2026, month: 4, day: 8, hour: 12))!
+        let out = SimianFolderNaming.fullLabelByAddingOrNormalizingSimianDate("Mix.mov", referenceDate: ref, timeZone: TimeZone(secondsFromGMT: 0))
+        XCTAssertEqual(out, "Mix_Apr08.26.mov")
+    }
+
+    func testFullLabelByAddingOrNormalizing_normalizesUndersizedDay() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let ref = cal.date(from: DateComponents(year: 2026, month: 4, day: 9, hour: 12))!
+        let out = SimianFolderNaming.fullLabelByAddingOrNormalizingSimianDate("Cue_Apr9.26", referenceDate: ref, timeZone: TimeZone(secondsFromGMT: 0))
+        XCTAssertEqual(out, "Cue_Apr09.26")
+    }
+
+    func testFullLabelByAddingOrNormalizing_extraDotMonthDayYear() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let ref = cal.date(from: DateComponents(year: 2026, month: 11, day: 13, hour: 12))!
+        let out = SimianFolderNaming.fullLabelByAddingOrNormalizingSimianDate("Spot_NOV.13.26", referenceDate: ref, timeZone: TimeZone(secondsFromGMT: 0))
+        XCTAssertEqual(out, "Spot_Nov13.26")
+    }
+
+    func testFullLabelByAddingOrNormalizing_noYearUsesReferenceYear() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let ref = cal.date(from: DateComponents(year: 2026, month: 9, day: 22, hour: 12))!
+        let out = SimianFolderNaming.fullLabelByAddingOrNormalizingSimianDate("Cue_Sept22", referenceDate: ref, timeZone: TimeZone(secondsFromGMT: 0))
+        XCTAssertEqual(out, "Cue_Sep22.26")
+    }
+
+    func testFullLabelByAddingOrNormalizing_noopWhenAlreadyCanonical() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let ref = cal.date(from: DateComponents(year: 2026, month: 4, day: 8, hour: 12))!
+        let label = "Mix_Apr08.26.mov"
+        let out = SimianFolderNaming.fullLabelByAddingOrNormalizingSimianDate(label, referenceDate: ref, timeZone: TimeZone(secondsFromGMT: 0))
+        XCTAssertEqual(out, label)
+    }
+
+    func testFullLabelByAddingOrNormalizing_regressionMiddleDateUnchangedByAppend() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let ref = cal.date(from: DateComponents(year: 2026, month: 4, day: 8, hour: 12))!
+        let label = "06_Safeway_Apr7_Apr08.26"
+        let out = SimianFolderNaming.fullLabelByAddingOrNormalizingSimianDate(label, referenceDate: ref, timeZone: TimeZone(secondsFromGMT: 0))
+        XCTAssertEqual(out, label)
+    }
 }

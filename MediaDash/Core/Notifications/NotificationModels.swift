@@ -113,7 +113,9 @@ struct Notification: Identifiable, Codable, Equatable {
     
     // History tracking - what was created when approved
     var historyNote: String? // Human-readable note about what happened (e.g., "Created in Work Picture and Simian")
-    
+
+    /// When true, the email was not tagged with the Gmail "New Docket" label and the user should confirm or dismiss.
+    var requiresDocketConfirmation: Bool?
     
     init(
         id: UUID = UUID(),
@@ -137,7 +139,8 @@ struct Notification: Identifiable, Codable, Equatable {
         isGrabbed: Bool = false,
         isPriorityAssist: Bool = false,
         grabbedBy: String? = nil,
-        grabbedAt: Date? = nil
+        grabbedAt: Date? = nil,
+        requiresDocketConfirmation: Bool? = nil
     ) {
         self.id = id
         self.type = type
@@ -162,6 +165,7 @@ struct Notification: Identifiable, Codable, Equatable {
         self.isPriorityAssist = isPriorityAssist
         self.grabbedBy = grabbedBy
         self.grabbedAt = grabbedAt
+        self.requiresDocketConfirmation = requiresDocketConfirmation
         // Store original values for reset
         self.originalDocketNumber = docketNumber
         self.originalJobName = jobName

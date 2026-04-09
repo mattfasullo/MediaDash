@@ -72,6 +72,7 @@ struct DesktopLayoutView: View {
                 // Main Staging Area (center)
                 DesktopStagingArea(
                     cacheManager: cacheManager,
+                    wpDate: wpDate,
                     prepDate: prepDate,
                     selectedFileIndex: $selectedFileIndex
                 )
@@ -650,6 +651,7 @@ struct DesktopStagingArea: View {
     @EnvironmentObject var manager: MediaManager
     @EnvironmentObject var settingsManager: SettingsManager
     let cacheManager: AsanaCacheManager?
+    let wpDate: Date
     let prepDate: Date
     @Binding var selectedFileIndex: Int?
     
@@ -720,7 +722,7 @@ struct DesktopStagingArea: View {
                     filesStagingBody
                 case .sessions:
                     if let cache = cacheManager {
-                        StagingSessionsPanel(cacheManager: cache, prepDate: prepDate)
+                        StagingSessionsPanel(cacheManager: cache, wpDate: wpDate, prepDate: prepDate)
                     } else {
                         Text("Connect Asana to use Sessions.")
                             .font(.system(size: 12))
