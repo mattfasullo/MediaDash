@@ -157,9 +157,9 @@ class AsanaCacheManager: ObservableObject {
         // Cache status doesn't change frequently enough to justify checking every 5 seconds,
         // and the frequent file I/O was causing UI sluggishness
         statusCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
+            guard let manager = self else { return }
             Task { @MainActor in
-                self.updateCacheStatus()
+                manager.updateCacheStatus()
             }
         }
 
@@ -179,9 +179,9 @@ class AsanaCacheManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
+            guard let manager = self else { return }
             Task { @MainActor in
-                self.pauseStatusCheckTimerForBackground()
+                manager.pauseStatusCheckTimerForBackground()
             }
         }
         let become = nc.addObserver(
@@ -189,9 +189,9 @@ class AsanaCacheManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
+            guard let manager = self else { return }
             Task { @MainActor in
-                self.resumeStatusCheckTimerAfterForeground()
+                manager.resumeStatusCheckTimerAfterForeground()
             }
         }
         appLifecycleObservers = [resign, become]
@@ -246,12 +246,12 @@ class AsanaCacheManager: ObservableObject {
         
         // Create new timer that performs incremental sync every 5 minutes (300 seconds)
         syncTimer = Timer.scheduledTimer(withTimeInterval: 300.0, repeats: true) { [weak self] _ in
-            guard let self else {
+            guard let manager = self else {
                 print("⚠️ [Background Sync] Cache manager deallocated - periodic sync stopped")
                 return
             }
             Task { @MainActor in
-                await self.performBackgroundSync()
+                await manager.performBackgroundSync()
             }
         }
         
