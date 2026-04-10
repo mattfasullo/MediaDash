@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.09</title>
+            <description><![CDATA[
+                <p>Swift 6 concurrency fix for Asana cache: timer and lifecycle callbacks now bind weak self before MainActor tasks, including background sync.</p>
+            ]]></description>
+            <pubDate>Fri, 10 Apr 2026 19:48:51 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.09/MediaDash.zip"
+                sparkle:version="190"
+                sparkle:shortVersionString="1.09"
+                sparkle:edSignature="RHIP7Xqop39gtfdmBQEIcDwtO1sEGqxqkUi7zLR5RL+juCyUBcoBfJ3dxS0OkPusFBQCaDM98XLD5gqH5D1iAA=="
+                length="15086000"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.08</title>
             <description><![CDATA[
                 <p>Latest update</p>
