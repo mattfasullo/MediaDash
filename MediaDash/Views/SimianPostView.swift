@@ -1327,6 +1327,28 @@ struct SimianPostView: View {
         }
     }
 
+    /// Look up the parent folder ID of a folder by searching caches directly.
+    /// Returns `.some(nil)` for root-level folders, `.some(id)` for nested folders,
+    /// and `nil` (Double Optional `.none`) when the folder is not found in any cache.
+    /// This is used when the flat treeList may be truncated (maxTotalTreeRows cap).
+    private func cachedParentFolderId(forFolderId folderId: String) -> String?? {
+        if currentFolders.contains(where: { $0.id == folderId }) { return .some(nil) }
+        for (parentId, children) in folderChildrenCache {
+            if children.contains(where: { $0.id == folderId }) { return .some(parentId) }
+        }
+        return nil
+    }
+
+    /// Look up a folder's display name from caches. Used to resolve destination folder names
+    /// for file uploads when the target folder is not the breadcrumb root.
+    private func cachedFolderName(forFolderId folderId: String) -> String? {
+        if let f = currentFolders.first(where: { $0.id == folderId }) { return f.name }
+        for children in folderChildrenCache.values {
+            if let f = children.first(where: { $0.id == folderId }) { return f.name }
+        }
+        return nil
+    }
+
     /// Move a folder into another folder (same project) using update_folder_sort.
     private func moveFolderIntoFolder(projectId: String, folderId: String, sourceParentId: String?, sourceSiblingIdsWithoutThis: [String], targetFolderId: String) async throws {
         try await simianService.updateFolderSort(projectId: projectId, parentFolderId: sourceParentId, folderIds: sourceSiblingIdsWithoutThis)
@@ -1350,11 +1372,19 @@ struct SimianPostView: View {
         var resolvedParents: [String?] = []
         resolvedParents.reserveCapacity(folderTreeIds.count)
         for tid in folderTreeIds {
-            guard let item = treeList.first(where: { $0.id == tid }), case .folder(_, _, _, let p) = item else {
-                moveItemsIntoFolder(projectId: projectId, itemIds: itemIds, targetFolderId: targetFolderId)
-                return
+            if let item = treeList.first(where: { $0.id == tid }), case .folder(_, _, _, let p) = item {
+                // Fast path: item is visible in the current treeList.
+                resolvedParents.append(p)
+            } else {
+                // Slow path: item may be off-screen due to maxTotalTreeRows truncation.
+                // Search caches directly so we don't confuse "sibling reorder" with "move into folder".
+                let rawId = String(tid.dropFirst(2))
+                guard let optionalParent = cachedParentFolderId(forFolderId: rawId) else {
+                    // Truly unknown — abort rather than accidentally nesting into target folder.
+                    return
+                }
+                resolvedParents.append(optionalParent)
             }
-            resolvedParents.append(p)
         }
         if resolvedParents.allSatisfy({ $0 == targetSiblingParentId }) {
             reorderItems(projectId: projectId, draggedIds: itemIds, targetId: targetTreeId, treeList: treeList)
@@ -1957,13 +1987,14 @@ struct SimianPostView: View {
 
     private func fileTreeRow(file: SimianFile, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFile], treeList: [SimianTreeItem]) -> some View {
         let isEditing = inlineRenameItemId == "file-\(file.id)"
+        // Resolve the destination folder name from caches so nested-file drops go to the correct folder.
+        let dropFolderName = parentFolderId.flatMap { cachedFolderName(forFolderId: $0) } ?? folderBreadcrumb.last?.name
         return SimianFileRow(
             fileId: file.id, projectId: browsingProjectId ?? "", parentFolderId: parentFolderId,
             depth: depth, fileName: file.title, canReorder: siblings.count > 1,
             isEditing: isEditing, editText: $inlineRenameText,
             selectedItemIds: selectedItemIds,
-            onSelect: { selectedItemIds = ["file-\(file.id)"] },
-            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: currentParentFolderId, destinationFolderName: folderBreadcrumb.last?.name) },
+            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: parentFolderId, destinationFolderName: dropFolderName) },
             onReorderInsertAfter: { draggedIds in
                 let nextId = siblings.firstIndex(where: { $0.id == file.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
                 reorderItems(projectId: browsingProjectId ?? "", draggedIds: draggedIds, targetId: nextId.map { "file-\($0)" }, treeList: treeList)
@@ -2085,15 +2116,18 @@ struct SimianPostView: View {
                 reorderFiles(projectId: projectId, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: targetFileId)
             }
         }
-        // If targetId is nil (insert at end), use last item's parent
+        // If targetId is nil (insert at end), use the first dragged item of each type to determine parent.
+        // Search is type-specific so a mixed selection (f- and file-) resolves each type independently.
         if targetId == nil {
             if !folderIds.isEmpty {
-                if let firstDragged = treeList.first(where: { draggedIds.contains($0.id) }), case .folder(_, _, _, let parentId) = firstDragged {
+                if let firstDragged = treeList.first(where: { $0.id.hasPrefix("f-") && draggedIds.contains($0.id) }),
+                   case .folder(_, _, _, let parentId) = firstDragged {
                     reorderFolders(projectId: projectId, folderIds: folderIds, parentFolderId: parentId, dropBeforeFolderId: nil)
                 }
             }
             if !fileIds.isEmpty {
-                if let firstDragged = treeList.first(where: { draggedIds.contains($0.id) }), case .file(_, _, _, let parentId) = firstDragged {
+                if let firstDragged = treeList.first(where: { $0.id.hasPrefix("file-") && draggedIds.contains($0.id) }),
+                   case .file(_, _, _, let parentId) = firstDragged {
                     reorderFiles(projectId: projectId, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: nil)
                 }
             }
@@ -2572,6 +2606,7 @@ private struct ReorderGapView: View {
     let expectedType: String
     let validateParent: (String?) -> Bool
     let onDrop: ([String]) -> Void
+    let canReorder: Bool
     @Binding var isTargeted: Bool
 
     /// Fixed height avoids animating row geometry during drag (that + list-level animation caused jitter with the drag preview).
@@ -2586,14 +2621,25 @@ private struct ReorderGapView: View {
         .frame(height: rowHeight)
         .contentShape(Rectangle())
         .onDrop(of: [.text, .plainText, .utf8PlainText], isTargeted: $isTargeted) { providers in
-            guard let provider = providers.first else { return false }
-            let types: [UTType] = [.text, .plainText, .utf8PlainText]
-            let hasPayload = types.contains { provider.hasItemConformingToTypeIdentifier($0.identifier) }
-            guard hasPayload else { return false }
-            _ = provider.loadObject(ofClass: String.self) { obj, _ in
-                guard let str = obj else { return }
+            guard canReorder else { return false }
+            guard let provider = providers.first,
+                  provider.canLoadObject(ofClass: String.self) else { return false }
+            // Synchronous pre-validation via the drag pasteboard; avoids accepting drops whose
+            // payload will fail validation in the async callback (which would look like a silent no-op).
+            let dragPB = NSPasteboard(name: .drag)
+            let pbStr = dragPB.string(forType: .string)
+                       ?? dragPB.string(forType: NSPasteboard.PasteboardType(rawValue: UTType.utf8PlainText.identifier))
+                       ?? dragPB.string(forType: NSPasteboard.PasteboardType(rawValue: UTType.plainText.identifier))
+            if let str = pbStr {
                 guard let parsed = parseSimianMultiDrag(str),
-                      parsed.type == expectedType, validateParent(parsed.parentId) else { return }
+                      parsed.type == expectedType,
+                      validateParent(parsed.parentId) else { return false }
+            }
+            _ = provider.loadObject(ofClass: String.self) { obj, _ in
+                guard let str = obj,
+                      let parsed = parseSimianMultiDrag(str),
+                      parsed.type == expectedType,
+                      validateParent(parsed.parentId) else { return }
                 DispatchQueue.main.async { onDrop(parsed.itemIds) }
             }
             return true
@@ -2697,7 +2743,7 @@ private struct SimianFolderRow: View {
                 return true
             }
 
-            ReorderGapView(expectedType: "folder", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
+            ReorderGapView(expectedType: "folder", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, canReorder: canReorder, isTargeted: $isGapBelow)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -2719,8 +2765,7 @@ private struct SimianFileRow: View {
     let isEditing: Bool
     @Binding var editText: String
     let selectedItemIds: Set<String>
-    let onSelect: () -> Void
-    /// Drop Finder files onto the row body (not a folder row) → upload into the current list location.
+    /// Drop Finder files onto the row body → upload into this file's parent folder.
     let onExternalFileDrop: ([NSItemProvider]) -> Bool
     let onReorderInsertAfter: ([String]) -> Void
     let onCommitRename: () -> Void
@@ -2774,7 +2819,7 @@ private struct SimianFileRow: View {
             .background(isExternalFileDropTargeted ? Color.accentColor.opacity(0.15) : Color.clear)
             .onDrop(of: [UTType.fileURL], isTargeted: $isExternalFileDropTargeted, perform: onExternalFileDrop)
 
-            ReorderGapView(expectedType: "file", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
+            ReorderGapView(expectedType: "file", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, canReorder: canReorder, isTargeted: $isGapBelow)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
