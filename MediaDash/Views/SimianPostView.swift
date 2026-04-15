@@ -35,6 +35,7 @@ struct SimianPostView: View {
     @State private var currentFolders: [SimianFolder] = []
     @State private var currentFiles: [SimianFile] = []
     @State private var isLoadingFolders = false
+    @State private var folderListFocusTrigger = 0
 
     // Tree view
     @State private var expandedFolderIds: Set<String> = []
@@ -1748,6 +1749,7 @@ struct SimianPostView: View {
                     inlineRenameItemId: inlineRenameItemId,
                     currentParentFolderId: currentParentFolderId,
                     stagedFileCount: manager.selectedFiles.count,
+                    focusTrigger: folderListFocusTrigger,
                     inlineRenameText: $inlineRenameText,
                     onToggleExpand: { folderId in toggleExpand(projectId: projectId, folderId: folderId) },
                     onSpringLoadExpand: { folderId in expandFolderForSpringLoad(projectId: projectId, folderId: folderId) },
@@ -2407,10 +2409,9 @@ struct SimianPostView: View {
                     // #region agent log
                     logFocusSnapshot("loadFolders completed (success)", hypothesisId: "H5")
                     // #endregion
-                    // Reload swaps List content; AppKit often ends with `NSWindow` as first responder until we re-assert (H5).
+                    // After the new SimianTreeView mounts, make its NSOutlineView first responder.
                     if selectedProjectName != nil {
-                        isFolderListFocused = true
-                        syncFolderListFocusWithAppKit()
+                        folderListFocusTrigger += 1
                     }
                 }
             } catch {
@@ -2422,8 +2423,7 @@ struct SimianPostView: View {
                     logFocusSnapshot("loadFolders completed (error)", hypothesisId: "H5")
                     // #endregion
                     if selectedProjectName != nil {
-                        isFolderListFocused = true
-                        syncFolderListFocusWithAppKit()
+                        folderListFocusTrigger += 1
                     }
                 }
             }

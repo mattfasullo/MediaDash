@@ -69,6 +69,7 @@ struct SimianTreeView: NSViewRepresentable {
     let inlineRenameItemId: String?
     let currentParentFolderId: String?
     let stagedFileCount: Int
+    let focusTrigger: Int
 
     @Binding var inlineRenameText: String
 
@@ -121,6 +122,8 @@ struct SimianTreeView: NSViewRepresentable {
         ov.registerForDraggedTypes(types)
         ov.setDraggingSourceOperationMask(.move, forLocal: true)
         ov.setDraggingSourceOperationMask([.move, .copy], forLocal: false)
+        // Prefer insertion gaps over “on row” drops so sibling reorder is easier than “move into folder”.
+        ov.draggingDestinationFeedbackStyle = .gap
 
         sv.documentView = ov
         context.coordinator.outlineView = ov
@@ -164,6 +167,9 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
     private var syncingSelection = false
     private var syncingExpansion = false
 
+    // Focus trigger: -1 means "never applied"; fires makeFirstResponder on first mount and every bump
+    private var lastAppliedFocusTrigger = -1
+
     // Track what we last applied so `update()` is idempotent
     private var prevExpandedIds: Set<String> = []
     private var prevSelectedIds: Set<String> = []
@@ -191,6 +197,14 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
         if newView.expandedFolderIds != prevExpandedIds {
             prevExpandedIds = newView.expandedFolderIds
             syncExpansion(in: ov, expandedIds: newView.expandedFolderIds)
+        }
+
+        if newView.focusTrigger != lastAppliedFocusTrigger {
+            lastAppliedFocusTrigger = newView.focusTrigger
+            DispatchQueue.main.async { [weak self] in
+                guard let ov = self?.outlineView else { return }
+                ov.window?.makeFirstResponder(ov)
+            }
         }
 
         if newView.selectedItemIds != prevSelectedIds && !syncingSelection {
@@ -251,11 +265,29 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
         for n in rowsToCollapse { ov.collapseItem(n) }
     }
 
+    /// Row order for drops must match `outlineView(_:child:ofItem:)` / `folderSiblings` — not only `folderChildrenCache`,
+    /// because navigated-in listings live in `currentFolders` / `currentFiles` while the cache may still be empty.
+    private func orderedDropRowNodes(parentFolderId: String?) -> [SimianTreeNode] {
+        let folders: [SimianFolder]
+        let files: [SimianFile]
+        if parentFolderId == nil || parentFolderId == view.currentParentFolderId {
+            folders = view.currentFolders
+            files = view.currentFiles
+        } else {
+            let pid = parentFolderId!
+            folders = view.folderChildrenCache[pid] ?? []
+            files = view.folderFilesCache[pid] ?? []
+        }
+        return folders.compactMap { nodeCache["f-\($0.id)"] } + files.compactMap { nodeCache["file-\($0.id)"] }
+    }
+
     private func syncSelectionToOutlineView(_ ids: Set<String>, in ov: NSOutlineView) {
         let idxSet = IndexSet(ids.compactMap { id -> Int? in
             guard let n = nodeCache[id] else { return nil }
             let row = ov.row(forItem: n); return row >= 0 ? row : nil
         })
+        syncingSelection = true
+        defer { syncingSelection = false }
         ov.selectRowIndexes(idxSet, byExtendingSelection: false)
     }
 
@@ -403,19 +435,37 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
         // Can't drop onto a dragged item
         if let targetNode = item as? SimianTreeNode, parsed.itemIds.contains(targetNode.treeId) { return [] }
 
-        // Spring-load: hover over closed folder → expand after delay
-        let folderTarget = item as? SimianTreeNode
-        if let fn = folderTarget, fn.kind == .folder, !outlineView.isItemExpanded(fn) {
-            if springLoadTarget !== fn {
-                springLoadTimer?.invalidate()
-                springLoadTarget = fn
-                springLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.65, repeats: false) { [weak self] _ in
-                    guard let self, let fid = fn.itemId else { return }
-                    DispatchQueue.main.async { self.view.onSpringLoadExpand(fid) }
-                    self.springLoadTimer = nil; self.springLoadTarget = nil
-                }
+        // NSOutlineView's default tracking proposes "insert as child N of folder X" when the cursor is
+        // near the bottom half of a collapsed/expanded folder row.  For reordering siblings that is wrong:
+        // we want "insert before folder X at folder X's parent level".  Redirect the proposal whenever
+        // the proposed item is a folder AND the child index is NOT NSOutlineViewDropOnItemIndex.
+        // The NSOutlineViewDropOnItemIndex case (-1) is intentional "drop onto folder" (move-into) and
+        // must NOT be redirected.
+        if childIndex != NSOutlineViewDropOnItemIndex, item is SimianTreeNode {
+            let idxInParent = outlineView.childIndex(forItem: item as AnyObject)
+            if idxInParent >= 0 {
+                let parentItem = outlineView.parent(forItem: item as AnyObject)
+                outlineView.setDropItem(parentItem, dropChildIndex: idxInParent)
             }
-        } else if springLoadTarget !== folderTarget {
+        }
+
+        // Spring-load: hover over closed folder → expand after delay (external drops only; internal drags are almost always reorder)
+        let folderTarget = item as? SimianTreeNode
+        if isExternal {
+            if let fn = folderTarget, fn.kind == .folder, !outlineView.isItemExpanded(fn) {
+                if springLoadTarget !== fn {
+                    springLoadTimer?.invalidate()
+                    springLoadTarget = fn
+                    springLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.65, repeats: false) { [weak self] _ in
+                        guard let self, let fid = fn.itemId else { return }
+                        DispatchQueue.main.async { self.view.onSpringLoadExpand(fid) }
+                        self.springLoadTimer = nil; self.springLoadTarget = nil
+                    }
+                }
+            } else if springLoadTarget !== folderTarget {
+                springLoadTimer?.invalidate(); springLoadTimer = nil; springLoadTarget = nil
+            }
+        } else if springLoadTarget != nil {
             springLoadTimer?.invalidate(); springLoadTimer = nil; springLoadTarget = nil
         }
 
@@ -454,19 +504,8 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             else { parentFolderId = view.currentParentFolderId }
 
             // Find the item at childIndex to get the "insert before" id
-            let dropBeforeNode: SimianTreeNode? = {
-                if let pid = parentFolderId {
-                    let cf = view.folderChildrenCache[pid] ?? []
-                    let ff = view.folderFilesCache[pid] ?? []
-                    let all: [SimianTreeNode] = cf.compactMap { nodeCache["f-\($0.id)"] } + ff.compactMap { nodeCache["file-\($0.id)"] }
-                    return childIndex < all.count ? all[childIndex] : nil
-                } else {
-                    let rf = view.currentFolders.compactMap { nodeCache["f-\($0.id)"] }
-                    let rff = view.currentFiles.compactMap { nodeCache["file-\($0.id)"] }
-                    let all = rf + rff
-                    return childIndex < all.count ? all[childIndex] : nil
-                }
-            }()
+            let all = orderedDropRowNodes(parentFolderId: parentFolderId)
+            let dropBeforeNode = childIndex < all.count ? all[childIndex] : nil
 
             let folderIds = parsed.itemIds.compactMap { $0.hasPrefix("f-") ? String($0.dropFirst(2)) : nil }
             let fileIds = parsed.itemIds.compactMap { $0.hasPrefix("file-") ? String($0.dropFirst(5)) : nil }
