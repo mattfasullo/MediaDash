@@ -1736,84 +1736,39 @@ struct SimianPostView: View {
             if isLoadingFolders {
                 HStack(spacing: 8) { ProgressView().scaleEffect(0.8); Text("Loading folders...").font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity).padding()
             } else {
-                let treeList = flatTreeList(projectId: projectId)
-                let truncationRowCount = treeList.count >= maxTotalTreeRows ? 1 : 0
-                let estimatedContentRows = CGFloat(treeList.count + truncationRowCount)
-                GeometryReader { geo in
-                    let fillerMinHeight = max(120, geo.size.height - estimatedContentRows * 36 - 24)
-                    ScrollViewReader { proxy in
-                        List(selection: $selectedItemIds) {
-                            ForEach(Array(treeList.enumerated()), id: \.element.id) { _, item in
-                                Group {
-                                    switch item {
-                                    case .folder(let f, let d, let p, let parentId):
-                                        folderTreeRow(projectId: projectId, folder: f, depth: d, path: p, parentFolderId: parentId, siblings: folderSiblings(parentId: parentId), treeList: treeList)
-                                    case .file(let file, let d, let p, let parentId):
-                                        fileTreeRow(file: file, depth: d, path: p, parentFolderId: parentId, siblings: fileSiblings(parentFolderId: parentId), treeList: treeList)
-                                    }
-                                }
-                                .tag(item.id).id(item.id)
-                                .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
-                                .transition(.move(edge: .top).combined(with: .opacity))
-                            }
-
-                            if treeList.count >= maxTotalTreeRows {
-                                Text("(Showing first \(maxTotalTreeRows) items)").font(.caption2).foregroundStyle(.secondary).padding(.vertical, 4)
-                            }
-
-                            Color.clear
-                                .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
-                                .frame(minHeight: fillerMinHeight)
-                                .contentShape(Rectangle())
-                                .selectionDisabled(true)
-                                .contextMenu { folderBrowserEmptyAreaContextMenu(projectId: projectId, treeList: treeList) }
-                        }
-                        .listStyle(.inset(alternatesRowBackgrounds: true))
-                        .onDrop(of: [UTType.fileURL], isTargeted: $isFolderListExternalDropTargeted) { providers in
-                            handleExternalFileDrop(providers: providers, folderId: currentParentFolderId, destinationFolderName: folderBreadcrumb.last?.name)
-                        }
-                        .focusable()
-                        .focused($isFolderListFocused)
-                        .onAppear {
-                            isFolderListFocused = true
-                            if selectedItemIds.isEmpty, !treeList.isEmpty {
-                                selectedItemIds = [treeList[0].id]
-                                treeKeyboardHeadIndex = 0
-                                treeKeyboardAnchorIndex = nil
-                            }
-                            // #region agent log
-                            logFocusSnapshot("folder List onAppear", hypothesisId: "H1")
-                            // #endregion
-                            DispatchQueue.main.async {
-                                // Do not guard on `isFolderListFocused`: `syncFolderListFocusWithAppKit` sets false first;
-                                // that interleaves here and skipped the repair (stuck false / NSWindow first responder).
-                                guard selectedProjectName != nil else { return }
-                                isFolderListFocused = false
-                                isFolderListFocused = true
-                                // #region agent log
-                                logFocusSnapshot("folder List onAppear async focus toggle done", hypothesisId: "H2")
-                                // #endregion
-                            }
-                        }
-                        .onChange(of: selectedItemIds) { _, newValue in
-                            guard browsingProjectId != nil,
-                                  selectedProjectName != nil,
-                                  !newValue.isEmpty else { return }
-                            let scrollId: String
-                            if newValue.count == 1, let only = newValue.first {
-                                scrollId = only
-                            } else {
-                                let tl = flatTreeList(projectId: projectId)
-                                guard !tl.isEmpty else { return }
-                                let hi = min(max(treeKeyboardHeadIndex, 0), tl.count - 1)
-                                scrollId = tl[hi].id
-                            }
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                proxy.scrollTo(scrollId, anchor: .center)
-                            }
-                        }
-                    }
-                }
+                SimianTreeView(
+                    projectId: projectId,
+                    currentFolders: currentFolders,
+                    currentFiles: currentFiles,
+                    folderChildrenCache: folderChildrenCache,
+                    folderFilesCache: folderFilesCache,
+                    loadingFolderIds: loadingFolderIds,
+                    expandedFolderIds: expandedFolderIds,
+                    selectedItemIds: selectedItemIds,
+                    inlineRenameItemId: inlineRenameItemId,
+                    currentParentFolderId: currentParentFolderId,
+                    stagedFileCount: manager.selectedFiles.count,
+                    inlineRenameText: $inlineRenameText,
+                    onToggleExpand: { folderId in toggleExpand(projectId: projectId, folderId: folderId) },
+                    onSpringLoadExpand: { folderId in expandFolderForSpringLoad(projectId: projectId, folderId: folderId) },
+                    onLoadChildren: { folderId in loadFolderChildren(projectId: projectId, folderId: folderId) },
+                    onReorderFolders: { pid, folderIds, parentId, dropBeforeId in
+                        reorderFolders(projectId: pid, folderIds: folderIds, parentFolderId: parentId, dropBeforeFolderId: dropBeforeId)
+                    },
+                    onReorderFiles: { pid, fileIds, parentId, dropBeforeId in
+                        reorderFiles(projectId: pid, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: dropBeforeId)
+                    },
+                    onMoveIntoFolder: { pid, itemIds, targetFolderId in
+                        moveItemsIntoFolder(projectId: pid, itemIds: itemIds, targetFolderId: targetFolderId)
+                    },
+                    onExternalFileDrop: { providers, folderId, folderName in
+                        handleExternalFileDrop(providers: providers, folderId: folderId, destinationFolderName: folderName)
+                    },
+                    onSelectionChange: { ids in selectedItemIds = ids },
+                    onCommitRename: { commitInlineRename() },
+                    onCancelRename: { inlineRenameItemId = nil; inlineRenameText = "" },
+                    onContextAction: { action in handleSimianTreeContextAction(action, projectId: projectId) }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2022,6 +1977,66 @@ struct SimianPostView: View {
         else {
             expandedFolderIds.insert(folderId)
             if folderChildrenCache[folderId] == nil { loadFolderChildren(projectId: projectId, folderId: folderId) }
+        }
+    }
+
+    /// Expand-only spring-load: expands without toggling (so the folder stays open after the drag ends)
+    /// and never changes selectedItemIds so the dragged item's selection is preserved.
+    private func expandFolderForSpringLoad(projectId: String, folderId: String) {
+        guard !expandedFolderIds.contains(folderId) else { return }
+        expandedFolderIds.insert(folderId)
+        if folderChildrenCache[folderId] == nil { loadFolderChildren(projectId: projectId, folderId: folderId) }
+    }
+
+    /// Route context menu actions from SimianTreeView back into existing SimianPostView logic.
+    private func handleSimianTreeContextAction(_ action: SimianTreeContextAction, projectId: String) {
+        let treeList = flatTreeList(projectId: projectId)
+        switch action {
+        case .uploadTo(let folderId, let folderName):
+            uploadToFolder(folderId: folderId, destinationFolderName: folderName)
+        case .uploadStagedFiles(let folderId, let folderName):
+            uploadStagedFiles(folderId: folderId, destinationFolderName: folderName)
+        case .newFolderWithSelection(let treeId):
+            if treeId.isEmpty {
+                startNewFolderWithSelectionFromCurrentDirectory(treeList: treeList)
+            } else {
+                startNewFolderWithSelection(treeList: treeList, rightClickedId: treeId)
+            }
+        case .newFolder(let parentFolderId):
+            beginFinderStyleNewFolder(parentFolderId: parentFolderId, itemIdsToMove: [])
+        case .beginRename(let treeId):
+            presentRenameSheetForTreeItem(id: treeId, treeList: treeList)
+        case .addDate(let treeId):
+            addDateStampToSelection(treeList: treeList, rightClickedId: treeId, useUploadTime: false)
+        case .copyLink(let treeId):
+            if treeId.hasPrefix("f-"), treeId.count > 2 {
+                copyFolderLink(projectId: projectId, folderId: String(treeId.dropFirst(2)))
+            }
+        case .downloadFolder(let folderId, let folderName):
+            presentSubtreeDownloadSavePanel(
+                projectId: projectId,
+                folderId: folderId,
+                rootFolderLabel: folderName,
+                panelMessage: "A folder will be created here with all files from \u{201C}\(folderName)\u{201D}.",
+                emptyResultMessage: "Folder is empty."
+            )
+        case .downloadFile(let fileId):
+            if let treeItem = treeList.first(where: { $0.id == "file-\(fileId)" }),
+               case .file(let f, _, _, _) = treeItem {
+                beginDownloadSimianFile(f)
+            }
+        case .delete(let treeId):
+            if treeId.hasPrefix("f-"), treeId.count > 2,
+               let item = treeList.first(where: { $0.id == treeId }),
+               case .folder(let f, _, _, let pid) = item {
+                pendingDeleteIsFolder = true; pendingDeleteItemId = f.id; pendingDeleteItemName = f.name
+                pendingDeleteParentFolderId = pid; showDeleteConfirmation = true
+            } else if treeId.hasPrefix("file-"), treeId.count > 5,
+                      let item = treeList.first(where: { $0.id == treeId }),
+                      case .file(let f, _, _, let pid) = item {
+                pendingDeleteIsFolder = false; pendingDeleteItemId = f.id; pendingDeleteItemName = f.title
+                pendingDeleteParentFolderId = pid; showDeleteConfirmation = true
+            }
         }
     }
 
@@ -2577,11 +2592,11 @@ enum ProjectSortOrder: String, CaseIterable {
 
 // MARK: - Drag payload: "simian-multi|type|projectId|parentId|id1,id2,id3"
 
-private func buildSimianDragPayload(type: String, projectId: String, parentId: String?, itemIds: [String]) -> String {
+func buildSimianDragPayload(type: String, projectId: String, parentId: String?, itemIds: [String]) -> String {
     "simian-multi|\(type)|\(projectId)|\(parentId ?? "")|\(itemIds.joined(separator: ","))"
 }
 
-private func parseSimianMultiDrag(_ str: String) -> (type: String, projectId: String, parentId: String?, itemIds: [String])? {
+func parseSimianMultiDrag(_ str: String) -> (type: String, projectId: String, parentId: String?, itemIds: [String])? {
     let parts = str.split(separator: "|", maxSplits: 4).map(String.init)
     guard parts.count >= 5 else { return nil }
     if parts[0] == "simian-multi" {
