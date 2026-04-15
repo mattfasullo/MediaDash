@@ -8,7 +8,8 @@ struct JobResult {
 }
 
 /// Use case for executing file jobs (Work Picture, Prep, Both)
-struct FileJobUseCase {
+/// File-system work must run off the main thread; opt out of `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`.
+nonisolated struct FileJobUseCase {
     /// Progress 0…1, optional status line, optional current file name. Invoked from a background thread.
     typealias DroppedSourceProgressHandler = @Sendable (_ overall: Double, _ status: String?, _ currentFile: String?) -> Void
 
@@ -173,7 +174,7 @@ struct FileJobUseCase {
     }
 
     /// Drops onto a **known** work-picture job folder (full path to the docket folder on disk): creates the next dated subfolder (`01_date`, …) and copies each dropped item into it — same as `execute` work picture, without resolving docket/year from a string.
-    func copyDroppedSourcesIntoWorkPictureDatedFolder(workPictureBaseURL: URL, sourceURLs: [URL], wpDate: Date, progress: DroppedSourceProgressHandler? = nil) throws -> JobResult {
+    nonisolated func copyDroppedSourcesIntoWorkPictureDatedFolder(workPictureBaseURL: URL, sourceURLs: [URL], wpDate: Date, progress: DroppedSourceProgressHandler? = nil) throws -> JobResult {
         let fm = fileSystem
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: workPictureBaseURL.path, isDirectory: &isDir), isDir.boolValue else {

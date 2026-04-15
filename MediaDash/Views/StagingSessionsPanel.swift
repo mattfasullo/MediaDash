@@ -179,7 +179,7 @@ struct StagingSessionsPanel: View {
         isSyncingSessions = true
         Task {
             try? await cacheManager.syncUpcomingSessions(workspaceID: settingsManager.currentSettings.asanaWorkspaceID)
-            await MainActor.run {
+            _ = await MainActor.run {
                 isSyncingSessions = false
                 reloadDaySections()
                 refreshToken = UUID()
@@ -684,9 +684,7 @@ private struct FolderDropChip: View {
                 try FileManager.default.removeItem(at: url)
             }
             try data.write(to: url)
-            await MainActor.run {
-                NSWorkspace.shared.open(url)
-            }
+            _ = NSWorkspace.shared.open(url)
         } catch {
             print("⚠️ [StagingSessions] could not write prep summary: \(error.localizedDescription)")
         }
@@ -730,7 +728,7 @@ private func runStagingChipWorkPictureDrop(
                 FloatingProgressManager.shared.updateProgress(overall, message: msg, currentFile: file)
             }
         }
-        await MainActor.run {
+        _ = await MainActor.run {
             FloatingProgressManager.shared.startOperation(.filing(docket: docketLabel), totalFiles: 0, totalBytes: 0)
         }
         let useCase = FileJobUseCase(config: config)
@@ -741,11 +739,11 @@ private func runStagingChipWorkPictureDrop(
                 wpDate: wpDate,
                 progress: progress
             )
-            await MainActor.run {
+            _ = await MainActor.run {
                 FloatingProgressManager.shared.complete(message: "Done!")
             }
         } catch {
-            await MainActor.run {
+            _ = await MainActor.run {
                 FloatingProgressManager.shared.hide()
             }
             print("⚠️ [StagingSessions] work picture file failed: \(error.localizedDescription)")

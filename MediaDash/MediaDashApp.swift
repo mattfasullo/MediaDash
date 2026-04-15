@@ -144,7 +144,18 @@ struct MediaDashApp: App {
     /// Finder Sync often does not appear under System Settings → Extensions on Sequoia; `pluginkit` is the reliable toggle.
     private static func showFinderSyncSettingsHelpAlert() {
         let extensionID = "mattfasullo.MediaDash.FinderSync"
-        let enableCommand = "pluginkit -e use -i \(extensionID)"
+        // `-a` registers the appex with PlugInKit; `-e use` alone often fails on Sequoia (same pattern as LucidLink / OpenInTerminal).
+        let addAndEnableCommands = """
+        pluginkit -a "/Applications/MediaDash.app/Contents/PlugIns/MediaDashFinderSync.appex"
+        pluginkit -e use -i \(extensionID)
+        killall Finder
+        """
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        let verifyCommands = """
+        pluginkit -m -v -i \(extensionID)
+        pluginkit -m -v 2>&1 | grep -i mediadash
+        """
+        .trimmingCharacters(in: .whitespacesAndNewlines)
         let alert = NSAlert()
         alert.messageText = "Finder Sync and System Settings"
         alert.informativeText = """
@@ -152,23 +163,23 @@ struct MediaDashApp: App {
 
         Your Login Items page may show only “Open at Login” and “Allow in the Background” with no Finder Sync section. That is a known Apple UI issue, not a missing MediaDash install.
 
-        Enable the extension from Terminal (install MediaDash, open it once, then run):
+        Register and enable the extension from Terminal. Use the real path to MediaDashFinderSync.appex (not “…appex”). For Xcode runs, open the built MediaDash.app → Contents → PlugIns → drag MediaDashFinderSync.appex into Terminal after pluginkit -a with a space.
 
-        \(enableCommand)
+        \(addAndEnableCommands)
 
-        Verify it is registered:
+        Check registration — run each line separately (do not type “and” between commands; that is not valid shell syntax):
 
-        pluginkit -m -v | grep -i MediaDash
+        \(verifyCommands)
 
-        Then restart Finder: killall Finder
+        Note: `pluginkit -mAD -p com.apple.FinderSync` often prints “(no matches)” on recent macOS even when extensions work; prefer `-i` or grep mediadash above.
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Copy enable command")
+        alert.addButton(withTitle: "Copy pluginkit commands")
         let response = alert.runModal()
         if response == .alertSecondButtonReturn {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(enableCommand, forType: .string)
+            NSPasteboard.general.setString(addAndEnableCommands + "\n\n" + verifyCommands, forType: .string)
         }
     }
 }
