@@ -34,6 +34,31 @@ enum SimianFolderNaming {
         return looseFileAutoNestParentFolderNames.contains(upper)
     }
 
+    /// Resolve destination folder name for auto-nesting checks.
+    /// Prefers explicit drop target name; otherwise falls back to current folder name
+    /// (when dropping into the current directory) and then to a cached lookup.
+    static func effectiveDestinationFolderName(
+        providedName: String?,
+        folderId: String?,
+        currentFolderId: String?,
+        currentFolderName: String?,
+        cachedFolderName: String?
+    ) -> String? {
+        if let explicit = providedName?.trimmingCharacters(in: .whitespacesAndNewlines), !explicit.isEmpty {
+            return explicit
+        }
+        guard let folderId else { return nil }
+        if folderId == currentFolderId,
+           let current = currentFolderName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !current.isEmpty {
+            return current
+        }
+        if let cached = cachedFolderName?.trimmingCharacters(in: .whitespacesAndNewlines), !cached.isEmpty {
+            return cached
+        }
+        return nil
+    }
+
     /// Next sibling folder name `NN_MmmDD.yy` (e.g. `04_Apr01.26`) using the same index rules as `nextNumberedFolderName`.
     static func nextDateStampedLooseFileFolderName(existingFolderNames: [String], date: Date = Date(), timeZone: TimeZone? = nil) -> String {
         let existingNumbers = numberedPrefixValues(from: existingFolderNames)

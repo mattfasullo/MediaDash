@@ -27,7 +27,6 @@ struct RestripeView: View {
     @State private var showFFmpegInstallSheet = false
     @State private var ffmpegAvailable = true
     @State private var showBatchRename = false
-    @State private var audioListHeight: CGFloat = 220
     /// Highlights the assignments column when dragging; also pins `onDrop` to the `[NSItemProvider]` perform overload (not `DropDelegate`).
     @State private var assignmentsColumnDropTargeted = false
 
@@ -44,10 +43,13 @@ struct RestripeView: View {
             VStack(alignment: .leading, spacing: 20) {
                 header
                 linkingWorkspace
+                    .frame(maxHeight: .infinity)
+                    .layoutPriority(1)
                 outputSection
                 summaryAndAction
             }
             .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 980, minHeight: 640)
         .onAppear {
@@ -109,10 +111,11 @@ struct RestripeView: View {
             selectedPictureURL = nil
             return
         }
-        if let selectedPictureURL, config.pictures.contains(selectedPictureURL) {
+        if let selectedPictureURL,
+           config.pictures.contains(where: { $0.isSameRestripeFile(as: selectedPictureURL) }) {
             return
         }
-        selectedPictureURL = config.pictures.first
+        selectedPictureURL = config.pictures.first?.normalizedRestripeFileURL
     }
 
     // MARK: - FFmpeg banner
@@ -162,6 +165,7 @@ struct RestripeView: View {
                 picturesColumn
                 assignmentsColumn
             }
+            .frame(maxHeight: .infinity)
             Button {
                 linkSelectedAudioToSelectedPicture()
             } label: {
@@ -194,18 +198,22 @@ struct RestripeView: View {
             UnassignedAudioList(
                 urls: config.unassignedAudio,
                 selected: $selectedUnassigned,
-                height: $audioListHeight,
                 onAdd: addAudioFromPicker,
                 onDrop: { urls in linkDroppedUnassigned(urls) }
             )
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func addAudioFromPicker() {
         FilePickerService.chooseFiles(allowedTypes: Self.audioTypes, allowsMultiple: true) { urls in
-            let existingPaths = Set(config.unassignedAudio.map(\.path) + config.assignments.map { $0.audioURL.path })
-            let newUrls = urls.filter { !existingPaths.contains($0.path) }
+            let existingPaths = Set(
+                config.unassignedAudio.map(\.normalizedRestripeFileURL.path)
+                    + config.assignments.map { $0.audioURL.normalizedRestripeFileURL.path }
+            )
+            let newUrls = urls
+                .map(\.normalizedRestripeFileURL)
+                .filter { !existingPaths.contains($0.path) }
             if !newUrls.isEmpty {
                 config.unassignedAudio = config.unassignedAudio + newUrls
             }
@@ -214,8 +222,10 @@ struct RestripeView: View {
 
     private func addVideosFromPicker() {
         FilePickerService.chooseFiles(allowedTypes: Self.videoTypes, allowsMultiple: true) { urls in
-            let existingPaths = Set(config.pictures.map(\.path))
-            let newUrls = urls.filter { !existingPaths.contains($0.path) }
+            let existingPaths = Set(config.pictures.map(\.normalizedRestripeFileURL.path))
+            let newUrls = urls
+                .map(\.normalizedRestripeFileURL)
+                .filter { !existingPaths.contains($0.path) }
             if !newUrls.isEmpty {
                 config.pictures.append(contentsOf: newUrls)
             }
@@ -244,7 +254,7 @@ struct RestripeView: View {
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -263,27 +273,29 @@ struct RestripeView: View {
         let linked = config.assignments(for: pictureURL).count
         return PictureSelectionRow(
             url: pictureURL,
-            isSelected: selectedPictureURL == pictureURL,
+            isSelected: selectedPictureURL.map { pictureURL.isSameRestripeFile(as: $0) } ?? false,
             linkedCount: linked,
             onSelect: {
-                selectedPictureURL = pictureURL
+                selectedPictureURL = pictureURL.normalizedRestripeFileURL
                 selectedAssignmentIds = []
             },
             onDropAudio: { urls in
-                selectedPictureURL = pictureURL
-                linkAudio(urls, to: pictureURL)
+                let pic = pictureURL.normalizedRestripeFileURL
+                selectedPictureURL = pic
+                linkAudio(urls, to: pic)
             },
             onRemove: { removePicture(pictureURL) }
         )
     }
 
     private func removePicture(_ pictureURL: URL) {
-        config.pictures.removeAll { $0 == pictureURL }
-        let removedAssignments = config.assignments.filter { $0.pictureURL == pictureURL }
-        config.assignments.removeAll { $0.pictureURL == pictureURL }
+        let key = pictureURL.normalizedRestripeFileURL
+        config.pictures.removeAll { $0.isSameRestripeFile(as: key) }
+        let removedAssignments = config.assignments.filter { $0.pictureURL.isSameRestripeFile(as: key) }
+        config.assignments.removeAll { $0.pictureURL.isSameRestripeFile(as: key) }
         for assignment in removedAssignments {
-            if !config.unassignedAudio.contains(where: { $0.path == assignment.audioURL.path }) {
-                config.unassignedAudio.append(assignment.audioURL)
+            if !config.unassignedAudio.contains(where: { $0.isSameRestripeFile(as: assignment.audioURL) }) {
+                config.unassignedAudio.append(assignment.audioURL.normalizedRestripeFileURL)
             }
         }
         selectedAssignmentIds = []
@@ -294,8 +306,9 @@ struct RestripeView: View {
         VStack(alignment: .leading, spacing: 10) {
             assignmentsColumnHeader
             assignmentsColumnBody
+                .frame(maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var assignmentsColumnHeader: some View {
@@ -358,6 +371,7 @@ struct RestripeView: View {
                     }
                     .padding(.vertical, 2)
                 }
+                .frame(maxHeight: .infinity)
             }
         }
         .padding(10)
@@ -390,8 +404,9 @@ struct RestripeView: View {
 
     private func removeLinkedAssignment(_ assignment: RestripeAssignment) {
         config.assignments.removeAll { $0.id == assignment.id }
-        if !config.unassignedAudio.contains(where: { $0.path == assignment.audioURL.path }) {
-            config.unassignedAudio.append(assignment.audioURL)
+        let aud = assignment.audioURL.normalizedRestripeFileURL
+        if !config.unassignedAudio.contains(where: { $0.isSameRestripeFile(as: aud) }) {
+            config.unassignedAudio.append(aud)
         }
         selectedAssignmentIds.remove(assignment.id)
     }
@@ -419,7 +434,8 @@ struct RestripeView: View {
 
     private func linkSelectedAudioToSelectedPicture() {
         guard let selectedPictureURL, !selectedUnassigned.isEmpty else { return }
-        let urls = config.unassignedAudio.filter { selectedUnassigned.contains($0) }
+        let selectedNorm = Set(selectedUnassigned.map(\.normalizedRestripeFileURL))
+        let urls = config.unassignedAudio.filter { selectedNorm.contains($0.normalizedRestripeFileURL) }
         linkAudio(urls, to: selectedPictureURL)
         selectedUnassigned = []
     }
@@ -522,8 +538,10 @@ struct RestripeView: View {
     }
 
     private func mergeVideoURLs(_ urls: [URL]) {
-        let existingPaths = Set(config.pictures.map(\.path))
-        let newUrls = urls.filter { !existingPaths.contains($0.path) }
+        let existingPaths = Set(config.pictures.map(\.normalizedRestripeFileURL.path))
+        let newUrls = urls
+            .map(\.normalizedRestripeFileURL)
+            .filter { !existingPaths.contains($0.path) }
         if !newUrls.isEmpty {
             config.pictures.append(contentsOf: newUrls)
         }
@@ -549,20 +567,30 @@ struct RestripeView: View {
     }
 
     private func linkAudio(_ urls: [URL], to pictureURL: URL) {
-        for audioURL in urls {
-            guard !config.assignments.contains(where: { $0.audioURL == audioURL }) else { continue }
-            config.unassignedAudio.removeAll { $0 == audioURL }
-            config.assignments.append(RestripeAssignment.make(pictureURL: pictureURL, audioURL: audioURL))
+        let pic = pictureURL.normalizedRestripeFileURL
+        var reservedBasenames = Set(config.assignments.map(\.outputBasename))
+        for raw in urls {
+            let audioURL = raw.normalizedRestripeFileURL
+            guard !config.assignments.contains(where: { $0.audioURL.isSameRestripeFile(as: audioURL) }) else { continue }
+            config.unassignedAudio.removeAll { $0.isSameRestripeFile(as: audioURL) }
+            let assignment = RestripeAssignment.make(
+                pictureURL: pic,
+                audioURL: audioURL,
+                reservedBasenames: reservedBasenames
+            )
+            reservedBasenames.insert(assignment.outputBasename)
+            config.assignments.append(assignment)
         }
     }
 
     private func linkDroppedUnassigned(_ urls: [URL]) {
-        var existingPaths = Set(config.unassignedAudio.map(\.path))
+        var existingPaths = Set(config.unassignedAudio.map(\.normalizedRestripeFileURL.path))
         for url in urls {
-            config.assignments.removeAll { $0.audioURL.path == url.path }
-            if !existingPaths.contains(url.path) {
-                config.unassignedAudio = config.unassignedAudio + [url]
-                existingPaths.insert(url.path)
+            let nu = url.normalizedRestripeFileURL
+            config.assignments.removeAll { $0.audioURL.isSameRestripeFile(as: nu) }
+            if !existingPaths.contains(nu.path) {
+                config.unassignedAudio = config.unassignedAudio + [nu]
+                existingPaths.insert(nu.path)
             }
         }
     }
@@ -1100,14 +1128,11 @@ private struct LinkedAudioRow: View {
 private struct UnassignedAudioList: View {
     let urls: [URL]
     @Binding var selected: Set<URL>
-    @Binding var height: CGFloat
     let onAdd: () -> Void
     let onDrop: ([URL]) -> Void
 
     @State private var isTargeted = false
     @State private var selectionAnchorIndex: Int?
-    private let minHeight: CGFloat = 120
-    private let maxHeight: CGFloat = 400
 
     private func handleUnassignedSelection(at index: Int) {
         guard index < urls.count else { return }
@@ -1135,57 +1160,54 @@ private struct UnassignedAudioList: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Group {
-                if urls.isEmpty {
-                    Button(action: onAdd) {
-                        VStack(spacing: 12) {
-                            Image(systemName: "waveform.circle")
-                                .font(.system(size: 32))
-                                .foregroundStyle(.secondary)
-                            Text("Add audio or drag files here")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding()
-                        .background(isTargeted ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+        Group {
+            if urls.isEmpty {
+                Button(action: onAdd) {
+                    VStack(spacing: 12) {
+                        Image(systemName: "waveform.circle")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.secondary)
+                        Text("Add audio or drag files here")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(urls.enumerated()), id: \.element) { index, url in
-                                UnassignedAudioRow(
-                                    url: url,
-                                    isSelected: selected.contains(url),
-                                    onSelect: { handleUnassignedSelection(at: index) },
-                                    payload: AudioDropPayload(urls: selected.isEmpty ? [url] : Array(selected))
-                                )
-                            }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                    .background(isTargeted ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(urls.enumerated()), id: \.element) { index, url in
+                            UnassignedAudioRow(
+                                url: url,
+                                isSelected: selected.contains(url),
+                                onSelect: { handleUnassignedSelection(at: index) },
+                                payload: AudioDropPayload(urls: selected.isEmpty ? [url] : Array(selected))
+                            )
                         }
                     }
                 }
             }
-            .frame(height: max(0, height - 10))
-            .background(
-                urls.isEmpty
-                    ? Color.clear
-                    : (isTargeted ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .onDrop(of: [.fileURL, .url, UTType.json], isTargeted: $isTargeted) { providers in
-                Task {
-                    let urls = await loadURLs(from: providers)
-                    await MainActor.run {
-                        if !urls.isEmpty { onDrop(urls) }
-                    }
+        }
+        .frame(maxHeight: .infinity)
+        .background(
+            urls.isEmpty
+                ? Color.clear
+                : (isTargeted ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .onDrop(of: [.fileURL, .url, UTType.json], isTargeted: $isTargeted) { providers in
+            Task {
+                let urls = await loadURLs(from: providers)
+                await MainActor.run {
+                    if !urls.isEmpty { onDrop(urls) }
                 }
-                return true
             }
-            ResizeHandle(height: $height, minHeight: minHeight, maxHeight: maxHeight)
+            return true
         }
     }
 
@@ -1211,36 +1233,6 @@ private struct UnassignedAudioList: View {
             }
         }
         return result
-    }
-}
-
-private struct ResizeHandle: View {
-    @Binding var height: CGFloat
-    let minHeight: CGFloat
-    let maxHeight: CGFloat
-    @State private var dragStartHeight: CGFloat?
-
-    var body: some View {
-        Rectangle()
-            .fill(Color.clear)
-            .frame(height: 10)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if dragStartHeight == nil { dragStartHeight = height }
-                        if let start = dragStartHeight {
-                            let newHeight = start + value.translation.height
-                            height = min(max(newHeight, minHeight), maxHeight)
-                        }
-                    }
-                    .onEnded { _ in dragStartHeight = nil }
-            )
-            .overlay(alignment: .center) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.secondary.opacity(0.4))
-                    .frame(width: 36, height: 4)
-            }
     }
 }
 

@@ -14,7 +14,7 @@ enum SimianTreeContextAction {
     case newFolderWithSelection(treeId: String)
     case newFolder(parentFolderId: String?)
     case beginRename(treeId: String)
-    case addDate(treeId: String)
+    case addDate(treeId: String, useUploadTime: Bool)
     case copyLink(treeId: String)
     case downloadFolder(folderId: String, folderName: String)
     case downloadFile(fileId: String)
@@ -52,6 +52,16 @@ final class SimianTreeNode: NSObject {
         return treeId == o.treeId
     }
     override var hash: Int { treeId.hashValue }
+}
+
+enum SimianDropTargeting {
+    /// Reserve the top/bottom slices of a row for gap-based sibling reordering.
+    /// The center band means "drop into this folder".
+    static func shouldDropOnFolder(yInRow: CGFloat, rowHeight: CGFloat) -> Bool {
+        guard rowHeight > 0 else { return false }
+        let normalizedY = max(0, min(yInRow / rowHeight, 1))
+        return normalizedY >= 0.30 && normalizedY <= 0.70
+    }
 }
 
 // MARK: - NSViewRepresentable
@@ -192,6 +202,9 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
         if dataChanged {
             refreshNodeCache(from: newView)
             ov.reloadData()
+            // reloadData() clears NSOutlineView selection even when SwiftUI’s selectedItemIds are unchanged;
+            // re-apply so the blue highlight matches keyboard/focus state.
+            syncSelectionToOutlineView(newView.selectedItemIds, in: ov)
         }
 
         if newView.expandedFolderIds != prevExpandedIds {
@@ -422,9 +435,24 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
     // MARK: - Drop destination
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex childIndex: Int) -> NSDragOperation {
+        let location = outlineView.convert(info.draggingLocation, from: nil)
+        let hoveredRow = outlineView.row(at: location)
+        let hoveredNode = hoveredRow >= 0 ? (outlineView.item(atRow: hoveredRow) as? SimianTreeNode) : nil
+        let isHoveringFolderCenter: Bool = {
+            guard let hoveredNode, hoveredNode.kind == .folder else { return false }
+            let rowRect = outlineView.rect(ofRow: hoveredRow)
+            let yInRow = location.y - rowRect.minY
+            return SimianDropTargeting.shouldDropOnFolder(yInRow: yInRow, rowHeight: rowRect.height)
+        }()
+
         // External Finder file drag
         let isExternal = (info.draggingSource as? NSOutlineView) !== outlineView
-        if isExternal && info.draggingPasteboard.types?.contains(.fileURL) == true { return .copy }
+        if isExternal && info.draggingPasteboard.types?.contains(.fileURL) == true {
+            if isHoveringFolderCenter, let hoveredNode {
+                outlineView.setDropItem(hoveredNode, dropChildIndex: NSOutlineViewDropOnItemIndex)
+            }
+            return .copy
+        }
 
         // Internal Simian drag
         guard let str = info.draggingPasteboard
@@ -434,17 +462,29 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
 
         // Can't drop onto a dragged item
         if let targetNode = item as? SimianTreeNode, parsed.itemIds.contains(targetNode.treeId) { return [] }
+        if let hoveredNode, parsed.itemIds.contains(hoveredNode.treeId) { return [] }
+
+        // With .gap feedback style, NSOutlineView often proposes insert-as-child.
+        // If the pointer is clearly centered on a folder row, treat it as explicit move-into.
+        if isHoveringFolderCenter, let hoveredNode {
+            outlineView.setDropItem(hoveredNode, dropChildIndex: NSOutlineViewDropOnItemIndex)
+            return .move
+        }
 
         // NSOutlineView's default tracking proposes "insert as child N of folder X" when the cursor is
-        // near the bottom half of a collapsed/expanded folder row.  For reordering siblings that is wrong:
+        // near the bottom half of a collapsed folder row.  For reordering siblings that is wrong:
         // we want "insert before folder X at folder X's parent level".  Redirect the proposal whenever
-        // the proposed item is a folder AND the child index is NOT NSOutlineViewDropOnItemIndex.
-        // The NSOutlineViewDropOnItemIndex case (-1) is intentional "drop onto folder" (move-into) and
-        // must NOT be redirected.
-        if childIndex != NSOutlineViewDropOnItemIndex, item is SimianTreeNode {
-            let idxInParent = outlineView.childIndex(forItem: item as AnyObject)
+        // the proposed item is a folder that is NOT the actual parent of the dragged items (i.e. it is
+        // a sibling being misproposed as parent).  The NSOutlineViewDropOnItemIndex case (-1) is
+        // intentional "drop ON folder" (move-into) and must NOT be redirected.  Likewise, when the
+        // proposed item IS the true parent (its id matches parsed.parentId), it is a legitimate
+        // "insert inside parent" proposal and must not be redirected.
+        if childIndex != NSOutlineViewDropOnItemIndex,
+           let proposedNode = item as? SimianTreeNode,
+           proposedNode.itemId != parsed.parentId {
+            let idxInParent = outlineView.childIndex(forItem: proposedNode)
             if idxInParent >= 0 {
-                let parentItem = outlineView.parent(forItem: item as AnyObject)
+                let parentItem = outlineView.parent(forItem: proposedNode)
                 outlineView.setDropItem(parentItem, dropChildIndex: idxInParent)
             }
         }
@@ -534,6 +574,21 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             menu.addItem(item)
         }
 
+        func addAddDateSubmenu(forTreeId treeId: String) {
+            let sub = NSMenu()
+            let today = NSMenuItem(title: "Today's Date", action: #selector(menuAction(_:)), keyEquivalent: "")
+            today.target = self
+            today.representedObject = SimianTreeContextAction.addDate(treeId: treeId, useUploadTime: false)
+            sub.addItem(today)
+            let upload = NSMenuItem(title: "Upload Date", action: #selector(menuAction(_:)), keyEquivalent: "")
+            upload.target = self
+            upload.representedObject = SimianTreeContextAction.addDate(treeId: treeId, useUploadTime: true)
+            sub.addItem(upload)
+            let parent = NSMenuItem(title: "Add Date", action: nil, keyEquivalent: "")
+            parent.submenu = sub
+            menu.addItem(parent)
+        }
+
         if let node {
             if node.kind == .folder, let fid = node.itemId, let fn = node.folder?.name {
                 add("Upload to \u{201C}\(fn)\u{201D}\u{2026}", action: .uploadTo(folderId: fid, folderName: fn))
@@ -543,7 +598,7 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
                 add("New Folder", action: .newFolder(parentFolderId: fid))
                 menu.addItem(.separator())
                 add("Rename\u{2026}", action: .beginRename(treeId: node.treeId))
-                add("Add Date", action: .addDate(treeId: node.treeId))
+                addAddDateSubmenu(forTreeId: node.treeId)
                 menu.addItem(.separator())
                 add("Copy Link", action: .copyLink(treeId: node.treeId))
                 add("Download folder contents\u{2026}", action: .downloadFolder(folderId: fid, folderName: fn))
@@ -555,7 +610,7 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
                 add("New Folder with Selection", action: .newFolderWithSelection(treeId: node.treeId))
                 menu.addItem(.separator())
                 add("Rename\u{2026}", action: .beginRename(treeId: node.treeId))
-                add("Add Date", action: .addDate(treeId: node.treeId))
+                addAddDateSubmenu(forTreeId: node.treeId)
                 menu.addItem(.separator())
                 add("Download\u{2026}", action: .downloadFile(fileId: fid))
                 menu.addItem(.separator())
@@ -586,16 +641,22 @@ final class SimianTreeCell: NSView {
     private let nameLabel = NSTextField()
     private let renameField = NSTextField()
     private let spinner = NSProgressIndicator()
+    private let typeTagBackView = NSView()
+    private let typeTagLabel = NSTextField()
 
     private var onRenameTextChange: ((String) -> Void)?
     private var onCommitRename: (() -> Void)?
     private var onCancelRename: (() -> Void)?
 
+    // Swapped to make room for the type tag or extend to the trailing edge.
+    private var nameLabelToTagConstraint: NSLayoutConstraint!
+    private var nameLabelToTrailingConstraint: NSLayoutConstraint!
+
     override init(frame: NSRect) { super.init(frame: frame); setup() }
     required init?(coder: NSCoder) { fatalError() }
 
     private func setup() {
-        for v in [iconView, nameLabel, renameField, spinner] as [NSView] {
+        for v in [iconView, nameLabel, renameField, spinner, typeTagBackView] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v)
         }
 
@@ -603,6 +664,7 @@ final class SimianTreeCell: NSView {
 
         nameLabel.isEditable = false; nameLabel.isBordered = false; nameLabel.drawsBackground = false
         nameLabel.lineBreakMode = .byTruncatingTail; nameLabel.font = .systemFont(ofSize: 13)
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         renameField.isEditable = true; renameField.isBordered = true; renameField.bezelStyle = .roundedBezel
         renameField.font = .systemFont(ofSize: 13); renameField.isHidden = true
@@ -610,6 +672,24 @@ final class SimianTreeCell: NSView {
         renameField.delegate = self
 
         spinner.style = .spinning; spinner.controlSize = .small; spinner.isHidden = true
+
+        typeTagBackView.wantsLayer = true
+        typeTagBackView.layer?.cornerRadius = 3
+        typeTagBackView.layer?.masksToBounds = true
+        typeTagBackView.isHidden = true
+
+        typeTagLabel.isEditable = false; typeTagLabel.isBordered = false; typeTagLabel.drawsBackground = false
+        typeTagLabel.lineBreakMode = .byClipping
+        typeTagLabel.setContentHuggingPriority(.required, for: .horizontal)
+        typeTagLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        typeTagLabel.translatesAutoresizingMaskIntoConstraints = false
+        typeTagBackView.addSubview(typeTagLabel)
+        typeTagBackView.setContentHuggingPriority(.required, for: .horizontal)
+        typeTagBackView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        nameLabelToTagConstraint = nameLabel.trailingAnchor.constraint(equalTo: typeTagBackView.leadingAnchor, constant: -4)
+        nameLabelToTrailingConstraint = nameLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4)
+        nameLabelToTrailingConstraint.isActive = true
 
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
@@ -623,13 +703,67 @@ final class SimianTreeCell: NSView {
             spinner.heightAnchor.constraint(equalToConstant: 14),
 
             nameLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 5),
-            nameLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             renameField.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 5),
             renameField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             renameField.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            typeTagBackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            typeTagBackView.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            typeTagLabel.leadingAnchor.constraint(equalTo: typeTagBackView.leadingAnchor, constant: 4),
+            typeTagLabel.topAnchor.constraint(equalTo: typeTagBackView.topAnchor, constant: 1),
+            typeTagLabel.bottomAnchor.constraint(equalTo: typeTagBackView.bottomAnchor, constant: -1),
+            typeTagBackView.trailingAnchor.constraint(equalTo: typeTagLabel.trailingAnchor, constant: 4),
         ])
+    }
+
+    /// Prefer `media_file` URL, then filename in `title`, for a tag like `.wav`.
+    private static func resolvedExtension(_ file: SimianFile) -> String? {
+        if let u = file.mediaURL {
+            let e = u.pathExtension
+            if !e.isEmpty { return e.lowercased() }
+        }
+        let e = (file.title as NSString).pathExtension
+        return e.isEmpty ? nil : e.lowercased()
+    }
+
+    private static func iconFromFileTypeString(_ ft: String) -> (symbol: String, color: NSColor)? {
+        let s = ft.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty else { return nil }
+        if s.hasPrefix("audio") || s == "wav" || s == "mp3" || s == "aiff" || s == "flac" || s == "aac" {
+            return ("waveform", .systemTeal)
+        }
+        if s.hasPrefix("video") || s == "mp4" || s == "mov" || s == "avi" || s == "mxf" || s == "r3d" {
+            return ("film", .systemPurple)
+        }
+        if s.hasPrefix("image") || s == "jpg" || s == "jpeg" || s == "png" || s == "gif" || s == "tiff" || s == "tif" || s == "psd" {
+            return ("photo", .systemGreen)
+        }
+        if s == "pdf" {
+            return ("doc.richtext", .systemRed)
+        }
+        if s.hasPrefix("doc") || s == "txt" || s == "rtf" || s == "pages" || s == "docx" {
+            return ("doc.text", .systemOrange)
+        }
+        return nil
+    }
+
+    private static func iconFromExtension(_ ext: String) -> (symbol: String, color: NSColor) {
+        let e = ext.lowercased()
+        if ["wav", "mp3", "aiff", "aif", "flac", "m4a", "aac"].contains(e) { return ("waveform", .systemTeal) }
+        if ["mp4", "mov", "avi", "mxf", "m4v", "r3d", "prores"].contains(e) { return ("film", .systemPurple) }
+        if ["jpg", "jpeg", "png", "gif", "tiff", "tif", "psd", "heic", "webp"].contains(e) { return ("photo", .systemGreen) }
+        if e == "pdf" { return ("doc.richtext", .systemRed) }
+        if ["txt", "rtf", "pages", "docx", "doc"].contains(e) { return ("doc.text", .systemOrange) }
+        return ("doc", .secondaryLabelColor)
+    }
+
+    private static func iconForFile(_ file: SimianFile) -> (symbol: String, color: NSColor) {
+        if let ft = file.fileType, let i = iconFromFileTypeString(ft) { return i }
+        if let ext = resolvedExtension(file) { return iconFromExtension(ext) }
+        return ("doc", .secondaryLabelColor)
     }
 
     func configure(
@@ -645,10 +779,20 @@ final class SimianTreeCell: NSView {
         self.onCommitRename = onCommitRename
         self.onCancelRename = onCancelRename
 
-        let symbolName = node.kind == .folder ? "folder" : "doc"
         let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
-        iconView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?.withSymbolConfiguration(cfg)
-        iconView.contentTintColor = .secondaryLabelColor
+        let simianFile = node.kind == .file ? node.file : nil
+        let fileIcon = simianFile.map { SimianTreeCell.iconForFile($0) }
+
+        if node.kind == .folder {
+            iconView.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)?.withSymbolConfiguration(cfg)
+            iconView.contentTintColor = .secondaryLabelColor
+        } else if let ft = fileIcon {
+            iconView.image = NSImage(systemSymbolName: ft.symbol, accessibilityDescription: nil)?.withSymbolConfiguration(cfg)
+            iconView.contentTintColor = ft.color
+        } else {
+            iconView.image = NSImage(systemSymbolName: "doc", accessibilityDescription: nil)?.withSymbolConfiguration(cfg)
+            iconView.contentTintColor = .secondaryLabelColor
+        }
 
         if isLoading {
             iconView.isHidden = true; spinner.isHidden = false; spinner.startAnimation(nil)
@@ -658,6 +802,7 @@ final class SimianTreeCell: NSView {
 
         if isInlineRenaming {
             nameLabel.isHidden = true; renameField.isHidden = false
+            applyTag(nil)
             if renameField.stringValue != renameText { renameField.stringValue = renameText }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -667,6 +812,27 @@ final class SimianTreeCell: NSView {
         } else {
             nameLabel.isHidden = false; renameField.isHidden = true
             nameLabel.stringValue = node.displayName
+            if let f = simianFile, let ext = SimianTreeCell.resolvedExtension(f), let ft = fileIcon {
+                applyTag((".\(ext)", ft.color))
+            } else {
+                applyTag(nil)
+            }
+        }
+    }
+
+    private func applyTag(_ tagInfo: (text: String, color: NSColor)?) {
+        if let (text, color) = tagInfo {
+            typeTagLabel.font = .systemFont(ofSize: 9, weight: .medium)
+            typeTagLabel.stringValue = text
+            typeTagLabel.textColor = color
+            typeTagBackView.layer?.backgroundColor = color.withAlphaComponent(0.12).cgColor
+            typeTagBackView.isHidden = false
+            nameLabelToTrailingConstraint.isActive = false
+            nameLabelToTagConstraint.isActive = true
+        } else {
+            typeTagBackView.isHidden = true
+            nameLabelToTagConstraint.isActive = false
+            nameLabelToTrailingConstraint.isActive = true
         }
     }
 

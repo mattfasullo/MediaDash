@@ -10,6 +10,19 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - File URL identity (same file, different URL forms)
+
+extension URL {
+    /// Normalizes local file URLs so the same file is not treated as different (symlinks, `/private/var`, etc.).
+    var normalizedRestripeFileURL: URL {
+        standardizedFileURL
+    }
+
+    func isSameRestripeFile(as other: URL) -> Bool {
+        normalizedRestripeFileURL == other.normalizedRestripeFileURL
+    }
+}
+
 // MARK: - Assignment (picture + audio + output name)
 
 /// One restripe job: picture + audio + chosen output basename.
@@ -19,12 +32,18 @@ struct RestripeAssignment: Identifiable {
     var audioURL: URL
     var outputBasename: String
 
-    static func make(pictureURL: URL, audioURL: URL) -> RestripeAssignment {
+    static func make(pictureURL: URL, audioURL: URL, reservedBasenames: Set<String>) -> RestripeAssignment {
         let base = audioURL.deletingPathExtension().lastPathComponent
+        var candidate = "\(base)_pic"
+        var n = 0
+        while reservedBasenames.contains(candidate) {
+            n += 1
+            candidate = "\(base)_pic_\(n)"
+        }
         return RestripeAssignment(
             pictureURL: pictureURL,
             audioURL: audioURL,
-            outputBasename: "\(base)_pic"
+            outputBasename: candidate
         )
     }
 }
@@ -70,7 +89,8 @@ final class RestripeConfig: ObservableObject {
 
     /// Assignments grouped by picture URL
     func assignments(for pictureURL: URL) -> [RestripeAssignment] {
-        assignments.filter { $0.pictureURL == pictureURL }
+        let key = pictureURL.normalizedRestripeFileURL
+        return assignments.filter { $0.pictureURL.isSameRestripeFile(as: key) }
     }
 
     /// Total number of output files to create

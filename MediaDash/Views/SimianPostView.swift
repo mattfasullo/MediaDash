@@ -2008,8 +2008,8 @@ struct SimianPostView: View {
             beginFinderStyleNewFolder(parentFolderId: parentFolderId, itemIdsToMove: [])
         case .beginRename(let treeId):
             presentRenameSheetForTreeItem(id: treeId, treeList: treeList)
-        case .addDate(let treeId):
-            addDateStampToSelection(treeList: treeList, rightClickedId: treeId, useUploadTime: false)
+        case .addDate(let treeId, let useUploadTime):
+            addDateStampToSelection(treeList: treeList, rightClickedId: treeId, useUploadTime: useUploadTime)
         case .copyLink(let treeId):
             if treeId.hasPrefix("f-"), treeId.count > 2 {
                 copyFolderLink(projectId: projectId, folderId: String(treeId.dropFirst(2)))
@@ -2516,13 +2516,20 @@ struct SimianPostView: View {
     private func uploadDroppedFiles(projectId: String, folderId: String?, destinationFolderName: String?, fileURLs: [URL]) {
         let itemsToUpload = fileURLs.map { FileItem(url: $0) }
         let totalFiles = itemsToUpload.reduce(0) { $0 + $1.fileCount }
+        let resolvedDestinationFolderName = SimianFolderNaming.effectiveDestinationFolderName(
+            providedName: destinationFolderName,
+            folderId: folderId,
+            currentFolderId: currentParentFolderId,
+            currentFolderName: folderBreadcrumb.last?.name,
+            cachedFolderName: folderId.flatMap { cachedFolderName(forFolderId: $0) }
+        )
         isUploading = true; statusMessage = "Uploading\u{2026}"; statusIsError = false; uploadTotal = totalFiles; uploadCurrent = 0; uploadFileName = ""
         Task {
             do {
                 let progressCounter = ProgressCounter()
                 let looseItems = itemsToUpload.filter { !$0.isDirectory }
                 let dirItems = itemsToUpload.filter { $0.isDirectory }
-                let shouldNestLoose = SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: destinationFolderName)
+                let shouldNestLoose = SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: resolvedDestinationFolderName)
                     && folderId != nil
                     && !looseItems.isEmpty
 
