@@ -233,8 +233,9 @@ struct LoginView: View {
                         Picker("Account type", selection: $newUserRole) {
                             Text("Media Team Member").tag(UserRole.mediaTeamMember)
                             Text("Producer").tag(UserRole.producer)
+                            Text("Tools").tag(UserRole.tools)
                         }
-                        .pickerStyle(.segmented)
+                        .pickerStyle(.menu)
                         .labelsHidden()
                     }
                 }

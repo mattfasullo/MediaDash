@@ -7,6 +7,7 @@ import Combine
 enum UserRole: String, Codable, CaseIterable {
     case mediaTeamMember = "Media Team Member"
     case producer = "Producer"
+    case tools = "Tools"
     
     var displayName: String {
         return self.rawValue
@@ -18,6 +19,8 @@ enum UserRole: String, Codable, CaseIterable {
             return "I'm part of the media team"
         case .producer:
             return "I'm a producer"
+        case .tools:
+            return "I use internal tools and utilities"
         }
     }
     
@@ -27,6 +30,8 @@ enum UserRole: String, Codable, CaseIterable {
             return "person.2.fill"
         case .producer:
             return "person.fill"
+        case .tools:
+            return "wrench.and.screwdriver"
         }
     }
 }

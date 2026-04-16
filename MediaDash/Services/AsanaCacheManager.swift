@@ -179,9 +179,9 @@ class AsanaCacheManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let manager = self else { return }
-            Task { @MainActor in
-                manager.pauseStatusCheckTimerForBackground()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.pauseStatusCheckTimerForBackground()
             }
         }
         let become = nc.addObserver(
@@ -189,9 +189,9 @@ class AsanaCacheManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let manager = self else { return }
-            Task { @MainActor in
-                manager.resumeStatusCheckTimerAfterForeground()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.resumeStatusCheckTimerAfterForeground()
             }
         }
         appLifecycleObservers = [resign, become]

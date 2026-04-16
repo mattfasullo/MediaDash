@@ -201,6 +201,13 @@ struct SettingsView: View {
         }
         return false
     }
+
+    private var isTools: Bool {
+        if case .loggedIn(let profile) = sessionManager.authenticationState {
+            return profile.settings.userRole == .tools
+        }
+        return false
+    }
     
     private func connectToAsana() {
         guard OAuthConfig.isAsanaConfigured else {
@@ -355,7 +362,7 @@ struct SettingsView: View {
                         )
                     }
 
-                    // Path Settings (media only)
+                    // Path Settings (media + tools; not producer-only)
                     if !isProducer {
                         PathSettingsSection(
                             settings: $settings,
@@ -363,8 +370,8 @@ struct SettingsView: View {
                         )
                     }
                     
-                    // Asana Integration (always for producer; when Asana selected for media)
-                    if settings.docketSource == .asana || isProducer {
+                    // Asana Integration (always for producer; when Asana selected for media — not tools)
+                    if !isTools, settings.docketSource == .asana || isProducer {
                         AsanaIntegrationSection(
                             settings: $settings,
                             hasUnsavedChanges: $hasUnsavedChanges,
@@ -386,8 +393,8 @@ struct SettingsView: View {
                         )
                     }
 
-                    // Gmail Integration Section (media only)
-                    if !isProducer {
+                    // Gmail Integration Section (media team only — not producer or tools)
+                    if !isProducer && !isTools {
                         GmailIntegrationSection(
                             settings: $settings,
                             hasUnsavedChanges: $hasUnsavedChanges,

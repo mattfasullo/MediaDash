@@ -178,11 +178,11 @@ struct MediaDashApp: App {
 /// Centralized window configuration to avoid code duplication
 /// All window configuration should go through this struct
 enum WindowConfiguration {
-    /// The main app window (set by WindowAccessor in GatekeeperView). Only this window is non-resizable.
+    /// The main app window (set by WindowAccessor in GatekeeperView).
     static weak var mainAppWindow: NSWindow?
 
     /// Configures a window with the standard MediaDash appearance and behavior.
-    /// Main app window: not resizable. Other windows: resizable with a minimum size.
+    /// Main and auxiliary windows are resizable; minimum size is enforced by `MinSizeWindowDelegate`.
     static func configureWindow(_ window: NSWindow) {
         if isSheetWindow(window) {
             configureSheetWindow(window)
@@ -191,13 +191,8 @@ enum WindowConfiguration {
 
         let isMainAppWindow = (window === mainAppWindow)
         var styleMask = window.styleMask
-        if isMainAppWindow {
-            styleMask.remove(.resizable)
-            window.showsResizeIndicator = false
-        } else {
-            styleMask.insert(.resizable)
-            window.showsResizeIndicator = true
-        }
+        styleMask.insert(.resizable)
+        window.showsResizeIndicator = true
         window.styleMask = styleMask
 
         // Delegate enforces minimum size only (allows any size >= minSize).

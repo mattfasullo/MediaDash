@@ -25,7 +25,7 @@ enum OnboardingStep: Int, CaseIterable {
     var subtitle: String {
         switch self {
         case .welcome: return "Professional media management, streamlined"
-        case .userRole: return "Are you a media team member or a producer?"
+        case .userRole: return "Are you a media team member, producer, or tools user?"
         case .serverPath: return "Set up your server paths"
         case .docketSource: return "Choose where your docket data lives"
         case .integrations: return "Supercharge your workflow"
@@ -329,9 +329,12 @@ struct OnboardingView: View {
                     SummaryRow(label: "Role", value: role.displayName)
                 }
                 
-                // Only show server path and docket source for media team members
+                // Server path: media team and tools (not producer)
                 if selectedUserRole != .producer {
                     SummaryRow(label: "Server Path", value: serverBasePath.isEmpty ? "Not set" : shortenPath(serverBasePath))
+                }
+                // Docket source: media team only
+                if selectedUserRole == .mediaTeamMember {
                     SummaryRow(label: "Docket Source", value: selectedDocketSource.displayName)
                 }
                 
@@ -339,7 +342,9 @@ struct OnboardingView: View {
                 if selectedUserRole == .producer {
                     SummaryRow(label: "Asana", value: enableAsana ? "Enabled (configure in Settings)" : "Not configured")
                     SummaryRow(label: "Airtable", value: "Configure in Settings")
-                } else {
+                } else if selectedUserRole == .tools {
+                    SummaryRow(label: "Tools", value: "Music Demos utilities (configure paths in Settings)")
+                } else if selectedUserRole == .mediaTeamMember {
                     if enableGmail {
                         SummaryRow(label: "Gmail", value: "Enabled (configure in Settings)")
                     }
@@ -376,6 +381,17 @@ struct OnboardingView: View {
                                 previousStep = .userRole
                             case .complete:
                                 previousStep = .integrations
+                            default:
+                                previousStep = OnboardingStep(rawValue: currentStep.rawValue - 1)
+                            }
+                        } else if selectedUserRole == .tools {
+                            switch currentStep {
+                            case .userRole:
+                                previousStep = .welcome
+                            case .serverPath:
+                                previousStep = .userRole
+                            case .complete:
+                                previousStep = .serverPath
                             default:
                                 previousStep = OnboardingStep(rawValue: currentStep.rawValue - 1)
                             }
@@ -441,6 +457,19 @@ struct OnboardingView: View {
                     nextStep = nil
                 default:
                     // Shouldn't reach here for producers, but fallback to next step
+                    nextStep = OnboardingStep(rawValue: currentStep.rawValue + 1)
+                }
+            } else if selectedUserRole == .tools {
+                switch currentStep {
+                case .welcome:
+                    nextStep = .userRole
+                case .userRole:
+                    nextStep = .serverPath
+                case .serverPath:
+                    nextStep = .complete
+                case .complete:
+                    nextStep = nil
+                default:
                     nextStep = OnboardingStep(rawValue: currentStep.rawValue + 1)
                 }
             } else {

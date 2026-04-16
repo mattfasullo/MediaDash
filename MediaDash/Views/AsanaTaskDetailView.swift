@@ -1483,8 +1483,7 @@ struct AsanaTaskDetailView: View {
     
     private func colorForTrackColorName(_ name: String) -> Color {
         guard !name.isEmpty else { return .gray }
-        let lower = name.lowercased()
-        return Self.trackColorOptions.first(where: { $0.name.lowercased() == lower })?.color ?? .gray
+        return DemoTrackColorPalette.swiftUIColor(forName: name)
     }
 
     /// Track colour popover laid out like the spreadsheet: Composers (Composer | Colour 1–5) then Freelance/Extra (rows of Colour 1–5).
@@ -2442,17 +2441,8 @@ struct AsanaTaskDetailView: View {
     
     private func trackColor(composerName: String, filename: String) -> String {
         if let stored = trackColors[composerName]?[filename] { return stored }
-        if let fromFile = colorNameFromFilename(filename) { return fromFile }
+        if let fromFile = DemoTrackColorPalette.colorNameMatchingStem(filename) { return fromFile }
         return ""
-    }
-
-    /// Detect a palette colour name in the filename (case-insensitive). Longer names tried first so e.g. "Crimson" wins over "Red".
-    private func colorNameFromFilename(_ filename: String) -> String? {
-        let lower = filename.lowercased()
-        let byLength = Self.trackColorOptions.map(\.name).sorted { $0.count > $1.count }
-        return byLength.first { name in
-            lower.contains(name.lowercased())
-        }
     }
 
     /// Composer names for the Composers table (matches spreadsheet: Composer | Colour 1–5).
@@ -2461,9 +2451,9 @@ struct AsanaTaskDetailView: View {
         "Lowell Sostomi", "Tyson Kuteyi", "Tom Westin", "Kevin MacInnis"
     ]
 
-    /// Composers table: one row per composer with 5 colour names. Indices 0..<40 from trackColorOptions.
+    /// Composers table: one row per composer with 5 colour names. Indices 0..<40 from `DemoTrackColorPalette.options`.
     private static var trackColorComposerRows: [(composerName: String, colourNames: [String])] {
-        let names = trackColorOptions.map(\.name)
+        let names = DemoTrackColorPalette.options.map(\.name)
         let composerCount = min(trackColorComposerNames.count, 8)
         let namesPerRow = 5
         return (0..<composerCount).map { i in
@@ -2474,9 +2464,9 @@ struct AsanaTaskDetailView: View {
         }
     }
 
-    /// Freelance/Extra table: rows of 5 colour names each. Indices 40+ from trackColorOptions.
+    /// Freelance/Extra table: rows of 5 colour names each. Indices 40+ from `DemoTrackColorPalette.options`.
     private static var trackColorFreelanceRows: [[String]] {
-        let names = trackColorOptions.map(\.name)
+        let names = DemoTrackColorPalette.options.map(\.name)
         let startIndex = min(40, names.count)
         let remainder = Array(names.dropFirst(startIndex))
         let cols = 5
@@ -2486,92 +2476,6 @@ struct AsanaTaskDetailView: View {
         }
     }
 
-    /// Track colour options from composer/freelance palette (POSTING LEGEND).
-    private static let trackColorOptions: [(name: String, color: Color)] = [
-        ("Cyan", Color(red: 0, green: 0.74, blue: 0.83)),
-        ("Pink", Color(red: 1, green: 0.41, blue: 0.71)),
-        ("Fuchsia", Color(red: 1, green: 0, blue: 1)),
-        ("Emerald", Color(red: 0.31, green: 0.78, blue: 0.47)),
-        ("Lily", Color(red: 0.9, green: 0.9, blue: 1)),
-        ("Scarlet", Color(red: 1, green: 0.14, blue: 0)),
-        ("Ochre", Color(red: 0.8, green: 0.47, blue: 0.13)),
-        ("Saffron", Color(red: 0.96, green: 0.77, blue: 0.19)),
-        ("Chestnut", Color(red: 0.58, green: 0.32, blue: 0.22)),
-        ("Cucumber", Color(red: 0.48, green: 0.74, blue: 0.41)),
-        ("Auburn", Color(red: 0.65, green: 0.16, blue: 0.16)),
-        ("Olive", Color(red: 0.5, green: 0.5, blue: 0)),
-        ("Amber", Color(red: 1, green: 0.75, blue: 0)),
-        ("Crimson", Color(red: 0.86, green: 0.08, blue: 0.24)),
-        ("Clover", Color(red: 0.28, green: 0.55, blue: 0.28)),
-        ("Cobalt", Color(red: 0, green: 0.28, blue: 0.67)),
-        ("Sienna", Color(red: 0.63, green: 0.32, blue: 0.18)),
-        ("Cerulean", Color(red: 0.16, green: 0.48, blue: 0.72)),
-        ("Khaki", Color(red: 0.76, green: 0.69, blue: 0.57)),
-        ("Kiwi", Color(red: 0.56, green: 0.83, blue: 0.29)),
-        ("Blue", .blue),
-        ("Beige", Color(red: 0.96, green: 0.96, blue: 0.86)),
-        ("White", .white),
-        ("Mauve", Color(red: 0.88, green: 0.69, blue: 0.88)),
-        ("Whirlpool", Color(red: 0.43, green: 0.71, blue: 0.72)),
-        ("Grey", .gray),
-        ("Black", .black),
-        ("Azure", Color(red: 0.31, green: 0.59, blue: 1)),
-        ("Lilac", Color(red: 0.78, green: 0.64, blue: 0.78)),
-        ("Salmon", Color(red: 0.98, green: 0.5, blue: 0.45)),
-        ("Teal", .teal),
-        ("Turquoise", Color(red: 0.25, green: 0.88, blue: 0.82)),
-        ("Taupe", Color(red: 0.52, green: 0.45, blue: 0.41)),
-        ("Mango", Color(red: 1, green: 0.62, blue: 0.18)),
-        ("Tangelo", Color(red: 0.98, green: 0.3, blue: 0)),
-        ("Yellow", .yellow),
-        ("Orange", .orange),
-        ("Thistle", Color(red: 0.85, green: 0.75, blue: 0.85)),
-        ("Shamrock", Color(red: 0, green: 0.62, blue: 0.38)),
-        ("Eggshell", Color(red: 0.94, green: 0.92, blue: 0.84)),
-        ("Maroon", Color(red: 0.5, green: 0, blue: 0)),
-        ("Navy", Color(red: 0, green: 0, blue: 0.5)),
-        ("Mint", Color(red: 0.6, green: 1, blue: 0.6)),
-        ("Tangerine", Color(red: 1, green: 0.6, blue: 0)),
-        ("Begonia", Color(red: 0.98, green: 0.42, blue: 0.54)),
-        ("Purple", .purple),
-        ("Magenta", Color(red: 1, green: 0, blue: 0.55)),
-        ("Violet", Color(red: 0.58, green: 0, blue: 0.83)),
-        ("Umber", Color(red: 0.39, green: 0.32, blue: 0.28)),
-        ("Red", .red),
-        ("Rose", Color(red: 1, green: 0.41, blue: 0.53)),
-        ("Ruby", Color(red: 0.88, green: 0.07, blue: 0.37)),
-        ("Aqua", Color(red: 0, green: 1, blue: 1)),
-        ("Jade", Color(red: 0, green: 0.66, blue: 0.42)),
-        ("Green", .green),
-        ("Indigo", Color(red: 0.29, green: 0, blue: 0.51)),
-        ("Brown", .brown),
-        ("Cream", Color(red: 1, green: 0.99, blue: 0.82)),
-        ("Periwinkle", Color(red: 0.8, green: 0.8, blue: 1)),
-        ("Cherry", Color(red: 0.87, green: 0.19, blue: 0.39)),
-        ("Burgundy", Color(red: 0.5, green: 0, blue: 0.13)),
-        ("Orchid", Color(red: 0.85, green: 0.44, blue: 0.84)),
-        ("Chamomile", Color(red: 0.98, green: 0.95, blue: 0.73)),
-        ("Juniper", Color(red: 0.28, green: 0.36, blue: 0.33)),
-        ("Lavender", Color(red: 0.9, green: 0.9, blue: 0.98)),
-        ("Blush", Color(red: 0.87, green: 0.69, blue: 0.69)),
-        ("Pumpkin", Color(red: 1, green: 0.46, blue: 0.09)),
-        ("Mulberry", Color(red: 0.77, green: 0.29, blue: 0.55)),
-        ("Tuscan", Color(red: 0.78, green: 0.64, blue: 0.54)),
-        ("Coral", Color(red: 1, green: 0.5, blue: 0.31)),
-        ("Lime", Color(red: 0.75, green: 1, blue: 0)),
-        ("Pecan", Color(red: 0.55, green: 0.42, blue: 0.27)),
-        ("Jasmine", Color(red: 0.97, green: 0.87, blue: 0.49)),
-        ("Poppy", Color(red: 0.86, green: 0.23, blue: 0.21)),
-        ("Cabernet", Color(red: 0.44, green: 0.19, blue: 0.27)),
-        ("Honeyball", Color(red: 0.94, green: 0.78, blue: 0.31)),
-        ("Dorado", Color(red: 0.72, green: 0.53, blue: 0.04)),
-        ("Heliotrope", Color(red: 0.87, green: 0.45, blue: 1)),
-        ("Ultramarine", Color(red: 0.25, green: 0, blue: 0.6)),
-        ("Peach", Color(red: 1, green: 0.8, blue: 0.6)),
-        ("Aquamarine", Color(red: 0.5, green: 1, blue: 0.83)),
-        ("Canary", Color(red: 1, green: 1, blue: 0.6)),
-    ]
-    
     // MARK: - Finder grey tag ("in use")
     /// Finder grey label tag name (used to mark demos that are in use).
     private static let inUseTagName = "Gray"

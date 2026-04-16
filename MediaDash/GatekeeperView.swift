@@ -34,6 +34,9 @@ struct GatekeeperView: View {
                 if profile.settings.userRole == .producer {
                     ProducerRootView(sessionManager: sessionManager, profile: profile)
                         .preferredColorScheme(profile.settings.appearance.colorScheme)
+                } else if profile.settings.userRole == .tools {
+                    ToolsRootView(sessionManager: sessionManager, profile: profile)
+                        .preferredColorScheme(profile.settings.appearance.colorScheme)
                 } else {
                     AuthenticatedRootView(
                         sessionManager: sessionManager,

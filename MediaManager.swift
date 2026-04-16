@@ -292,6 +292,38 @@ struct AppConfig: Sendable {
         }
     }
 
+    /// Updates or inserts the display name for a writer **folder token** (e.g. `BG`) in `writers.json`, matched case-insensitively on folder name.
+    nonisolated func updateWriterDisplayName(folderToken: String, displayName: String) {
+        let folder = writerValue(folderToken)
+        let name = writerValue(displayName)
+        guard !folder.isEmpty, !name.isEmpty else { return }
+
+        guard writersBasePathExists else {
+            print("⚠️ [Writers] updateWriterDisplayName skipped: writers store path unavailable.")
+            return
+        }
+
+        let url = writersFileURL
+        let fm = FileManager.default
+        let dir = url.deletingLastPathComponent()
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
+
+        var writers = loadWritersFromServer()
+        if let idx = writers.firstIndex(where: { $0.folderName.caseInsensitiveCompare(folder) == .orderedSame }) {
+            let canonFolder = writers[idx].folderName
+            writers[idx] = (name, canonFolder)
+        } else {
+            writers.append((name, folder))
+        }
+        let array = writers.map { ["name": $0.name, "folderName": $0.folderName, "initials": $0.folderName] }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: array)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            print("⚠️ [Writers] Failed to write \(url.path): \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Local Media Tasks (shared across team)
 
     /// Load all local-only MediaDash tasks (e.g. demos rounds without Asana tasks) from the shared JSON store.
