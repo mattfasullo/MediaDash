@@ -35,6 +35,7 @@ struct SimianPostView: View {
     @State private var currentFolders: [SimianFolder] = []
     @State private var currentFiles: [SimianFile] = []
     @State private var isLoadingFolders = false
+    @State private var folderListFocusTrigger = 0
 
     // Tree view
     @State private var expandedFolderIds: Set<String> = []
@@ -1327,6 +1328,28 @@ struct SimianPostView: View {
         }
     }
 
+    /// Look up the parent folder ID of a folder by searching caches directly.
+    /// Returns `.some(nil)` for root-level folders, `.some(id)` for nested folders,
+    /// and `nil` (Double Optional `.none`) when the folder is not found in any cache.
+    /// This is used when the flat treeList may be truncated (maxTotalTreeRows cap).
+    private func cachedParentFolderId(forFolderId folderId: String) -> String?? {
+        if currentFolders.contains(where: { $0.id == folderId }) { return .some(nil) }
+        for (parentId, children) in folderChildrenCache {
+            if children.contains(where: { $0.id == folderId }) { return .some(parentId) }
+        }
+        return nil
+    }
+
+    /// Look up a folder's display name from caches. Used to resolve destination folder names
+    /// for file uploads when the target folder is not the breadcrumb root.
+    private func cachedFolderName(forFolderId folderId: String) -> String? {
+        if let f = currentFolders.first(where: { $0.id == folderId }) { return f.name }
+        for children in folderChildrenCache.values {
+            if let f = children.first(where: { $0.id == folderId }) { return f.name }
+        }
+        return nil
+    }
+
     /// Move a folder into another folder (same project) using update_folder_sort.
     private func moveFolderIntoFolder(projectId: String, folderId: String, sourceParentId: String?, sourceSiblingIdsWithoutThis: [String], targetFolderId: String) async throws {
         try await simianService.updateFolderSort(projectId: projectId, parentFolderId: sourceParentId, folderIds: sourceSiblingIdsWithoutThis)
@@ -1350,11 +1373,19 @@ struct SimianPostView: View {
         var resolvedParents: [String?] = []
         resolvedParents.reserveCapacity(folderTreeIds.count)
         for tid in folderTreeIds {
-            guard let item = treeList.first(where: { $0.id == tid }), case .folder(_, _, _, let p) = item else {
-                moveItemsIntoFolder(projectId: projectId, itemIds: itemIds, targetFolderId: targetFolderId)
-                return
+            if let item = treeList.first(where: { $0.id == tid }), case .folder(_, _, _, let p) = item {
+                // Fast path: item is visible in the current treeList.
+                resolvedParents.append(p)
+            } else {
+                // Slow path: item may be off-screen due to maxTotalTreeRows truncation.
+                // Search caches directly so we don't confuse "sibling reorder" with "move into folder".
+                let rawId = String(tid.dropFirst(2))
+                guard let optionalParent = cachedParentFolderId(forFolderId: rawId) else {
+                    // Truly unknown — abort rather than accidentally nesting into target folder.
+                    return
+                }
+                resolvedParents.append(optionalParent)
             }
-            resolvedParents.append(p)
         }
         if resolvedParents.allSatisfy({ $0 == targetSiblingParentId }) {
             reorderItems(projectId: projectId, draggedIds: itemIds, targetId: targetTreeId, treeList: treeList)
@@ -1706,84 +1737,40 @@ struct SimianPostView: View {
             if isLoadingFolders {
                 HStack(spacing: 8) { ProgressView().scaleEffect(0.8); Text("Loading folders...").font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity).padding()
             } else {
-                let treeList = flatTreeList(projectId: projectId)
-                let truncationRowCount = treeList.count >= maxTotalTreeRows ? 1 : 0
-                let estimatedContentRows = CGFloat(treeList.count + truncationRowCount)
-                GeometryReader { geo in
-                    let fillerMinHeight = max(120, geo.size.height - estimatedContentRows * 36 - 24)
-                    ScrollViewReader { proxy in
-                        List(selection: $selectedItemIds) {
-                            ForEach(Array(treeList.enumerated()), id: \.element.id) { _, item in
-                                Group {
-                                    switch item {
-                                    case .folder(let f, let d, let p, let parentId):
-                                        folderTreeRow(projectId: projectId, folder: f, depth: d, path: p, parentFolderId: parentId, siblings: folderSiblings(parentId: parentId), treeList: treeList)
-                                    case .file(let file, let d, let p, let parentId):
-                                        fileTreeRow(file: file, depth: d, path: p, parentFolderId: parentId, siblings: fileSiblings(parentFolderId: parentId), treeList: treeList)
-                                    }
-                                }
-                                .tag(item.id).id(item.id)
-                                .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
-                                .transition(.move(edge: .top).combined(with: .opacity))
-                            }
-
-                            if treeList.count >= maxTotalTreeRows {
-                                Text("(Showing first \(maxTotalTreeRows) items)").font(.caption2).foregroundStyle(.secondary).padding(.vertical, 4)
-                            }
-
-                            Color.clear
-                                .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
-                                .frame(minHeight: fillerMinHeight)
-                                .contentShape(Rectangle())
-                                .selectionDisabled(true)
-                                .contextMenu { folderBrowserEmptyAreaContextMenu(projectId: projectId, treeList: treeList) }
-                        }
-                        .listStyle(.inset(alternatesRowBackgrounds: true))
-                        .onDrop(of: [UTType.fileURL], isTargeted: $isFolderListExternalDropTargeted) { providers in
-                            handleExternalFileDrop(providers: providers, folderId: currentParentFolderId, destinationFolderName: folderBreadcrumb.last?.name)
-                        }
-                        .focusable()
-                        .focused($isFolderListFocused)
-                        .onAppear {
-                            isFolderListFocused = true
-                            if selectedItemIds.isEmpty, !treeList.isEmpty {
-                                selectedItemIds = [treeList[0].id]
-                                treeKeyboardHeadIndex = 0
-                                treeKeyboardAnchorIndex = nil
-                            }
-                            // #region agent log
-                            logFocusSnapshot("folder List onAppear", hypothesisId: "H1")
-                            // #endregion
-                            DispatchQueue.main.async {
-                                // Do not guard on `isFolderListFocused`: `syncFolderListFocusWithAppKit` sets false first;
-                                // that interleaves here and skipped the repair (stuck false / NSWindow first responder).
-                                guard selectedProjectName != nil else { return }
-                                isFolderListFocused = false
-                                isFolderListFocused = true
-                                // #region agent log
-                                logFocusSnapshot("folder List onAppear async focus toggle done", hypothesisId: "H2")
-                                // #endregion
-                            }
-                        }
-                        .onChange(of: selectedItemIds) { _, newValue in
-                            guard browsingProjectId != nil,
-                                  selectedProjectName != nil,
-                                  !newValue.isEmpty else { return }
-                            let scrollId: String
-                            if newValue.count == 1, let only = newValue.first {
-                                scrollId = only
-                            } else {
-                                let tl = flatTreeList(projectId: projectId)
-                                guard !tl.isEmpty else { return }
-                                let hi = min(max(treeKeyboardHeadIndex, 0), tl.count - 1)
-                                scrollId = tl[hi].id
-                            }
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                proxy.scrollTo(scrollId, anchor: .center)
-                            }
-                        }
-                    }
-                }
+                SimianTreeView(
+                    projectId: projectId,
+                    currentFolders: currentFolders,
+                    currentFiles: currentFiles,
+                    folderChildrenCache: folderChildrenCache,
+                    folderFilesCache: folderFilesCache,
+                    loadingFolderIds: loadingFolderIds,
+                    expandedFolderIds: expandedFolderIds,
+                    selectedItemIds: selectedItemIds,
+                    inlineRenameItemId: inlineRenameItemId,
+                    currentParentFolderId: currentParentFolderId,
+                    stagedFileCount: manager.selectedFiles.count,
+                    focusTrigger: folderListFocusTrigger,
+                    inlineRenameText: $inlineRenameText,
+                    onToggleExpand: { folderId in toggleExpand(projectId: projectId, folderId: folderId) },
+                    onSpringLoadExpand: { folderId in expandFolderForSpringLoad(projectId: projectId, folderId: folderId) },
+                    onLoadChildren: { folderId in loadFolderChildren(projectId: projectId, folderId: folderId) },
+                    onReorderFolders: { pid, folderIds, parentId, dropBeforeId in
+                        reorderFolders(projectId: pid, folderIds: folderIds, parentFolderId: parentId, dropBeforeFolderId: dropBeforeId)
+                    },
+                    onReorderFiles: { pid, fileIds, parentId, dropBeforeId in
+                        reorderFiles(projectId: pid, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: dropBeforeId)
+                    },
+                    onMoveIntoFolder: { pid, itemIds, targetFolderId in
+                        moveItemsIntoFolder(projectId: pid, itemIds: itemIds, targetFolderId: targetFolderId)
+                    },
+                    onExternalFileDrop: { providers, folderId, folderName in
+                        handleExternalFileDrop(providers: providers, folderId: folderId, destinationFolderName: folderName)
+                    },
+                    onSelectionChange: { ids in selectedItemIds = ids },
+                    onCommitRename: { commitInlineRename() },
+                    onCancelRename: { inlineRenameItemId = nil; inlineRenameText = "" },
+                    onContextAction: { action in handleSimianTreeContextAction(action, projectId: projectId) }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1957,13 +1944,14 @@ struct SimianPostView: View {
 
     private func fileTreeRow(file: SimianFile, depth: Int, path: String, parentFolderId: String?, siblings: [SimianFile], treeList: [SimianTreeItem]) -> some View {
         let isEditing = inlineRenameItemId == "file-\(file.id)"
+        // Resolve the destination folder name from caches so nested-file drops go to the correct folder.
+        let dropFolderName = parentFolderId.flatMap { cachedFolderName(forFolderId: $0) } ?? folderBreadcrumb.last?.name
         return SimianFileRow(
             fileId: file.id, projectId: browsingProjectId ?? "", parentFolderId: parentFolderId,
             depth: depth, fileName: file.title, canReorder: siblings.count > 1,
             isEditing: isEditing, editText: $inlineRenameText,
             selectedItemIds: selectedItemIds,
-            onSelect: { selectedItemIds = ["file-\(file.id)"] },
-            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: currentParentFolderId, destinationFolderName: folderBreadcrumb.last?.name) },
+            onExternalFileDrop: { providers in handleExternalFileDrop(providers: providers, folderId: parentFolderId, destinationFolderName: dropFolderName) },
             onReorderInsertAfter: { draggedIds in
                 let nextId = siblings.firstIndex(where: { $0.id == file.id }).flatMap { i in i + 1 < siblings.count ? siblings[i + 1].id : nil }
                 reorderItems(projectId: browsingProjectId ?? "", draggedIds: draggedIds, targetId: nextId.map { "file-\($0)" }, treeList: treeList)
@@ -1991,6 +1979,66 @@ struct SimianPostView: View {
         else {
             expandedFolderIds.insert(folderId)
             if folderChildrenCache[folderId] == nil { loadFolderChildren(projectId: projectId, folderId: folderId) }
+        }
+    }
+
+    /// Expand-only spring-load: expands without toggling (so the folder stays open after the drag ends)
+    /// and never changes selectedItemIds so the dragged item's selection is preserved.
+    private func expandFolderForSpringLoad(projectId: String, folderId: String) {
+        guard !expandedFolderIds.contains(folderId) else { return }
+        expandedFolderIds.insert(folderId)
+        if folderChildrenCache[folderId] == nil { loadFolderChildren(projectId: projectId, folderId: folderId) }
+    }
+
+    /// Route context menu actions from SimianTreeView back into existing SimianPostView logic.
+    private func handleSimianTreeContextAction(_ action: SimianTreeContextAction, projectId: String) {
+        let treeList = flatTreeList(projectId: projectId)
+        switch action {
+        case .uploadTo(let folderId, let folderName):
+            uploadToFolder(folderId: folderId, destinationFolderName: folderName)
+        case .uploadStagedFiles(let folderId, let folderName):
+            uploadStagedFiles(folderId: folderId, destinationFolderName: folderName)
+        case .newFolderWithSelection(let treeId):
+            if treeId.isEmpty {
+                startNewFolderWithSelectionFromCurrentDirectory(treeList: treeList)
+            } else {
+                startNewFolderWithSelection(treeList: treeList, rightClickedId: treeId)
+            }
+        case .newFolder(let parentFolderId):
+            beginFinderStyleNewFolder(parentFolderId: parentFolderId, itemIdsToMove: [])
+        case .beginRename(let treeId):
+            presentRenameSheetForTreeItem(id: treeId, treeList: treeList)
+        case .addDate(let treeId, let useUploadTime):
+            addDateStampToSelection(treeList: treeList, rightClickedId: treeId, useUploadTime: useUploadTime)
+        case .copyLink(let treeId):
+            if treeId.hasPrefix("f-"), treeId.count > 2 {
+                copyFolderLink(projectId: projectId, folderId: String(treeId.dropFirst(2)))
+            }
+        case .downloadFolder(let folderId, let folderName):
+            presentSubtreeDownloadSavePanel(
+                projectId: projectId,
+                folderId: folderId,
+                rootFolderLabel: folderName,
+                panelMessage: "A folder will be created here with all files from \u{201C}\(folderName)\u{201D}.",
+                emptyResultMessage: "Folder is empty."
+            )
+        case .downloadFile(let fileId):
+            if let treeItem = treeList.first(where: { $0.id == "file-\(fileId)" }),
+               case .file(let f, _, _, _) = treeItem {
+                beginDownloadSimianFile(f)
+            }
+        case .delete(let treeId):
+            if treeId.hasPrefix("f-"), treeId.count > 2,
+               let item = treeList.first(where: { $0.id == treeId }),
+               case .folder(let f, _, _, let pid) = item {
+                pendingDeleteIsFolder = true; pendingDeleteItemId = f.id; pendingDeleteItemName = f.name
+                pendingDeleteParentFolderId = pid; showDeleteConfirmation = true
+            } else if treeId.hasPrefix("file-"), treeId.count > 5,
+                      let item = treeList.first(where: { $0.id == treeId }),
+                      case .file(let f, _, _, let pid) = item {
+                pendingDeleteIsFolder = false; pendingDeleteItemId = f.id; pendingDeleteItemName = f.title
+                pendingDeleteParentFolderId = pid; showDeleteConfirmation = true
+            }
         }
     }
 
@@ -2085,15 +2133,18 @@ struct SimianPostView: View {
                 reorderFiles(projectId: projectId, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: targetFileId)
             }
         }
-        // If targetId is nil (insert at end), use last item's parent
+        // If targetId is nil (insert at end), use the first dragged item of each type to determine parent.
+        // Search is type-specific so a mixed selection (f- and file-) resolves each type independently.
         if targetId == nil {
             if !folderIds.isEmpty {
-                if let firstDragged = treeList.first(where: { draggedIds.contains($0.id) }), case .folder(_, _, _, let parentId) = firstDragged {
+                if let firstDragged = treeList.first(where: { $0.id.hasPrefix("f-") && draggedIds.contains($0.id) }),
+                   case .folder(_, _, _, let parentId) = firstDragged {
                     reorderFolders(projectId: projectId, folderIds: folderIds, parentFolderId: parentId, dropBeforeFolderId: nil)
                 }
             }
             if !fileIds.isEmpty {
-                if let firstDragged = treeList.first(where: { draggedIds.contains($0.id) }), case .file(_, _, _, let parentId) = firstDragged {
+                if let firstDragged = treeList.first(where: { $0.id.hasPrefix("file-") && draggedIds.contains($0.id) }),
+                   case .file(_, _, _, let parentId) = firstDragged {
                     reorderFiles(projectId: projectId, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: nil)
                 }
             }
@@ -2358,10 +2409,9 @@ struct SimianPostView: View {
                     // #region agent log
                     logFocusSnapshot("loadFolders completed (success)", hypothesisId: "H5")
                     // #endregion
-                    // Reload swaps List content; AppKit often ends with `NSWindow` as first responder until we re-assert (H5).
+                    // After the new SimianTreeView mounts, make its NSOutlineView first responder.
                     if selectedProjectName != nil {
-                        isFolderListFocused = true
-                        syncFolderListFocusWithAppKit()
+                        folderListFocusTrigger += 1
                     }
                 }
             } catch {
@@ -2373,8 +2423,7 @@ struct SimianPostView: View {
                     logFocusSnapshot("loadFolders completed (error)", hypothesisId: "H5")
                     // #endregion
                     if selectedProjectName != nil {
-                        isFolderListFocused = true
-                        syncFolderListFocusWithAppKit()
+                        folderListFocusTrigger += 1
                     }
                 }
             }
@@ -2467,13 +2516,20 @@ struct SimianPostView: View {
     private func uploadDroppedFiles(projectId: String, folderId: String?, destinationFolderName: String?, fileURLs: [URL]) {
         let itemsToUpload = fileURLs.map { FileItem(url: $0) }
         let totalFiles = itemsToUpload.reduce(0) { $0 + $1.fileCount }
+        let resolvedDestinationFolderName = SimianFolderNaming.effectiveDestinationFolderName(
+            providedName: destinationFolderName,
+            folderId: folderId,
+            currentFolderId: currentParentFolderId,
+            currentFolderName: folderBreadcrumb.last?.name,
+            cachedFolderName: folderId.flatMap { cachedFolderName(forFolderId: $0) }
+        )
         isUploading = true; statusMessage = "Uploading\u{2026}"; statusIsError = false; uploadTotal = totalFiles; uploadCurrent = 0; uploadFileName = ""
         Task {
             do {
                 let progressCounter = ProgressCounter()
                 let looseItems = itemsToUpload.filter { !$0.isDirectory }
                 let dirItems = itemsToUpload.filter { $0.isDirectory }
-                let shouldNestLoose = SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: destinationFolderName)
+                let shouldNestLoose = SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: resolvedDestinationFolderName)
                     && folderId != nil
                     && !looseItems.isEmpty
 
@@ -2543,11 +2599,11 @@ enum ProjectSortOrder: String, CaseIterable {
 
 // MARK: - Drag payload: "simian-multi|type|projectId|parentId|id1,id2,id3"
 
-private func buildSimianDragPayload(type: String, projectId: String, parentId: String?, itemIds: [String]) -> String {
+func buildSimianDragPayload(type: String, projectId: String, parentId: String?, itemIds: [String]) -> String {
     "simian-multi|\(type)|\(projectId)|\(parentId ?? "")|\(itemIds.joined(separator: ","))"
 }
 
-private func parseSimianMultiDrag(_ str: String) -> (type: String, projectId: String, parentId: String?, itemIds: [String])? {
+func parseSimianMultiDrag(_ str: String) -> (type: String, projectId: String, parentId: String?, itemIds: [String])? {
     let parts = str.split(separator: "|", maxSplits: 4).map(String.init)
     guard parts.count >= 5 else { return nil }
     if parts[0] == "simian-multi" {
@@ -2572,6 +2628,7 @@ private struct ReorderGapView: View {
     let expectedType: String
     let validateParent: (String?) -> Bool
     let onDrop: ([String]) -> Void
+    let canReorder: Bool
     @Binding var isTargeted: Bool
 
     /// Fixed height avoids animating row geometry during drag (that + list-level animation caused jitter with the drag preview).
@@ -2586,14 +2643,25 @@ private struct ReorderGapView: View {
         .frame(height: rowHeight)
         .contentShape(Rectangle())
         .onDrop(of: [.text, .plainText, .utf8PlainText], isTargeted: $isTargeted) { providers in
-            guard let provider = providers.first else { return false }
-            let types: [UTType] = [.text, .plainText, .utf8PlainText]
-            let hasPayload = types.contains { provider.hasItemConformingToTypeIdentifier($0.identifier) }
-            guard hasPayload else { return false }
-            _ = provider.loadObject(ofClass: String.self) { obj, _ in
-                guard let str = obj else { return }
+            guard canReorder else { return false }
+            guard let provider = providers.first,
+                  provider.canLoadObject(ofClass: String.self) else { return false }
+            // Synchronous pre-validation via the drag pasteboard; avoids accepting drops whose
+            // payload will fail validation in the async callback (which would look like a silent no-op).
+            let dragPB = NSPasteboard(name: .drag)
+            let pbStr = dragPB.string(forType: .string)
+                       ?? dragPB.string(forType: NSPasteboard.PasteboardType(rawValue: UTType.utf8PlainText.identifier))
+                       ?? dragPB.string(forType: NSPasteboard.PasteboardType(rawValue: UTType.plainText.identifier))
+            if let str = pbStr {
                 guard let parsed = parseSimianMultiDrag(str),
-                      parsed.type == expectedType, validateParent(parsed.parentId) else { return }
+                      parsed.type == expectedType,
+                      validateParent(parsed.parentId) else { return false }
+            }
+            _ = provider.loadObject(ofClass: String.self) { obj, _ in
+                guard let str = obj,
+                      let parsed = parseSimianMultiDrag(str),
+                      parsed.type == expectedType,
+                      validateParent(parsed.parentId) else { return }
                 DispatchQueue.main.async { onDrop(parsed.itemIds) }
             }
             return true
@@ -2697,7 +2765,7 @@ private struct SimianFolderRow: View {
                 return true
             }
 
-            ReorderGapView(expectedType: "folder", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
+            ReorderGapView(expectedType: "folder", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, canReorder: canReorder, isTargeted: $isGapBelow)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -2719,8 +2787,7 @@ private struct SimianFileRow: View {
     let isEditing: Bool
     @Binding var editText: String
     let selectedItemIds: Set<String>
-    let onSelect: () -> Void
-    /// Drop Finder files onto the row body (not a folder row) → upload into the current list location.
+    /// Drop Finder files onto the row body → upload into this file's parent folder.
     let onExternalFileDrop: ([NSItemProvider]) -> Bool
     let onReorderInsertAfter: ([String]) -> Void
     let onCommitRename: () -> Void
@@ -2774,7 +2841,7 @@ private struct SimianFileRow: View {
             .background(isExternalFileDropTargeted ? Color.accentColor.opacity(0.15) : Color.clear)
             .onDrop(of: [UTType.fileURL], isTargeted: $isExternalFileDropTargeted, perform: onExternalFileDrop)
 
-            ReorderGapView(expectedType: "file", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, isTargeted: $isGapBelow)
+            ReorderGapView(expectedType: "file", validateParent: validateParent, onDrop: { ids in onReorderInsertAfter(ids) }, canReorder: canReorder, isTargeted: $isGapBelow)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())

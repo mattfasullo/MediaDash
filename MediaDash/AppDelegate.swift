@@ -119,6 +119,52 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Cache sync status item removed - sync is now handled internally by AsanaCacheManager
     }
 
+    // #region agent log
+    private static let kMediaDashAppGroup = "group.mattfasullo.MediaDash"
+    /// Cursor session ingest path (main app only); Finder Sync extension cannot write here.
+    private static let kMediaDashDebugLogMirrorPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-55b33e.log"
+
+    private static func appendDebugNDJSONLine(_ line: String) {
+        let payload = (line + "\n").data(using: .utf8) ?? Data()
+        func appendFile(atPath path: String) {
+            if FileManager.default.fileExists(atPath: path) {
+                if let h = FileHandle(forWritingAtPath: path) {
+                    h.seekToEndOfFile()
+                    h.write(payload)
+                    try? h.close()
+                }
+            } else {
+                try? payload.write(to: URL(fileURLWithPath: path))
+            }
+        }
+        if let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: kMediaDashAppGroup)?
+            .appendingPathComponent("debug-55b33e.log") {
+            appendFile(atPath: groupURL.path)
+        }
+        appendFile(atPath: kMediaDashDebugLogMirrorPath)
+    }
+
+    private static func mediaDashDebugNDJSON(location: String, message: String, hypothesisId: String, data: [String: String] = [:]) {
+        var data = data
+        if let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: kMediaDashAppGroup)?
+            .appendingPathComponent("debug-55b33e.log") {
+            data["groupDebugLogPath"] = groupURL.path
+        }
+        let dict: [String: Any] = [
+            "sessionId": "55b33e",
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+            "location": location,
+            "message": message,
+            "hypothesisId": hypothesisId,
+            "runId": "pre-fix",
+            "data": data
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: dict),
+              let line = String(data: json, encoding: .utf8) else { return }
+        appendDebugNDJSONLine(line)
+    }
+    // #endregion
+
     /// Registers the app bundle and embedded Finder Sync extension with Launch Services.
     /// Finder Sync does not appear in the same System Settings sheet as Apple’s Quick Actions (Rotate, Markup, …).
     /// On Sequoia, management also appears under System Settings → General → Login Items & Extensions → **File Providers** (15.2+).
@@ -126,19 +172,57 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let appURL = Bundle.main.bundleURL
         LSRegisterURL(appURL as CFURL, true)
         let appex = appURL.appendingPathComponent("Contents/PlugIns/MediaDashFinderSync.appex", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: appex.path) else { return }
+        let appexExists = FileManager.default.fileExists(atPath: appex.path)
+        // #region agent log
+        Self.mediaDashDebugNDJSON(
+            location: "AppDelegate.swift:registerEmbeddedFinderSyncWithLaunchServices",
+            message: "host app registration",
+            hypothesisId: "D",
+            data: [
+                "appPath": appURL.path,
+                "appexPath": appex.path,
+                "appexExists": appexExists ? "true" : "false",
+                "appexBundleID": Bundle(url: appex)?.bundleIdentifier ?? ""
+            ]
+        )
+        // #endregion
+        guard appexExists else { return }
         LSRegisterURL(appex as CFURL, true)
 
-        // Sequoia: after LS registration, PlugInKit may still need an explicit “use” for the Finder Sync plugin.
-        // Order matches common guidance: quarantine strip → registration (above) → pluginkit (async below).
+        // Sequoia: PlugInKit often needs the appex path registered (`-a`) before `-e use` (see LucidLink / OpenInTerminal docs).
+        // Order: quarantine strip → LSRegister → pluginkit -a → pluginkit -e use.
         let extensionBundleID = Bundle(url: appex)?.bundleIdentifier
         DispatchQueue.global(qos: .utility).async {
             if Self.bundleHasQuarantineAttribute(at: appURL) {
                 Self.stripQuarantineFromBundle(at: appURL)
             }
-            if let id = extensionBundleID {
-                Self.runPlugInKitEnableFinderSync(bundleID: id)
-            }
+            // DTS / dev forums: stale Launch Services DB can prevent Finder from loading Finder Sync even when PlugInKit exits 0.
+            let lsExit = Self.runLSRegisterForceTrusted(appURL: appURL)
+            // #region agent log
+            Self.mediaDashDebugNDJSON(
+                location: "AppDelegate.swift:runLSRegisterForceTrusted",
+                message: "lsregister -f -R -trusted finished",
+                hypothesisId: "D",
+                data: ["terminationStatus": String(lsExit)]
+            )
+            // #endregion
+            Self.runPlugInKitAddAndUseFinderSync(appexPath: appex.path, bundleID: extensionBundleID)
+        }
+    }
+
+    /// Forces full registration of the app bundle (and embedded PlugIns) with Launch Services.
+    private static func runLSRegisterForceTrusted(appURL: URL) -> Int32 {
+        let tool = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+        guard FileManager.default.isExecutableFile(atPath: tool) else { return -3 }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: tool)
+        task.arguments = ["-f", "-R", "-trusted", appURL.path]
+        do {
+            try task.run()
+            task.waitUntilExit()
+            return task.terminationStatus
+        } catch {
+            return -2
         }
     }
 
@@ -173,17 +257,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Enables the Finder Sync `.appex` in PlugInKit (non-sandboxed host only; same pattern as manual `pluginkit -e use -i …`).
-    private static func runPlugInKitEnableFinderSync(bundleID: String) {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
-        task.arguments = ["-e", "use", "-i", bundleID]
-        do {
-            try task.run()
-            task.waitUntilExit()
-        } catch {
-            // Ignore: pluginkit unavailable or extension not yet visible to PK.
+    /// Registers the appex with PlugInKit (`-a`) then enables it (`-e use`), matching third‑party Sequoia troubleshooting guides.
+    private static func runPlugInKitAddAndUseFinderSync(appexPath: String, bundleID: String?) {
+        let pk = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        func run(_ arguments: [String]) -> Int32 {
+            let task = Process()
+            task.executableURL = pk
+            task.arguments = arguments
+            do {
+                try task.run()
+                task.waitUntilExit()
+                return task.terminationStatus
+            } catch {
+                return -1
+            }
         }
+        let addExit = run(["-a", appexPath])
+        var useExit: Int32 = -2
+        if let id = bundleID {
+            useExit = run(["-e", "use", "-i", id])
+        }
+        // #region agent log
+        mediaDashDebugNDJSON(
+            location: "AppDelegate.swift:runPlugInKitAddAndUseFinderSync",
+            message: "pluginkit finished",
+            hypothesisId: "D",
+            data: [
+                "addTerminationStatus": String(addExit),
+                "useTerminationStatus": String(useExit),
+                "bundleID": bundleID ?? ""
+            ]
+        )
+        // #endregion
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

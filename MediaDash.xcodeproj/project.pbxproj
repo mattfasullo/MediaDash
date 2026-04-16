@@ -11,6 +11,7 @@
 		EF9222E22ECFA7D500DD3992 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = EF9222E12ECFA7D500DD3992 /* Sparkle */; };
 		EFA100032ECD48C90002FEED /* FinderSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFA100002ECD48C90002FEED /* FinderSync.swift */; };
 		EFA100042ECD48C90002FEED /* MediaDashFinderSync.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = EFA100012ECD48C90002FEED /* MediaDashFinderSync.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		EFA100112ECD48C90002FEED /* AppexLoadProbe.c in Sources */ = {isa = PBXBuildFile; fileRef = EFA100102ECD48C90002FEED /* AppexLoadProbe.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,6 +59,7 @@
 		EF7B667C2ECD49B10002FEED /* MediaManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaManager.swift; sourceTree = "<group>"; };
 		EFA100002ECD48C90002FEED /* FinderSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderSync.swift; sourceTree = "<group>"; };
 		EFA100012ECD48C90002FEED /* MediaDashFinderSync.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MediaDashFinderSync.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		EFA100102ECD48C90002FEED /* AppexLoadProbe.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = AppexLoadProbe.c; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -150,6 +152,7 @@
 		EFA1000A2ECD48C90002FEED /* MediaDashFinderSync */ = {
 			isa = PBXGroup;
 			children = (
+				EFA100102ECD48C90002FEED /* AppexLoadProbe.c */,
 				EFA100002ECD48C90002FEED /* FinderSync.swift */,
 			);
 			path = MediaDashFinderSync;
@@ -357,6 +360,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EFA100112ECD48C90002FEED /* AppexLoadProbe.c in Sources */,
 				EFA100032ECD48C90002FEED /* FinderSync.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

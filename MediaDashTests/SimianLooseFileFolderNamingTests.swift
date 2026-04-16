@@ -40,6 +40,50 @@ final class SimianLooseFileFolderNamingTests: XCTestCase {
         XCTAssertFalse(SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: ""))
     }
 
+    func testEffectiveDestinationFolderName_prefersProvidedName() {
+        let out = SimianFolderNaming.effectiveDestinationFolderName(
+            providedName: " FINALS ",
+            folderId: "f1",
+            currentFolderId: "f1",
+            currentFolderName: "POSTINGS",
+            cachedFolderName: "MUSIC"
+        )
+        XCTAssertEqual(out, "FINALS")
+    }
+
+    func testEffectiveDestinationFolderName_fallsBackToCurrentFolderName() {
+        let out = SimianFolderNaming.effectiveDestinationFolderName(
+            providedName: nil,
+            folderId: "f1",
+            currentFolderId: "f1",
+            currentFolderName: "POSTINGS",
+            cachedFolderName: nil
+        )
+        XCTAssertEqual(out, "POSTINGS")
+    }
+
+    func testEffectiveDestinationFolderName_fallsBackToCachedFolderName() {
+        let out = SimianFolderNaming.effectiveDestinationFolderName(
+            providedName: nil,
+            folderId: "f2",
+            currentFolderId: "f1",
+            currentFolderName: "POSTINGS",
+            cachedFolderName: "FINALS"
+        )
+        XCTAssertEqual(out, "FINALS")
+    }
+
+    func testEffectiveDestinationFolderName_returnsNilWithoutFolderContext() {
+        let out = SimianFolderNaming.effectiveDestinationFolderName(
+            providedName: nil,
+            folderId: nil,
+            currentFolderId: "f1",
+            currentFolderName: "POSTINGS",
+            cachedFolderName: "FINALS"
+        )
+        XCTAssertNil(out)
+    }
+
     func testStemHasSimianDateSuffix_recognizesOneOrTwoDigitDay() {
         XCTAssertTrue(SimianFolderNaming.stemHasSimianDateSuffix("Cue_Apr8.26"))
         XCTAssertTrue(SimianFolderNaming.stemHasSimianDateSuffix("Cue_Apr08.26"))
