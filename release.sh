@@ -77,6 +77,7 @@ xcodebuild -project "$PROJECT" \
     -configuration Release \
     -archivePath "$RELEASE_DIR/$APP_NAME.xcarchive" \
     archive \
+    -allowProvisioningUpdates \
     > "$RELEASE_DIR/build.log" 2>&1
 
 if [ $? -ne 0 ]; then
@@ -107,6 +108,7 @@ xcodebuild -exportArchive \
     -archivePath "$RELEASE_DIR/$APP_NAME.xcarchive" \
     -exportPath "$RELEASE_DIR" \
     -exportOptionsPlist "$RELEASE_DIR/export_options.plist" \
+    -allowProvisioningUpdates \
     >> "$RELEASE_DIR/build.log" 2>&1
 
 # Copy media_validator.py into app bundle Resources
