@@ -150,6 +150,47 @@ struct SimianTreeView: NSViewRepresentable {
 final class SimianAppKitOutlineView: NSOutlineView {
     weak var coordinator: SimianTreeCoordinator?
 
+    /// Loose follow-scroll for keyboard selection: only nudge the clip when the row leaves a vertical
+    /// “comfort band” inside the visible rect, instead of tracking every selection change like a locked view.
+    override func scrollRowToVisible(_ row: Int) {
+        guard row >= 0, row < numberOfRows else {
+            super.scrollRowToVisible(row)
+            return
+        }
+        let rowRect = rect(ofRow: row)
+        guard !rowRect.isNull, rowRect.height > 0 else {
+            super.scrollRowToVisible(row)
+            return
+        }
+        let vis = visibleRect
+        let visH = vis.height
+        guard visH > 0 else {
+            super.scrollRowToVisible(row)
+            return
+        }
+        let edge = max(48, rowHeight * 2.5)
+        let comfortTop = vis.minY + edge
+        let comfortBottom = vis.maxY - edge
+        if rowRect.minY >= comfortTop && rowRect.maxY <= comfortBottom {
+            return
+        }
+        if rowRect.minY < comfortTop && rowRect.maxY > comfortBottom {
+            super.scrollRowToVisible(row)
+            return
+        }
+        var targetOriginY = vis.minY
+        if rowRect.maxY > comfortBottom {
+            targetOriginY = rowRect.maxY - visH + edge
+        }
+        if rowRect.minY < comfortTop {
+            targetOriginY = rowRect.minY - edge
+        }
+        let maxOriginY = max(0, bounds.height - visH)
+        targetOriginY = min(max(0, targetOriginY), maxOriginY)
+        if abs(targetOriginY - vis.minY) < 0.5 { return }
+        scroll(NSPoint(x: 0, y: targetOriginY))
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let pt = convert(event.locationInWindow, from: nil)
         let row = self.row(at: pt)
@@ -590,6 +631,13 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
         }
 
         if let node {
+            let offerBatchRename = v.selectedItemIds.contains(node.treeId) && v.selectedItemIds.count > 1
+            let removeTitle: String = {
+                if v.selectedItemIds.contains(node.treeId), v.selectedItemIds.count > 1 {
+                    return "Remove \(v.selectedItemIds.count) Items from Simian\u{2026}"
+                }
+                return "Remove from Simian\u{2026}"
+            }()
             if node.kind == .folder, let fid = node.itemId, let fn = node.folder?.name {
                 add("Upload to \u{201C}\(fn)\u{201D}\u{2026}", action: .uploadTo(folderId: fid, folderName: fn))
                 if v.stagedFileCount > 0 { add("Upload \(v.stagedFileCount) staged file(s) here", action: .uploadStagedFiles(folderId: fid, folderName: fn)) }
@@ -597,24 +645,24 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
                 add("New Folder with Selection", action: .newFolderWithSelection(treeId: node.treeId))
                 add("New Folder", action: .newFolder(parentFolderId: fid))
                 menu.addItem(.separator())
-                add("Rename\u{2026}", action: .beginRename(treeId: node.treeId))
+                add(offerBatchRename ? "Batch Rename\u{2026}" : "Rename\u{2026}", action: .beginRename(treeId: node.treeId))
                 addAddDateSubmenu(forTreeId: node.treeId)
                 menu.addItem(.separator())
                 add("Copy Link", action: .copyLink(treeId: node.treeId))
                 add("Download folder contents\u{2026}", action: .downloadFolder(folderId: fid, folderName: fn))
                 menu.addItem(.separator())
-                let delItem = NSMenuItem(title: "Remove from Simian\u{2026}", action: #selector(menuAction(_:)), keyEquivalent: "")
+                let delItem = NSMenuItem(title: removeTitle, action: #selector(menuAction(_:)), keyEquivalent: "")
                 delItem.target = self; delItem.representedObject = SimianTreeContextAction.delete(treeId: node.treeId)
                 menu.addItem(delItem)
             } else if node.kind == .file, let fid = node.itemId {
                 add("New Folder with Selection", action: .newFolderWithSelection(treeId: node.treeId))
                 menu.addItem(.separator())
-                add("Rename\u{2026}", action: .beginRename(treeId: node.treeId))
+                add(offerBatchRename ? "Batch Rename\u{2026}" : "Rename\u{2026}", action: .beginRename(treeId: node.treeId))
                 addAddDateSubmenu(forTreeId: node.treeId)
                 menu.addItem(.separator())
                 add("Download\u{2026}", action: .downloadFile(fileId: fid))
                 menu.addItem(.separator())
-                let delItem = NSMenuItem(title: "Remove from Simian\u{2026}", action: #selector(menuAction(_:)), keyEquivalent: "")
+                let delItem = NSMenuItem(title: removeTitle, action: #selector(menuAction(_:)), keyEquivalent: "")
                 delItem.target = self; delItem.representedObject = SimianTreeContextAction.delete(treeId: node.treeId)
                 menu.addItem(delItem)
             }

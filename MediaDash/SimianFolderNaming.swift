@@ -6,8 +6,38 @@
 //
 
 import Foundation
+import UniformTypeIdentifiers
 
 enum SimianFolderNaming {
+    /// Video extensions: upload to Simian gets an automatic `_Mmmdd.yy` stamp when missing (same list style as prep / staging).
+    static let simianUploadVideoExtensions: Set<String> = [
+        "mp4", "mov", "avi", "mxf", "m4v", "prores", "mkv", "webm", "wmv", "mpg", "mpeg", "m2v", "mts", "m2ts"
+    ]
+
+    /// Multipart `filename=` for Simian: video, configured music types, or extensionless files whose declared content type is A/V get `fullLabelByAppendingDateStamp` when the stem lacks a Simian date suffix.
+    static func multipartUploadFilename(
+        forLocalFileURL fileURL: URL,
+        musicExtensionsLowercased: Set<String>,
+        date: Date = Date(),
+        timeZone: TimeZone? = nil
+    ) -> String {
+        let name = fileURL.lastPathComponent
+        let ext = fileURL.pathExtension.lowercased()
+        let isVideo = Self.simianUploadVideoExtensions.contains(ext)
+        let isAudio = musicExtensionsLowercased.contains(ext)
+        let isMediaByContentType: Bool = {
+            guard ext.isEmpty else { return false }
+            guard let values = try? fileURL.resourceValues(forKeys: [.contentTypeKey]),
+                  let ct = values.contentType else { return false }
+            return ct.conforms(to: .movie) || ct.conforms(to: .video) || ct.conforms(to: .audio)
+        }()
+        guard isVideo || isAudio || isMediaByContentType else { return name }
+        if let stamped = fullLabelByAppendingDateStamp(name, date: date, timeZone: timeZone) {
+            return stamped
+        }
+        return name
+    }
+
     /// Regex for folder names like `01_Name` or `123_Name` (same as loose-file date folders `01_Apr01.26`).
     private static let numberedFolderPrefixRegex = try? NSRegularExpression(pattern: "^([0-9]{1,3})_(.+)$")
 

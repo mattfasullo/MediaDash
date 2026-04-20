@@ -9,6 +9,14 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+private struct SimianPendingDeleteItem: Identifiable {
+    let isFolder: Bool
+    let itemId: String
+    let displayName: String
+    let parentFolderId: String?
+    var id: String { (isFolder ? "f-" : "file-") + itemId }
+}
+
 struct SimianPostView: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var sessionManager: SessionManager
@@ -81,12 +89,9 @@ struct SimianPostView: View {
     @State private var isBatchRenaming = false
     @State private var isApplyingSimianAddDate = false
 
-    // Delete confirmation
+    // Delete confirmation (one or many items)
     @State private var showDeleteConfirmation = false
-    @State private var pendingDeleteIsFolder = true
-    @State private var pendingDeleteItemId = ""
-    @State private var pendingDeleteItemName = ""
-    @State private var pendingDeleteParentFolderId: String?
+    @State private var pendingDeleteItems: [SimianPendingDeleteItem] = []
 
     /// Creating folder on server (Finder-style Cmd+N / New Folder with Selection).
     @State private var isCreatingFolder = false
@@ -267,13 +272,19 @@ struct SimianPostView: View {
         .sheet(isPresented: $showRenameSheet) { renameSheet }
         .sheet(isPresented: $showBatchRenameSheet) { batchRenameSheet }
         .alert("Remove from Simian?", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) { pendingDeleteItems = [] }
+                .keyboardShortcut(.cancelAction)
             Button("Remove", role: .destructive) { performPendingDelete() }
+                .keyboardShortcut(.defaultAction)
         } message: {
-            let name = pendingDeleteItemName.isEmpty ? (pendingDeleteIsFolder ? "this folder" : "this file") : pendingDeleteItemName
-            Text(pendingDeleteIsFolder
-                 ? "\u{201C}\(name)\u{201D} and its contents will be removed from Simian. This cannot be undone."
-                 : "\u{201C}\(name)\u{201D} will be removed from Simian. This cannot be undone.")
+            if pendingDeleteItems.count == 1, let only = pendingDeleteItems.first {
+                let name = only.displayName.isEmpty ? (only.isFolder ? "this folder" : "this file") : only.displayName
+                Text(only.isFolder
+                     ? "\u{201C}\(name)\u{201D} and its contents will be removed from Simian. This cannot be undone."
+                     : "\u{201C}\(name)\u{201D} will be removed from Simian. This cannot be undone.")
+            } else if pendingDeleteItems.count > 1 {
+                Text("\(pendingDeleteItems.count) selected items will be removed from Simian. This cannot be undone.")
+            }
         }
         .alert("Download entire project?", isPresented: $showDownloadEntireProjectConfirmation) {
             Button("Cancel", role: .cancel) {}
@@ -699,6 +710,14 @@ struct SimianPostView: View {
         return .ignored
     }
 
+    /// Backspace (⌫) vs forward delete (⌦). `KeyPress.key` is a `KeyEquivalent`; the ⌫ key often maps to ASCII DEL (`\u{7F}`), not `.delete` (BS / `\u{8}`).
+    private func keyPressRepresentsDeleteKey(_ press: KeyPress) -> Bool {
+        if press.key == .delete || press.key == .deleteForward { return true }
+        if press.key == KeyEquivalent("\u{7f}") { return true }
+        guard press.characters.count == 1, let u = press.characters.unicodeScalars.first?.value else { return false }
+        return u == 8 || u == 127
+    }
+
     private func handleCommandKeyPress(_ press: KeyPress) -> KeyPress.Result {
         guard press.modifiers.contains(.command) else { return .ignored }
 
@@ -778,6 +797,22 @@ struct SimianPostView: View {
             } else {
                 beginFinderStyleNewFolder(parentFolderId: currentParentFolderId, itemIdsToMove: [])
             }
+            return .handled
+        }
+
+        // Cmd+Delete / Cmd+Fn+Delete: prompt to remove selected files/folders (Finder-style).
+        if keyPressRepresentsDeleteKey(press) {
+            guard !press.modifiers.contains(.shift),
+                  !press.modifiers.contains(.option),
+                  !press.modifiers.contains(.control) else { return .ignored }
+            if showDeleteConfirmation { return .ignored }
+            guard selectedProjectName != nil, let projectId = browsingProjectId else { return .ignored }
+            if let window = NSApp.keyWindow, KeyboardNavigationCoordinator.isEditingText(in: window) { return .ignored }
+            if inlineRenameItemId != nil { return .ignored }
+            guard !selectedItemIds.isEmpty else { return .ignored }
+            resignSimianSearchFieldForListNavigation()
+            let treeList = flatTreeList(projectId: projectId)
+            enqueueDeleteForTreeIds(Array(selectedItemIds), treeList: treeList)
             return .handled
         }
 
@@ -1119,7 +1154,18 @@ struct SimianPostView: View {
             var skippedCount = 0
             var failures: [String] = []
             for target in mapped {
-                let ref = useUploadTime ? (target.uploadedAt ?? Date()) : Date()
+                let ref: Date
+                if useUploadTime {
+                    var upload = target.uploadedAt
+                    if upload == nil, !target.isFolder {
+                        if let info = try? await simianService.getFileInfo(projectId: projectId, fileId: target.itemId) {
+                            upload = info.uploadedAt
+                        }
+                    }
+                    ref = upload ?? Date()
+                } else {
+                    ref = Date()
+                }
                 let newName = SimianFolderNaming.fullLabelByAddingOrNormalizingSimianDate(target.currentName, referenceDate: ref, timeZone: TimeZone.current)
                 if newName == target.currentName {
                     skippedCount += 1
@@ -1496,26 +1542,39 @@ struct SimianPostView: View {
     }
 
     private func performPendingDelete() {
-        guard let projectId = browsingProjectId else { return }
-        let isFolder = pendingDeleteIsFolder; let itemId = pendingDeleteItemId; let parentId = pendingDeleteParentFolderId
+        guard let projectId = browsingProjectId, !pendingDeleteItems.isEmpty else { return }
+        let items = pendingDeleteItems
+        pendingDeleteItems = []
         showDeleteConfirmation = false
         Task {
             do {
-                if isFolder {
-                    try await simianService.deleteFolder(projectId: projectId, folderId: itemId)
-                    await MainActor.run {
-                        applyFolderDeletion(folderId: itemId, parentFolderId: parentId)
-                        expandedFolderIds.remove(itemId); folderChildrenCache.removeValue(forKey: itemId); folderFilesCache.removeValue(forKey: itemId)
-                        selectedItemIds.remove("f-\(itemId)"); statusMessage = "Folder removed"; statusIsError = false
-                    }
-                } else {
-                    try await simianService.deleteFile(projectId: projectId, fileId: itemId)
-                    await MainActor.run {
-                        applyFileDeletion(fileId: itemId, parentFolderId: parentId)
-                        selectedItemIds.remove("file-\(itemId)"); statusMessage = "File removed"; statusIsError = false
+                for item in items {
+                    if item.isFolder {
+                        try await simianService.deleteFolder(projectId: projectId, folderId: item.itemId)
+                        await MainActor.run {
+                            applyFolderDeletion(folderId: item.itemId, parentFolderId: item.parentFolderId)
+                            expandedFolderIds.remove(item.itemId)
+                            folderChildrenCache.removeValue(forKey: item.itemId)
+                            folderFilesCache.removeValue(forKey: item.itemId)
+                            selectedItemIds.remove("f-\(item.itemId)")
+                        }
+                    } else {
+                        try await simianService.deleteFile(projectId: projectId, fileId: item.itemId)
+                        await MainActor.run {
+                            applyFileDeletion(fileId: item.itemId, parentFolderId: item.parentFolderId)
+                            selectedItemIds.remove("file-\(item.itemId)")
+                        }
                     }
                 }
-                await MainActor.run { refreshCurrentView() }
+                await MainActor.run {
+                    if items.count == 1, let only = items.first {
+                        statusMessage = only.isFolder ? "Folder removed" : "File removed"
+                    } else {
+                        statusMessage = "Removed \(items.count) items from Simian"
+                    }
+                    statusIsError = false
+                    refreshCurrentView()
+                }
             } catch {
                 await MainActor.run { statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; statusIsError = true }
             }
@@ -1872,10 +1931,9 @@ struct SimianPostView: View {
             .disabled(isDownloadingFromSimian)
             Divider()
             Button("Remove from Simian\u{2026}", role: .destructive) {
-                pendingDeleteIsFolder = true
-                pendingDeleteItemId = folderId
-                pendingDeleteItemName = folderName
-                pendingDeleteParentFolderId = folderBreadcrumb.dropLast().last?.id
+                pendingDeleteItems = [
+                    SimianPendingDeleteItem(isFolder: true, itemId: folderId, displayName: folderName, parentFolderId: folderBreadcrumb.dropLast().last?.id)
+                ]
                 showDeleteConfirmation = true
             }
         } else if browsingProjectId != nil, selectedProjectName != nil {
@@ -1936,8 +1994,7 @@ struct SimianPostView: View {
             .disabled(isDownloadingFromSimian)
             Divider()
             Button("Remove from Simian\u{2026}", role: .destructive) {
-                pendingDeleteIsFolder = true; pendingDeleteItemId = folder.id; pendingDeleteItemName = folder.name
-                pendingDeleteParentFolderId = parentFolderId; showDeleteConfirmation = true
+                enqueueDeleteForTreeIds(treeIdsForMultiSelectContextAction(rightClickedTreeId: "f-\(folder.id)"), treeList: treeList)
             }
         }
     }
@@ -1968,8 +2025,7 @@ struct SimianPostView: View {
                 .disabled(file.mediaURL == nil || isDownloadingFromSimian)
             Divider()
             Button("Remove from Simian\u{2026}", role: .destructive) {
-                pendingDeleteIsFolder = false; pendingDeleteItemId = file.id; pendingDeleteItemName = file.title
-                pendingDeleteParentFolderId = parentFolderId; showDeleteConfirmation = true
+                enqueueDeleteForTreeIds(treeIdsForMultiSelectContextAction(rightClickedTreeId: "file-\(file.id)"), treeList: treeList)
             }
         }
     }
@@ -2007,7 +2063,11 @@ struct SimianPostView: View {
         case .newFolder(let parentFolderId):
             beginFinderStyleNewFolder(parentFolderId: parentFolderId, itemIdsToMove: [])
         case .beginRename(let treeId):
-            presentRenameSheetForTreeItem(id: treeId, treeList: treeList)
+            if shouldOfferBatchRename(rightClickedId: treeId) {
+                startBatchRename(treeList: treeList, rightClickedId: treeId)
+            } else {
+                presentRenameSheetForTreeItem(id: treeId, treeList: treeList)
+            }
         case .addDate(let treeId, let useUploadTime):
             addDateStampToSelection(treeList: treeList, rightClickedId: treeId, useUploadTime: useUploadTime)
         case .copyLink(let treeId):
@@ -2028,17 +2088,8 @@ struct SimianPostView: View {
                 beginDownloadSimianFile(f)
             }
         case .delete(let treeId):
-            if treeId.hasPrefix("f-"), treeId.count > 2,
-               let item = treeList.first(where: { $0.id == treeId }),
-               case .folder(let f, _, _, let pid) = item {
-                pendingDeleteIsFolder = true; pendingDeleteItemId = f.id; pendingDeleteItemName = f.name
-                pendingDeleteParentFolderId = pid; showDeleteConfirmation = true
-            } else if treeId.hasPrefix("file-"), treeId.count > 5,
-                      let item = treeList.first(where: { $0.id == treeId }),
-                      case .file(let f, _, _, let pid) = item {
-                pendingDeleteIsFolder = false; pendingDeleteItemId = f.id; pendingDeleteItemName = f.title
-                pendingDeleteParentFolderId = pid; showDeleteConfirmation = true
-            }
+            let ids = treeIdsForMultiSelectContextAction(rightClickedTreeId: treeId)
+            enqueueDeleteForTreeIds(ids, treeList: treeList)
         }
     }
 
@@ -2054,6 +2105,28 @@ struct SimianPostView: View {
     /// Multiple items selected and the row you opened the menu on is part of that selection → batch rename; otherwise single-item rename.
     private func shouldOfferBatchRename(rightClickedId: String) -> Bool {
         selectedItemIds.contains(rightClickedId) && selectedItemIds.count > 1
+    }
+
+    /// Same selection rule as batch rename / new folder with selection: act on full selection when the row is in it.
+    private func treeIdsForMultiSelectContextAction(rightClickedTreeId: String) -> [String] {
+        (selectedItemIds.contains(rightClickedTreeId) && selectedItemIds.count > 1)
+            ? Array(selectedItemIds)
+            : [rightClickedTreeId]
+    }
+
+    private func enqueueDeleteForTreeIds(_ treeIds: [String], treeList: [SimianTreeItem]) {
+        let items: [SimianPendingDeleteItem] = treeIds.compactMap { id in
+            guard let treeItem = treeList.first(where: { $0.id == id }) else { return nil }
+            switch treeItem {
+            case .folder(let f, _, _, let pid):
+                return SimianPendingDeleteItem(isFolder: true, itemId: f.id, displayName: f.name, parentFolderId: pid)
+            case .file(let f, _, _, let pid):
+                return SimianPendingDeleteItem(isFolder: false, itemId: f.id, displayName: f.title, parentFolderId: pid)
+            }
+        }
+        guard !items.isEmpty else { return }
+        pendingDeleteItems = items
+        showDeleteConfirmation = true
     }
 
     private func presentRenameSheetForTreeItem(id: String, treeList: [SimianTreeItem]) {
@@ -2543,7 +2616,12 @@ struct SimianPostView: View {
                 for fileItem in looseItems {
                     progressCounter.increment()
                     await MainActor.run { uploadCurrent = progressCounter.value; uploadTotal = totalFiles; uploadFileName = fileItem.name }
-                    _ = try await simianService.uploadFile(projectId: projectId, folderId: looseFolderId, fileURL: fileItem.url)
+                    _ = try await simianService.uploadFile(
+                        projectId: projectId,
+                        folderId: looseFolderId,
+                        fileURL: fileItem.url,
+                        musicExtensionsForUploadNaming: settingsManager.currentSettings.musicExtensions
+                    )
                 }
 
                 for fileItem in dirItems {
@@ -2582,7 +2660,15 @@ struct SimianPostView: View {
             if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { subfolders.append(item) }
             else if (try? item.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true { filesHere.append(item) }
         }
-        for fileURL in filesHere { uploadProgress(fileURL.lastPathComponent); _ = try await simianService.uploadFile(projectId: projectId, folderId: simianFolderId, fileURL: fileURL) }
+        for fileURL in filesHere {
+            uploadProgress(fileURL.lastPathComponent)
+            _ = try await simianService.uploadFile(
+                projectId: projectId,
+                folderId: simianFolderId,
+                fileURL: fileURL,
+                musicExtensionsForUploadNaming: settingsManager.currentSettings.musicExtensions
+            )
+        }
         for sub in subfolders {
             let existing = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: simianFolderId)
             try await uploadFolderWithStructure(projectId: projectId, destinationFolderId: simianFolderId, localFolderURL: sub, existingFolderNames: existing.map { $0.name }, uploadProgress: uploadProgress)

@@ -170,4 +170,62 @@ final class SimianLooseFileFolderNamingTests: XCTestCase {
         let out = SimianFolderNaming.fullLabelByAddingOrNormalizingSimianDate(label, referenceDate: ref, timeZone: TimeZone(secondsFromGMT: 0))
         XCTAssertEqual(out, label)
     }
+
+    // MARK: - multipart upload filename
+
+    func testMultipartUploadFilename_appendsDateForVideo() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = cal.date(from: DateComponents(year: 2026, month: 4, day: 17, hour: 12))!
+        let url = URL(fileURLWithPath: "/tmp/PURPLE.mov", isDirectory: false)
+        let out = SimianFolderNaming.multipartUploadFilename(
+            forLocalFileURL: url,
+            musicExtensionsLowercased: [],
+            date: date,
+            timeZone: TimeZone(secondsFromGMT: 0)
+        )
+        XCTAssertEqual(out, "PURPLE_Apr17.26.mov")
+    }
+
+    func testMultipartUploadFilename_appendsDateForConfiguredMusicExtension() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = cal.date(from: DateComponents(year: 2026, month: 4, day: 17, hour: 12))!
+        let url = URL(fileURLWithPath: "/tmp/PURPLE.wav", isDirectory: false)
+        let out = SimianFolderNaming.multipartUploadFilename(
+            forLocalFileURL: url,
+            musicExtensionsLowercased: ["wav", "mp3"],
+            date: date,
+            timeZone: TimeZone(secondsFromGMT: 0)
+        )
+        XCTAssertEqual(out, "PURPLE_Apr17.26.wav")
+    }
+
+    func testMultipartUploadFilename_skipsWhenStemAlreadyDated() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = cal.date(from: DateComponents(year: 2026, month: 4, day: 17, hour: 12))!
+        let url = URL(fileURLWithPath: "/tmp/PURPLE_Apr01.26.mov", isDirectory: false)
+        let out = SimianFolderNaming.multipartUploadFilename(
+            forLocalFileURL: url,
+            musicExtensionsLowercased: [],
+            date: date,
+            timeZone: TimeZone(secondsFromGMT: 0)
+        )
+        XCTAssertEqual(out, "PURPLE_Apr01.26.mov")
+    }
+
+    func testMultipartUploadFilename_nonMediaUnchanged() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = cal.date(from: DateComponents(year: 2026, month: 4, day: 17, hour: 12))!
+        let url = URL(fileURLWithPath: "/tmp/Notes.txt", isDirectory: false)
+        let out = SimianFolderNaming.multipartUploadFilename(
+            forLocalFileURL: url,
+            musicExtensionsLowercased: ["wav"],
+            date: date,
+            timeZone: TimeZone(secondsFromGMT: 0)
+        )
+        XCTAssertEqual(out, "Notes.txt")
+    }
 }

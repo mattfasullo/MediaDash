@@ -899,7 +899,8 @@ class SimianService: ObservableObject {
             "yyyy-MM-dd'T'HH:mm:ssZZZZZ",
             "yyyy-MM-dd'T'HH:mm:ss.SSSZZZZZ",
             "MM/dd/yyyy",
-            "MM/dd/yy"
+            "MM/dd/yy",
+            "yyyy-MM-dd"
         ]
         for format in formats {
             let formatter = DateFormatter()
@@ -918,18 +919,93 @@ class SimianService: ObservableObject {
     }
 
     /// Best-effort “added to Simian” time from folder/file payload dictionaries.
-    nonisolated private static func uploadDateFromPayload(_ dict: [String: Any]) -> Date? {
-        let keys = ["upload_date", "upload_date_time", "date_added", "created_at", "created", "time", "date"]
-        for k in keys {
-            if let n = dict[k] as? Int, n > 946_684_800 {
-                return Date(timeIntervalSince1970: TimeInterval(n))
+    /// Scans the root object plus common nested containers (`file`, `metadata`, …) so list payloads that nest metadata still work.
+    /// Avoids generic keys like `date` / `time`, which often reflect “today” or unrelated project fields rather than upload time.
+    nonisolated static func uploadDateFromPayload(_ dict: [String: Any]) -> Date? {
+        var sources: [[String: Any]] = [dict]
+        let nestedContainerKeys = ["file", "metadata", "meta", "details", "item", "properties", "data", "payload"]
+        for k in nestedContainerKeys {
+            if let inner = dict[k] as? [String: Any] {
+                sources.append(inner)
             }
-            if let n = dict[k] as? Double, n > 946_684_800 {
-                return Date(timeIntervalSince1970: n)
+        }
+        let uploadKeys = [
+            "upload_date", "upload_date_time", "uploaded_at", "uploadedAt", "uploadDate",
+            "file_upload_date", "date_added", "dateAdded", "added_at", "addedAt", "inserted_at", "insertedAt"
+        ]
+        for key in uploadKeys {
+            for src in sources {
+                if let d = dateFromLooseMetadataValue(src[key]) { return d }
             }
-            if let s = stringValue(dict[k]), let d = parseSimianMetadataDate(s) {
-                return d
+        }
+        let createdKeys = ["created_at", "createdAt", "creation_date", "creationDate", "created"]
+        for key in createdKeys {
+            for src in sources {
+                if let d = dateFromLooseMetadataValue(src[key]) { return d }
             }
+        }
+        return nil
+    }
+
+    nonisolated private static func dateFromLooseMetadataValue(_ value: Any?) -> Date? {
+        if let interval = epochSecondsFromJSONScalar(value) {
+            return Date(timeIntervalSince1970: interval)
+        }
+        if let s = metadataDisplayString(forJSONScalar: value), let d = parseSimianMetadataDate(s) {
+            return d
+        }
+        if let s = metadataDisplayString(forJSONScalar: value), let interval = epochSecondsFromNumericString(s) {
+            return Date(timeIntervalSince1970: interval)
+        }
+        return nil
+    }
+
+    /// String forms of JSON scalars for calendar-style date parsing (includes `NSNumber` → string for numeric timestamps).
+    nonisolated private static func metadataDisplayString(forJSONScalar value: Any?) -> String? {
+        if let s = value as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        if let n = value as? NSNumber {
+            return n.stringValue
+        }
+        return nil
+    }
+
+    nonisolated private static func epochSecondsFromJSONScalar(_ value: Any?) -> TimeInterval? {
+        switch value {
+        case let n as NSNumber:
+            return normalizeEpochSecondsToUnix(n.doubleValue)
+        case let i as Int:
+            return normalizeEpochSecondsToUnix(TimeInterval(i))
+        case let i as Int64:
+            return normalizeEpochSecondsToUnix(TimeInterval(i))
+        case let u as UInt64:
+            return normalizeEpochSecondsToUnix(TimeInterval(u))
+        case let d as Double:
+            return normalizeEpochSecondsToUnix(d)
+        default:
+            return nil
+        }
+    }
+
+    nonisolated private static func epochSecondsFromNumericString(_ s: String) -> TimeInterval? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == "." || $0 == "-") }) else { return nil }
+        guard let raw = Double(trimmed) else { return nil }
+        return normalizeEpochSecondsToUnix(raw)
+    }
+
+    /// Epoch in seconds, accepting values sent as milliseconds since 1970.
+    nonisolated private static func normalizeEpochSecondsToUnix(_ raw: TimeInterval) -> TimeInterval? {
+        guard raw.isFinite else { return nil }
+        var s = raw
+        if s > 1_000_000_000_000 {
+            s /= 1000
+        }
+        if s >= 631_152_000 && s < 4_102_444_800 {
+            return s
         }
         return nil
     }
@@ -939,8 +1015,14 @@ class SimianService: ObservableObject {
     ///   - projectId: Simian project ID
     ///   - folderId: Optional folder ID (nil = project root)
     ///   - fileURL: Local file URL to upload
+    ///   - musicExtensionsForUploadNaming: Used with ``SimianFolderNaming/simianUploadVideoExtensions`` so video/audio uploads get `_Mmmdd.yy` before the extension when the name does not already end with that stamp.
     /// - Returns: Uploaded file ID from response
-    func uploadFile(projectId: String, folderId: String?, fileURL: URL) async throws -> String {
+    func uploadFile(
+        projectId: String,
+        folderId: String?,
+        fileURL: URL,
+        musicExtensionsForUploadNaming: [String]? = nil
+    ) async throws -> String {
         try await ensureAuthenticated()
 
         let trimmedProjectId = projectId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -972,7 +1054,9 @@ class SimianService: ObservableObject {
             appendPart(name: "folder_id", value: folderId)
         }
 
-        let filename = fileURL.lastPathComponent
+        let resolvedMusicExtensions = musicExtensionsForUploadNaming ?? AppSettings.default.musicExtensions
+        let musicExtSet = Set(resolvedMusicExtensions.map { $0.lowercased() })
+        let filename = SimianFolderNaming.multipartUploadFilename(forLocalFileURL: fileURL, musicExtensionsLowercased: musicExtSet)
         guard let fileData = try? Data(contentsOf: fileURL) else {
             throw SimianError.apiError("Could not read file: \(fileURL.path)")
         }
@@ -1350,16 +1434,23 @@ class SimianService: ObservableObject {
         }
         
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let root = json["root"] as? [String: Any],
-              let payload = root["payload"] as? [[String: Any]],
-              let fileInfo = payload.first else {
+              let root = json["root"] as? [String: Any] else {
+            throw SimianError.apiError("Invalid response format from get_file_info")
+        }
+        let fileInfo: [String: Any]
+        if let rows = root["payload"] as? [[String: Any]], let first = rows.first {
+            fileInfo = first
+        } else if let dict = root["payload"] as? [String: Any] {
+            fileInfo = dict
+        } else {
             throw SimianError.apiError("Invalid response format from get_file_info")
         }
         
         return SimianFileInfo(
             id: fileId,
             title: SimianService.stringValue(fileInfo["title"]),
-            mediaSize: SimianService.stringValue(fileInfo["media_size"])
+            mediaSize: SimianService.stringValue(fileInfo["media_size"]),
+            uploadedAt: SimianService.uploadDateFromPayload(fileInfo)
         )
     }
 
@@ -3054,6 +3145,8 @@ struct SimianFileInfo: Identifiable, Hashable {
     let id: String
     let title: String?
     let mediaSize: String?
+    /// Present when `get_file_info` includes upload/created metadata (list APIs sometimes omit it).
+    let uploadedAt: Date?
     
     var mediaSizeBytes: Int64? {
         guard let mediaSize = mediaSize else { return nil }
