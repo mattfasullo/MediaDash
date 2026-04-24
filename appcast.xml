@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.12</title>
+            <description><![CDATA[
+                <p>Staging: Arrange Finals from the file tree—preview planned moves before applying, with automatic folder refresh after organizing.</p>
+            ]]></description>
+            <pubDate>Fri, 24 Apr 2026 15:13:22 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.12/MediaDash.zip"
+                sparkle:version="220"
+                sparkle:shortVersionString="1.12"
+                sparkle:edSignature="KTboutNOFdy57oyWCk4qnjmTeBh9s/yEwPOuGxUuW/eDcYbcElYxJk4xiCQ8V4mpkA1YD6quYJFn00nLkIuXCw=="
+                length="15468888"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.11</title>
             <description><![CDATA[
                 <p>Windows 98 UI theme, Simian upload date parsing, improved notification dialogs, and bug fixes</p>
