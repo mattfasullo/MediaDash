@@ -371,7 +371,9 @@ struct StagingFileListView: View {
     @Binding var showBatchRenameSheet: Bool
     @Binding var filesToRename: [FileItem]
     @Binding var showVideoConverterSheet: Bool
-    
+    /// Use `sheet(item:)` so sheet content always has a folder (avoids EmptyView + zero-size sheet on macOS).
+    @State private var createFinalsSheetTarget: CreateFinalsSheetTarget?
+
     // Supported thumbnail extensions
     private let thumbnailExtensions = ["jpg", "jpeg", "png", "gif", "heic", "mp4", "mov", "m4v", "avi", "mkv", "mxf"]
     
@@ -385,7 +387,10 @@ struct StagingFileListView: View {
                     thumbnailExtensions: thumbnailExtensions,
                     filesToRename: $filesToRename,
                     showBatchRenameSheet: $showBatchRenameSheet,
-                    showVideoConverterSheet: $showVideoConverterSheet
+                    showVideoConverterSheet: $showVideoConverterSheet,
+                    onCreateFinals: { folder in
+                        createFinalsSheetTarget = CreateFinalsSheetTarget(folder: folder)
+                    }
                 )
             }
         }
@@ -400,6 +405,11 @@ struct StagingFileListView: View {
         }
         .onAppear {
             updateTreeNodes(from: manager.selectedFiles)
+        }
+        .sheet(item: $createFinalsSheetTarget) { target in
+            CreateFinalsSheet(folder: target.folder, manager: manager)
+                .compactSheetContent()
+                .compactSheetBorder()
         }
         .onKeyPress(.space) {
             // QuickLook preview with Space key
@@ -458,7 +468,8 @@ struct TreeNodeView: View {
     @Binding var filesToRename: [FileItem]
     @Binding var showBatchRenameSheet: Bool
     @Binding var showVideoConverterSheet: Bool
-    
+    var onCreateFinals: ((FileItem) -> Void)? = nil
+
     var body: some View {
         if node.file.isDirectory {
             DisclosureGroup(isExpanded: $node.isExpanded) {
@@ -470,7 +481,8 @@ struct TreeNodeView: View {
                         thumbnailExtensions: thumbnailExtensions,
                         filesToRename: $filesToRename,
                         showBatchRenameSheet: $showBatchRenameSheet,
-                        showVideoConverterSheet: $showVideoConverterSheet
+                        showVideoConverterSheet: $showVideoConverterSheet,
+                        onCreateFinals: onCreateFinals
                     )
                 }
             } label: {
@@ -480,7 +492,8 @@ struct TreeNodeView: View {
                     isSelected: selectedFileId == node.file.id,
                     supportsThumbnail: false,
                     onRename: nil,
-                    showVideoConverterSheet: $showVideoConverterSheet
+                    showVideoConverterSheet: $showVideoConverterSheet,
+                    onCreateFinals: { onCreateFinals?(node.file) }
                 )
                 .tag(node.file.id)
             }
@@ -515,7 +528,8 @@ struct StagingFileRow: View {
     let supportsThumbnail: Bool
     var onRename: (() -> Void)?
     @Binding var showVideoConverterSheet: Bool
-    
+    var onCreateFinals: (() -> Void)? = nil
+
     // Video file extensions
     private let videoExtensions = ["mp4", "mov", "avi", "mxf", "m4v", "prores"]
     
@@ -579,9 +593,17 @@ struct StagingFileRow: View {
                 QuickLookCoordinator.shared.showPreview(for: [file.url])
             }
             .keyboardShortcut(" ", modifiers: [])
-            
+
             Divider()
-            
+
+            // Arrange Finals — only for directories
+            if file.isDirectory {
+                Button("Arrange Finals…") {
+                    onCreateFinals?()
+                }
+                Divider()
+            }
+
             // Rename option (only for files, not directories)
             if !file.isDirectory {
                 Button("Rename") {
@@ -697,3 +719,167 @@ struct StagingFileRow: View {
     }
 }
 
+// MARK: - Arrange Finals Sheet
+
+private struct CreateFinalsSheetTarget: Identifiable {
+    let folder: FileItem
+    var id: String { folder.url.path }
+}
+
+struct CreateFinalsSheet: View {
+    let folder: FileItem
+    @ObservedObject var manager: MediaManager
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var preview: FinalsMovePreview? = nil
+    @State private var isApplying: Bool = false
+    @State private var errorMessage: String? = nil
+    @State private var succeeded: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack(spacing: 8) {
+                Image(systemName: "folder.badge.gearshape")
+                    .foregroundColor(.accentColor)
+                    .font(.title3)
+                Text("Arrange Finals")
+                    .font(.headline)
+            }
+
+            Text(folder.name)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Divider()
+
+            if succeeded {
+                Label("Finals arranged successfully.", systemImage: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.subheadline)
+            } else if let preview {
+                previewBody(preview)
+            } else {
+                ProgressView("Scanning…")
+                    .frame(maxWidth: .infinity)
+            }
+
+            if let err = errorMessage {
+                Text(err)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.escape, modifiers: [])
+                if !succeeded, let p = preview, !p.isEmpty {
+                    Button(isApplying ? "Applying…" : "Apply") {
+                        apply(preview: p)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isApplying)
+                    .keyboardShortcut(.return, modifiers: [])
+                }
+                if succeeded {
+                    Button("Done") { dismiss() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.return, modifiers: [])
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+        .task { buildPreview() }
+    }
+
+    @ViewBuilder
+    private func previewBody(_ preview: FinalsMovePreview) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            bucketRow(icon: "music.note.list", label: "Fullmixes", count: preview.fullMixes.count)
+            bucketRow(icon: "waveform", label: "Mixouts", count: preview.mixouts.count)
+            bucketRow(icon: "film", label: "Quicktime References", count: preview.qtReferences.count)
+
+            if !preview.unclassified.isEmpty {
+                Divider()
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("\(preview.unclassified.count) unclassified — will stay in place:")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(preview.unclassified, id: \.path) { url in
+                                    Text(url.lastPathComponent)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 80)
+                    }
+                }
+            }
+
+            if preview.isEmpty {
+                Text("No classifiable files found in this folder.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func bucketRow(icon: String, label: String, count: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundColor(.secondary)
+                .frame(width: 16)
+            Text(label)
+                .font(.subheadline)
+            Spacer()
+            Text("\(count)")
+                .font(.subheadline.monospacedDigit())
+                .foregroundColor(count > 0 ? .primary : .secondary)
+        }
+    }
+
+    private func buildPreview() {
+        let url = folder.url
+        Task.detached(priority: .userInitiated) {
+            let p = FinalsFolderOrganizationUseCase.buildPlan(root: url)
+            await MainActor.run { self.preview = p }
+        }
+    }
+
+    private func apply(preview: FinalsMovePreview) {
+        isApplying = true
+        errorMessage = nil
+        let url = folder.url
+        Task.detached(priority: .userInitiated) {
+            do {
+                try FinalsFolderOrganizationUseCase.execute(preview: preview)
+                await MainActor.run {
+                    isApplying = false
+                    succeeded = true
+                    // Refresh the staged folder so the tree reflects the new layout
+                    manager.refreshStagedFolder(url: url)
+                }
+            } catch {
+                await MainActor.run {
+                    isApplying = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+}

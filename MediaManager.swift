@@ -1725,6 +1725,14 @@ class MediaManager: ObservableObject {
         conversionProgress.removeValue(forKey: id)
     }
 
+    /// Refresh a staged folder entry after an in-place reorganization (e.g. Arrange Finals).
+    /// Replaces the old `FileItem` for that URL with a freshly constructed one so the tree
+    /// reflects the updated directory contents on next expand.
+    func refreshStagedFolder(url: URL) {
+        guard let idx = selectedFiles.firstIndex(where: { $0.url == url }) else { return }
+        selectedFiles[idx] = FileItem(url: url)
+    }
+
     func cancelProcessing() {
         cancelRequested = true
         statusMessage = "Cancelling..."
