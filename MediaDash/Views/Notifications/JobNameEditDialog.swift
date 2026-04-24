@@ -66,3 +66,22 @@ struct JobNameEditDialog: View {
     }
 }
 
+// MARK: - Preview
+
+#Preview("With Docket") {
+    JobNameEditDialog(
+        isPresented: .constant(true),
+        jobName: .constant("Campaign Name"),
+        docketNumber: "26150",
+        onConfirm: { _ in }
+    )
+}
+
+#Preview("Without Docket") {
+    JobNameEditDialog(
+        isPresented: .constant(true),
+        jobName: .constant("Project Name"),
+        docketNumber: nil,
+        onConfirm: { _ in }
+    )
+}

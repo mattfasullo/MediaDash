@@ -30,3 +30,13 @@ struct NotificationBadgeView: View {
     }
 }
 
+// MARK: - Preview
+
+#Preview("With Badge") {
+    NotificationBadgeView(
+        notificationCenter: NotificationCenter(),
+        isExpanded: .constant(false)
+    )
+    .frame(width: 50, height: 50)
+}
+

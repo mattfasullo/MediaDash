@@ -60,3 +60,22 @@ struct DocketNumberInputDialog: View {
     }
 }
 
+// MARK: - Preview
+
+#Preview("Empty Docket") {
+    DocketNumberInputDialog(
+        isPresented: .constant(true),
+        docketNumber: .constant(""),
+        jobName: "Test Project Name",
+        onConfirm: {}
+    )
+}
+
+#Preview("With Docket Number") {
+    DocketNumberInputDialog(
+        isPresented: .constant(true),
+        docketNumber: .constant("26150"),
+        jobName: "Campaign Launch",
+        onConfirm: {}
+    )
+}

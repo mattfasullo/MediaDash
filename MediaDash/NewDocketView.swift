@@ -177,3 +177,32 @@ struct NewDocketView: View {
     }
 }
 
+// MARK: - Preview
+
+#Preview("New Docket - Empty") {
+    NewDocketView(
+        isPresented: .constant(true),
+        selectedDocket: .constant(""),
+        manager: MediaManager(
+            settingsManager: SettingsManager(),
+            metadataManager: DocketMetadataManager(settings: .default)
+        ),
+        settingsManager: SettingsManager()
+    )
+    .frame(width: 360, height: 240)
+}
+
+#Preview("New Docket - Pre-filled") {
+    NewDocketView(
+        isPresented: .constant(true),
+        selectedDocket: .constant(""),
+        manager: MediaManager(
+            settingsManager: SettingsManager(),
+            metadataManager: DocketMetadataManager(settings: .default)
+        ),
+        settingsManager: SettingsManager(),
+        initialDocketNumber: "12345",
+        initialJobName: "Sample Job"
+    )
+    .frame(width: 360, height: 240)
+}

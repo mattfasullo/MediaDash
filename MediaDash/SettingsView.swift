@@ -4534,6 +4534,8 @@ struct ThemeSelectionSection: View {
             return "Clean, professional interface with subtle colors"
         case .retroDesktop:
             return "Nostalgic retro desktop OS aesthetic with bold colors and window-based interface (Beta)"
+        case .windows98:
+            return "Classic Windows 98 interface with authentic 3D bevel borders, silver chrome, and teal desktop"
         }
     }
 }

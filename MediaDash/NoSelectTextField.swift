@@ -34,6 +34,53 @@ class NoSelectNSTextField: NSTextField {
         }
         super.keyDown(with: event)
     }
+
+    // MARK: - First responder (deferred; avoid work during `NSViewRepresentable.updateNSView`)
+
+    /// Non-zero when SwiftUI last requested focus for this control (bumped in `updateNSView`).
+    var mediadash_scheduledFocusToken: Int = 0
+    /// True if we need another `perform` pass because `window` was nil the last time we tried to focus.
+    private var mediadash_focusRetryAfterWindow: Bool = false
+
+    private static let mediadash_applyFocusSel = #selector(mediadash_applyScheduledFirstResponder)
+    private static let mediadash_applyBlurSel = #selector(mediadash_applyScheduledResign)
+
+    /// AppKit’s usual pattern: leave the current run-loop item (and SwiftUI’s update pass) first.
+    /// `makeFirstResponder` can still report Hang Risk for internal main→default-QoS waits; this minimizes it.
+    func mediadash_scheduleFirstResponder() {
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: Self.mediadash_applyFocusSel, object: nil)
+        perform(Self.mediadash_applyFocusSel, with: nil, afterDelay: 0, inModes: [.common])
+    }
+
+    @objc private func mediadash_applyScheduledFirstResponder() {
+        guard mediadash_scheduledFocusToken > 0 else { return }
+        guard let w = window else {
+            mediadash_focusRetryAfterWindow = true
+            return
+        }
+        mediadash_focusRetryAfterWindow = false
+        if w.firstResponder === self { return }
+        _ = w.makeFirstResponder(self)
+    }
+
+    func mediadash_scheduleResignIfKey() {
+        mediadash_focusRetryAfterWindow = false
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: Self.mediadash_applyFocusSel, object: nil)
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: Self.mediadash_applyBlurSel, object: nil)
+        perform(Self.mediadash_applyBlurSel, with: nil, afterDelay: 0, inModes: [.common])
+    }
+
+    @objc private func mediadash_applyScheduledResign() {
+        guard window?.firstResponder === self || currentEditor() != nil else { return }
+        _ = resignFirstResponder()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil, mediadash_focusRetryAfterWindow, mediadash_scheduledFocusToken > 0 {
+            mediadash_scheduleFirstResponder()
+        }
+    }
 }
 
 struct NoSelectTextField: NSViewRepresentable {
@@ -56,17 +103,31 @@ struct NoSelectTextField: NSViewRepresentable {
     var blurRequestToken: Int = 0
 
     private static let debugLogPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-simian-keyfocus.log"
+    /// Serial utility-QoS queue so log I/O never blocks the main (User-interactive) thread
+    /// and can’t priority-invert with AppKit field/text work (Xcode Hang Risk diagnostic).
+    private static let debugLogQueue = DispatchQueue(label: "mediadash.NoSelectTextField.log",
+                                                     qos: .utility)
+    /// One-shot availability check; if the log dir isn’t writable on this machine, stay a no-op.
+    private static let debugLogAvailable: Bool = {
+        let dir = (debugLogPath as NSString).deletingLastPathComponent
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) && isDir.boolValue
+            && FileManager.default.isWritableFile(atPath: dir)
+    }()
 
     private static func logDebug(_ message: String) {
-        if FileManager.default.fileExists(atPath: debugLogPath) == false {
-            _ = FileManager.default.createFile(atPath: debugLogPath, contents: nil)
+        guard debugLogAvailable else { return }
+        debugLogQueue.async {
+            if FileManager.default.fileExists(atPath: debugLogPath) == false {
+                _ = FileManager.default.createFile(atPath: debugLogPath, contents: nil)
+            }
+            guard let handle = FileHandle(forWritingAtPath: debugLogPath) else { return }
+            handle.seekToEndOfFile()
+            if let data = "\(message)\n".data(using: .utf8) {
+                handle.write(data)
+            }
+            handle.closeFile()
         }
-        guard let handle = FileHandle(forWritingAtPath: debugLogPath) else { return }
-        handle.seekToEndOfFile()
-        if let data = "\(message)\n".data(using: .utf8) {
-            handle.write(data)
-        }
-        handle.closeFile()
     }
 
     func makeNSView(context: Context) -> NoSelectNSTextField {
@@ -149,25 +210,17 @@ struct NoSelectTextField: NSViewRepresentable {
 
         if focusRequestToken > 0, focusRequestToken != context.coordinator.lastAppliedFocusRequestToken {
             context.coordinator.lastAppliedFocusRequestToken = focusRequestToken
-            let field = nsView
-            DispatchQueue.main.async {
-                if let window = field.window {
-                    _ = window.makeFirstResponder(field)
-                } else {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        _ = field.window?.makeFirstResponder(field)
-                    }
-                }
-            }
+            nsView.mediadash_scheduledFocusToken = focusRequestToken
+            // Do not call `makeFirstResponder` in this `update` pass. Use
+            // `NSObject.perform(_:afterDelay:inModes:)` so first-responder work runs
+            // after the current run-loop event (out of the SwiftUI update stack). If
+            // the view has no `window` yet, `viewDidMoveToWindow` re-schedules.
+            nsView.mediadash_scheduleFirstResponder()
         }
 
         if blurRequestToken > 0, blurRequestToken != context.coordinator.lastAppliedBlurRequestToken {
             context.coordinator.lastAppliedBlurRequestToken = blurRequestToken
-            let field = nsView
-            DispatchQueue.main.async {
-                guard field.window?.firstResponder === field || field.currentEditor() != nil else { return }
-                _ = field.resignFirstResponder()
-            }
+            nsView.mediadash_scheduleResignIfKey()
         }
     }
 

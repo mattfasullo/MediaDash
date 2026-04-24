@@ -67,12 +67,25 @@ struct EmailDocketParser {
     }
     
     
-    /// Parse email to extract docket information
+    /// Extracts docket information from email content using multiple regex patterns.
+    ///
+    /// **Parsing Strategy:**
+    /// 1. First attempts to find docket on the first line of the body (common email convention)
+    /// 2. Falls back to 7 ordered regex patterns with decreasing specificity
+    /// 3. Validates extracted docket against valid year prefixes (current/next year)
+    /// 4. Cleans job names by removing common email prefixes like "Fwd:", "Re:", "NEW DOCKET"
+    ///
+    /// **Intent Detection:**
+    /// The parser requires evidence that the email is about a "new docket" request, not just
+    /// any mention of a docket number. It checks for keywords ("new", "docket", "request")
+    /// and validates the docket appears in both subject and body for Pattern 7 matches.
+    ///
     /// - Parameters:
-    ///   - subject: Email subject line
-    ///   - body: Email body text
-    ///   - from: Email sender
-    /// - Returns: ParsedDocket if successful, nil otherwise
+    ///   - subject: Email subject line (may contain docket + job name)
+    ///   - body: Email body text (may contain table data that gets cleaned)
+    ///   - from: Email sender address (stored for attribution)
+    /// - Returns: `ParsedDocket` containing number, name, and source email; `nil` if no valid
+    ///           docket found or if intent requirements not met
     func parseEmail(subject: String?, body: String?, from: String?) -> ParsedDocket? {
         let subjectText = subject ?? ""
         var bodyText = body ?? ""

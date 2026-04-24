@@ -34,6 +34,8 @@ struct ActionButtonsView: View {
             return Color(red: 0.30, green: 0.45, blue: 0.30)  // Washed-out forest green
         case .retroDesktop:
             return Color(red: 0.25, green: 0.55, blue: 0.35)  // Slightly brighter forest green for retro
+        case .windows98:
+            return Win98Colors.buttonCalendar  // #406040 forest green
         }
     }
     

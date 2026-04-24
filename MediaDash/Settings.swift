@@ -366,6 +366,7 @@ enum AppearanceMode: String, Codable, CaseIterable {
 enum AppTheme: String, Codable, CaseIterable {
     case modern = "Modern"
     case retroDesktop = "Retro Desktop (Beta)"
+    case windows98 = "Windows 98"
 
     var displayName: String {
         self.rawValue
@@ -378,6 +379,8 @@ enum AppTheme: String, Codable, CaseIterable {
             return Color(nsColor: .controlBackgroundColor)
         case .retroDesktop:
             return Color(red: 0.173, green: 0.173, blue: 0.173) // Dark gray #2C2C2C
+        case .windows98:
+            return Win98Colors.desktopTeal // #008080
         }
     }
 
@@ -387,6 +390,8 @@ enum AppTheme: String, Codable, CaseIterable {
             return .primary
         case .retroDesktop:
             return .white
+        case .windows98:
+            return Win98Colors.black
         }
     }
 
@@ -396,6 +401,8 @@ enum AppTheme: String, Codable, CaseIterable {
             return 8
         case .retroDesktop:
             return 6
+        case .windows98:
+            return 0
         }
     }
 
@@ -413,6 +420,12 @@ enum AppTheme: String, Codable, CaseIterable {
                 Color(red: 1.0, green: 0.549, blue: 0.259),  // Orange #FF8C42
                 Color(red: 0.29, green: 0.565, blue: 0.886)   // Blue #4A90E2
             )
+        case .windows98:
+            return (
+                Win98Colors.buttonFile,    // #607CA0 slate blue
+                Win98Colors.buttonSimian,  // #807040 tan
+                Win98Colors.buttonBoth     // #406060 teal-gray
+            )
         }
     }
 
@@ -421,6 +434,8 @@ enum AppTheme: String, Codable, CaseIterable {
         case .modern:
             return .white
         case .retroDesktop:
+            return .white
+        case .windows98:
             return .white
         }
     }
@@ -431,11 +446,18 @@ enum AppTheme: String, Codable, CaseIterable {
             return nil
         case .retroDesktop:
             return nil
+        case .windows98:
+            return nil
         }
     }
 
     var useCustomFont: Bool {
         false
+    }
+
+    /// True when the Win98 theme is active — signals views to use Win98-specific chrome
+    var useWin98Style: Bool {
+        self == .windows98
     }
     
     // Retro Desktop specific colors from design.json
@@ -900,6 +922,28 @@ extension AppSettings {
 // MARK: - Settings Manager
 
 @MainActor
+/// Manages application settings with support for multiple user profiles.
+///
+/// **Profile System:**
+/// Each user can have multiple named profiles (e.g., "Work", "Personal", "Testing").
+/// Each profile has its own complete set of settings including:
+/// - Server paths (work picture, prep locations)
+/// - Asana integration configuration
+/// - Gmail scanning settings
+/// - UI preferences (theme, layout mode)
+///
+/// **Persistence:**
+/// Settings are stored in UserDefaults as a JSON-encoded dictionary keyed by profile name.
+/// The current profile name is stored separately to restore the correct profile on launch.
+///
+/// **Migration Handling:**
+/// The init performs several migrations:
+/// 1. Path reset on app updates (ensures paths work across different machines)
+/// 2. Gmail poll interval migration (300s → 3600s for new-docket scanning)
+///
+/// **Usage:**
+/// Access via `@EnvironmentObject` or inject into views. Changes to `currentSettings`
+/// automatically persist to disk.
 class SettingsManager: ObservableObject {
     @Published var currentSettings: AppSettings
     @Published var availableProfiles: [String] = []
@@ -908,6 +952,11 @@ class SettingsManager: ObservableObject {
     private let currentProfileKey = "currentProfile"
     private let profilesKey = "savedProfiles"
 
+    /// Initializes the settings manager, loading the last active profile.
+    ///
+    /// On first launch, creates a "Default" profile with factory defaults.
+    /// On subsequent launches, restores the previously active profile.
+    /// Performs any necessary data migrations.
     init() {
         // Initialize stored properties first (required before calling instance methods)
         // Load current profile name

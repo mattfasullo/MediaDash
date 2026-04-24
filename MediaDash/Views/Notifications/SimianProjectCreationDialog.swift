@@ -181,3 +181,28 @@ struct SimianProjectCreationDialog: View {
     }
 }
 
+// MARK: - Preview
+
+#Preview("Simian Disabled") {
+    SimianProjectCreationDialog(
+        isPresented: .constant(true),
+        simianService: SimianService(),
+        settingsManager: SettingsManager(),
+        initialDocketNumber: "26150",
+        initialJobName: "Test Campaign",
+        isSimianEnabled: false,
+        onConfirm: { _, _, _, _ in }
+    )
+}
+
+#Preview("Simian Enabled") {
+    SimianProjectCreationDialog(
+        isPresented: .constant(true),
+        simianService: SimianService(),
+        settingsManager: SettingsManager(),
+        initialDocketNumber: "26150",
+        initialJobName: "Test Campaign",
+        isSimianEnabled: true,
+        onConfirm: { _, _, _, _ in }
+    )
+}

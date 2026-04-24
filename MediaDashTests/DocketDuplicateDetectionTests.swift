@@ -22,4 +22,32 @@ final class DocketDuplicateDetectionTests: XCTestCase {
         XCTAssertTrue(DocketDuplicateDetection.simianProjectListContainsDocketNumber("26150-US", projectNames: names))
         XCTAssertFalse(DocketDuplicateDetection.simianProjectListContainsDocketNumber("26151", projectNames: names))
     }
+
+    // MARK: - Edge Cases
+
+    func testEmptyDocketReturnsEmptyString() {
+        XCTAssertEqual(DocketDuplicateDetection.baseNumericDocketString(""), "")
+    }
+
+    func testDocketWithMultipleDashes() {
+        // Should only strip the last country code suffix
+        XCTAssertEqual(DocketDuplicateDetection.baseNumericDocketString("26150-US-CA"), "26150-US")
+    }
+
+    func testEmptyDocketLists() {
+        XCTAssertFalse(DocketDuplicateDetection.workPictureContainsDocketNumber("26150", dockets: []))
+        XCTAssertFalse(DocketDuplicateDetection.simianProjectListContainsDocketNumber("26150", projectNames: []))
+    }
+
+    func testPartialMatchesDoNotCount() {
+        // 2615 is a prefix of 26150 but should not match
+        let dockets = ["26150_Ford_June_Retail"]
+        XCTAssertFalse(DocketDuplicateDetection.workPictureContainsDocketNumber("2615", dockets: dockets))
+        XCTAssertTrue(DocketDuplicateDetection.workPictureContainsDocketNumber("26150", dockets: dockets))
+    }
+
+    func testCaseInsensitiveMatching() {
+        let dockets = ["26150_FORD_RETAIL", "26150_ford_retail"]
+        XCTAssertTrue(DocketDuplicateDetection.workPictureContainsDocketNumber("26150", dockets: dockets))
+    }
 }

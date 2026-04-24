@@ -141,6 +141,7 @@ struct ContentView: View {
         switch currentTheme {
         case .modern: return "MediaDash"
         case .retroDesktop: return "MEDIADASH.EXE"
+        case .windows98: return "MediaDash"
         }
     }
 
@@ -148,6 +149,7 @@ struct ContentView: View {
         switch currentTheme {
         case .modern: return "Professional Media Manager"
         case .retroDesktop: return "C:\\TOOLS\\MEDIA>"
+        case .windows98: return "Professional Media Manager"
         }
     }
 
@@ -157,6 +159,8 @@ struct ContentView: View {
             return .system(size: 28, weight: .semibold, design: .rounded)
         case .retroDesktop:
             return .system(size: 20, weight: .bold, design: .monospaced)
+        case .windows98:
+            return .system(size: 16, weight: .bold, design: .default)
         }
     }
 
@@ -1281,7 +1285,9 @@ struct ActionButtonWithShortcut: View {
             .cornerRadius(theme.buttonCornerRadius)
             .overlay(
                 Group {
-                    if theme == .retroDesktop {
+                    if theme == .windows98 {
+                        Win98BevelOverlay(style: isHovered ? .sunken : .raised)
+                    } else if theme == .retroDesktop {
                         VStack(spacing: 0) {
                             HStack(spacing: 0) {
                                 Rectangle()
@@ -1315,11 +1321,11 @@ struct ActionButtonWithShortcut: View {
                 }
             )
             .shadow(
-                color: theme == .retroDesktop ? .clear : Color.black.opacity(0.15),
+                color: (theme == .retroDesktop || theme == .windows98) ? .clear : Color.black.opacity(0.15),
                 radius: 3,
                 y: 1
             )
-            .scaleEffect((isHovered || isFocused) ? 1.02 : 1.0)
+            .scaleEffect(theme == .windows98 ? 1.0 : (isHovered || isFocused) ? 1.02 : 1.0)
             .animation(.easeInOut(duration: 0.15), value: isHovered)
             .animation(.easeInOut(duration: 0.15), value: isFocused)
         }
@@ -1335,6 +1341,8 @@ struct ActionButtonWithShortcut: View {
             return .system(size: isPrimary ? 16 : 13, weight: .bold, design: .rounded)
         case .retroDesktop:
             return .system(size: isPrimary ? 14 : 12, weight: .bold, design: .monospaced)
+        case .windows98:
+            return .system(size: 11, weight: .bold, design: .default)
         }
     }
 
@@ -1344,6 +1352,8 @@ struct ActionButtonWithShortcut: View {
             return .system(size: 9, weight: .bold, design: .monospaced)
         case .modern:
             return .system(size: 11, weight: .medium)
+        case .windows98:
+            return .system(size: 9, weight: .regular, design: .default)
         }
     }
 }

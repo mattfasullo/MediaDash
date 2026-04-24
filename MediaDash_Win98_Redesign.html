@@ -1,0 +1,1673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1200">
+<title>MediaDash — Windows 98 Redesign</title>
+<style>
+/* ================================================================
+   WINDOWS 98 DESIGN SYSTEM
+   ================================================================ */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
+  font-size: 11px;
+  background: #008080;
+  min-height: 100vh;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* ---- Win98 color tokens ---- */
+:root {
+  --win-bg:          #c0c0c0;
+  --win-dark:        #808080;
+  --win-darker:      #404040;
+  --win-white:       #ffffff;
+  --win-light:       #dfdfdf;
+  --win-title-active-from: #000080;
+  --win-title-active-to:   #1084d0;
+  --win-title-inactive:    #7b7b7b;
+  --win-text:        #000000;
+  --win-select-bg:   #000080;
+  --win-select-text: #ffffff;
+  --win-blue:        #0000ee;
+  --win-red:         #cc0000;
+  --desktop-teal:    #008080;
+}
+
+/* ---- 3D bevel helpers ---- */
+.raised {
+  background: var(--win-bg);
+  border-top:    2px solid var(--win-white);
+  border-left:   2px solid var(--win-white);
+  border-right:  2px solid var(--win-darker);
+  border-bottom: 2px solid var(--win-darker);
+  box-shadow: inset -1px -1px 0 var(--win-dark), inset 1px 1px 0 var(--win-light);
+}
+.sunken {
+  background: var(--win-white);
+  border-top:    2px solid var(--win-darker);
+  border-left:   2px solid var(--win-darker);
+  border-right:  2px solid var(--win-light);
+  border-bottom: 2px solid var(--win-light);
+  box-shadow: inset 1px 1px 0 var(--win-dark), inset -1px -1px 0 var(--win-white);
+}
+.sunken-light {
+  border-top:    1px solid var(--win-dark);
+  border-left:   1px solid var(--win-dark);
+  border-right:  1px solid var(--win-light);
+  border-bottom: 1px solid var(--win-light);
+}
+.group-box {
+  border: 1px solid var(--win-dark);
+  box-shadow: inset 1px 1px 0 var(--win-white);
+  padding: 8px;
+  margin: 6px 0;
+}
+
+/* ---- Window chrome ---- */
+.win-window {
+  background: var(--win-bg);
+  border-top:    2px solid var(--win-white);
+  border-left:   2px solid var(--win-white);
+  border-right:  2px solid var(--win-darker);
+  border-bottom: 2px solid var(--win-darker);
+  box-shadow: inset -1px -1px 0 var(--win-dark), inset 1px 1px 0 var(--win-light);
+  position: absolute;
+  display: none;
+}
+.win-window.active { display: flex; flex-direction: column; }
+
+.win-titlebar {
+  background: linear-gradient(to right, var(--win-title-active-from), var(--win-title-active-to));
+  color: white;
+  font-weight: bold;
+  font-size: 11px;
+  padding: 3px 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.win-titlebar-icon {
+  width: 14px; height: 14px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; flex-shrink: 0;
+}
+.win-titlebar-title { flex: 1; white-space: nowrap; overflow: hidden; }
+.win-titlebar-controls { display: flex; gap: 2px; flex-shrink: 0; }
+.win-ctrl-btn {
+  width: 16px; height: 14px;
+  background: var(--win-bg);
+  border-top:    1px solid var(--win-white);
+  border-left:   1px solid var(--win-white);
+  border-right:  1px solid var(--win-darker);
+  border-bottom: 1px solid var(--win-darker);
+  box-shadow: inset -1px -1px 0 var(--win-dark), inset 1px 1px 0 var(--win-light);
+  color: var(--win-text);
+  font-size: 9px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-family: "MS Sans Serif", Arial, sans-serif;
+  font-weight: bold;
+}
+.win-ctrl-btn:active {
+  border-top:    1px solid var(--win-darker);
+  border-left:   1px solid var(--win-darker);
+  border-right:  1px solid var(--win-white);
+  border-bottom: 1px solid var(--win-white);
+  box-shadow: inset 1px 1px 0 var(--win-dark), inset -1px -1px 0 var(--win-light);
+}
+
+/* Menu bar */
+.win-menubar {
+  background: var(--win-bg);
+  display: flex;
+  padding: 1px 4px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--win-dark);
+}
+.win-menu-item {
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.win-menu-item:hover {
+  background: var(--win-select-bg);
+  color: var(--win-select-text);
+}
+
+/* Content area */
+.win-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Buttons ---- */
+.btn {
+  background: var(--win-bg);
+  border-top:    2px solid var(--win-white);
+  border-left:   2px solid var(--win-white);
+  border-right:  2px solid var(--win-darker);
+  border-bottom: 2px solid var(--win-darker);
+  box-shadow: inset -1px -1px 0 var(--win-dark), inset 1px 1px 0 var(--win-light);
+  padding: 3px 10px;
+  cursor: pointer;
+  font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
+  font-size: 11px;
+  color: var(--win-text);
+  white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 4px;
+  min-width: 75px;
+  justify-content: center;
+}
+.btn:active, .btn.pressed {
+  border-top:    2px solid var(--win-darker);
+  border-left:   2px solid var(--win-darker);
+  border-right:  2px solid var(--win-white);
+  border-bottom: 2px solid var(--win-white);
+  box-shadow: inset 1px 1px 0 var(--win-dark), inset -1px -1px 0 var(--win-light);
+  padding: 4px 9px 2px 11px;
+}
+.btn:hover { background: #d0d0d0; }
+.btn.default-btn {
+  border: 2px solid var(--win-text);
+  box-shadow: 0 0 0 2px var(--win-bg), inset -1px -1px 0 var(--win-dark), inset 1px 1px 0 var(--win-light);
+}
+.btn.big {
+  width: 100%; padding: 20px 6px;
+  font-size: 13px; font-weight: bold;
+  flex-direction: column; gap: 6px;
+  min-width: unset;
+}
+.btn.big .btn-icon { font-size: 22px; }
+.btn.disabled, .btn[disabled] { color: var(--win-dark); cursor: default; }
+
+/* ---- Tab control ---- */
+.tab-strip {
+  display: flex;
+  border-bottom: 2px solid var(--win-dark);
+  padding: 0 2px;
+  background: var(--win-bg);
+  margin-top: 4px;
+}
+.tab-btn {
+  padding: 3px 10px 2px;
+  cursor: pointer;
+  font-size: 11px;
+  border-top:    2px solid var(--win-white);
+  border-left:   2px solid var(--win-white);
+  border-right:  2px solid var(--win-darker);
+  border-bottom: none;
+  background: var(--win-light);
+  margin-right: 2px;
+  position: relative;
+  top: 2px;
+}
+.tab-btn.active {
+  background: var(--win-bg);
+  font-weight: bold;
+  top: 0;
+  padding-bottom: 4px;
+  z-index: 1;
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ---- Input fields ---- */
+.win-input {
+  background: white;
+  border-top:    2px solid var(--win-darker);
+  border-left:   2px solid var(--win-darker);
+  border-right:  2px solid var(--win-light);
+  border-bottom: 2px solid var(--win-light);
+  box-shadow: inset 1px 1px 0 var(--win-dark);
+  padding: 2px 4px;
+  font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
+  font-size: 11px;
+  color: var(--win-text);
+  outline: none;
+  width: 100%;
+}
+.win-input:focus {
+  outline: 1px dotted var(--win-text);
+  outline-offset: -3px;
+}
+
+/* ---- Select/Dropdown ---- */
+.win-select {
+  background: white;
+  border-top:    2px solid var(--win-darker);
+  border-left:   2px solid var(--win-darker);
+  border-right:  2px solid var(--win-light);
+  border-bottom: 2px solid var(--win-light);
+  padding: 1px 3px;
+  font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
+  font-size: 11px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Crect width='16' height='16' fill='%23c0c0c0'/%3E%3Crect x='1' y='1' width='14' height='14' fill='%23c0c0c0'/%3E%3Cpath d='M4 6 L8 10 L12 6' stroke='black' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0px center;
+  background-size: 16px;
+  padding-right: 18px;
+  cursor: pointer;
+}
+
+/* ---- List boxes ---- */
+.win-listbox {
+  background: white;
+  border-top:    2px solid var(--win-darker);
+  border-left:   2px solid var(--win-darker);
+  border-right:  2px solid var(--win-light);
+  border-bottom: 2px solid var(--win-light);
+  box-shadow: inset 1px 1px 0 var(--win-dark);
+  overflow-y: auto;
+  font-size: 11px;
+}
+.win-listitem {
+  padding: 2px 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.win-listitem:hover { background: #aaadcc; }
+.win-listitem.selected { background: var(--win-select-bg); color: var(--win-select-text); }
+
+/* ---- Status bar ---- */
+.win-statusbar {
+  background: var(--win-bg);
+  border-top: 1px solid var(--win-dark);
+  padding: 2px 4px;
+  display: flex;
+  gap: 4px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.statusbar-pane {
+  border-top:    1px solid var(--win-dark);
+  border-left:   1px solid var(--win-dark);
+  border-right:  1px solid var(--win-light);
+  border-bottom: 1px solid var(--win-light);
+  padding: 1px 6px;
+  flex: 1;
+}
+
+/* ---- Scrollbar (approximate Win98 look) ---- */
+::-webkit-scrollbar { width: 16px; height: 16px; }
+::-webkit-scrollbar-track { background: var(--win-light); }
+::-webkit-scrollbar-thumb {
+  background: var(--win-bg);
+  border-top:    2px solid var(--win-white);
+  border-left:   2px solid var(--win-white);
+  border-right:  2px solid var(--win-darker);
+  border-bottom: 2px solid var(--win-darker);
+}
+::-webkit-scrollbar-button { background: var(--win-bg); height: 16px; width: 16px; }
+
+/* ---- Taskbar ---- */
+#taskbar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 30px;
+  background: var(--win-bg);
+  border-top: 2px solid var(--win-white);
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  gap: 4px;
+  z-index: 9999;
+}
+#start-btn {
+  height: 22px;
+  padding: 2px 8px;
+  font-weight: bold;
+  font-size: 11px;
+  display: flex; align-items: center; gap: 4px;
+  cursor: pointer;
+  background: var(--win-bg);
+  border-top:    2px solid var(--win-white);
+  border-left:   2px solid var(--win-white);
+  border-right:  2px solid var(--win-darker);
+  border-bottom: 2px solid var(--win-darker);
+  box-shadow: inset -1px -1px 0 var(--win-dark), inset 1px 1px 0 var(--win-light);
+}
+.taskbar-divider {
+  width: 2px; height: 20px;
+  border-left: 1px solid var(--win-dark);
+  border-right: 1px solid var(--win-light);
+  margin: 0 2px;
+}
+.taskbar-btn {
+  height: 22px; padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  background: var(--win-bg);
+  border: 2px solid transparent;
+  display: flex; align-items: center; gap: 4px;
+  white-space: nowrap;
+  max-width: 150px; overflow: hidden;
+}
+.taskbar-btn.active {
+  border-top:    2px solid var(--win-darker);
+  border-left:   2px solid var(--win-darker);
+  border-right:  2px solid var(--win-white);
+  border-bottom: 2px solid var(--win-white);
+  background: var(--win-light);
+}
+.taskbar-clock {
+  margin-left: auto;
+  border-top:    1px solid var(--win-dark);
+  border-left:   1px solid var(--win-dark);
+  border-right:  1px solid var(--win-white);
+  border-bottom: 1px solid var(--win-white);
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* ---- Screen nav (designer overlay) ---- */
+#screen-nav {
+  position: fixed;
+  top: 6px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.75);
+  color: white;
+  padding: 4px 8px;
+  display: flex; gap: 4px; align-items: center;
+  border-radius: 3px;
+  z-index: 99999;
+  font-size: 10px;
+}
+#screen-nav span { opacity: 0.7; margin-right: 4px; }
+.snav-btn {
+  background: #333;
+  border: 1px solid #666;
+  color: white;
+  padding: 2px 7px;
+  cursor: pointer;
+  font-size: 10px;
+  border-radius: 2px;
+  font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
+}
+.snav-btn.active { background: #1084d0; border-color: #4ab; }
+
+/* ---- Checkbox / Radio ---- */
+.win-checkbox {
+  display: flex; align-items: center; gap: 5px;
+  cursor: pointer; font-size: 11px;
+}
+.win-checkbox input[type=checkbox], .win-checkbox input[type=radio] {
+  width: 13px; height: 13px;
+  accent-color: var(--win-text);
+}
+
+/* ---- Progress bar ---- */
+.win-progress {
+  background: white;
+  border-top:    2px solid var(--win-darker);
+  border-left:   2px solid var(--win-darker);
+  border-right:  2px solid var(--win-light);
+  border-bottom: 2px solid var(--win-light);
+  height: 16px; overflow: hidden;
+}
+.win-progress-fill {
+  height: 100%;
+  background: repeating-linear-gradient(
+    90deg,
+    #000080 0px, #000080 8px,
+    #1084d0 8px, #1084d0 16px
+  );
+}
+
+/* ---- Color badge (docket studio color) ---- */
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: bold;
+  border-top:    1px solid var(--win-white);
+  border-left:   1px solid var(--win-white);
+  border-right:  1px solid var(--win-darker);
+  border-bottom: 1px solid var(--win-darker);
+}
+.badge-blue  { background: #000080; color: white; }
+.badge-red   { background: #aa0000; color: white; }
+.badge-green { background: #006600; color: white; }
+.badge-gray  { background: #808080; color: white; }
+.badge-docket { background: #000080; color: white; font-family: monospace; }
+
+/* ---- Separator ---- */
+.win-sep {
+  height: 2px;
+  border-top: 1px solid var(--win-dark);
+  border-bottom: 1px solid var(--win-white);
+  margin: 4px 0;
+}
+
+/* ---- Docket session card ---- */
+.session-card {
+  border-top:    1px solid var(--win-white);
+  border-left:   1px solid var(--win-white);
+  border-right:  1px solid var(--win-darker);
+  border-bottom: 1px solid var(--win-darker);
+  background: var(--win-bg);
+  margin-bottom: 4px;
+  padding: 5px 7px;
+}
+.session-card:hover { background: var(--win-light); }
+.session-card .session-num {
+  font-family: "Courier New", monospace;
+  font-weight: bold;
+  font-size: 12px;
+}
+.session-card .folder-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px 4px; margin-top: 2px;
+  background: white;
+  border-top:    1px solid var(--win-darker);
+  border-left:   1px solid var(--win-darker);
+  border-right:  1px solid var(--win-light);
+  border-bottom: 1px solid var(--win-light);
+  font-size: 10px;
+}
+
+/* ================================================================
+   DESKTOP
+   ================================================================ */
+#desktop {
+  width: 100vw;
+  height: calc(100vh - 30px);
+  position: relative;
+  background: #008080;
+  overflow: hidden;
+}
+
+/* ================================================================
+   SCREEN 1: MAIN COMPACT VIEW
+   ================================================================ */
+#win-main {
+  top: 30px; left: 80px;
+  width: 620px;
+  height: 620px;
+}
+.main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+.main-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: #1a1a2e;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 6px;
+  border-right: 2px solid var(--win-darker);
+  overflow-y: auto;
+}
+.main-sidebar .logo-area {
+  text-align: center;
+  padding: 8px 0 4px;
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  font-family: Arial, sans-serif;
+  border-bottom: 1px solid #444;
+  margin-bottom: 4px;
+}
+.main-sidebar .logo-area .logo-sub {
+  font-size: 9px;
+  letter-spacing: 1px;
+  opacity: 0.5;
+  font-weight: normal;
+}
+.sidebar-btn-new-dockets {
+  background: #1e3a5f;
+  border-top:    1px solid #4a7ab5;
+  border-left:   1px solid #4a7ab5;
+  border-right:  1px solid #0a1a30;
+  border-bottom: 1px solid #0a1a30;
+  color: #aaccff;
+  padding: 5px 8px;
+  font-size: 11px;
+  display: flex; align-items: center; gap: 5px;
+  cursor: pointer;
+  font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
+  width: 100%;
+  justify-content: center;
+}
+.sidebar-btn-new-dockets:hover { background: #254878; }
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.action-grid .btn.big {
+  background: var(--win-bg);
+  color: var(--win-text);
+  border-top:    2px solid var(--win-white);
+  border-left:   2px solid var(--win-white);
+  border-right:  2px solid var(--win-darker);
+  border-bottom: 2px solid var(--win-darker);
+}
+.action-grid .btn.big.file  { background: #6080a0; color: white; border-color: #8aaccc #2a4060 #2a4060 #8aaccc; }
+.action-grid .btn.big.simian{ background: #807040; color: white; border-color: #aaaa60 #404020 #404020 #aaaa60; }
+.action-grid .btn.big.calendar { background: #406040; color: white; border-color: #60aa60 #203020 #203020 #60aa60; }
+.action-grid .btn.big.video { background: #804040; color: white; border-color: #aa6060 #402020 #402020 #aa6060; }
+.sidebar-link-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px;
+  color: #ccddff;
+  cursor: pointer;
+  font-size: 11px;
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+}
+.sidebar-link-row:hover {
+  background: #253555;
+  border-color: #4a7ab5 #0a1a30;
+}
+.sidebar-icon { font-size: 13px; }
+.sidebar-footer {
+  margin-top: auto;
+  border-top: 1px solid #444;
+  padding-top: 6px;
+  display: flex; align-items: center; justify-content: space-between;
+  color: #aaa;
+  font-size: 10px;
+}
+
+/* Sessions panel */
+.sessions-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #252535;
+  overflow: hidden;
+}
+.sessions-header {
+  background: #1e1e2e;
+  color: #cce;
+  padding: 5px 8px;
+  font-size: 11px;
+  display: flex; align-items: center; gap: 5px;
+  border-bottom: 2px solid var(--win-darker);
+  font-weight: bold;
+  flex-shrink: 0;
+}
+.sessions-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #1e1e2e;
+}
+.sess-card {
+  background: #2a2a3e;
+  border-top:    1px solid #4a4a6a;
+  border-left:   1px solid #4a4a6a;
+  border-right:  1px solid #111122;
+  border-bottom: 1px solid #111122;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.sess-card:hover { background: #333350; }
+.sess-num {
+  font-family: "Courier New", monospace;
+  font-weight: bold;
+  font-size: 12px;
+  color: white;
+}
+.sess-name { font-size: 10px; color: #aab; margin-top: 1px; }
+.sess-row-label { color: #f90; font-size: 10px; margin-top: 5px; display: flex; align-items: center; gap: 3px; }
+.sess-row-label.prep { color: #88aaff; }
+.sess-folder-btn {
+  display: flex; align-items: center; gap: 5px;
+  background: #1a1a2a;
+  border-top: 1px solid #333355;
+  border-left: 1px solid #333355;
+  border-right: 1px solid #0a0a15;
+  border-bottom: 1px solid #0a0a15;
+  padding: 3px 6px;
+  margin-top: 2px;
+  color: #ccccee;
+  font-size: 10px;
+  cursor: pointer;
+}
+.sess-folder-btn:hover { background: #252540; }
+.sess-status {
+  position: absolute;
+  bottom: 3px;
+  right: 8px;
+  font-size: 9px;
+  color: #88aaff;
+}
+.sessions-statusbar {
+  background: #1a1a28;
+  border-top: 1px solid #444;
+  padding: 3px 8px;
+  font-size: 10px;
+  color: #88aaff;
+  display: flex; align-items: center; gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ================================================================
+   SCREEN 2: NEW DOCKETS WINDOW
+   ================================================================ */
+#win-newdockets {
+  top: 60px; left: 350px;
+  width: 500px; height: 420px;
+}
+.newdockets-empty {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 10px; background: var(--win-bg);
+}
+.newdockets-empty .nd-icon { font-size: 40px; }
+.newdockets-empty .nd-title { font-weight: bold; font-size: 12px; }
+.newdockets-empty .nd-sub { color: var(--win-dark); font-size: 11px; }
+.newdockets-footer {
+  background: var(--win-bg);
+  border-top: 2px solid var(--win-dark);
+  padding: 6px 8px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ================================================================
+   SCREEN 3: SEARCH WINDOW
+   ================================================================ */
+#win-search {
+  top: 50px; left: 220px;
+  width: 520px; height: 420px;
+}
+.search-body { padding: 8px; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.search-results-area {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* ================================================================
+   SCREEN 4: JOB INFO WINDOW
+   ================================================================ */
+#win-jobinfo {
+  top: 55px; left: 200px;
+  width: 500px; height: 500px;
+}
+.jobinfo-body { padding: 6px; flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.jobinfo-meta { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.jobinfo-sync-bar { display: flex; align-items: center; gap: 6px; flex-shrink: 0; font-size: 10px; }
+.jobinfo-count { font-size: 10px; color: var(--win-dark); flex-shrink: 0; }
+
+/* ================================================================
+   SCREEN 5: CALENDAR WINDOW
+   ================================================================ */
+#win-calendar {
+  top: 35px; left: 150px;
+  width: 700px; height: 600px;
+}
+.cal-body { padding: 6px; flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.cal-toolbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.cal-checkboxes { display: flex; gap: 10px; flex-shrink: 0; }
+.cal-grid {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+.cal-header-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; flex-shrink: 0; }
+.cal-header-cell {
+  background: var(--win-bg);
+  border: 1px solid var(--win-dark);
+  padding: 2px 4px;
+  font-weight: bold;
+  font-size: 10px;
+  text-align: center;
+}
+.cal-week-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; flex: 1; }
+.cal-day-cell {
+  background: white;
+  border-top:    1px solid var(--win-darker);
+  border-left:   1px solid var(--win-darker);
+  border-right:  1px solid var(--win-light);
+  border-bottom: 1px solid var(--win-light);
+  padding: 3px 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  overflow: hidden;
+}
+.cal-day-cell:hover { background: #eeeeff; }
+.cal-day-cell.today { background: #ddeeff; border-color: #000080; }
+.cal-day-num { font-weight: bold; font-size: 11px; }
+.cal-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px;
+  background: #000080; color: white;
+  border-radius: 50%;
+  font-size: 9px; font-weight: bold;
+}
+
+/* Cal day detail panel */
+.cal-day-detail {
+  background: var(--win-bg);
+  border-top: 2px solid var(--win-dark);
+  padding: 6px;
+  flex-shrink: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.cal-day-detail-title {
+  font-weight: bold; font-size: 11px; margin-bottom: 4px;
+  display: flex; align-items: center; gap: 6px;
+}
+.cal-event-list { display: flex; flex-direction: column; gap: 2px; }
+.cal-event-section { font-weight: bold; font-size: 10px; color: var(--win-dark); margin-top: 4px; margin-bottom: 1px; }
+.cal-event-row {
+  background: white;
+  border-top:    1px solid var(--win-darker);
+  border-left:   1px solid var(--win-darker);
+  border-right:  1px solid var(--win-light);
+  border-bottom: 1px solid var(--win-light);
+  padding: 2px 6px;
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 10px;
+}
+.cal-event-row .event-assignee { color: var(--win-dark); font-size: 9px; }
+
+/* ================================================================
+   SCREEN 6: SETTINGS WINDOW
+   ================================================================ */
+#win-settings {
+  top: 40px; left: 250px;
+  width: 560px; height: 580px;
+}
+.settings-body {
+  padding: 8px 10px;
+  flex: 1;
+  overflow-y: auto;
+}
+.settings-section {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--win-dark);
+}
+.settings-section:last-child { border-bottom: none; }
+.settings-section-title {
+  font-weight: bold; font-size: 11px;
+  margin-bottom: 6px;
+  display: flex; align-items: center; gap: 5px;
+}
+.settings-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.settings-label { min-width: 100px; font-size: 11px; }
+.settings-val { font-size: 11px; }
+.profile-card {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: white;
+  border-top:    1px solid var(--win-darker);
+  border-left:   1px solid var(--win-darker);
+  border-right:  1px solid var(--win-light);
+  border-bottom: 1px solid var(--win-light);
+  margin-bottom: 6px;
+}
+.profile-avatar {
+  width: 28px; height: 28px;
+  background: #000080; color: white;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: bold; font-size: 12px;
+}
+.radio-group { display: flex; gap: 12px; }
+.radio-btn {
+  border-top:    2px solid var(--win-white);
+  border-left:   2px solid var(--win-white);
+  border-right:  2px solid var(--win-darker);
+  border-bottom: 2px solid var(--win-darker);
+  background: var(--win-bg);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  display: flex; align-items: center; gap: 3px;
+}
+.radio-btn.active {
+  border-top:    2px solid var(--win-darker);
+  border-left:   2px solid var(--win-darker);
+  border-right:  2px solid var(--win-white);
+  border-bottom: 2px solid var(--win-white);
+  background: var(--win-light);
+}
+.window-mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+.wmode-card {
+  border-top:    2px solid var(--win-white);
+  border-left:   2px solid var(--win-white);
+  border-right:  2px solid var(--win-darker);
+  border-bottom: 2px solid var(--win-darker);
+  background: var(--win-bg);
+  padding: 12px 8px;
+  text-align: center;
+  cursor: pointer;
+}
+.wmode-card.active {
+  border: 2px solid #000080;
+  background: #ddeeff;
+}
+.wmode-card .wmode-icon { font-size: 22px; margin-bottom: 4px; }
+.wmode-card .wmode-label { font-weight: bold; font-size: 11px; }
+.wmode-card .wmode-sub { font-size: 9px; color: var(--win-dark); }
+.wmode-card.disabled { opacity: 0.5; cursor: default; }
+.slider-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.win-slider { flex: 1; accent-color: #000080; }
+.settings-footer {
+  background: var(--win-bg);
+  border-top: 2px solid var(--win-dark);
+  padding: 6px 8px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+
+/* ================================================================
+   SCREEN 7: ARCHIVER WINDOW
+   ================================================================ */
+#win-archiver {
+  top: 45px; left: 120px;
+  width: 780px; height: 570px;
+}
+.archiver-body { padding: 6px 8px; flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.archiver-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  flex-shrink: 0; flex-wrap: wrap;
+}
+.archiver-list {
+  flex: 1;
+  overflow-y: auto;
+}
+.archiver-item {
+  padding: 3px 6px;
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid #eee;
+  cursor: pointer; font-size: 11px;
+}
+.archiver-item:hover { background: #ddeeff; }
+.archiver-item.selected { background: var(--win-select-bg); color: var(--win-select-text); }
+.archiver-footer {
+  background: var(--win-bg);
+  border-top: 2px solid var(--win-dark);
+  padding: 6px 8px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SCREEN NAVIGATOR (designer overlay) ===== -->
+<div id="screen-nav">
+  <span>SCREENS:</span>
+  <button class="snav-btn active" onclick="showScreen('main')">1 Main</button>
+  <button class="snav-btn" onclick="showScreen('newdockets')">2 New Dockets</button>
+  <button class="snav-btn" onclick="showScreen('search')">3 Search</button>
+  <button class="snav-btn" onclick="showScreen('jobinfo')">4 Job Info</button>
+  <button class="snav-btn" onclick="showScreen('calendar')">5 Calendar</button>
+  <button class="snav-btn" onclick="showScreen('settings')">6 Settings</button>
+  <button class="snav-btn" onclick="showScreen('archiver')">7 Archiver</button>
+</div>
+
+<!-- ===== DESKTOP ===== -->
+<div id="desktop">
+
+  <!-- ============================================================
+       SCREEN 1: MAIN COMPACT VIEW
+       ============================================================ -->
+  <div class="win-window active" id="win-main">
+    <!-- Title Bar -->
+    <div class="win-titlebar">
+      <span class="win-titlebar-icon">🎬</span>
+      <span class="win-titlebar-title">MediaDash</span>
+      <div class="win-titlebar-controls">
+        <div class="win-ctrl-btn">_</div>
+        <div class="win-ctrl-btn">□</div>
+        <div class="win-ctrl-btn">×</div>
+      </div>
+    </div>
+    <!-- Menu bar -->
+    <div class="win-menubar">
+      <span class="win-menu-item">File</span>
+      <span class="win-menu-item">Edit</span>
+      <span class="win-menu-item">View</span>
+      <span class="win-menu-item">Window</span>
+      <span class="win-menu-item">Help</span>
+    </div>
+    <!-- Main layout -->
+    <div class="main-layout win-content">
+      <!-- Left Sidebar -->
+      <div class="main-sidebar">
+        <div class="logo-area">
+          ≋ MEDIADASH
+          <div class="logo-sub">v1.10</div>
+        </div>
+
+        <button class="sidebar-btn-new-dockets" onclick="showScreen('newdockets')">
+          🔔 New Dockets
+        </button>
+
+        <div class="win-sep"></div>
+
+        <div class="action-grid">
+          <button class="btn big file">
+            <span class="btn-icon">📁</span>
+            File
+          </button>
+          <button class="btn big simian">
+            <span class="btn-icon">⬆</span>
+            Simian
+          </button>
+          <button class="btn big calendar" onclick="showScreen('calendar')">
+            <span class="btn-icon">📅</span>
+            Calendar
+          </button>
+          <button class="btn big video">
+            <span class="btn-icon">🎞</span>
+            Video
+          </button>
+        </div>
+
+        <div class="win-sep"></div>
+
+        <div class="sidebar-link-row" onclick="showScreen('search')">
+          <span class="sidebar-icon">🔍</span> Search
+        </div>
+        <div class="sidebar-link-row" onclick="showScreen('jobinfo')">
+          <span class="sidebar-icon">#</span> Job Info
+        </div>
+        <div class="sidebar-link-row" onclick="showScreen('archiver')">
+          <span class="sidebar-icon">📦</span> Archiver
+        </div>
+
+        <div class="sidebar-footer">
+          <span>👤 mattfasullo</span>
+          <span style="cursor:pointer;color:#ff8888;">Log Out</span>
+        </div>
+      </div>
+
+      <!-- Sessions Panel -->
+      <div class="sessions-panel">
+        <div class="sessions-header">
+          📋 Sessions
+          <span style="margin-left:auto;cursor:pointer;opacity:0.6;" onclick="showScreen('settings')">⚙</span>
+        </div>
+        <div class="sessions-list">
+
+          <!-- Docket 26109 -->
+          <div class="sess-card">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span class="sess-num">26109</span>
+              <span class="badge badge-red">C - Red</span>
+            </div>
+            <div class="sess-name">CAMH Suicide Helpline  - LS/VN</div>
+            <div class="sess-row-label">● Work picture</div>
+            <div class="sess-folder-btn">📁 26109_CAMH Suicide Helpline</div>
+            <div class="sess-row-label prep">● Prep</div>
+            <div class="sess-folder-btn">📁 26109_CAMH Suicide Helpline_PREP_Apr22.26</div>
+          </div>
+
+          <!-- Docket 26138 -->
+          <div class="sess-card">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span class="sess-num">26138</span>
+              <span class="badge badge-blue">A - Blue</span>
+            </div>
+            <div class="sess-name">Fidelity Canada @ 10am AWM/KJM</div>
+            <div class="sess-row-label">● Work picture</div>
+            <div class="sess-folder-btn">📁 26138_Fidelity Canada</div>
+            <div class="sess-row-label prep">● Prep</div>
+            <div class="sess-folder-btn">📁 26138_Fidelity Canada_PREP_Apr22.26</div>
+          </div>
+
+          <!-- Docket 26019 -->
+          <div class="sess-card">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span class="sess-num">26019</span>
+              <span class="badge badge-green">B - Green</span>
+            </div>
+            <div class="sess-name">OLG Instants @10am MD/EH</div>
+            <div class="sess-row-label">● Work picture</div>
+            <div class="sess-folder-btn">📁 26019_OLG Instants</div>
+            <div class="sess-row-label prep">● Prep</div>
+            <div class="sess-folder-btn">📁 26019_OLG Instants_PREP_Apr22.26</div>
+          </div>
+
+        </div>
+        <div class="sessions-statusbar">
+          <span>📡</span>
+          <span>58% Fetching project metadata...</span>
+          <div class="win-progress" style="flex:1;max-width:100px;">
+            <div class="win-progress-fill" style="width:58%;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Status bar -->
+    <div class="win-statusbar">
+      <div class="statusbar-pane">Ready</div>
+      <div class="statusbar-pane" style="flex:0;min-width:120px;">mattfasullo ● Synced</div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN 2: NEW DOCKETS WINDOW
+       ============================================================ -->
+  <div class="win-window" id="win-newdockets">
+    <div class="win-titlebar">
+      <span class="win-titlebar-icon">🔔</span>
+      <span class="win-titlebar-title">New Dockets</span>
+      <div class="win-titlebar-controls">
+        <div class="win-ctrl-btn">↺</div>
+        <div class="win-ctrl-btn">×</div>
+      </div>
+    </div>
+    <div class="tab-strip">
+      <div class="tab-btn active">All</div>
+      <div class="tab-btn">Dockets</div>
+      <div class="tab-btn">Requests</div>
+      <div class="tab-btn">Files</div>
+      <div class="tab-btn">Review</div>
+    </div>
+    <div class="newdockets-empty win-content">
+      <span class="nd-icon">🔕</span>
+      <span class="nd-title">No notifications</span>
+      <span class="nd-sub">No unread docket emails found</span>
+      <button class="btn default-btn" style="margin-top:8px;">↺ Scan for new dockets</button>
+    </div>
+    <div class="newdockets-footer">
+      <button class="btn" onclick="showScreen('main')">Close</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN 3: SEARCH WINDOW
+       ============================================================ -->
+  <div class="win-window" id="win-search">
+    <div class="win-titlebar">
+      <span class="win-titlebar-icon">🔍</span>
+      <span class="win-titlebar-title">Search Server</span>
+      <div class="win-titlebar-controls">
+        <div class="win-ctrl-btn">×</div>
+      </div>
+    </div>
+    <div class="search-body win-content">
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span>🔍</span>
+        <input class="win-input" type="text" placeholder="Search server..." style="flex:1;">
+      </div>
+      <div class="tab-strip" style="margin-top:2px;">
+        <div class="tab-btn">Work Picture</div>
+        <div class="tab-btn">Media Postings</div>
+        <div class="tab-btn active">Pro Tools Sessions</div>
+      </div>
+      <div class="search-results-area win-listbox" style="min-height:200px;padding:8px;color:var(--win-dark);font-size:11px;display:flex;align-items:center;justify-content:center;">
+        Type to search Pro Tools Sessions on the server
+      </div>
+    </div>
+    <div style="padding:6px 8px;display:flex;justify-content:space-between;background:var(--win-bg);border-top:2px solid var(--win-dark);">
+      <button class="btn" onclick="showScreen('main')">Close</button>
+      <button class="btn" disabled>Open Folder</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN 4: JOB INFO WINDOW
+       ============================================================ -->
+  <div class="win-window" id="win-jobinfo">
+    <div class="win-titlebar">
+      <span class="win-titlebar-icon">#</span>
+      <span class="win-titlebar-title">Job Info — Docket Search</span>
+      <div class="win-titlebar-controls">
+        <div class="win-ctrl-btn">×</div>
+      </div>
+    </div>
+    <div class="jobinfo-body win-content">
+      <div class="jobinfo-meta">
+        <span style="font-size:14px;">🔎</span>
+        <input class="win-input" type="text" placeholder="Search docket numbers or job names..." style="flex:1;">
+      </div>
+      <div class="jobinfo-sync-bar">
+        <span>Sort by:</span>
+        <select class="win-select" style="width:140px;">
+          <option>Recently Updated</option>
+          <option>Creation Time</option>
+        </select>
+        <div class="win-progress" style="width:120px;">
+          <div class="win-progress-fill" style="width:15%;"></div>
+        </div>
+        <span>Starting sync...</span>
+        <span style="margin-left:auto;">0%</span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:10px;color:var(--win-dark);">Last sync: 1 hr, 24 mins</span>
+        <span class="jobinfo-count">All Dockets — 2,854 dockets</span>
+      </div>
+      <div class="win-listbox search-results-area" style="flex:1;">
+        <div class="win-listitem selected">
+          <span class="badge badge-docket">26165</span>
+          <span style="flex:1;">Maple Radio/Spotify</span>
+          <span style="color:var(--win-dark);font-size:9px;">SESSION REPORT</span>
+          <span style="font-size:12px;cursor:pointer;">●</span>
+          <span style="font-size:12px;cursor:pointer;">📋</span>
+        </div>
+        <div class="win-listitem">
+          <span class="badge badge-docket">26164</span>
+          <span style="flex:1;">Lexus Brand Chapter 2</span>
+          <span style="color:var(--win-dark);font-size:9px;">SESSION REPORT</span>
+          <span style="font-size:12px;cursor:pointer;">●</span>
+          <span style="font-size:12px;cursor:pointer;">📋</span>
+        </div>
+        <div class="win-listitem">
+          <span class="badge badge-docket">26163</span>
+          <span style="flex:1;">Nemours Children's Hospital</span>
+          <span style="color:var(--win-dark);font-size:9px;">SESSION REPORT</span>
+          <span style="font-size:12px;cursor:pointer;">●</span>
+          <span style="font-size:12px;cursor:pointer;">📋</span>
+        </div>
+        <div class="win-listitem">
+          <span class="badge badge-docket">26162</span>
+          <span style="flex:1;">Coors Banquet</span>
+          <span style="color:var(--win-dark);font-size:9px;">SESSION REPORT</span>
+          <span style="font-size:12px;cursor:pointer;">●</span>
+          <span style="font-size:12px;cursor:pointer;">📋</span>
+        </div>
+        <div class="win-listitem">
+          <span class="badge badge-docket">26161</span>
+          <span style="flex:1;">Lincoln Q3</span>
+          <span style="color:var(--win-dark);font-size:9px;">SESSION REPORT</span>
+          <span style="font-size:12px;cursor:pointer;">●</span>
+          <span style="font-size:12px;cursor:pointer;">📋</span>
+        </div>
+        <div class="win-listitem">
+          <span class="badge badge-docket">26159</span>
+          <span style="flex:1;">Pfizer Paxlovid</span>
+          <span style="color:var(--win-dark);font-size:9px;">SESSION REPORT</span>
+          <span style="font-size:12px;cursor:pointer;">●</span>
+          <span style="font-size:12px;cursor:pointer;">📋</span>
+        </div>
+        <div class="win-listitem">
+          <span class="badge badge-docket">26158</span>
+          <span style="flex:1;">Tide Spring Refresh</span>
+          <span style="color:var(--win-dark);font-size:9px;">SESSION REPORT</span>
+          <span style="font-size:12px;cursor:pointer;">●</span>
+          <span style="font-size:12px;cursor:pointer;">📋</span>
+        </div>
+        <div class="win-listitem">
+          <span class="badge badge-docket">26156</span>
+          <span style="flex:1;">AMEX GABM</span>
+          <span style="color:var(--win-dark);font-size:9px;">SESSION REPORT</span>
+          <span style="font-size:12px;cursor:pointer;">●</span>
+          <span style="font-size:12px;cursor:pointer;">📋</span>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--win-dark);padding:2px 0;">
+        ℹ Reference only — type to search by number or job name
+      </div>
+    </div>
+    <div style="padding:6px 8px;display:flex;justify-content:flex-end;background:var(--win-bg);border-top:2px solid var(--win-dark);">
+      <button class="btn" onclick="showScreen('main')">Close</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN 5: ASANA CALENDAR WINDOW
+       ============================================================ -->
+  <div class="win-window" id="win-calendar">
+    <div class="win-titlebar">
+      <span class="win-titlebar-icon">📅</span>
+      <span class="win-titlebar-title">Asana Calendar</span>
+      <div class="win-titlebar-controls">
+        <div class="win-ctrl-btn">×</div>
+      </div>
+    </div>
+    <div class="cal-body win-content">
+      <div class="cal-toolbar">
+        <span style="font-weight:bold;">Calendar</span>
+        <span style="margin-left:auto;font-size:10px;">Show:</span>
+        <label class="win-checkbox"><input type="checkbox" checked> Sessions</label>
+        <label class="win-checkbox"><input type="checkbox" checked> Media Tasks</label>
+        <label class="win-checkbox"><input type="checkbox" checked> Other Tasks</label>
+        <label class="win-checkbox"><input type="checkbox"> Weekends</label>
+      </div>
+      <div class="cal-grid">
+        <!-- Header row -->
+        <div class="cal-header-row">
+          <div class="cal-header-cell">Mon</div>
+          <div class="cal-header-cell">Tue</div>
+          <div class="cal-header-cell">Wed</div>
+          <div class="cal-header-cell">Thu</div>
+          <div class="cal-header-cell">Fri</div>
+        </div>
+        <!-- Week 1 -->
+        <div class="cal-week-row">
+          <div class="cal-day-cell" onclick="showDayDetail('Mon Apr 21')">
+            <span class="cal-day-num">20</span>
+            <span class="cal-badge">7</span>
+          </div>
+          <div class="cal-day-cell today" onclick="showDayDetail('Tue, Apr 21')">
+            <span class="cal-day-num" style="color:#000080;text-decoration:underline;">21</span>
+            <span class="cal-badge">12</span>
+          </div>
+          <div class="cal-day-cell" onclick="showDayDetail('Wed Apr 22')">
+            <span class="cal-day-num">22</span>
+            <span class="cal-badge">10</span>
+          </div>
+          <div class="cal-day-cell" onclick="showDayDetail('Thu Apr 23')">
+            <span class="cal-day-num">23</span>
+            <span class="cal-badge">10</span>
+          </div>
+          <div class="cal-day-cell" onclick="showDayDetail('Fri Apr 24')">
+            <span class="cal-day-num">24</span>
+            <span class="cal-badge">4</span>
+          </div>
+        </div>
+        <!-- Week 2 -->
+        <div class="cal-week-row">
+          <div class="cal-day-cell"><span class="cal-day-num">27</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">28</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">29</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">30</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">1</span></div>
+        </div>
+        <!-- Week 3 -->
+        <div class="cal-week-row">
+          <div class="cal-day-cell"><span class="cal-day-num">4</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">5</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">6</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">7</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">8</span></div>
+        </div>
+        <!-- Week 4 -->
+        <div class="cal-week-row">
+          <div class="cal-day-cell"><span class="cal-day-num">11</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">12</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">13</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">14</span></div>
+          <div class="cal-day-cell"><span class="cal-day-num">15</span></div>
+        </div>
+      </div>
+
+      <!-- Day detail panel -->
+      <div class="cal-day-detail" id="cal-day-detail">
+        <div class="cal-day-detail-title">
+          Tue, Apr 21
+          <span class="badge badge-blue" style="font-size:9px;padding:1px 6px;">Today</span>
+          <span style="margin-left:auto;">
+            <button class="btn" style="min-width:0;padding:2px 8px;" onclick="hideDayDetail()">Close</button>
+          </span>
+        </div>
+        <div class="cal-event-list">
+          <div class="cal-event-section">Sessions (2)</div>
+          <div class="cal-event-row">
+            <span>● SESSION — AMEX GABM @10am MD/EH</span>
+            <span class="event-assignee">Nicholas Shaw</span>
+            <button class="btn" style="min-width:0;padding:1px 6px;font-size:10px;">Prep</button>
+          </div>
+          <div class="cal-event-row">
+            <span>● SESSION — Jacks FOH 2026 - AWM/KJM</span>
+            <span class="event-assignee">Kelly McCluskey</span>
+            <button class="btn" style="min-width:0;padding:1px 6px;font-size:10px;">Prep</button>
+          </div>
+          <div class="cal-event-section">Media Tasks (2)</div>
+          <div class="cal-event-row">
+            <span>● POST — Keenova — Xiaflex Viking Rev @12pm ME</span>
+            <span class="badge badge-gray" style="font-size:9px;padding:1px 4px;">Post</span>
+            <span style="font-size:10px;color:var(--win-dark);">media</span>
+          </div>
+          <div class="cal-event-row">
+            <span>● MIX — Tide Spring Refresh @2pm</span>
+            <span class="badge badge-gray" style="font-size:9px;padding:1px 4px;">Mix</span>
+            <span style="font-size:10px;color:var(--win-dark);">media</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="win-statusbar">
+      <div class="statusbar-pane">Click a date to view sessions</div>
+      <div class="statusbar-pane" style="flex:0;min-width:80px;text-align:right;">
+        <button class="btn" style="min-width:0;padding:1px 6px;font-size:10px;" onclick="showScreen('main')">Close</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN 6: SETTINGS WINDOW
+       ============================================================ -->
+  <div class="win-window" id="win-settings">
+    <div class="win-titlebar">
+      <span class="win-titlebar-icon">⚙</span>
+      <span class="win-titlebar-title">MediaDash Settings</span>
+      <div class="win-titlebar-controls">
+        <div class="win-ctrl-btn">×</div>
+      </div>
+    </div>
+    <div class="settings-body win-content">
+
+      <!-- Profile -->
+      <div class="settings-section">
+        <div class="settings-section-title">👤 Profile</div>
+        <div class="profile-card">
+          <div class="profile-avatar">MF</div>
+          <div>
+            <div style="font-weight:bold;">mattfasullo</div>
+            <div style="font-size:9px;color:var(--win-dark);">mattfasullo</div>
+          </div>
+          <span style="margin-left:auto;color:green;font-size:10px;">● Synced</span>
+        </div>
+        <div style="font-size:10px;color:var(--win-dark);">⏱ Last accessed: 1 hr ago</div>
+      </div>
+
+      <!-- Appearance -->
+      <div class="settings-section">
+        <div class="settings-section-title">🎨 Appearance</div>
+        <div style="font-size:10px;color:var(--win-dark);margin-bottom:4px;">Choose your preferred visual theme</div>
+        <div class="settings-row">
+          <span class="settings-label">Appearance</span>
+          <div class="radio-group">
+            <div class="radio-btn active">● System</div>
+            <div class="radio-btn">○ Light</div>
+            <div class="radio-btn">○ Dark</div>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Theme</span>
+          <select class="win-select" style="width:160px;">
+            <option>Modern</option>
+            <option>Retro Desktop</option>
+          </select>
+        </div>
+        <div style="font-size:10px;color:var(--win-dark);">Clean, professional interface with subtle colors</div>
+      </div>
+
+      <!-- Window Mode -->
+      <div class="settings-section">
+        <div class="settings-section-title">🪟 Window Mode</div>
+        <div style="font-size:10px;color:var(--win-dark);margin-bottom:6px;">Choose between a compact phone-like interface or a full dashboard experience</div>
+        <div class="window-mode-grid">
+          <div class="wmode-card active">
+            <div class="wmode-icon">📱</div>
+            <div class="wmode-label">Compact</div>
+            <div class="wmode-sub">Phone-like compact interface</div>
+          </div>
+          <div class="wmode-card disabled">
+            <div class="wmode-icon">🪟</div>
+            <div class="wmode-label">Dashboard</div>
+            <div class="wmode-sub">Coming soon</div>
+          </div>
+        </div>
+        <div style="font-size:10px;color:var(--win-dark);margin-top:4px;">ℹ Changes take effect after saving and restarting the app</div>
+      </div>
+
+      <!-- Sounds -->
+      <div class="settings-section">
+        <div class="settings-section-title">🔊 Sounds</div>
+        <div style="font-size:10px;color:var(--win-dark);margin-bottom:6px;">Enable or disable each sound and set its volume app-wide.</div>
+        <label class="win-checkbox" style="margin-bottom:4px;">
+          <input type="checkbox" checked>
+          <span><strong>New docket — loading</strong></span>
+        </label>
+        <div style="font-size:10px;color:var(--win-dark);margin-bottom:4px;padding-left:18px;">While Work Picture folder and/or Simian project are being created</div>
+        <div class="slider-row" style="padding-left:18px;">
+          <span style="font-size:10px;">Volume</span>
+          <input type="range" class="win-slider" min="0" max="100" value="54" style="flex:1;">
+          <span style="font-size:10px;min-width:30px;">54%</span>
+        </div>
+      </div>
+
+    </div>
+    <div class="settings-footer">
+      <span style="font-size:10px;color:var(--win-dark);">Version 1.10</span>
+      <div style="display:flex;gap:6px;">
+        <button class="btn">Reset to Defaults</button>
+        <button class="btn default-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN 7: ARCHIVER WINDOW
+       ============================================================ -->
+  <div class="win-window" id="win-archiver">
+    <div class="win-titlebar">
+      <span class="win-titlebar-icon">📦</span>
+      <span class="win-titlebar-title">Simian Archiver</span>
+      <div class="win-titlebar-controls">
+        <div class="win-ctrl-btn">×</div>
+      </div>
+    </div>
+    <div class="archiver-body win-content">
+      <div style="font-size:10px;color:var(--win-dark);">Select a date range and download project contents as ZIP folders.</div>
+      <div class="archiver-toolbar">
+        <span>Sort By:</span>
+        <select class="win-select" style="width:120px;"><option>Last Accessed</option><option>Name</option></select>
+        <span>From:</span>
+        <input class="win-input" type="text" value="2026-03-21" style="width:90px;">
+        <span>To:</span>
+        <input class="win-input" type="text" value="2026-04-21" style="width:90px;">
+        <button class="btn" style="min-width:0;padding:3px 8px;">Refresh Projects</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+        <input class="win-input" type="text" placeholder="Search projects" style="flex:1;">
+        <span style="font-size:10px;">GM archives:</span>
+        <button class="btn" style="min-width:0;padding:3px 8px;">Scan DATA BACKUPS</button>
+        <span style="font-size:10px;">Show:</span>
+        <select class="win-select" style="width:60px;"><option>All</option></select>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+        <span style="font-size:10px;">Projects in range: <strong>24</strong></span>
+        <div style="display:flex;gap:4px;">
+          <button class="btn" style="min-width:0;padding:2px 8px;">Select All</button>
+          <button class="btn" style="min-width:0;padding:2px 8px;">Clear</button>
+        </div>
+      </div>
+      <div class="win-listbox archiver-list">
+        <div style="display:grid;grid-template-columns:20px 1fr 160px 80px 60px;gap:4px;padding:2px 6px;background:var(--win-bg);font-weight:bold;font-size:10px;border-bottom:1px solid var(--win-dark);">
+          <span></span><span>Project Name</span><span>Last Accessed</span><span>Files</span><span>Size</span>
+        </div>
+        <div class="archiver-item selected">
+          <input type="checkbox" checked>
+          <span style="flex:1;">26165_Maple Radio Spotify</span>
+          <span style="width:160px;font-size:10px;color:inherit;">Apr 21, 2026 — 10:32 AM</span>
+          <span style="width:80px;font-size:10px;">48 files</span>
+          <span style="width:60px;font-size:10px;">2.1 GB</span>
+        </div>
+        <div class="archiver-item">
+          <input type="checkbox">
+          <span style="flex:1;">26164_Lexus Brand Chapter 2</span>
+          <span style="width:160px;font-size:10px;color:var(--win-dark);">Apr 20, 2026 — 3:15 PM</span>
+          <span style="width:80px;font-size:10px;">31 files</span>
+          <span style="width:60px;font-size:10px;">890 MB</span>
+        </div>
+        <div class="archiver-item">
+          <input type="checkbox">
+          <span style="flex:1;">26163_Nemours Childrens Hospital</span>
+          <span style="width:160px;font-size:10px;color:var(--win-dark);">Apr 19, 2026 — 11:08 AM</span>
+          <span style="width:80px;font-size:10px;">22 files</span>
+          <span style="width:60px;font-size:10px;">640 MB</span>
+        </div>
+        <div class="archiver-item">
+          <input type="checkbox">
+          <span style="flex:1;">26162_Coors Banquet</span>
+          <span style="width:160px;font-size:10px;color:var(--win-dark);">Apr 18, 2026 — 2:44 PM</span>
+          <span style="width:80px;font-size:10px;">17 files</span>
+          <span style="width:60px;font-size:10px;">320 MB</span>
+        </div>
+        <div class="archiver-item">
+          <input type="checkbox">
+          <span style="flex:1;">26161_Lincoln Q3</span>
+          <span style="width:160px;font-size:10px;color:var(--win-dark);">Apr 17, 2026 — 9:00 AM</span>
+          <span style="width:80px;font-size:10px;">29 files</span>
+          <span style="width:60px;font-size:10px;">1.4 GB</span>
+        </div>
+        <div class="archiver-item">
+          <input type="checkbox">
+          <span style="flex:1;">26159_Pfizer Paxlovid</span>
+          <span style="width:160px;font-size:10px;color:var(--win-dark);">Apr 16, 2026 — 4:22 PM</span>
+          <span style="width:80px;font-size:10px;">41 files</span>
+          <span style="width:60px;font-size:10px;">3.2 GB</span>
+        </div>
+        <div class="archiver-item">
+          <input type="checkbox">
+          <span style="flex:1;">26158_Tide Spring Refresh</span>
+          <span style="width:160px;font-size:10px;color:var(--win-dark);">Apr 15, 2026 — 1:10 PM</span>
+          <span style="width:80px;font-size:10px;">18 files</span>
+          <span style="width:60px;font-size:10px;">570 MB</span>
+        </div>
+        <div class="archiver-item">
+          <input type="checkbox">
+          <span style="flex:1;">26156_AMEX GABM</span>
+          <span style="width:160px;font-size:10px;color:var(--win-dark);">Apr 14, 2026 — 10:55 AM</span>
+          <span style="width:80px;font-size:10px;">55 files</span>
+          <span style="width:60px;font-size:10px;">4.8 GB</span>
+        </div>
+        <div class="archiver-item">
+          <input type="checkbox">
+          <span style="flex:1;">26154_Fidelity Canada Annual</span>
+          <span style="width:160px;font-size:10px;color:var(--win-dark);">Apr 12, 2026 — 8:30 AM</span>
+          <span style="width:80px;font-size:10px;">36 files</span>
+          <span style="width:60px;font-size:10px;">1.9 GB</span>
+        </div>
+        <div class="archiver-item">
+          <input type="checkbox">
+          <span style="flex:1;">26153_OLG Instants</span>
+          <span style="width:160px;font-size:10px;color:var(--win-dark);">Apr 11, 2026 — 3:40 PM</span>
+          <span style="width:80px;font-size:10px;">24 files</span>
+          <span style="width:60px;font-size:10px;">780 MB</span>
+        </div>
+      </div>
+    </div>
+    <div class="archiver-footer">
+      <span style="font-size:10px;">Selected: <strong>1</strong></span>
+      <div style="display:flex;gap:6px;">
+        <button class="btn" onclick="showScreen('main')">Close</button>
+        <button class="btn default-btn">Download Project Contents as ZIP Folders</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /desktop -->
+
+
+<!-- ===== TASKBAR ===== -->
+<div id="taskbar">
+  <div id="start-btn">
+    <span>🪟</span> <strong>Start</strong>
+  </div>
+  <div class="taskbar-divider"></div>
+  <div class="taskbar-btn active" id="tb-main" onclick="showScreen('main')">🎬 MediaDash</div>
+  <div class="taskbar-btn" id="tb-newdockets" onclick="showScreen('newdockets')">🔔 New Dockets</div>
+  <div class="taskbar-btn" id="tb-search" onclick="showScreen('search')">🔍 Search</div>
+  <div class="taskbar-btn" id="tb-jobinfo" onclick="showScreen('jobinfo')"># Job Info</div>
+  <div class="taskbar-btn" id="tb-calendar" onclick="showScreen('calendar')">📅 Calendar</div>
+  <div class="taskbar-btn" id="tb-settings" onclick="showScreen('settings')">⚙ Settings</div>
+  <div class="taskbar-btn" id="tb-archiver" onclick="showScreen('archiver')">📦 Archiver</div>
+  <div class="taskbar-clock" id="clock">11:08 PM</div>
+</div>
+
+
+<script>
+// ---- Clock ----
+function updateClock() {
+  const now = new Date();
+  let h = now.getHours(), m = now.getMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  document.getElementById('clock').textContent =
+    h + ':' + String(m).padStart(2,'0') + ' ' + ampm;
+}
+updateClock();
+setInterval(updateClock, 10000);
+
+// ---- Screen navigation ----
+const screens = ['main','newdockets','search','jobinfo','calendar','settings','archiver'];
+
+function showScreen(id) {
+  screens.forEach(s => {
+    const win = document.getElementById('win-' + s);
+    const tb  = document.getElementById('tb-' + s);
+    if (win) win.classList.toggle('active', s === id);
+    if (tb)  tb.classList.toggle('active', s === id);
+  });
+  // Update snav buttons
+  document.querySelectorAll('.snav-btn').forEach((btn, i) => {
+    btn.classList.toggle('active', screens[i] === id);
+  });
+}
+
+// ---- Calendar day detail ----
+function showDayDetail(label) {
+  document.getElementById('cal-day-detail').style.display = 'block';
+  const title = document.querySelector('.cal-day-detail-title');
+  if (title) title.childNodes[0].textContent = label + '  ';
+}
+function hideDayDetail() {
+  document.getElementById('cal-day-detail').style.display = 'block';
+}
+
+// ---- Tab switching ----
+document.querySelectorAll('.tab-strip').forEach(strip => {
+  strip.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      strip.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+});
+
+// ---- Slider live update ----
+document.querySelectorAll('input[type=range]').forEach(slider => {
+  slider.addEventListener('input', function() {
+    const label = this.parentElement.querySelector('span:last-child');
+    if (label) label.textContent = this.value + '%';
+  });
+});
+
+// ---- Radio buttons in settings ----
+document.querySelectorAll('.radio-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    const group = this.parentElement;
+    group.querySelectorAll('.radio-btn').forEach(b => {
+      b.classList.remove('active');
+      b.textContent = b.textContent.replace('●','○');
+    });
+    this.classList.add('active');
+    this.textContent = '● ' + this.textContent.replace(/^[●○]\s*/,'');
+  });
+});
+
+// ---- Archiver checkboxes ----
+document.querySelectorAll('.archiver-item input[type=checkbox]').forEach(cb => {
+  cb.addEventListener('change', function() {
+    const row = this.closest('.archiver-item');
+    row.classList.toggle('selected', this.checked);
+    const checked = document.querySelectorAll('.archiver-item input:checked').length;
+    document.querySelector('.archiver-footer span strong').textContent = checked;
+  });
+});
+</script>
+</body>
+</html>

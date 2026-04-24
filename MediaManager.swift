@@ -598,13 +598,26 @@ enum FileCompletionState: Sendable {
     case complete       // Fully complete
 }
 
+/// Represents a file or folder in the media staging area.
+/// Used throughout the app for displaying file lists, computing batch operations,
+/// and tracking selection state in the UI.
+///
+/// **Performance Note:** File size and recursive file counts are computed eagerly during
+/// initialization. For large folders (>10,000 files), counting caps at `maxFiles` to
+/// prevent UI blocking. Consider lazy loading if this becomes a bottleneck.
+///
+/// **Thread Safety:** The `init` is `nonisolated` and safe to call from any thread.
+/// However, `FileItem` instances are typically consumed on `@MainActor` via `MediaManager`.
 struct FileItem: Identifiable, Hashable, Sendable {
     let id = UUID()
     let url: URL
     let name: String
     let isDirectory: Bool
-    let fileCount: Int // For directories, counts files recursively; for files, always 1
-    let fileSize: Int64? // File size in bytes (nil for directories)
+    /// For directories: count of files recursively (capped at 10,000).
+    /// For files: always 1.
+    let fileCount: Int
+    /// File size in bytes (nil for directories since aggregated size is not computed).
+    let fileSize: Int64?
 
     nonisolated init(url: URL) {
         self.url = url

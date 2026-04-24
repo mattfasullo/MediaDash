@@ -56,7 +56,8 @@ private func mediaDashDebugNDJSON(location: String, message: String, hypothesisI
 }
 // #endregion
 
-final class FinderSync: FIFinderSync {
+@objc(MediaDashFinderSyncPrincipal)
+final class MediaDashFinderSyncPrincipal: FIFinderSync {
     override init() {
         super.init()
         // #region agent log
@@ -67,9 +68,10 @@ final class FinderSync: FIFinderSync {
         kInstrumentLogger.info("FinderSync init (session 55b33e) host=\(hostPath, privacy: .public)")
         // #endregion
         // Required so Finder delivers `menuForMenuKind` / `selectedItemURLs` for items under these roots.
-        // A sandboxed extension often cannot register `/`, which hides all MediaDash items — match host app (no sandbox).
+        // `/` is not a supported watch root; recent macOS silently drops the whole set when it's present.
+        // Register user-visible roots instead; add more specific paths here as MediaDash tracks them via the App Group.
         FIFinderSyncController.default().directoryURLs = Set([
-            URL(fileURLWithPath: "/"),
+            URL(fileURLWithPath: "/Users"),
             URL(fileURLWithPath: "/Volumes")
         ])
     }

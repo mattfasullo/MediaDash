@@ -56,6 +56,7 @@ BUILD_NUMBER=$(echo "$VERSION" | awk -F. '{printf "%d", $1*100 + $2*10 + $3}')
 [ "$VERSION" = "1.08" ] && BUILD_NUMBER=180
 [ "$VERSION" = "1.09" ] && BUILD_NUMBER=190
 [ "$VERSION" = "1.10" ] && BUILD_NUMBER=200
+[ "$VERSION" = "1.11" ] && BUILD_NUMBER=210
 
 # Validate BUILD_NUMBER is numeric
 if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
@@ -319,7 +320,7 @@ This app is not notarized (no Developer ID certificate). macOS may show a securi
 $RELEASE_NOTES"
 
 # Create release (pre-release for beta versions, full release for 1.0+)
-if [ "$VERSION" = "1.0" ] || [ "$VERSION" = "1.01" ] || [ "$VERSION" = "1.02" ] || [ "$VERSION" = "1.03" ] || [ "$VERSION" = "1.04" ] || [ "$VERSION" = "1.05" ] || [ "$VERSION" = "1.06" ] || [ "$VERSION" = "1.07" ] || [ "$VERSION" = "1.08" ] || [ "$VERSION" = "1.09" ] || [ "$VERSION" = "1.10" ]; then
+if [ "$VERSION" = "1.0" ] || [ "$VERSION" = "1.01" ] || [ "$VERSION" = "1.02" ] || [ "$VERSION" = "1.03" ] || [ "$VERSION" = "1.04" ] || [ "$VERSION" = "1.05" ] || [ "$VERSION" = "1.06" ] || [ "$VERSION" = "1.07" ] || [ "$VERSION" = "1.08" ] || [ "$VERSION" = "1.09" ] || [ "$VERSION" = "1.10" ] || [ "$VERSION" = "1.11" ]; then
     gh release create "v$VERSION" \
         "$RELEASE_DIR/$APP_NAME.zip" \
         "install_mediadash.sh" \
