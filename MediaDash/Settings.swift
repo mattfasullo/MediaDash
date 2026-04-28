@@ -245,6 +245,7 @@ enum DocketSource: String, Codable, CaseIterable {
 
 enum NewDocketDetectionMode: String, Codable, CaseIterable {
     case email = "Email"
+    case airtable = "Airtable"
     
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -633,6 +634,10 @@ struct AppSettings: Codable, Equatable {
     var airtableTableID: String? // Airtable table ID
     // API key stored in Keychain, not in settings
     
+    // Airtable Push Relay (Cloudflare Worker for push notifications)
+    var airtableWorkerURL: String? // e.g. "https://mediadash-relay.yourname.workers.dev"
+    var airtableWorkerSecret: String? // Shared secret sent in X-MediaDash-Secret header
+
     // Airtable Field Mappings (maps DocketInfo fields to Airtable field names)
     var airtableDocketNumberField: String // Field name in Airtable for docket number (used as lookup key)
     var airtableJobNameField: String // Field name in Airtable for job name
@@ -682,21 +687,8 @@ struct AppSettings: Codable, Equatable {
     // Advanced/Debug Settings
     var showDebugFeatures: Bool // Show debug/test features in notification center
     
-    // Company Media Email Settings
-    var companyMediaEmail: String // Email address to monitor for media file links (e.g., "media@graysonmusicgroup.com")
-    
-    // Media Team Grabbed Indicator Settings
-    var mediaTeamEmails: [String] // List of media team email addresses
-    var grabbedSubjectPatterns: [String] // Subject keywords that qualify as media-file-delivery (e.g., "FILE DELIVERY", "MEDIA FILE")
-    var grabbedSubjectExclusions: [String] // Subject keywords that EXCLUDE from media-file-delivery (user-configurable, no defaults)
-    var grabbedAttachmentTypes: [String] // File extensions that qualify as media files (e.g., "wav", "aiff", "zip", "mp4")
-    var grabbedFileHostingWhitelist: [String] // Whitelist of file hosting domains for delivery (e.g., "drive.google.com", "wdrv.it")
-    var grabbedSenderWhitelist: [String] // Approved sender email addresses
-    var grabbedBodyExclusions: [String] // Body keywords that EXCLUDE from media-file-delivery (e.g., "check out", "review", "options posted")
-
-    // Fun Feature: Cursed Image Replies
-    var enableCursedImageReplies: Bool // Enable fun feature to send random images from Reddit instead of "Grabbed" text
-    var cursedImageSubreddit: String // Subreddit name to fetch images from (e.g., "cursedimages")
+    /// Inbox address used in Gmail new-docket scan (`to:`) alongside the “New Docket” label.
+    var companyMediaEmail: String
 
     /// Composer/writer display name (from Asana) → folder name (initials or nickname) for Music Demos folders.
     var composerInitials: [String: String]?
@@ -811,10 +803,12 @@ struct AppSettings: Codable, Equatable {
             asanaClientSecret: nil,
             asanaDocketField: nil,
             asanaJobNameField: nil,
-            airtableBaseID: nil,
-            airtableTableID: nil,
-            airtableDocketNumberField: "Docket",
-            airtableJobNameField: "Project Title",
+            airtableBaseID: AirtableConfig.docketBaseID,
+            airtableTableID: AirtableConfig.docketTableID,
+            airtableWorkerURL: nil,
+            airtableWorkerSecret: nil,
+            airtableDocketNumberField: AirtableConfig.docketNumberField,
+            airtableJobNameField: AirtableConfig.jobNameField,
             airtableFullNameField: "Full Name",
             airtableDueDateField: "Due Date",
             airtableClientField: "Client",
@@ -830,7 +824,7 @@ struct AppSettings: Codable, Equatable {
             contactsCSVPath: nil,
             sharedCacheURL: "/Volumes/Grayson Assets/MEDIA/Media Dept Misc. Folders/Misc./MediaDash_Cache",
             useSharedCache: true,
-            gmailEnabled: true,
+            gmailEnabled: false,
             gmailQuery: "",
             gmailPollInterval: 3600, // 1 hour
             docketParsingPatterns: [],
@@ -844,40 +838,10 @@ struct AppSettings: Codable, Equatable {
                 "nicholas@graysonmusicgroup.com"
             ],
             notificationWindowLocked: true, // Default to locked (follows main window)
-            newDocketDetectionMode: .email, // Default to email-based detection
+            newDocketDetectionMode: .airtable, // Default to Airtable-based detection
             defaultBrowser: .chrome, // Default to Chrome
             showDebugFeatures: false, // Debug features hidden by default
             companyMediaEmail: "media@graysonmusicgroup.com", // Default company media email
-            mediaTeamEmails: ["kevin@graysonmusicgroup.com", "mattfasullo@graysonmusicgroup.com", "jeremy@graysonmusicgroup.com"], // Default media team
-            grabbedSubjectPatterns: [
-                "audio",           // Most common - appears in many subjects
-                "sfx",             // Sound effects
-                "mix",             // Mix or mix prep
-                "omf",             // OMF files
-                "aaf",             // AAF files
-                "prep",            // Audio prep, mix prep, prep files
-                "elements",        // Audio elements
-                "avtc",            // Audio/video timecode
-                "dc",              // Director's cut
-                "offline"          // Offline audio elements
-            ], // Default subject patterns (case-insensitive matching)
-            grabbedSubjectExclusions: [], // Subject exclusions (user-configurable, no defaults)
-            grabbedAttachmentTypes: ["wav", "aiff", "aif", "zip", "mp4", "mov", "mxf", "prores", "m4v", "mp3", "flac", "m4a", "aac", "omf", "aaf"], // Default attachment types
-            grabbedFileHostingWhitelist: [
-                "drive.google.com",      // Google Drive
-                "docs.google.com",      // Google Docs/Drive
-                "wdrv.it",              // WeTransfer
-                "wetransfer.com",       // WeTransfer
-                "wpp.box.com",          // Box (WPP)
-                "box.com",              // Box
-                "boxusercontent.com",   // Box
-                "psi.schoolediting.com", // School Editing custom hosting
-                "f.io"                  // Frame.io (delivery links, not review)
-            ], // Default file hosting whitelist (based on real examples)
-            grabbedSenderWhitelist: [], // Default sender whitelist (empty, user can add)
-            grabbedBodyExclusions: [], // Body exclusions (user-configurable, no defaults)
-            enableCursedImageReplies: false, // Fun feature disabled by default
-            cursedImageSubreddit: "cursedimages", // Default subreddit
             composerInitials: AppSettings.defaultComposerInitials, // Preset out of the box; user can edit in Settings
             displayNameForInitials: AppSettings.defaultDisplayNameForInitials,
             soundDocketAddingEnabled: nil,
@@ -992,6 +956,30 @@ class SettingsManager: ObservableObject {
         }
 
         migrateGmailPollIntervalFromLegacyDefaultIfNeeded()
+        migrateDetectionModeToAirtableIfNeeded()
+    }
+
+    /// Applies built-in Airtable docket detection defaults to all non-producer profiles.
+    /// Idempotent — safe to run on every launch.
+    private func migrateDetectionModeToAirtableIfNeeded() {
+        var profiles = loadAllProfiles()
+        var changed = false
+        for name in profiles.keys {
+            guard var profile = profiles[name] else { continue }
+            // Migrate only media team / default profiles (not producers — they use their own Airtable config)
+            guard profile.userRole != .producer else { continue }
+            profile = SettingsManager.applyDocketConfigDefaults(to: profile)
+            if profiles[name] != profile {
+                profiles[name] = profile
+                changed = true
+            }
+        }
+        guard changed, let encoded = try? JSONEncoder().encode(profiles) else { return }
+        userDefaults.set(encoded, forKey: profilesKey)
+        let activeName = userDefaults.string(forKey: currentProfileKey) ?? currentSettings.profileName
+        if let updated = profiles[activeName] {
+            currentSettings = updated
+        }
     }
 
     /// One-time: former default was 300s (5 min); new-docket auto-scan policy is hourly (3600s).
@@ -1053,8 +1041,68 @@ class SettingsManager: ObservableObject {
 
     // Custom init for workspace profiles
     init(settings: AppSettings) {
-        self.currentSettings = settings
+        self.currentSettings = SettingsManager.applyDocketConfigDefaults(to: settings)
         self.availableProfiles = []
+    }
+
+    /// Fills any blank Airtable docket config fields with the built-in `AirtableConfig` defaults.
+    /// Does NOT override `newDocketDetectionMode` if the user has explicitly chosen one — the
+    /// one-time `migrateLegacyEmailDetectionToAirtable` flips legacy `.email` profiles to `.airtable`.
+    static func applyDocketConfigDefaults(to settings: AppSettings) -> AppSettings {
+        var s = settings
+        guard s.userRole != .producer else { return s }
+        if s.newDocketDetectionMode == nil { s.newDocketDetectionMode = .airtable }
+        if (s.airtableBaseID  ?? "").isEmpty { s.airtableBaseID  = AirtableConfig.docketBaseID }
+        if (s.airtableTableID ?? "").isEmpty { s.airtableTableID = AirtableConfig.docketTableID }
+        if s.airtableDocketNumberField.isEmpty { s.airtableDocketNumberField = AirtableConfig.docketNumberField }
+        if s.airtableJobNameField.isEmpty || s.airtableJobNameField == "Project Title" || s.airtableJobNameField == "Job Name" {
+            s.airtableJobNameField = AirtableConfig.jobNameField
+        }
+        return s
+    }
+
+    /// One-time: switch existing `.email` profiles to `.airtable` so the upgrade lands by default,
+    /// but never override a user who later switches back to `.email` themselves.
+    /// Migrates BOTH `SettingsManager.savedProfiles` and `SessionManager.workspaceProfiles` storage.
+    static func migrateLegacyEmailDetectionToAirtableIfNeeded() {
+        let key = "didFlipEmailToAirtableV1"
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: key) else { return }
+        defer { defaults.set(true, forKey: key) }
+
+        // SettingsManager savedProfiles (keyed by profile name)
+        if let data = defaults.data(forKey: "savedProfiles"),
+           var profiles = try? JSONDecoder().decode([String: AppSettings].self, from: data) {
+            var changed = false
+            for name in profiles.keys {
+                guard var p = profiles[name], p.userRole != .producer else { continue }
+                if p.newDocketDetectionMode == .email || p.newDocketDetectionMode == nil {
+                    p.newDocketDetectionMode = .airtable
+                    profiles[name] = p
+                    changed = true
+                }
+            }
+            if changed, let encoded = try? JSONEncoder().encode(profiles) {
+                defaults.set(encoded, forKey: "savedProfiles")
+            }
+        }
+
+        // SessionManager workspaceProfiles (keyed by UUID)
+        if let data = defaults.data(forKey: "workspaceProfiles"),
+           var profiles = try? JSONDecoder().decode([UUID: WorkspaceProfile].self, from: data) {
+            var changed = false
+            for id in profiles.keys {
+                guard var wp = profiles[id], wp.settings.userRole != .producer else { continue }
+                if wp.settings.newDocketDetectionMode == .email || wp.settings.newDocketDetectionMode == nil {
+                    wp.settings.newDocketDetectionMode = .airtable
+                    profiles[id] = wp
+                    changed = true
+                }
+            }
+            if changed, let encoded = try? JSONEncoder().encode(profiles) {
+                defaults.set(encoded, forKey: "workspaceProfiles")
+            }
+        }
     }
 
     func saveCurrentProfile() {

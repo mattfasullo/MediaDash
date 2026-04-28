@@ -77,10 +77,6 @@ struct Notification: Identifiable, Codable, Equatable {
     var archivedAt: Date? // When the notification was archived
     var completedAt: Date? // When the notification was marked as complete (for request notifications)
     var threadId: String? // Gmail thread ID for tracking replies
-    var isGrabbed: Bool = false // Whether a media team member has "grabbed" this thread
-    var isPriorityAssist: Bool = false // Whether this needs priority assistance (couldn't grab file)
-    var grabbedBy: String? // Email of media team member who grabbed it
-    var grabbedAt: Date? // When it was grabbed
     
     // New docket specific data
     var docketNumber: String?
@@ -136,10 +132,6 @@ struct Notification: Identifiable, Codable, Equatable {
         fileLinks: [String]? = nil,
         fileLinkDescriptions: [String]? = nil,
         threadId: String? = nil,
-        isGrabbed: Bool = false,
-        isPriorityAssist: Bool = false,
-        grabbedBy: String? = nil,
-        grabbedAt: Date? = nil,
         requiresDocketConfirmation: Bool? = nil
     ) {
         self.id = id
@@ -161,10 +153,6 @@ struct Notification: Identifiable, Codable, Equatable {
         self.fileLinks = fileLinks
         self.fileLinkDescriptions = fileLinkDescriptions
         self.threadId = threadId
-        self.isGrabbed = isGrabbed
-        self.isPriorityAssist = isPriorityAssist
-        self.grabbedBy = grabbedBy
-        self.grabbedAt = grabbedAt
         self.requiresDocketConfirmation = requiresDocketConfirmation
         // Store original values for reset
         self.originalDocketNumber = docketNumber

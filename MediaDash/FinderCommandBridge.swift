@@ -22,6 +22,7 @@ enum FinderIncomingAction: String, Codable, Sendable {
     case convert
     case simian
     case audioOnly
+    case editOnSimian
 }
 
 /// JSON payload written by the Finder Sync extension (App Group) or parsed from URLs.
@@ -139,8 +140,54 @@ final class FinderCommandBridge {
                 )
             case .audioOnly:
                 AudioOnlyExportService.run(urls: urls)
+            case .editOnSimian:
+                Task {
+                    await Self.openFoldersOnSimian(urls: urls, settingsManager: settingsManager)
+                }
             }
         }
+    }
+
+    // MARK: - Edit on Simian
+
+    /// Look up each URL's folder name in the Simian project list and open the best match in the browser.
+    private static func openFoldersOnSimian(urls: [URL], settingsManager: SettingsManager) async {
+        let service = SimianService()
+        do {
+            let projects = try await service.getProjectList()
+            for url in urls {
+                let folderURL = isDirectory(url) ? url : url.deletingLastPathComponent()
+                let folderName = folderURL.lastPathComponent
+                if let match = bestSimianProject(for: folderName, in: projects),
+                   let webURL = SimianService.folderLinkURL(projectId: match.id, folderId: nil) {
+                    await MainActor.run { NSWorkspace.shared.open(webURL) }
+                } else {
+                    // Fallback: open the Simian projects list
+                    let fallback = URL(string: "https://graysonmusic.gosimian.com/projects")!
+                    await MainActor.run { NSWorkspace.shared.open(fallback) }
+                }
+            }
+        } catch {
+            let fallback = URL(string: "https://graysonmusic.gosimian.com/projects")!
+            await MainActor.run { NSWorkspace.shared.open(fallback) }
+        }
+    }
+
+    private static func isDirectory(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    /// Returns the first project whose name contains the folder name (case-insensitive),
+    /// or falls back to the first project whose name shares the leading numeric docket portion.
+    private static func bestSimianProject(for folderName: String, in projects: [SimianProject]) -> SimianProject? {
+        let lower = folderName.lowercased()
+        if let exact = projects.first(where: { $0.name.lowercased() == lower }) { return exact }
+        if let contains = projects.first(where: { $0.name.lowercased().contains(lower) }) { return contains }
+        // Try matching by numeric prefix (docket number)
+        let numeric = lower.prefix(while: { $0.isNumber })
+        guard !numeric.isEmpty else { return nil }
+        return projects.first(where: { $0.name.lowercased().hasPrefix(numeric) })
     }
 
     // MARK: - Shared container (token files)

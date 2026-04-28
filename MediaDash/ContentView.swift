@@ -106,6 +106,7 @@ struct ContentView: View {
     @FocusState private var mainViewFocused: Bool
     @EnvironmentObject var notificationCenter: NotificationCenter
     @EnvironmentObject var emailScanningService: EmailScanningService
+    @EnvironmentObject var airtableDocketScanningService: AirtableDocketScanningService
 
     // Task handle for hourly cache sync
     @State private var hourlySyncTask: Task<Void, Never>?
@@ -358,6 +359,7 @@ struct ContentView: View {
                         )
                         .environmentObject(sessionManager)
                         .environmentObject(emailScanningService)
+                        .environmentObject(airtableDocketScanningService)
                     )
                     NotificationWindowManager.shared.showNotificationWindow(content: content, isLocked: false)
                 } else {
@@ -4501,4 +4503,5 @@ struct WorkspaceMenuButton: View {
 
 #Preview {
     ContentView()
+        .environmentObject(AirtableDocketScanningService())
 }

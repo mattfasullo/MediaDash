@@ -1530,7 +1530,7 @@ struct SimianPostView: View {
     private func applyFileRename(fileId: String, parentFolderId: String?, newName: String) {
         guard let parentId = parentFolderId else { return }
         let renamed = { (old: SimianFile) -> SimianFile in
-            SimianFile(id: old.id, title: newName, fileType: old.fileType, mediaURL: old.mediaURL, folderId: old.folderId, projectId: old.projectId, uploadedAt: old.uploadedAt)
+            SimianFile(id: old.id, title: newName, fileName: newName, fileType: old.fileType, mediaURL: old.mediaURL, folderId: old.folderId, projectId: old.projectId, uploadedAt: old.uploadedAt)
         }
         if parentId == currentParentFolderId, let idx = currentFiles.firstIndex(where: { $0.id == fileId }) {
             currentFiles[idx] = renamed(currentFiles[idx])

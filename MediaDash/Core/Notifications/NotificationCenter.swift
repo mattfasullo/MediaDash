@@ -9,8 +9,6 @@ class NotificationCenter: ObservableObject {
     @Published var unreadCount: Int = 0
     @Published var isExpanded: Bool = false
 
-    weak var grabbedIndicatorService: GrabbedIndicatorService?
-
     private let notificationsKey = "mediadash_notifications"
 
     /// Last created instance — used to flush debounced saves on app termination.
@@ -262,49 +260,6 @@ class NotificationCenter: ObservableObject {
                 }
                 if existingThreadNotification != nil {
                     print("📋 [NotificationCenter] Skipping thread reply - already have docket notification for thread \(threadId)")
-                    return
-                }
-            }
-            // For file delivery, only update if there are NEW file links
-            if notification.type == .mediaFiles {
-                if let existingIndex = notifications.firstIndex(where: { existing in
-                    existing.threadId == threadId && existing.type == .mediaFiles
-                }) {
-                    // Check if there are genuinely new file links worth notifying about
-                    if let newLinks = notification.fileLinks, !newLinks.isEmpty {
-                        let existingLinks = notifications[existingIndex].fileLinks ?? []
-                        let existingLinksSet = Set(existingLinks)
-                        let newDescriptions = notification.fileLinkDescriptions ?? []
-
-                        // Find indices of truly new links
-                        var trulyNewLinks: [String] = []
-                        var trulyNewDescriptions: [String] = []
-                        for (index, link) in newLinks.enumerated() {
-                            if !existingLinksSet.contains(link) {
-                                trulyNewLinks.append(link)
-                                let desc = index < newDescriptions.count ? newDescriptions[index] : "Unknown contents"
-                                trulyNewDescriptions.append(desc)
-                            }
-                        }
-
-                        if !trulyNewLinks.isEmpty {
-                            // Add the new links and descriptions to the existing notification
-                            var updatedLinks = existingLinks
-                            updatedLinks.append(contentsOf: trulyNewLinks)
-                            notifications[existingIndex].fileLinks = updatedLinks
-
-                            var updatedDescriptions = notifications[existingIndex].fileLinkDescriptions ?? []
-                            updatedDescriptions.append(contentsOf: trulyNewDescriptions)
-                            notifications[existingIndex].fileLinkDescriptions = updatedDescriptions
-
-                            saveNotifications()
-                            print("📋 [NotificationCenter] Added \(trulyNewLinks.count) new file links to existing notification for thread \(threadId)")
-                        } else {
-                            print("📋 [NotificationCenter] Skipping thread reply - no new file links for thread \(threadId)")
-                        }
-                    } else {
-                        print("📋 [NotificationCenter] Skipping thread reply - already have file delivery notification for thread \(threadId)")
-                    }
                     return
                 }
             }
@@ -731,7 +686,13 @@ class NotificationCenter: ObservableObject {
         }
         
         // Re-fetch and re-parse the email
-        if let parsed = await emailService.reparseEmail(emailId: emailId) {
+        let n = notifications[index]
+        if let parsed = await emailService.reparseEmail(
+            emailId: emailId,
+            cachedSubject: n.emailSubject,
+            cachedBody: n.emailBody,
+            from: n.sourceEmail
+        ) {
             // Update with freshly parsed values
             notifications[index].docketNumber = parsed.docketNumber
             notifications[index].jobName = parsed.jobName

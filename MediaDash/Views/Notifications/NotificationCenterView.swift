@@ -47,6 +47,7 @@ struct NotificationCenterView: View {
     @ObservedObject var mediaManager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var airtableDocketScanningService: AirtableDocketScanningService
     @Binding var isExpanded: Bool
     @Binding var showSettings: Bool
     
@@ -67,10 +68,6 @@ struct NotificationCenterView: View {
     // Active notifications exclude completed ones (those go to history section)
     private var allActiveNotifications: [Notification] {
         notificationCenter.activeNotifications
-    }
-    
-    private var mediaFileNotifications: [Notification] {
-        allActiveNotifications.filter { $0.type == .mediaFiles }
     }
     
     private var activeNotifications: [Notification] {
@@ -106,11 +103,6 @@ struct NotificationCenterView: View {
         return filtered
     }
     
-    // Regular file delivery notifications
-    private var regularFileDeliveryNotifications: [Notification] {
-        regularNotifications.filter { $0.type == .mediaFiles }
-    }
-    
     // Regular request notifications (including completed ones, which will be greyed out)
     private var regularRequestNotifications: [Notification] {
         allActiveNotifications.filter { $0.type == .request }
@@ -137,7 +129,9 @@ struct NotificationCenterView: View {
             
             Divider()
             
-            emailStatusBannerContent
+            if settingsManager.currentSettings.newDocketDetectionMode == .email {
+                emailStatusBannerContent
+            }
             
             emailModeContent
         }
@@ -175,11 +169,19 @@ struct NotificationCenterView: View {
                         .foregroundColor(.secondary)
                 }
                 
-                EmailRefreshButton(
-                    notificationCenter: notificationCenter,
-                    grabbedIndicatorService: notificationCenter.grabbedIndicatorService
-                )
-                .environmentObject(emailScanningService)
+                if settingsManager.currentSettings.newDocketDetectionMode == .email {
+                    EmailRefreshButton(
+                        notificationCenter: notificationCenter
+                    )
+                    .environmentObject(emailScanningService)
+                    .environmentObject(settingsManager)
+                } else {
+                    AirtableDocketRefreshButton(
+                        notificationCenter: notificationCenter
+                    )
+                    .environmentObject(airtableDocketScanningService)
+                    .environmentObject(settingsManager)
+                }
                 
                 Button(action: {
                     NotificationWindowManager.shared.hideNotificationWindow()
@@ -228,7 +230,7 @@ struct NotificationCenterView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Gmail Integration Disabled")
                         .font(.system(size: 12, weight: .medium))
-                    Text("Email notifications are disabled. Enable in Settings to receive new docket and file delivery notifications")
+                    Text("Gmail is off or not connected. Enable Gmail in Settings when using Email detection for new dockets.")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
@@ -286,17 +288,26 @@ struct NotificationCenterView: View {
     
     private var emailModeContent: some View {
         Group {
-            let isGmailConnected = emailScanningService.gmailService.isAuthenticated
-            let gmailEnabled = settingsManager.currentSettings.gmailEnabled
-            
-            if gmailEnabled && !isGmailConnected {
-                gmailNotConnectedEmptyState
-            } else if !gmailEnabled && mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
-                gmailDisabledEmptyState
-            } else if mediaFileNotifications.isEmpty && activeNotifications.isEmpty {
-                noNotificationsEmptyState
+            // Any non-email mode (including nil → treated as Airtable after defaults) skips Gmail gatekeeping.
+            if settingsManager.currentSettings.newDocketDetectionMode != .email {
+                if activeNotifications.isEmpty {
+                    noNotificationsEmptyState
+                } else {
+                    notificationListContent
+                }
             } else {
-                notificationListContent
+                let isGmailConnected = emailScanningService.gmailService.isAuthenticated
+                let gmailEnabled = settingsManager.currentSettings.gmailEnabled
+
+                if gmailEnabled && !isGmailConnected {
+                    gmailNotConnectedEmptyState
+                } else if !gmailEnabled && activeNotifications.isEmpty {
+                    gmailDisabledEmptyState
+                } else if activeNotifications.isEmpty {
+                    noNotificationsEmptyState
+                } else {
+                    notificationListContent
+                }
             }
         }
     }
@@ -366,7 +377,9 @@ struct NotificationCenterView: View {
             if isScanningEmails {
                 ProgressView()
                     .scaleEffect(0.8)
-                Text("Scanning for unread emails...")
+                Text(settingsManager.currentSettings.newDocketDetectionMode == .email
+                     ? "Scanning for unread emails..."
+                     : "Checking Airtable for new dockets...")
                     .font(.system(size: 14))
                     .foregroundColor(.secondary)
             } else {
@@ -869,6 +882,9 @@ struct NotificationCenterView: View {
     }
     
     private func autoFetchEmail() {
+        if settingsManager.currentSettings.newDocketDetectionMode != .email {
+            return
+        }
         let timeSinceLastScan = emailScanningService.lastScanTime.map { Date().timeIntervalSince($0) } ?? Double.infinity
         let scanThreshold: TimeInterval = 30
         let shouldAutoScan = timeSinceLastScan > scanThreshold
@@ -902,9 +918,26 @@ struct NotificationCenterView: View {
         }
     }
     
-    /// Manual refresh: scan for new docket emails (force rescan). Call from Refresh button or empty-state "Scan" button.
+    /// Manual refresh: Gmail inbox (email mode) or Airtable poll (Airtable mode).
     private func triggerManualScan() {
         guard !isScanningEmails else { return }
+        if settingsManager.currentSettings.newDocketDetectionMode != .email {
+            Task {
+                isScanningEmails = true
+                lastScanStatus = nil
+                await airtableDocketScanningService.scanNow()
+                isScanningEmails = false
+                if let err = airtableDocketScanningService.lastError, !err.isEmpty {
+                    lastScanStatus = err
+                } else {
+                    let n = notificationCenter.activeNotifications.count
+                    lastScanStatus = n == 0
+                        ? "No pending new dockets"
+                        : "\(n) new docket\(n == 1 ? "" : "s") in the list"
+                }
+            }
+            return
+        }
         Task {
             isScanningEmails = true
             lastScanStatus = nil
@@ -1053,10 +1086,6 @@ struct NotificationRowView: View {
     @State private var isEmailPreviewExpanded = false
     @State private var showJobNameEditDialog = false
     @State private var selectedTextFromEmail: String? = nil
-    @State private var isGrabbedBadgeHovered = false
-    @State private var showGrabbedConfirmation = false
-    @State private var pendingEmailIdForReply: String?
-    @State private var isSendingReply = false
     @State private var showFeedbackDialog = false
     @State private var isEmailPreviewButtonHovered = false
     @State private var feedbackCorrection = ""
@@ -1362,21 +1391,13 @@ struct NotificationRowView: View {
                 // Background color - different colors for different notification types
                 Group {
                     if isHovered {
-                        // Hover state - darker for visibility
-                        if notification.type == .mediaFiles {
-                            Color.orange.opacity(0.15)
-                        } else if notification.type == .request && notification.status == .completed {
+                        if notification.type == .request && notification.status == .completed {
                             Color.gray.opacity(0.1)
                         } else {
                             Color.blue.opacity(0.1)
                         }
                     } else if notification.status == .pending {
-                        // Pending state - subtle background
-                        if notification.type == .mediaFiles {
-                            Color.orange.opacity(0.08)
-                        } else {
-                            Color.blue.opacity(0.05)
-                        }
+                        Color.blue.opacity(0.05)
                     } else if notification.type == .request && notification.status == .completed {
                         // Completed request - greyed out
                         Color.gray.opacity(0.05)
@@ -1546,16 +1567,6 @@ struct NotificationRowView: View {
                 )
                 .sheetBorder()
             }
-        }
-        .alert("Did you grab it?", isPresented: $showGrabbedConfirmation) {
-            Button("No", role: .cancel) {
-                pendingEmailIdForReply = nil
-            }
-            Button("Yes") {
-                sendGrabbedReply()
-            }
-        } message: {
-            Text("Did you successfully grab the file?")
         }
         .sheet(isPresented: $showFeedbackDialog) {
             EmptyView() // Feedback removed
@@ -2025,66 +2036,10 @@ struct NotificationRowView: View {
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
             
-            mediaFilesStatusBadge(notification: notification)
-            
             if notification.status == .pending {
                 Circle()
                     .fill(Color.blue)
                     .frame(width: 8, height: 8)
-            }
-        }
-    }
-    
-    /// Helper view for media files status badge (grabbed/priority assist)
-    @ViewBuilder
-    private func mediaFilesStatusBadge(notification: Notification) -> some View {
-        if notification.type == .mediaFiles {
-            if notification.isPriorityAssist {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(.red)
-                    Text("Priority Assist")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.red)
-                }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.red.opacity(0.1))
-                .cornerRadius(4)
-            } else if notification.isGrabbed {
-                Button(action: {
-                    notificationCenter.archive(notification, emailScanningService: emailScanningService)
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(.green)
-                        if let grabbedBy = notification.grabbedBy {
-                            Text("Grabbed by \(extractProducerName(from: grabbedBy))")
-                                .font(.system(size: 9))
-                                .foregroundColor(.green)
-                        } else {
-                            Text("Grabbed")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(.green)
-                        }
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(isGrabbedBadgeHovered ? Color.green.opacity(0.2) : Color.green.opacity(0.1))
-                    .cornerRadius(4)
-                }
-                .buttonStyle(.plain)
-                .help("Click to archive notification")
-                .onHover { hovering in
-                    isGrabbedBadgeHovered = hovering
-                    if hovering {
-                        NSCursor.pointingHand.push()
-                    } else {
-                        NSCursor.pop()
-                    }
-                }
             }
         }
     }
@@ -2094,51 +2049,12 @@ struct NotificationRowView: View {
     private func notificationContentView(notification: Notification) -> some View {
         if notification.type == .newDocket {
             newDocketContentView(notification: notification)
-        } else if notification.type == .mediaFiles {
-            mediaFilesContentView(notification: notification)
         } else if notification.type == .request {
             requestContentView(notification: notification)
         } else {
             Text(notification.message)
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
-        }
-    }
-    
-    /// Helper view for mediaFiles notification content to reduce view complexity
-    @ViewBuilder
-    private func mediaFilesContentView(notification: Notification) -> some View {
-        let extractedLinks: [String] = {
-            if let existingLinks = notification.fileLinks, !existingLinks.isEmpty {
-                return existingLinks
-            }
-            if let emailBody = notification.emailBody {
-                return FileHostingLinkDetector.extractFileHostingLinks(emailBody)
-            }
-            return []
-        }()
-        
-        VStack(alignment: .leading, spacing: 8) {
-            Text(notification.message)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-            
-            if !extractedLinks.isEmpty {
-                fileLinksListView(notification: notification, links: extractedLinks)
-            }
-            
-            if notification.isPriorityAssist {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
-                        .foregroundColor(.red)
-                    Text("Needs assistance - could not grab file")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.red)
-                }
-                .padding(.top, 2)
-            }
-
         }
     }
 
@@ -2153,172 +2069,6 @@ struct NotificationRowView: View {
             producerInfoView(notification: notification)
             emailPreviewSection(notification: notification)
         }
-    }
-    
-    /// Helper view for file links list
-    @ViewBuilder
-    private func fileLinksListView(notification: Notification, links: [String]) -> some View {
-        let descriptions = notification.fileLinkDescriptions ?? []
-
-        VStack(alignment: .leading, spacing: 6) {
-            Text("File Links:")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(.secondary)
-
-            ForEach(Array(links.enumerated()), id: \.offset) { index, link in
-                let description = index < descriptions.count ? descriptions[index] : nil
-                if URL(string: link) != nil {
-                    validLinkButton(notification: notification, link: link, description: description, allLinks: links)
-                } else {
-                    invalidLinkView(notification: notification, link: link, description: description)
-                }
-            }
-        }
-        .padding(.top, 4)
-    }
-    
-    /// Helper view for a valid link button
-    @ViewBuilder
-    private func validLinkButton(notification: Notification, link: String, description: String?, allLinks: [String]) -> some View {
-        Button(action: {
-            openLinkInBrowser(link)
-            if let emailId = notification.emailId {
-                pendingEmailIdForReply = emailId
-                showGrabbedConfirmation = true
-            }
-        }) {
-            VStack(alignment: .leading, spacing: 4) {
-                // Show description if available
-                if let desc = description, !desc.isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "doc.text.fill")
-                            .font(.system(size: 9))
-                            .foregroundColor(.primary.opacity(0.7))
-                        Text(desc)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.primary)
-                            .lineLimit(2)
-                    }
-                }
-
-                HStack(spacing: 6) {
-                    Image(systemName: "link.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundColor(.blue)
-                    Text(link)
-                        .font(.system(size: 10))
-                        .foregroundColor(.blue)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer()
-                    Image(systemName: "arrow.up.right.square")
-                        .font(.system(size: 9))
-                        .foregroundColor(.blue.opacity(0.7))
-                }
-
-                if allLinks.count > 1, let sourceEmail = notification.sourceEmail {
-                    HStack(spacing: 4) {
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary.opacity(0.6))
-                        Text("From: \(extractProducerName(from: sourceEmail))")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary.opacity(0.7))
-                    }
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(Color.blue.opacity(0.1))
-            .cornerRadius(6)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.blue.opacity(0.3), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .help("Click to open link in browser")
-        .onHover { hovering in
-            if hovering {
-                NSCursor.pointingHand.push()
-            } else {
-                NSCursor.pop()
-            }
-        }
-    }
-    
-    /// Helper view for invalid link
-    @ViewBuilder
-    private func invalidLinkView(notification: Notification, link: String, description: String?) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
-                    .foregroundColor(.orange)
-                Text("Link Invalid")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.orange)
-                Spacer()
-            }
-
-            // Show description if available
-            if let desc = description, !desc.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "doc.text.fill")
-                        .font(.system(size: 9))
-                        .foregroundColor(.primary.opacity(0.7))
-                    Text(desc)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.primary)
-                        .lineLimit(2)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Unable to parse link from email. The link may be malformed or incomplete.")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
-
-                Text("Extracted: \(link.prefix(100))")
-                    .font(.system(size: 8, design: .monospaced))
-                    .foregroundColor(.secondary.opacity(0.7))
-                    .lineLimit(2)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            
-            if let emailId = notification.emailId {
-                Button(action: {
-                    openEmailInBrowser(emailId: emailId)
-                    pendingEmailIdForReply = emailId
-                    showGrabbedConfirmation = true
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "envelope.fill")
-                            .font(.system(size: 9))
-                        Text("Open Email Thread")
-                            .font(.system(size: 9, weight: .medium))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.orange.opacity(0.1))
-                    .cornerRadius(4)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .help("Open the email in your browser to view the link")
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Color.orange.opacity(0.05))
-        .cornerRadius(6)
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-        )
     }
     
     /// Helper view for newDocket notification content to reduce view complexity
@@ -2491,155 +2241,6 @@ struct NotificationRowView: View {
             }
         }
         .padding(.top, 6)
-    }
-    
-    
-    private func sendGrabbedReply() {
-        guard let emailId = pendingEmailIdForReply else { return }
-        guard emailScanningService.gmailService.isAuthenticated else {
-            // DEBUG: Commented out for performance
-            // print("NotificationCenterView: Cannot send reply - Gmail not authenticated")
-            return
-        }
-        
-        isSendingReply = true
-        
-        Task {
-            do {
-                let settings = settingsManager.currentSettings
-                var imageURL: URL? = nil
-                
-                // Check if cursed image feature is enabled
-                if settings.enableCursedImageReplies && !settings.cursedImageSubreddit.isEmpty {
-                    // DEBUG: Commented out for performance
-                    // print("NotificationCenterView: Fetching random image from r/\(settings.cursedImageSubreddit)...")
-                    
-                    let redditService = RedditImageService()
-                    do {
-                        // Try to fetch image with retries
-                        if let url = try await redditService.fetchRandomImageURLWithRetry(from: settings.cursedImageSubreddit) {
-                            imageURL = url
-                            // DEBUG: Commented out for performance
-                            // print("NotificationCenterView: ✅ Found image: \(url.absoluteString)")
-                        } else {
-                            // DEBUG: Commented out for performance
-                            // print("NotificationCenterView: ⚠️ No image found, falling back to text")
-                        }
-                    } catch {
-                        // If image fetch fails, log but continue with plain text
-                        // DEBUG: Commented out for performance
-                        // print("NotificationCenterView: ⚠️ Failed to fetch image: \(error.localizedDescription), falling back to text")
-                    }
-                }
-                
-                // CRITICAL: Send reply ONLY to media email - NEVER to clients or other recipients
-                // This removes all other recipients from the original email thread
-                _ = try await emailScanningService.gmailService.sendReply(
-                    messageId: emailId,
-                    body: "Grabbed",
-                    to: ["media@graysonmusicgroup.com"], // ONLY this recipient - all others removed
-                    imageURL: imageURL
-                )
-                
-                // DEBUG: Commented out for performance
-                // print("NotificationCenterView: ✅ Successfully sent 'Grabbed' reply\(imageURL != nil ? " with image" : "")")
-                
-                // Mark notification as grabbed (remove it)
-                if let notification = notification {
-                    // Mark email as read when grabbing file delivery
-                    await markEmailAsReadIfNeeded(notification)
-                    
-                    // Track grab interaction by email ID
-                    await MainActor.run {
-                        if let emailId = notification.emailId {
-                            EmailFeedbackTracker.shared.recordInteraction(
-                                emailId: emailId,
-                                type: .grabbed
-                            )
-                        }
-                    }
-                    
-                    // Remove notification instead of archiving
-                    await notificationCenter.remove(notification, emailScanningService: emailScanningService)
-                    print("📋 NotificationCenterView: Removed notification after grabbing file delivery")
-                    
-                    await MainActor.run {
-                        pendingEmailIdForReply = nil
-                        isSendingReply = false
-                    }
-                }
-            } catch {
-                // DEBUG: Commented out for performance
-                // print("NotificationCenterView: ❌ Failed to send reply: \(error.localizedDescription)")
-                
-                await MainActor.run {
-                    // Show error notification
-                    let errorNotification = Notification(
-                        type: .error,
-                        title: "Failed to Send Reply",
-                        message: "Could not send 'Grabbed' reply: \(error.localizedDescription)"
-                    )
-                    notificationCenter.add(errorNotification)
-                    pendingEmailIdForReply = nil
-                    isSendingReply = false
-                }
-            }
-        }
-    }
-    
-    /// Open a link in the default browser from settings
-    private func openLinkInBrowser(_ link: String) {
-        // DEBUG: Commented out for performance
-        // print("NotificationCenterView: openLinkInBrowser called with link: \(link)")
-        
-        guard let url = URL(string: link) else {
-            // DEBUG: Commented out for performance
-            // print("NotificationCenterView: ❌ Invalid URL: \(link)")
-            return
-        }
-        
-        // DEBUG: Commented out for performance
-        // print("NotificationCenterView: ✅ Valid URL created: \(url.absoluteString)")
-        
-        // Get browser preference from settings
-        let browserPreference = settingsManager.currentSettings.defaultBrowser
-        // DEBUG: Commented out for performance
-        // print("NotificationCenterView: Browser preference: \(browserPreference)")
-        
-        // If a specific browser is selected, try to open with that browser
-        if let bundleId = browserPreference.bundleIdentifier {
-            // DEBUG: Commented out for performance
-            // print("NotificationCenterView: Attempting to open with bundle ID: \(bundleId)")
-            // Check if the browser is installed
-            if let browserURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
-                // DEBUG: Commented out for performance
-                // print("NotificationCenterView: ✅ Browser found at: \(browserURL.path)")
-                NSWorkspace.shared.open([url], withApplicationAt: browserURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: { runningApp, error in
-                    if error != nil {
-                        // DEBUG: Commented out for performance
-                        // print("NotificationCenterView: ❌ Error opening link in preferred browser: \(error.localizedDescription)")
-                        // Fallback to default browser
-                        // DEBUG: Commented out for performance
-                        // print("NotificationCenterView: Falling back to default browser")
-                        NSWorkspace.shared.open(url)
-                    } else {
-                        // DEBUG: Commented out for performance
-                        // print("NotificationCenterView: ✅ Successfully opened link in preferred browser")
-                    }
-                })
-                return
-            } else {
-                // DEBUG: Commented out for performance
-                // print("NotificationCenterView: ⚠️ Browser with bundle ID \(bundleId) not found, falling back to default")
-            }
-        }
-        
-        // Fallback to default browser
-        // DEBUG: Commented out for performance
-        // print("NotificationCenterView: Opening with default browser")
-        _ = NSWorkspace.shared.open(url)
-        // DEBUG: Commented out for performance
-        // print("NotificationCenterView: Default browser open result: \(success)")
     }
     
     /// Open email in Gmail browser

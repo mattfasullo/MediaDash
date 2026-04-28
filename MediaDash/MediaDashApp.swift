@@ -22,6 +22,9 @@ struct MediaDashApp: App {
         let isPlayground = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PLAYGROUNDS"] != nil
         if !isPreview && !isPlayground {
             _ = FileLogger.shared
+            // One-time flip of existing email-detection profiles to Airtable.
+            // Must run before SessionManager loads its persisted WorkspaceProfile.
+            SettingsManager.migrateLegacyEmailDetectionToAirtableIfNeeded()
         }
     }
 
