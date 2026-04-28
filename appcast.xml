@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.13</title>
+            <description><![CDATA[
+                <p>Smarter duplicate detection when docket folders use optional letter suffixes before the job name. Improvements to Gmail scanning, Simian staging, and Airtable docket workflows; notification polish; Simian tree and post view refinements.</p>
+            ]]></description>
+            <pubDate>Tue, 28 Apr 2026 21:01:37 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.13/MediaDash.zip"
+                sparkle:version="230"
+                sparkle:shortVersionString="1.13"
+                sparkle:edSignature="egLASbMEf12JgzOZrtYCa2/Rlr8kFdtyBJcNaL7HeidSmBOmvBHq1l9tCGkmuxNTDQW/Td4hr9xt3oO1q8CBCg=="
+                length="15396867"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.12</title>
             <description><![CDATA[
                 <p>Staging: Arrange Finals from the file tree—preview planned moves before applying, with automatic folder refresh after organizing.</p>
