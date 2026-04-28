@@ -657,6 +657,9 @@ struct NotificationCenterView: View {
                     
                     Button("Clear All") {
                         notificationCenter.clearAll()
+                        // Clearing notifications should allow a true re-scan from sources.
+                        emailScanningService.clearProcessedEmails()
+                        airtableDocketScanningService.clearSeenRecords()
                     }
                     .buttonStyle(.borderless)
                     .font(.system(size: 11))
@@ -876,6 +879,7 @@ struct NotificationCenterView: View {
             notificationCenter.cleanupOldArchivedNotifications()
             notificationCenter.cleanupOldCompletedRequests()
             await notificationCenter.syncCompletionStatus()
+            await emailScanningService.refreshDuplicateIndicatorsForActiveNotifications()
         }
         
         autoFetchEmail()
@@ -2483,7 +2487,11 @@ struct NotificationRowView: View {
         let config = AppConfig(settings: settingsManager.currentSettings)
         let serverBase = settingsManager.currentSettings.serverBasePath
         let foundYear = config.findDocketYear(docket: docketName)
-        if foundYear != nil {
+        let prefixMatchInLoadedDockets = DocketDuplicateDetection.workPictureContainsDocketNumber(
+            docketNumber,
+            dockets: mediaManager.dockets
+        )
+        if foundYear != nil || prefixMatchInLoadedDockets {
             info.existsInWorkPicture = true
         }
         // #region agent log

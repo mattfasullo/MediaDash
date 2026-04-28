@@ -16,6 +16,7 @@ enum SimianTreeContextAction {
     case beginRename(treeId: String)
     case addDate(treeId: String, useUploadTime: Bool)
     case copyLink(treeId: String)
+    case openInBrowser(treeId: String)
     case downloadFolder(folderId: String, folderName: String)
     case downloadFile(fileId: String)
     case delete(treeId: String)
@@ -649,6 +650,7 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
                 addAddDateSubmenu(forTreeId: node.treeId)
                 menu.addItem(.separator())
                 add("Copy Link", action: .copyLink(treeId: node.treeId))
+                add("Edit on Simian", action: .openInBrowser(treeId: node.treeId))
                 add("Download folder contents\u{2026}", action: .downloadFolder(folderId: fid, folderName: fn))
                 menu.addItem(.separator())
                 let delItem = NSMenuItem(title: removeTitle, action: #selector(menuAction(_:)), keyEquivalent: "")
@@ -660,6 +662,7 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
                 add(offerBatchRename ? "Batch Rename\u{2026}" : "Rename\u{2026}", action: .beginRename(treeId: node.treeId))
                 addAddDateSubmenu(forTreeId: node.treeId)
                 menu.addItem(.separator())
+                add("Edit on Simian", action: .openInBrowser(treeId: node.treeId))
                 add("Download\u{2026}", action: .downloadFile(fileId: fid))
                 menu.addItem(.separator())
                 let delItem = NSMenuItem(title: removeTitle, action: #selector(menuAction(_:)), keyEquivalent: "")
@@ -672,6 +675,12 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             menu.addItem(.separator())
             add("New Folder with Selection", action: .newFolderWithSelection(treeId: ""))
             add("New Folder", action: .newFolder(parentFolderId: v.currentParentFolderId))
+            menu.addItem(.separator())
+            if let pid = v.currentParentFolderId {
+                add("Edit on Simian", action: .openInBrowser(treeId: "f-\(pid)"))
+            } else {
+                add("Edit on Simian", action: .openInBrowser(treeId: ""))
+            }
         }
         return menu.items.isEmpty ? nil : menu
     }

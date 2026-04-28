@@ -160,16 +160,16 @@ final class FinderCommandBridge {
                 let folderName = folderURL.lastPathComponent
                 if let match = bestSimianProject(for: folderName, in: projects),
                    let webURL = SimianService.folderLinkURL(projectId: match.id, folderId: nil) {
-                    await MainActor.run { NSWorkspace.shared.open(webURL) }
+                    _ = await MainActor.run { NSWorkspace.shared.open(webURL) }
                 } else {
                     // Fallback: open the Simian projects list
-                    let fallback = URL(string: "https://graysonmusic.gosimian.com/projects")!
-                    await MainActor.run { NSWorkspace.shared.open(fallback) }
+                    let fallback = URL(string: "https://graysonmusic.gosimian.com/simian/projects")!
+                    _ = await MainActor.run { NSWorkspace.shared.open(fallback) }
                 }
             }
         } catch {
-            let fallback = URL(string: "https://graysonmusic.gosimian.com/projects")!
-            await MainActor.run { NSWorkspace.shared.open(fallback) }
+            let fallback = URL(string: "https://graysonmusic.gosimian.com/simian/projects")!
+            _ = await MainActor.run { NSWorkspace.shared.open(fallback) }
         }
     }
 

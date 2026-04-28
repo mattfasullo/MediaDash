@@ -652,7 +652,8 @@ class EmailScanningService: ObservableObject {
             return false
         }
         
-        emailScanDebug("    ✅ Parsed docket: \(parsedDocket.docketNumber) - \(parsedDocket.jobName)")
+        let normalizedParsedDocketNumber = normalizeDocketNumberForApp(parsedDocket.docketNumber)
+        emailScanDebug("    ✅ Parsed docket: \(parsedDocket.docketNumber) -> \(normalizedParsedDocketNumber) - \(parsedDocket.jobName)")
         
         // STRICT VALIDATION: Docket number is REQUIRED - no exceptions, no "TBD" allowed
         // If we don't have a valid docket number, reject the notification
@@ -662,7 +663,7 @@ class EmailScanningService: ObservableObject {
             return false
         }
 
-        if shouldSkipDocketExistsInWorkPictureAndSimian(docketNumber: parsedDocket.docketNumber) {
+        if shouldSkipDocketExistsInWorkPictureAndSimian(docketNumber: normalizedParsedDocketNumber) {
             markEmailProcessedForScan(message)
             emailScanDebug("    ℹ️ Skipping notification (WP+Simian); marked email processed so it is not rescanned")
             return false
@@ -681,13 +682,13 @@ class EmailScanningService: ObservableObject {
             let messageText: String
             let docketNumber: String?
             
-            if parsedDocket.docketNumber == "TBD" {
+            if normalizedParsedDocketNumber == "TBD" {
                 // No docket number found - use nil and create a different message
                 messageText = "New Docket Email: \(parsedDocket.jobName) (Docket number pending)"
                 docketNumber = nil
             } else {
-                messageText = "Docket \(parsedDocket.docketNumber): \(parsedDocket.jobName)"
-                docketNumber = parsedDocket.docketNumber
+                messageText = "Docket \(normalizedParsedDocketNumber): \(parsedDocket.jobName)"
+                docketNumber = normalizedParsedDocketNumber
             }
             
             // Ensure we store non-empty values (not empty strings)
@@ -1217,9 +1218,21 @@ class EmailScanningService: ObservableObject {
         }
         
         // Filter to only valid docket numbers (5 digits, optionally with -US suffix)
-        let validDockets = parts.filter { isValidDocketNumber($0) }
+        let validDockets = parts
+            .filter { isValidDocketNumber($0) }
+            .map { normalizeDocketNumberForApp($0) }
         
         return validDockets
+    }
+
+    /// App normalization for docket numbers: remove trailing "-US".
+    private func normalizeDocketNumberForApp(_ docketNumber: String) -> String {
+        let trimmed = docketNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.replacingOccurrences(
+            of: "-US",
+            with: "",
+            options: [.caseInsensitive, .anchored]
+        )
     }
     
     /// Validate a docket number: must be exactly 5 digits with valid year prefix, optionally with -XX country suffix (e.g. -US, -CA)
@@ -1410,21 +1423,24 @@ class EmailScanningService: ObservableObject {
     /// Check for existing Work Picture folder and Simian project when notification is added
     private func checkDuplicatesForNotification(_ notification: Notification) async {
         guard let docketNumber = notification.docketNumber, docketNumber != "TBD",
-              let jobName = notification.jobName else {
+              notification.jobName != nil else {
             return
         }
         
-        emailScanDebug("📋 [EmailScanningService] Auto-scanning for duplicates: \(docketNumber)_\(jobName)")
+        let jobNameForLog = notification.jobName ?? "(unknown)"
+        emailScanDebug("📋 [EmailScanningService] Auto-scanning for duplicates: \(docketNumber)_\(jobNameForLog)")
         
         var workPictureExists = false
         var simianExists = false
         
         // Check Work Picture folder
         if let mediaManager = mediaManager {
-            let docketName = "\(docketNumber)_\(jobName)"
-            workPictureExists = mediaManager.dockets.contains(docketName)
+            workPictureExists = DocketDuplicateDetection.workPictureContainsDocketNumber(
+                docketNumber,
+                dockets: mediaManager.dockets
+            )
             if workPictureExists {
-                emailScanDebug("📋 [EmailScanningService] ✅ Found existing Work Picture folder: \(docketName)")
+                emailScanDebug("📋 [EmailScanningService] ✅ Found existing Work Picture folder by docket number: \(docketNumber)")
             }
         }
         
@@ -1434,9 +1450,22 @@ class EmailScanningService: ObservableObject {
            settings.simianEnabled,
            simianService.isConfigured {
             do {
-                simianExists = try await simianService.projectExists(docketNumber: docketNumber, jobName: jobName)
+                if let cachedProjects = scanBatchSimianProjects, !cachedProjects.isEmpty {
+                    simianExists = DocketDuplicateDetection.simianProjectListContainsDocketNumber(
+                        docketNumber,
+                        projectNames: cachedProjects.map(\.name)
+                    )
+                } else {
+                    // Fallback to a docket-number-only check so we still detect existing projects
+                    // when job names differ from email-parsed names.
+                    let projects = try await simianService.getProjectList()
+                    simianExists = DocketDuplicateDetection.simianProjectListContainsDocketNumber(
+                        docketNumber,
+                        projectNames: projects.map(\.name)
+                    )
+                }
                 if simianExists {
-                    emailScanDebug("📋 [EmailScanningService] ✅ Found existing Simian project: \(docketNumber)_\(jobName)")
+                    emailScanDebug("📋 [EmailScanningService] ✅ Found existing Simian project by docket number: \(docketNumber)")
                 }
             } catch {
                 emailScanDebug("📋 [EmailScanningService] ⚠️ Error checking Simian: \(error.localizedDescription)")
@@ -1462,6 +1491,18 @@ class EmailScanningService: ObservableObject {
                     emailScanDebug("📋 [EmailScanningService] Marked notification as pre-existing in Simian")
                 }
             }
+        }
+    }
+
+    /// Re-check duplicate indicators (Work Picture / Simian) for currently active new-docket notifications.
+    /// This is useful on app launch when notifications are restored from persistence.
+    func refreshDuplicateIndicatorsForActiveNotifications() async {
+        guard let nc = notificationCenter else { return }
+        defer { clearSimianProjectsScanCache() }
+        await prefetchSimianProjectsForCurrentScan()
+        let targets = nc.activeNotifications.filter { $0.type == .newDocket }
+        for notification in targets {
+            await checkDuplicatesForNotification(notification)
         }
     }
 }

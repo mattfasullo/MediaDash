@@ -84,6 +84,7 @@ class AirtableDocketScanningService: ObservableObject {
 
         let docketField = settings.airtableDocketNumberField.nilIfEmpty ?? AirtableConfig.docketNumberField
         let jobField    = settings.airtableJobNameField.nilIfEmpty      ?? AirtableConfig.jobNameField
+        let simianProjectNames = await fetchSimianProjectNamesForScan()
 
         do {
             let records = try await fetchRecordsJobFieldAssignedAfter(
@@ -105,14 +106,19 @@ class AirtableDocketScanningService: ObservableObject {
                     continue
                 }
 
-                let docketNumber = rawDocket.trimmingCharacters(in: .whitespacesAndNewlines)
+                let docketNumber = rawDocket
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "-US", with: "", options: [.caseInsensitive, .anchored])
                 let jobName      = (record.fields[jobField] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
                 // Don't markSeen here — an empty job name is transient (not yet filled in).
                 // The LAST_MODIFIED_TIME filter will re-surface this record once it's filled.
                 guard !jobName.isEmpty else { continue }
 
-                if shouldSkipAlreadyProvisioned(docketNumber: docketNumber) {
+                if shouldSkipAlreadyProvisioned(
+                    docketNumber: docketNumber,
+                    simianProjectNames: simianProjectNames
+                ) {
                     markSeen(record.id)
                     continue
                 }
@@ -292,12 +298,45 @@ class AirtableDocketScanningService: ObservableObject {
         return prefix == currentYearLast2 || prefix == nextYearLast2
     }
 
-    /// Fix 3: skip only when the docket is confirmed to exist in Work Picture.
-    /// Simian check is removed — we have no pre-fetched Simian list at scan time and
-    /// the previous implementation unconditionally returned false anyway.
-    private func shouldSkipAlreadyProvisioned(docketNumber: String) -> Bool {
-        guard let mm = mediaManager else { return false }
-        return DocketDuplicateDetection.workPictureContainsDocketNumber(docketNumber, dockets: mm.dockets)
+    /// Skip notification creation only when the docket is confirmed to exist in BOTH
+    /// Work Picture and Simian (job names may differ).
+    private func shouldSkipAlreadyProvisioned(docketNumber: String, simianProjectNames: [String]?) -> Bool {
+        let inWorkPicture: Bool = {
+            guard let mm = mediaManager else { return false }
+            return DocketDuplicateDetection.workPictureContainsDocketNumber(docketNumber, dockets: mm.dockets)
+        }()
+        if !inWorkPicture {
+            return false
+        }
+
+        guard let simianProjectNames, !simianProjectNames.isEmpty else {
+            return false
+        }
+
+        let inSimian = DocketDuplicateDetection.simianProjectListContainsDocketNumber(
+            docketNumber,
+            projectNames: simianProjectNames
+        )
+        return inWorkPicture && inSimian
+    }
+
+    /// Fetch Simian projects once per scan for duplicate pre-checks.
+    /// Returns nil when Simian is disabled/unavailable, so callers treat Simian state as unknown.
+    private func fetchSimianProjectNamesForScan() async -> [String]? {
+        guard let settings = settingsManager?.currentSettings,
+              settings.simianEnabled,
+              let simian = simianService,
+              simian.isConfigured else {
+            return nil
+        }
+
+        do {
+            let projects = try await simian.getProjectList()
+            return projects.map(\.name)
+        } catch {
+            print("AirtableDocketScanningService: ⚠️ Could not fetch Simian projects for duplicate pre-check: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     // MARK: - Periodic scanning

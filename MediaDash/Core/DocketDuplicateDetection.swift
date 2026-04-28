@@ -16,19 +16,30 @@ enum DocketDuplicateDetection {
         return trimmed
     }
 
-    /// True if any Work Picture folder name starts with `{base}_` (case-sensitive match on prefix; base is normalized).
-    static func workPictureContainsDocketNumber(_ rawDocketNumber: String, dockets: [String]) -> Bool {
-        let base = baseNumericDocketString(rawDocketNumber)
+    /// True if `candidate` starts with `{base}` or `{base}-XX` and then either ends or continues with a common delimiter.
+    /// Delimiters supported after the docket token: `_`, `-`, or a space.
+    private static func hasMatchingDocketPrefix(_ candidate: String, base: String, caseInsensitive: Bool) -> Bool {
         guard !base.isEmpty else { return false }
-        let prefix = base + "_"
-        return dockets.contains { $0.hasPrefix(prefix) }
+        let name = caseInsensitive ? candidate.lowercased() : candidate
+        let normalizedBase = caseInsensitive ? base.lowercased() : base
+        let pattern = "^" + NSRegularExpression.escapedPattern(for: normalizedBase) + "(?:-[a-z]{1,3})?(?:$|[_\\s-])"
+        let options: NSRegularExpression.Options = caseInsensitive ? [.caseInsensitive] : []
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return false
+        }
+        let range = NSRange(name.startIndex..<name.endIndex, in: name)
+        return regex.firstMatch(in: name, options: [], range: range) != nil
     }
 
-    /// True if any Simian project name starts with `{base}_` (job name may differ).
+    /// True if any Work Picture folder name starts with `{base}_` or `{base}-XX_` (job name may differ).
+    static func workPictureContainsDocketNumber(_ rawDocketNumber: String, dockets: [String]) -> Bool {
+        let base = baseNumericDocketString(rawDocketNumber)
+        return dockets.contains { hasMatchingDocketPrefix($0, base: base, caseInsensitive: true) }
+    }
+
+    /// True if any Simian project name starts with `{base}_` or `{base}-XX_` (job name may differ).
     static func simianProjectListContainsDocketNumber(_ rawDocketNumber: String, projectNames: [String]) -> Bool {
         let base = baseNumericDocketString(rawDocketNumber)
-        guard !base.isEmpty else { return false }
-        let prefix = base.lowercased() + "_"
-        return projectNames.contains { $0.lowercased().hasPrefix(prefix) }
+        return projectNames.contains { hasMatchingDocketPrefix($0, base: base, caseInsensitive: true) }
     }
 }

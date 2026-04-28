@@ -888,6 +888,21 @@ class SimianService: ObservableObject {
         return trimmed.isEmpty ? "HTTP \(status)" : trimmed
     }
 
+    /// Validate the common Simian JSON envelope (`root.status`) and surface API-level errors.
+    private static func requireSuccessRootResponse(_ data: Data, action: String) throws {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let root = json["root"] as? [String: Any] else {
+            let snippet = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Empty response"
+            throw SimianError.apiError("Failed to \(action): unexpected response format (\(snippet.prefix(200)))")
+        }
+        let status = (root["status"] as? String ?? "").lowercased()
+        guard status == "success" else {
+            let message = root["message"] as? String ?? "Unknown API error"
+            throw SimianError.apiError("Failed to \(action): \(message)")
+        }
+    }
+
     /// Parses date strings from Simian list/detail payloads (`upload_date`, etc.).
     nonisolated static func parseSimianMetadataDate(_ raw: String?) -> Date? {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1926,28 +1941,13 @@ class SimianService: ObservableObject {
             let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
             throw SimianError.apiError("Failed to rename folder: \(msg)")
         }
+        try Self.requireSuccessRootResponse(data, action: "rename folder")
     }
 
-    /// Rename a file
-    func renameFile(projectId: String, fileId: String, newName: String) async throws {
-        try await ensureAuthenticated()
-        guard let baseURLString = baseURL, !baseURLString.isEmpty,
-              let base = URL(string: baseURLString),
-              let authKey = authKey,
-              let authToken = authToken else {
-            throw SimianError.notConfigured
-        }
-        let endpointURL = base.appendingPathComponent("rename_file").appendingPathComponent(projectId)
+    private func performRenameFileRequest(endpointURL: URL, params: [String: String]) async throws {
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let params: [String: String] = [
-            "auth_token": authToken,
-            "auth_key": authKey,
-            "file_id": fileId,
-            "title": newName,
-            "file_name": newName
-        ]
         request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
             .joined(separator: "&")
             .data(using: .utf8)
@@ -1957,6 +1957,46 @@ class SimianService: ObservableObject {
             let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
             throw SimianError.apiError("Failed to rename file: \(msg)")
         }
+        try Self.requireSuccessRootResponse(data, action: "rename file")
+    }
+
+    private static func expectedRenamedFileName(newTitle: String, currentFileName: String?) -> String {
+        guard let currentFileName, !currentFileName.isEmpty else { return newTitle }
+        let ext = (currentFileName as NSString).pathExtension
+        guard !ext.isEmpty else { return newTitle }
+        if newTitle.lowercased().hasSuffix(".\(ext.lowercased())") { return newTitle }
+        return "\(newTitle).\(ext)"
+    }
+
+    /// Rename a file and verify title changed; `file_name` may be immutable on some Simian installs.
+    @discardableResult
+    func renameFile(projectId: String, fileId: String, newName: String, currentFileName: String? = nil) async throws -> SimianFileInfo {
+        try await ensureAuthenticated()
+        guard let baseURLString = baseURL, !baseURLString.isEmpty,
+              let base = URL(string: baseURLString),
+              let authKey = authKey,
+              let authToken = authToken else {
+            throw SimianError.notConfigured
+        }
+        let endpointURL = base.appendingPathComponent("rename_file").appendingPathComponent(projectId)
+        let expectedFileName = Self.expectedRenamedFileName(newTitle: newName, currentFileName: currentFileName)
+        let params: [String: String] = [
+            "auth_token": authToken,
+            "auth_key": authKey,
+            "file_id": fileId,
+            // Simian Projects API expects `name` for rename_file.
+            "name": newName,
+            // Include both explicit fields so backends that support them can update both values.
+            "title": newName,
+            "file_name": expectedFileName
+        ]
+        try await performRenameFileRequest(endpointURL: endpointURL, params: params)
+
+        let info = try await getFileInfo(projectId: projectId, fileId: fileId)
+        if info.title != newName {
+            throw SimianError.apiError("Rename partially applied: expected title '\(newName)', got '\(info.title ?? "nil")'")
+        }
+        return info
     }
 
     /// Delete a folder (and its contents) from a project
@@ -2190,10 +2230,11 @@ class SimianService: ObservableObject {
     /// - Parameters:
     ///   - projectId: The project ID
     ///   - folderId: Optional folder ID (nil for project root)
-    /// - Returns: URL like https://graysonmusic.gosimian.com/projects/123 or .../projects/123?folder_id=456
+    /// - Returns: URL like https://graysonmusic.gosimian.com/simian/projects/123 or ...?folder_id=456
+    /// Web UI lives under `/simian/projects/` (same tree as archive download); `/projects/` routes 404 when logged in.
     static func folderLinkURL(projectId: String, folderId: String?) -> URL? {
         let base = "https://graysonmusic.gosimian.com"
-        var path = "\(base)/projects/\(projectId)"
+        var path = "\(base)/simian/projects/\(projectId)"
         if let folderId = folderId, !folderId.isEmpty {
             path += "?folder_id=\(folderId)"
         }

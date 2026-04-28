@@ -615,9 +615,15 @@ class NotificationCenter: ObservableObject {
         let hasMM = mediaManager != nil
         if let settingsManager = settingsManager {
             let config = AppConfig(settings: settingsManager.currentSettings)
-            notifications[index].isInWorkPicture = config.findDocketYear(docket: docketName) != nil
+            let exactExists = config.findDocketYear(docket: docketName) != nil
+            let prefixExists = mediaManager.map {
+                DocketDuplicateDetection.workPictureContainsDocketNumber(docketNumber, dockets: $0.dockets)
+            } ?? false
+            notifications[index].isInWorkPicture = exactExists || prefixExists
         } else if let mediaManager = mediaManager {
-            notifications[index].isInWorkPicture = mediaManager.dockets.contains(docketName)
+            notifications[index].isInWorkPicture =
+                mediaManager.dockets.contains(docketName) ||
+                DocketDuplicateDetection.workPictureContainsDocketNumber(docketNumber, dockets: mediaManager.dockets)
         }
         // #region agent log
         do {

@@ -16,11 +16,32 @@ final class DocketDuplicateDetectionTests: XCTestCase {
         XCTAssertFalse(DocketDuplicateDetection.workPictureContainsDocketNumber("26151", dockets: dockets))
     }
 
+    func testWorkPictureContainsDocketNumberWhenStoredFolderHasCountrySuffix() {
+        let dockets = ["26150-US_Ford_June_Retail", "26149_Other_Job"]
+        XCTAssertTrue(DocketDuplicateDetection.workPictureContainsDocketNumber("26150", dockets: dockets))
+        XCTAssertTrue(DocketDuplicateDetection.workPictureContainsDocketNumber("26150-US", dockets: dockets))
+    }
+
     func testSimianProjectListContainsDocketNumberUsesPrefixOnly() {
         let names = ["26150_Ford_Retail", "99999_Other"]
         XCTAssertTrue(DocketDuplicateDetection.simianProjectListContainsDocketNumber("26150", projectNames: names))
         XCTAssertTrue(DocketDuplicateDetection.simianProjectListContainsDocketNumber("26150-US", projectNames: names))
         XCTAssertFalse(DocketDuplicateDetection.simianProjectListContainsDocketNumber("26151", projectNames: names))
+    }
+
+    func testSimianProjectListContainsDocketNumberWhenStoredProjectHasCountrySuffix() {
+        let names = ["26150-US_Ford_Retail", "99999_Other"]
+        XCTAssertTrue(DocketDuplicateDetection.simianProjectListContainsDocketNumber("26150", projectNames: names))
+        XCTAssertTrue(DocketDuplicateDetection.simianProjectListContainsDocketNumber("26150-US", projectNames: names))
+    }
+
+    func testAllowsSpaceAndDashDelimitersAfterDocket() {
+        let workPictureDockets = [
+            "26168-US Farmer's Insurance Radio",
+            "26169-Sleep-Country-Sleep-Cool"
+        ]
+        XCTAssertTrue(DocketDuplicateDetection.workPictureContainsDocketNumber("26168-US", dockets: workPictureDockets))
+        XCTAssertTrue(DocketDuplicateDetection.workPictureContainsDocketNumber("26169", dockets: workPictureDockets))
     }
 
     // MARK: - Edge Cases

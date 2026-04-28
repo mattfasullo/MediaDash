@@ -342,6 +342,7 @@ struct SimianPostView: View {
         let isFolder: Bool
         let parentFolderId: String?
         let currentName: String
+        let currentFileName: String?
         /// From Simian payload when present; used for “Add Date” → upload time.
         let uploadedAt: Date?
     }
@@ -896,9 +897,9 @@ struct SimianPostView: View {
                     }
                 case .file(let f, _, _, let parentId):
                     guard newName != f.title else { return }
-                    try await simianService.renameFile(projectId: projectId, fileId: f.id, newName: newName)
+                    let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: f.id, newName: newName, currentFileName: f.fileName)
                     await MainActor.run {
-                        applyFileRename(fileId: f.id, parentFolderId: parentId, newName: newName)
+                        applyFileRename(fileId: f.id, parentFolderId: parentId, newName: newName, updatedFileName: updatedInfo.fileName)
                         statusMessage = "File renamed"; statusIsError = false
                     }
                 }
@@ -1087,9 +1088,9 @@ struct SimianPostView: View {
                             applyFolderRename(folderId: target.itemId, parentFolderId: target.parentFolderId, newName: newName)
                         }
                     } else {
-                        try await simianService.renameFile(projectId: projectId, fileId: target.itemId, newName: newName)
+                        let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: target.itemId, newName: newName, currentFileName: target.currentFileName)
                         await MainActor.run {
-                            applyFileRename(fileId: target.itemId, parentFolderId: target.parentFolderId, newName: newName)
+                            applyFileRename(fileId: target.itemId, parentFolderId: target.parentFolderId, newName: newName, updatedFileName: updatedInfo.fileName)
                         }
                     }
                     renamedCount += 1
@@ -1132,6 +1133,7 @@ struct SimianPostView: View {
                     isFolder: true,
                     parentFolderId: parentId,
                     currentName: folder.name,
+                    currentFileName: nil,
                     uploadedAt: folder.uploadedAt
                 )
             case .file(let file, _, _, let parentId):
@@ -1141,6 +1143,7 @@ struct SimianPostView: View {
                     isFolder: false,
                     parentFolderId: parentId,
                     currentName: file.title,
+                    currentFileName: file.fileName,
                     uploadedAt: file.uploadedAt
                 )
             }
@@ -1182,9 +1185,9 @@ struct SimianPostView: View {
                             applyFolderRename(folderId: target.itemId, parentFolderId: target.parentFolderId, newName: newName)
                         }
                     } else {
-                        try await simianService.renameFile(projectId: projectId, fileId: target.itemId, newName: newName)
+                        let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: target.itemId, newName: newName, currentFileName: target.currentFileName)
                         await MainActor.run {
-                            applyFileRename(fileId: target.itemId, parentFolderId: target.parentFolderId, newName: newName)
+                            applyFileRename(fileId: target.itemId, parentFolderId: target.parentFolderId, newName: newName, updatedFileName: updatedInfo.fileName)
                         }
                     }
                     renamedCount += 1
@@ -1498,8 +1501,9 @@ struct SimianPostView: View {
                     try await simianService.renameFolder(projectId: projectId, folderId: renameItemId, newName: newName)
                     await MainActor.run { applyFolderRename(folderId: renameItemId, parentFolderId: renameParentFolderId, newName: newName) }
                 } else {
-                    try await simianService.renameFile(projectId: projectId, fileId: renameItemId, newName: newName)
-                    await MainActor.run { applyFileRename(fileId: renameItemId, parentFolderId: renameParentFolderId, newName: newName) }
+                    let existingFileName = fileNameForFileId(renameItemId)
+                    let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: renameItemId, newName: newName, currentFileName: existingFileName)
+                    await MainActor.run { applyFileRename(fileId: renameItemId, parentFolderId: renameParentFolderId, newName: newName, updatedFileName: updatedInfo.fileName) }
                 }
                 await MainActor.run { statusMessage = renameIsFolder ? "Folder renamed" : "File renamed"; statusIsError = false }
             } catch {
@@ -1527,10 +1531,10 @@ struct SimianPostView: View {
         }
     }
 
-    private func applyFileRename(fileId: String, parentFolderId: String?, newName: String) {
+    private func applyFileRename(fileId: String, parentFolderId: String?, newName: String, updatedFileName: String?) {
         guard let parentId = parentFolderId else { return }
         let renamed = { (old: SimianFile) -> SimianFile in
-            SimianFile(id: old.id, title: newName, fileName: newName, fileType: old.fileType, mediaURL: old.mediaURL, folderId: old.folderId, projectId: old.projectId, uploadedAt: old.uploadedAt)
+            SimianFile(id: old.id, title: newName, fileName: updatedFileName ?? old.fileName, fileType: old.fileType, mediaURL: old.mediaURL, folderId: old.folderId, projectId: old.projectId, uploadedAt: old.uploadedAt)
         }
         if parentId == currentParentFolderId, let idx = currentFiles.firstIndex(where: { $0.id == fileId }) {
             currentFiles[idx] = renamed(currentFiles[idx])
@@ -1539,6 +1543,18 @@ struct SimianPostView: View {
             files[idx] = renamed(files[idx])
             folderFilesCache[parentId] = files
         }
+    }
+
+    private func fileNameForFileId(_ fileId: String) -> String? {
+        if let file = currentFiles.first(where: { $0.id == fileId }) {
+            return file.fileName
+        }
+        for files in folderFilesCache.values {
+            if let file = files.first(where: { $0.id == fileId }) {
+                return file.fileName
+            }
+        }
+        return nil
     }
 
     private func performPendingDelete() {
@@ -2074,6 +2090,8 @@ struct SimianPostView: View {
             if treeId.hasPrefix("f-"), treeId.count > 2 {
                 copyFolderLink(projectId: projectId, folderId: String(treeId.dropFirst(2)))
             }
+        case .openInBrowser(let treeId):
+            openSimianItemInBrowser(treeId: treeId, projectId: projectId, treeList: treeList)
         case .downloadFolder(let folderId, let folderName):
             presentSubtreeDownloadSavePanel(
                 projectId: projectId,
@@ -2090,6 +2108,54 @@ struct SimianPostView: View {
         case .delete(let treeId):
             let ids = treeIdsForMultiSelectContextAction(rightClickedTreeId: treeId)
             enqueueDeleteForTreeIds(ids, treeList: treeList)
+        }
+    }
+
+    private func openSimianItemInBrowser(treeId: String, projectId: String, treeList: [SimianTreeItem]) {
+        updateSimianServiceConfiguration()
+        if treeId.hasPrefix("f-"), treeId.count > 2 {
+            let folderId = String(treeId.dropFirst(2))
+            Task { @MainActor in
+                await openSimianFolderInBrowserViaShortLink(projectId: projectId, folderId: folderId)
+            }
+            return
+        }
+        if treeId.hasPrefix("file-"),
+           let treeItem = treeList.first(where: { $0.id == treeId }),
+           case .file(_, _, _, let parentFolderId) = treeItem,
+           let parent = parentFolderId, !parent.isEmpty {
+            Task { @MainActor in
+                await openSimianFolderInBrowserViaShortLink(projectId: projectId, folderId: parent)
+            }
+            return
+        }
+        guard let url = SimianService.folderLinkURL(projectId: projectId, folderId: nil) else {
+            statusMessage = "Unable to build Simian browser link."
+            statusIsError = true
+            return
+        }
+        _ = NSWorkspace.shared.open(url)
+    }
+
+    /// Prefer API short link (same as Copy Link); fallback to `/simian/projects/…` if the request fails.
+    @MainActor
+    private func openSimianFolderInBrowserViaShortLink(projectId: String, folderId: String) async {
+        updateSimianServiceConfiguration()
+        do {
+            let shortLink = try await simianService.getShortLink(projectId: projectId, folderId: folderId)
+            let trimmed = shortLink.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let url = URL(string: trimmed) {
+                _ = NSWorkspace.shared.open(url)
+                return
+            }
+        } catch {
+            // Fall through to constructed URL
+        }
+        if let url = SimianService.folderLinkURL(projectId: projectId, folderId: folderId) {
+            _ = NSWorkspace.shared.open(url)
+        } else {
+            statusMessage = "Unable to build Simian browser link."
+            statusIsError = true
         }
     }
 
@@ -2162,6 +2228,7 @@ struct SimianPostView: View {
                     isFolder: true,
                     parentFolderId: parentId,
                     currentName: folder.name,
+                    currentFileName: nil,
                     uploadedAt: folder.uploadedAt
                 )
             case .file(let file, _, _, let parentId):
@@ -2171,6 +2238,7 @@ struct SimianPostView: View {
                     isFolder: false,
                     parentFolderId: parentId,
                     currentName: file.title,
+                    currentFileName: file.fileName,
                     uploadedAt: file.uploadedAt
                 )
             }
