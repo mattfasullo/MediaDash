@@ -88,7 +88,7 @@ struct ProducerRootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
-                settingsManager.currentSettings = profile.settings
+                settingsManager.currentSettings = SettingsManager.applyDocketConfigDefaults(to: profile.settings)
                 configureProducerCache()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     evaluateServicesPromptIfNeeded()

@@ -79,9 +79,9 @@ struct AuthenticatedRootView: View {
     @StateObject private var emailScanningService: EmailScanningService
     @StateObject private var notificationCenter = NotificationCenter()
     @StateObject private var asanaCacheManager = AsanaCacheManager()
-    @StateObject private var grabbedIndicatorService = GrabbedIndicatorService()
     @StateObject private var simianService = SimianService()
     @StateObject private var asanaDocketScanningService = AsanaDocketScanningService()
+    @StateObject private var airtableDocketScanningService = AirtableDocketScanningService()
     
     @State private var showSplashScreen = true
     @State private var initializationComplete = false
@@ -113,11 +113,6 @@ struct AuthenticatedRootView: View {
         emailService.mediaManager = mediaManager
         emailService.settingsManager = settings
         
-        // Initialize grabbed indicator service
-        let grabbedService = GrabbedIndicatorService()
-        grabbedService.gmailService = gmailService
-        grabbedService.notificationCenter = notificationCenter
-        grabbedService.settingsManager = settings
         emailService.notificationCenter = notificationCenter
         emailService.metadataManager = metadata
         
@@ -135,7 +130,6 @@ struct AuthenticatedRootView: View {
         
         _emailScanningService = StateObject(wrappedValue: emailService)
         _asanaCacheManager = StateObject(wrappedValue: asanaCache)
-        _grabbedIndicatorService = StateObject(wrappedValue: grabbedService)
         
         // Company name cache and other preloading will happen during splash screen
     }
@@ -149,6 +143,7 @@ struct AuthenticatedRootView: View {
                 .environmentObject(manager)
                 .environmentObject(sessionManager)
                 .environmentObject(emailScanningService)
+                .environmentObject(airtableDocketScanningService)
                 .environmentObject(notificationCenter)
                 .opacity(showSplashScreen ? 0 : 1)
             
@@ -191,8 +186,8 @@ struct AuthenticatedRootView: View {
                 // #region agent log
                 DebugSessionLog.write(location: "GatekeeperView.swift:AuthenticatedRootView.onAppear", message: "AuthenticatedRootView onAppear (launch)", hypothesisId: "H4", data: [:])
                 // #endregion
-                // Sync settings manager with profile settings
-                settingsManager.currentSettings = profile.settings
+                // Sync settings manager with profile settings (applying built-in docket defaults)
+                settingsManager.currentSettings = SettingsManager.applyDocketConfigDefaults(to: profile.settings)
                 
                 // Update email scanning service references
                 emailScanningService.mediaManager = manager
@@ -206,6 +201,15 @@ struct AuthenticatedRootView: View {
                 asanaDocketScanningService.mediaManager = manager
                 asanaDocketScanningService.asanaCacheManager = asanaCacheManager
                 
+                // Wire up Airtable docket scanning service
+                airtableDocketScanningService.settingsManager = settingsManager
+                airtableDocketScanningService.notificationCenter = notificationCenter
+                airtableDocketScanningService.mediaManager = manager
+                
+                // Cloudflare Worker / APNs relay (disabled — polling only for now)
+                // PushNotificationManager.shared.appNotificationCenter = notificationCenter
+                // PushNotificationManager.shared.settingsManager = settingsManager
+                
                 // Configure Simian service from settings
                 if settingsManager.currentSettings.simianEnabled,
                    let baseURL = settingsManager.currentSettings.simianAPIBaseURL,
@@ -216,20 +220,8 @@ struct AuthenticatedRootView: View {
                         simianService.setCredentials(username: username, password: password)
                     }
                     asanaDocketScanningService.simianService = simianService
+                    airtableDocketScanningService.simianService = simianService
                 }
-                
-                // Update grabbed indicator service references
-                grabbedIndicatorService.gmailService = emailScanningService.gmailService
-                grabbedIndicatorService.notificationCenter = notificationCenter
-                grabbedIndicatorService.settingsManager = settingsManager
-                
-                // Link the notification center to the grabbed service (for immediate checks)
-                notificationCenter.grabbedIndicatorService = grabbedIndicatorService
-                
-                // Start grabbed indicator monitoring (non-blocking)
-                grabbedIndicatorService.startMonitoring()
-                
-                // Initial grabbed check will happen during splash screen preloading
                 
                 // Update Asana cache settings
                 if let sharedCacheURL = profile.settings.sharedCacheURL, !sharedCacheURL.isEmpty {
@@ -251,46 +243,31 @@ struct AuthenticatedRootView: View {
                     )
                 }
                 
-                // Start email scanning if enabled and authenticated
-                if settingsManager.currentSettings.gmailEnabled {
-                    // #region agent log
-                    let logData: [String: Any] = [
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "C",
-                        "location": "GatekeeperView.swift:onAppear",
-                        "message": "GatekeeperView accessing Gmail keychain",
-                        "data": [
-                            "timestamp": Date().timeIntervalSince1970,
-                            "operation": "getGmailAccessToken"
-                        ],
-                        "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
-                    ]
-                    if let json = try? JSONSerialization.data(withJSONObject: logData),
-                       let jsonString = String(data: json, encoding: .utf8) {
-                        if let fileHandle = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                            fileHandle.seekToEndOfFile()
-                            fileHandle.write((jsonString + "\n").data(using: .utf8)!)
-                            fileHandle.closeFile()
-                        } else {
-                            try? (jsonString + "\n").write(toFile: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log", atomically: true, encoding: .utf8)
-                        }
-                    }
-                    // #endregion
-                    // Restore tokens from Keychain
+                // Gmail is only used for new-docket detection when mode is Email (not Airtable).
+                if settingsManager.currentSettings.newDocketDetectionMode == .email,
+                   settingsManager.currentSettings.gmailEnabled {
                     if let accessToken = SharedKeychainService.getGmailAccessToken(), !accessToken.isEmpty {
                         let refreshToken = SharedKeychainService.getGmailRefreshToken()
                         #if DEBUG
                         print("GmailService: Restoring tokens on app launch")
                         #endif
                         emailScanningService.gmailService.setAccessToken(accessToken, refreshToken: refreshToken)
-                        
+
                         emailScanningService.startScanning()
                     } else {
                         #if DEBUG
                         print("GmailService: No access token found in Keychain")
                         #endif
                     }
+                }
+                
+                // Start Airtable-based new-docket detection when configured
+                if settingsManager.currentSettings.newDocketDetectionMode == .airtable {
+                    airtableDocketScanningService.startScanning()
+                    // Cloudflare relay disabled
+                    // if let workerURL = settingsManager.currentSettings.airtableWorkerURL, !workerURL.isEmpty {
+                    //     PushNotificationManager.shared.requestPermissionAndRegister()
+                    // }
                 }
                 
                 // Initialize progress tracking
@@ -320,10 +297,9 @@ struct AuthenticatedRootView: View {
                 // Update email scanning service settings
                 emailScanningService.settingsManager = settingsManager
                 
-                // Start/stop scanning based on settings
-                if newSettings.gmailEnabled {
+                // Start/stop Gmail scanning only when Email detection + Gmail enabled
+                if newSettings.newDocketDetectionMode == .email, newSettings.gmailEnabled {
                     if let accessToken = SharedKeychainService.getGmailAccessToken(), !accessToken.isEmpty {
-                        // Restore refresh token if available
                         let refreshToken = SharedKeychainService.getGmailRefreshToken()
                         emailScanningService.gmailService.setAccessToken(accessToken, refreshToken: refreshToken)
                         if !emailScanningService.isEnabled {
@@ -332,6 +308,20 @@ struct AuthenticatedRootView: View {
                     }
                 } else {
                     emailScanningService.stopScanning()
+                }
+                
+                // Start/stop Airtable detection based on detection mode
+                if newSettings.newDocketDetectionMode == .airtable {
+                    if !airtableDocketScanningService.isEnabled {
+                        airtableDocketScanningService.startScanning()
+                    }
+                    // Cloudflare relay disabled
+                    // if let workerURL = newSettings.airtableWorkerURL, !workerURL.isEmpty,
+                    //    !PushNotificationManager.shared.isRegistered {
+                    //     PushNotificationManager.shared.requestPermissionAndRegister()
+                    // }
+                } else {
+                    airtableDocketScanningService.stopScanning()
                 }
             }
     }
@@ -475,9 +465,6 @@ struct AuthenticatedRootView: View {
             manager.buildSessionIndex(folder: .workPicture)
             manager.buildSessionIndex(folder: .mediaPostings)
         }
-        
-        // Initial grabbed indicator check (non-blocking)
-        await grabbedIndicatorService.checkForGrabbedReplies()
     }
     
     /// Wait for initialization processes to complete

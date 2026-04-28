@@ -181,7 +181,11 @@ class EmailScanningService: ObservableObject {
             lastError = "Gmail integration is not enabled in settings"
             return
         }
-        
+        guard settings.newDocketDetectionMode == .email else {
+            lastError = nil
+            return
+        }
+
         guard gmailService.isAuthenticated else {
             lastError = "Gmail is not authenticated"
             return
@@ -213,6 +217,10 @@ class EmailScanningService: ObservableObject {
         #if DEBUG
         emailScanDebug("🔍 EmailScanningService.scanNow() called")
         #endif
+        // When Airtable detection is active, new-docket scanning is handled by AirtableDocketScanningService.
+        if settingsManager?.currentSettings.newDocketDetectionMode == .airtable {
+            return
+        }
         // Skip if a scan is already running (do not conflate with `isEnabled` / periodic scanning).
         if isScanning {
             return
@@ -574,24 +582,13 @@ class EmailScanningService: ObservableObject {
         
         // Determine the original sender: check if there's already a notification for this thread
         // If so, use the sourceEmail from that notification (the original sender)
+        // Use sender from the message we already fetched (no extra Gmail thread API calls).
         var originalSenderEmail = message.from
         if !message.threadId.isEmpty, let notificationCenter = notificationCenter {
             let threadId = message.threadId
-            // Check if there's an existing notification for this thread
             if let existingNotification = notificationCenter.notifications.first(where: { $0.threadId == threadId && $0.type == .newDocket }) {
                 originalSenderEmail = existingNotification.sourceEmail
                 emailScanDebug("  📧 Using original sender from existing notification: \(originalSenderEmail ?? "nil")")
-            } else {
-                // No existing notification - try to get the original sender from the thread
-                do {
-                    let thread = try await gmailService.getThread(threadId: threadId)
-                    if let messages = thread.messages, let firstMessage = messages.first {
-                        originalSenderEmail = firstMessage.from
-                        emailScanDebug("  📧 Using original sender from thread's first message: \(originalSenderEmail ?? "nil")")
-                    }
-                } catch {
-                    emailScanDebug("  ⚠️ Could not fetch thread to get original sender, using current message sender: \(error.localizedDescription)")
-                }
             }
         }
         
@@ -736,239 +733,7 @@ class EmailScanningService: ObservableObject {
         
         return true
     }
-    
-    /// Check if email is sent to company media email
-    private func checkIfMediaEmail(_ message: GmailMessage, mediaEmail: String) -> Bool {
-        let recipients = message.allRecipients
-        let mediaEmailLower = mediaEmail.lowercased()
-        
-        emailScanDebug("EmailScanningService: Checking if email \(message.id) is sent to media email")
-        emailScanDebug("  Media email: \(mediaEmailLower)")
-        emailScanDebug("  Recipients: \(recipients)")
-        
-        // Check if media email is in recipients
-        let isMediaEmail = recipients.contains { recipient in
-            recipient.lowercased() == mediaEmailLower
-        }
-        
-        emailScanDebug("  Is media email: \(isMediaEmail)")
-        return isMediaEmail
-    }
-    
-    /// Check if an email is an internal request (company → media team) vs outgoing (company → external clients)
-    /// Returns true if this appears to be an internal request that should be processed
-    private func isInternalRequest(from: String?, recipients: [String], mediaEmail: String) -> Bool {
-        guard let from = from else { return false }
-        
-        // Check if sender is from company domain
-        let fromDomain = from.split(separator: "@").last.map(String.init) ?? ""
-        let isFromCompany = fromDomain.lowercased().contains("grayson")
-        
-        if !isFromCompany {
-            return false // External sender - not an internal request
-        }
-        
-        // Check if all recipients are internal (company domain or media email)
-        let mediaEmailLower = mediaEmail.lowercased()
-        let allRecipientsInternal = recipients.allSatisfy { recipient in
-            let recipientDomain = recipient.split(separator: "@").last.map(String.init) ?? ""
-            return recipientDomain.lowercased().contains("grayson") || recipient.lowercased() == mediaEmailLower
-        }
-        
-        // If all recipients are internal, this is likely an internal request
-        // If there are external recipients, this is likely outgoing
-        return allRecipientsInternal
-    }
-    
-    /// Process a media email and create notification
-    func processMediaEmailAndCreateNotification(_ message: GmailMessage) async -> Bool {
-        // Safety check: Only process unread emails
-        guard let labelIds = message.labelIds, labelIds.contains("UNREAD") else {
-            emailScanDebug("EmailScanningService: Skipping media email \(message.id) - already marked as read")
-            return false
-        }
-        
-        guard let settingsManager = settingsManager else {
-            emailScanDebug("EmailScanningService: ❌ Failed to create media file notification for email \(message.id) - settingsManager is nil")
-            return false
-        }
-        let settings = settingsManager.currentSettings
-        
-        // Check if email is actually sent to media email
-        guard checkIfMediaEmail(message, mediaEmail: settings.companyMediaEmail) else {
-            emailScanDebug("EmailScanningService: ❌ Failed to create media file notification for email \(message.id) - email is not sent to media email address (\(settings.companyMediaEmail))")
-            emailScanDebug("  Recipients: \(message.allRecipients.joined(separator: ", "))")
-            return false
-        }
-        
-        let subject = message.subject ?? ""
-        let plainBody = message.plainTextBody ?? ""
-        let htmlBody = message.htmlBody ?? ""
-        
-        // For file hosting link detection, we want to check BOTH plain text and HTML
-        // because links might be in HTML format even if plain text exists
-        let bodyForDetection = !plainBody.isEmpty ? (plainBody + " " + htmlBody) : htmlBody
-        let body = !plainBody.isEmpty ? plainBody : htmlBody
-        
-        emailScanDebug("EmailScanningService: Processing media email \(message.id)")
-        emailScanDebug("  Subject: \(subject)")
-        emailScanDebug("  Plain body length: \(plainBody.count)")
-        emailScanDebug("  HTML body length: \(htmlBody.count)")
-        emailScanDebug("  Plain body preview: \(plainBody.prefix(200))")
-        emailScanDebug("  HTML body preview: \(htmlBody.prefix(200))")
-        emailScanDebug("  Combined body for detection preview: \(bodyForDetection.prefix(300))")
-        emailScanDebug("  File hosting whitelist: \(settings.grabbedFileHostingWhitelist)")
-        
-        // Use rule-based detection for file delivery
-        var linkResult: QualificationResult? = nil
-        var fileLinks: [String] = []
-        let fileLinkDescriptions: [String] = []
-        
-        // Check if email contains file hosting links using the whitelist from settings
-        if linkResult == nil {
-            // Check if email contains file hosting links using the whitelist from settings
-            let qualifier = MediaThreadQualifier(
-                subjectPatterns: settings.grabbedSubjectPatterns,
-                subjectExclusions: settings.grabbedSubjectExclusions,
-                attachmentTypes: settings.grabbedAttachmentTypes,
-                fileHostingWhitelist: settings.grabbedFileHostingWhitelist,
-                senderWhitelist: settings.grabbedSenderWhitelist,
-                bodyExclusions: settings.grabbedBodyExclusions
-            )
-            
-            // Use the qualifier's file hosting link detection (which uses the whitelist)
-            // Check BOTH plain text and HTML body for links (links might be in HTML)
-            // or fall back to general detection if whitelist is empty
-            if !settings.grabbedFileHostingWhitelist.isEmpty {
-                linkResult = qualifier.qualifiesByFileHostingLinksWithDebug(bodyForDetection)
-            } else {
-                // Fallback case - create a simple result
-                let hasLink = FileHostingLinkDetector.containsFileHostingLink(bodyForDetection)
-                linkResult = QualificationResult(
-                    qualifies: hasLink,
-                    reasons: ["Using fallback FileHostingLinkDetector", hasLink ? "✅ Found file hosting link" : "❌ No file hosting link found"],
-                    matchedCriteria: hasLink ? ["File hosting link (fallback detector)"] : [],
-                    exclusionReasons: []
-                )
-            }
-            
-            // Extract file links using regular detector
-            if fileLinks.isEmpty {
-                fileLinks = FileHostingLinkDetector.extractFileHostingLinks(bodyForDetection)
-            }
-        }
-        
-        guard let linkResult = linkResult else {
-            emailScanDebug("EmailScanningService: Failed to determine file delivery status")
-            return false
-        }
-        
-        // Log detailed debug information
-        let separator = String(repeating: "=", count: 80)
-        emailScanDebug("\n\(separator)")
-        emailScanDebug("📧 FILE DELIVERY NOTIFICATION DEBUG - Email ID: \(message.id)")
-        emailScanDebug(separator)
-        for reason in linkResult.reasons {
-            emailScanDebug(reason)
-        }
-        if linkResult.qualifies {
-            emailScanDebug("\n✅ RESULT: QUALIFIED AS FILE DELIVERY")
-            emailScanDebug("  Matched criteria: \(linkResult.matchedCriteria.joined(separator: ", "))")
-        } else {
-            emailScanDebug("\n❌ RESULT: NOT QUALIFIED")
-            if !linkResult.exclusionReasons.isEmpty {
-                emailScanDebug("  Exclusion reasons: \(linkResult.exclusionReasons.joined(separator: ", "))")
-            }
-        }
-        emailScanDebug("\(separator)\n")
-        
-        guard linkResult.qualifies else {
-            emailScanDebug("EmailScanningService: Media email \(message.id) does not contain file hosting links from whitelist")
-            return false
-        }
-        
-        // File links were already extracted above
-        
-        await MainActor.run {
-            guard let notificationCenter = notificationCenter else {
-                print("EmailScanningService: ERROR - notificationCenter is nil when trying to add media notification")
-                return
-            }
-            
-            // Try to extract docket number from email (subject or body)
-            var extractedDocketNumber: String? = nil
-            var extractedJobName: String? = nil
-            
-            // Try parsing the email to extract docket info
-            if let parsed = parser.parseEmail(subject: subject, body: body, from: message.from) {
-                // Only use parsed docket if it's valid (not "TBD")
-                if isValidDocketNumber(parsed.docketNumber) {
-                    extractedDocketNumber = parsed.docketNumber
-                    extractedJobName = parsed.jobName
-                    emailScanDebug("EmailScanningService: ✅ Extracted docket from file delivery email: \(parsed.docketNumber) - \(parsed.jobName)")
-                }
-            }
-            
-            // Create a cleaner message - use subject but truncate if too long, or create a summary
-            let cleanMessage: String
-            if let docketNum = extractedDocketNumber, let jobName = extractedJobName {
-                // If we have docket info, create a clean message
-                cleanMessage = "Docket \(docketNum): \(jobName)"
-            } else if let docketNum = extractedDocketNumber {
-                // Just docket number
-                cleanMessage = "Docket \(docketNum)"
-            } else if !subject.isEmpty {
-                // Use subject but truncate if it's very long (likely contains body text)
-                let maxLength = 100
-                if subject.count > maxLength {
-                    cleanMessage = String(subject.prefix(maxLength)) + "..."
-                } else {
-                    cleanMessage = subject
-                }
-            } else {
-                cleanMessage = "Files shared via \(settings.companyMediaEmail)"
-            }
-            
-            // Create notification for media files
-            let notification = Notification(
-                type: .mediaFiles,
-                title: "File Delivery Available",
-                message: cleanMessage,
-                timestamp: Date(),
-                status: .pending, // Ensure it's marked as pending
-                archivedAt: nil,
-                docketNumber: extractedDocketNumber,
-                jobName: extractedJobName,
-                emailId: message.id,
-                sourceEmail: message.from,
-                projectManager: nil,
-                emailSubject: subject.isEmpty ? nil : subject,
-                emailBody: body.isEmpty ? nil : body,
-                fileLinks: fileLinks.isEmpty ? nil : fileLinks,
-                fileLinkDescriptions: fileLinkDescriptions.isEmpty ? nil : fileLinkDescriptions,
-                threadId: message.threadId // Store thread ID for tracking replies
-            )
-            
-            
-            emailScanDebug("EmailScanningService: ✅ Adding media file notification for email \(message.id)")
-            emailScanDebug("  Notification ID: \(notification.id)")
-            emailScanDebug("  Type: \(notification.type)")
-            emailScanDebug("  Status: \(notification.status)")
-            emailScanDebug("  Title: \(notification.title)")
-            emailScanDebug("  Message: \(notification.message)")
-            emailScanDebug("  File links found: \(fileLinks.count)")
-            for (index, link) in fileLinks.enumerated() {
-                emailScanDebug("    Link \(index + 1): \(link)")
-            }
-            notificationCenter.add(notification)
-            emailScanDebug("EmailScanningService: ✅ Notification added. Total notifications: \(notificationCenter.notifications.count)")
-            emailScanDebug("  Active notifications: \(notificationCenter.activeNotifications.count)")
-            emailScanDebug("  Media file notifications: \(notificationCenter.activeNotifications.filter { $0.type == .mediaFiles }.count)")
-        }
-        
-        return true
-    }
-    
+
     /// Store feedback about a notification (for future use)
     /// - Parameters:
     ///   - notificationId: The notification ID
@@ -1059,51 +824,56 @@ class EmailScanningService: ObservableObject {
     }
     
     
-    /// Re-parse an email by emailId and return the parsed values
-    func reparseEmail(emailId: String) async -> (docketNumber: String?, jobName: String?, subject: String?, body: String?)? {
-        do {
-            // Fetch the email again
-            let message = try await gmailService.getEmail(messageId: emailId)
-            
-            // Use parser with custom patterns if configured
-            guard let settingsManager = settingsManager else { return nil }
-            let currentSettings = settingsManager.currentSettings
-            let patterns = currentSettings.docketParsingPatterns
-            
-            // Create company name matcher
-            let companyNames = companyNameCache.getAllCompanyNames()
-            let matcher = CompanyNameMatcher(companyNames: companyNames)
-            
-            // Create parser with matcher, metadata manager, and Asana cache manager
-            let parser = patterns.isEmpty 
-                ? EmailDocketParser(companyNameMatcher: matcher, metadataManager: metadataManager, asanaCacheManager: asanaCacheManager)
-                : EmailDocketParser(patterns: patterns, companyNameMatcher: matcher, metadataManager: metadataManager, asanaCacheManager: asanaCacheManager)
-            
-            let subject = message.subject ?? ""
-            let plainBody = message.plainTextBody ?? ""
-            let htmlBody = message.htmlBody ?? ""
-            let body = !plainBody.isEmpty ? plainBody : htmlBody
-            
-            let parsed = parser.parseEmail(
-                subject: message.subject,
-                body: message.plainTextBody ?? message.htmlBody,
-                from: message.from
-            )
-            
-            guard let parsedDocket = parsed else {
-                print("EmailScanningService: Failed to re-parse email \(emailId)")
+    /// Re-parse using cached notification content when possible (no Gmail call). Falls back to one `getEmail` only if body was not stored.
+    func reparseEmail(
+        emailId: String,
+        cachedSubject: String?,
+        cachedBody: String?,
+        from: String?
+    ) async -> (docketNumber: String?, jobName: String?, subject: String?, body: String?)? {
+        guard let settingsManager = settingsManager else { return nil }
+        let currentSettings = settingsManager.currentSettings
+        let patterns = currentSettings.docketParsingPatterns
+        let companyNames = companyNameCache.getAllCompanyNames()
+        let matcher = CompanyNameMatcher(companyNames: companyNames)
+        let parser: EmailDocketParser = patterns.isEmpty
+            ? EmailDocketParser(companyNameMatcher: matcher, metadataManager: metadataManager, asanaCacheManager: asanaCacheManager)
+            : EmailDocketParser(patterns: patterns, companyNameMatcher: matcher, metadataManager: metadataManager, asanaCacheManager: asanaCacheManager)
+
+        let subject: String
+        let body: String
+        let fromAddr: String?
+
+        let cachedSub = (cachedSubject ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let cachedBod = (cachedBody ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cachedSub.isEmpty && !cachedBod.isEmpty {
+            subject = cachedSub
+            body = cachedBod
+            fromAddr = from
+        } else {
+            guard gmailService.isAuthenticated else { return nil }
+            do {
+                let message = try await gmailService.getEmail(messageId: emailId)
+                subject = message.subject ?? ""
+                let plainBody = message.plainTextBody ?? ""
+                let htmlBody = message.htmlBody ?? ""
+                body = !plainBody.isEmpty ? plainBody : htmlBody
+                fromAddr = message.from
+            } catch {
+                print("EmailScanningService: Error re-fetching email \(emailId): \(error.localizedDescription)")
                 return nil
             }
-            
-            let docketNumber = parsedDocket.docketNumber == "TBD" ? nil : parsedDocket.docketNumber
-            let emailSubjectToStore = subject.isEmpty ? nil : subject
-            let emailBodyToStore = body.isEmpty ? nil : body
-            
-            return (docketNumber: docketNumber, jobName: parsedDocket.jobName, subject: emailSubjectToStore, body: emailBodyToStore)
-        } catch {
-            print("EmailScanningService: Error re-fetching email \(emailId): \(error.localizedDescription)")
+        }
+
+        let parsed = parser.parseEmail(subject: subject, body: body, from: fromAddr)
+        guard let parsedDocket = parsed else {
+            print("EmailScanningService: Failed to re-parse email \(emailId)")
             return nil
         }
+        let docketNumber = parsedDocket.docketNumber == "TBD" ? nil : parsedDocket.docketNumber
+        let emailSubjectToStore = subject.isEmpty ? nil : subject
+        let emailBodyToStore = body.isEmpty ? nil : body
+        return (docketNumber: docketNumber, jobName: parsedDocket.jobName, subject: emailSubjectToStore, body: emailBodyToStore)
     }
     
     /// Create docket from notification (called when user approves).
@@ -1297,6 +1067,10 @@ class EmailScanningService: ObservableObject {
             print("EmailScanningService: ERROR - settingsManager is nil")
             return
         }
+        // When Airtable detection is active, new-docket scanning is handled by AirtableDocketScanningService.
+        if settingsManager.currentSettings.newDocketDetectionMode == .airtable {
+            return
+        }
         
         let settings = settingsManager.currentSettings
         
@@ -1400,7 +1174,7 @@ class EmailScanningService: ObservableObject {
                     emailScanDebug("EmailScanningService: ✅ Created new docket notification for email \(message.id)")
                 } else {
                     failedCount += 1
-                    emailScanDebug("EmailScanningService: Email \(message.id) - not a new docket, skipping (media files and requests are no longer processed)")
+                    emailScanDebug("EmailScanningService: Email \(message.id) - not a new docket, skipping")
                 }
             }
             
@@ -1408,13 +1182,6 @@ class EmailScanningService: ObservableObject {
             
             lastScanTime = Date()
             clearRateLimitRetryAfter()
-            
-            if let grabbedService = notificationCenter.grabbedIndicatorService {
-                emailScanDebug("EmailScanningService: Triggering immediate grabbed reply check...")
-                Task {
-                    await grabbedService.checkForGrabbedReplies()
-                }
-            }
             
         } catch {
             print("EmailScanningService: Error scanning unread emails: \(error.localizedDescription)")

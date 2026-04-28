@@ -1616,6 +1616,7 @@ struct DashboardFileCard: View {
 struct DashboardNotificationsPanel: View {
     @EnvironmentObject var notificationCenter: NotificationCenter
     @EnvironmentObject var emailScanningService: EmailScanningService
+    @EnvironmentObject var airtableDocketScanningService: AirtableDocketScanningService
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var manager: MediaManager
     @Binding var isVisible: Bool
@@ -1627,14 +1628,12 @@ struct DashboardNotificationsPanel: View {
         case all = "All"
         case newDockets = "Dockets"
         case requests = "Requests"
-        case fileDeliveries = "Files"
         case forReview = "Review"
         
         var icon: String {
             switch self {
             case .all: return "tray.full"
             case .newDockets: return "doc.badge.plus"
-            case .fileDeliveries: return "arrow.down.doc"
             case .requests: return "hand.raised"
             case .forReview: return "eye"
             }
@@ -1642,18 +1641,15 @@ struct DashboardNotificationsPanel: View {
     }
     
     private var filteredNotifications: [Notification] {
-        let active = notificationCenter.activeNotifications
+        let active = notificationCenter.activeNotifications.filter { $0.type != .mediaFiles }
         switch selectedFilter {
         case .all:
             return active
         case .newDockets:
             return active.filter { $0.type == .newDocket }
-        case .fileDeliveries:
-            return active.filter { $0.type == .mediaFiles }
         case .requests:
             return active.filter { $0.type == .request }
         case .forReview:
-            // For review filter (no longer available)
             return []
         }
     }
@@ -1685,11 +1681,19 @@ struct DashboardNotificationsPanel: View {
                         .background(Capsule().fill(Color.red))
                 }
                 
-                EmailRefreshButton(
-                    notificationCenter: notificationCenter,
-                    grabbedIndicatorService: notificationCenter.grabbedIndicatorService
-                )
-                .environmentObject(emailScanningService)
+                if settingsManager.currentSettings.newDocketDetectionMode == .email {
+                    EmailRefreshButton(
+                        notificationCenter: notificationCenter
+                    )
+                    .environmentObject(emailScanningService)
+                    .environmentObject(settingsManager)
+                } else {
+                    AirtableDocketRefreshButton(
+                        notificationCenter: notificationCenter
+                    )
+                    .environmentObject(airtableDocketScanningService)
+                    .environmentObject(settingsManager)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)

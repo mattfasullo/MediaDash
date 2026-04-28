@@ -5,11 +5,11 @@ import XCTest
 @MainActor
 final class NotificationTests: XCTestCase {
 
-    private var notificationCenter: NotificationCenter!
+    private var notificationCenter: MediaDash.NotificationCenter!
 
     override func setUp() {
         super.setUp()
-        notificationCenter = NotificationCenter()
+        notificationCenter = MediaDash.NotificationCenter()
     }
 
     override func tearDown() {
@@ -124,64 +124,6 @@ final class NotificationTests: XCTestCase {
         // Should only have 1 request notification
         let requestNotifications = notificationCenter.notifications.filter { $0.type == .request }
         XCTAssertEqual(requestNotifications.count, 1)
-    }
-
-    // MARK: - Media Files Notification Updates
-
-    func testMediaFilesNotificationAppendsNewLinks() {
-        let notification1 = Notification(
-            type: .mediaFiles,
-            title: "Files",
-            message: "First delivery",
-            threadId: "thread999",
-            fileLinks: ["http://link1.com"],
-            fileLinkDescriptions: ["First file"]
-        )
-
-        let notification2 = Notification(
-            type: .mediaFiles,
-            title: "Files",
-            message: "Second delivery",
-            threadId: "thread999",
-            fileLinks: ["http://link1.com", "http://link2.com"],
-            fileLinkDescriptions: ["First file", "Second file"]
-        )
-
-        notificationCenter.add(notification1)
-        notificationCenter.add(notification2)
-
-        // Should have 1 notification with both links
-        let mediaNotifications = notificationCenter.notifications.filter { $0.type == .mediaFiles }
-        XCTAssertEqual(mediaNotifications.count, 1)
-        XCTAssertEqual(mediaNotifications.first?.fileLinks?.count, 2)
-    }
-
-    func testMediaFilesNotificationSkipsDuplicateLinks() {
-        let notification1 = Notification(
-            type: .mediaFiles,
-            title: "Files",
-            message: "First delivery",
-            threadId: "thread111",
-            fileLinks: ["http://link1.com"],
-            fileLinkDescriptions: ["First file"]
-        )
-
-        let notification2 = Notification(
-            type: .mediaFiles,
-            title: "Files",
-            message: "Duplicate delivery",
-            threadId: "thread111",
-            fileLinks: ["http://link1.com"],
-            fileLinkDescriptions: ["Same file"]
-        )
-
-        notificationCenter.add(notification1)
-        notificationCenter.add(notification2)
-
-        // Should have 1 notification with only 1 link (duplicate skipped)
-        let mediaNotifications = notificationCenter.notifications.filter { $0.type == .mediaFiles }
-        XCTAssertEqual(mediaNotifications.count, 1)
-        XCTAssertEqual(mediaNotifications.first?.fileLinks?.count, 1)
     }
 
     // MARK: - Read/Unread State

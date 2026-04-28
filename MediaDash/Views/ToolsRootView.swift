@@ -41,7 +41,7 @@ struct ToolsRootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
-                settingsManager.currentSettings = profile.settings
+                settingsManager.currentSettings = SettingsManager.applyDocketConfigDefaults(to: profile.settings)
                 configureToolsCache()
             }
             .onChange(of: sessionManager.authenticationState) { _, newState in

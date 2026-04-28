@@ -291,6 +291,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // #endregion
     }
 
+    // MARK: - Remote Notifications (APNs) — Cloudflare relay disabled (see GatekeeperView)
+
+    // func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    //     Task { @MainActor in
+    //         PushNotificationManager.shared.handleDeviceToken(deviceToken)
+    //     }
+    // }
+    //
+    // func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+    //     Task { @MainActor in
+    //         PushNotificationManager.shared.handleRegistrationFailure(error)
+    //     }
+    // }
+    //
+    // func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+    //     Task { @MainActor in
+    //         PushNotificationManager.shared.handleIncomingPush(userInfo)
+    //     }
+    // }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
             _ = FinderCommandBridge.shared.handleOpenURL(url)

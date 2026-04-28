@@ -2000,10 +2000,10 @@ struct ProducerView: View {
             settingsManager.currentSettings = s
         }
         var titleCol = settings.airtableProjectTitleField ?? settings.airtableJobNameField
-        if titleCol == "Job Name" {
-            titleCol = "Project Title"
+        if titleCol == "Job Name" || titleCol == "Project Title" {
+            titleCol = AirtableConfig.jobNameField
             var s = settingsManager.currentSettings
-            s.airtableJobNameField = "Project Title"
+            s.airtableJobNameField = AirtableConfig.jobNameField
             settingsManager.currentSettings = s
         }
         let checkboxes = checkboxesOverride ?? pushCheckboxes

@@ -2,58 +2,65 @@ import Foundation
 
 // MARK: - Classification
 
-enum FinalsCategory: Equatable {
-    case fullMix(deliverable: String?)  // deliverable = "TV", "WEB", etc.; nil means flat under Fullmixes
+enum FinalsCategory: Equatable, Sendable {
+    case fullMix(deliverable: String?)
     case mixout
     case qtReference
     case unclassified
 }
 
+// MARK: - File-level constants
+// Project default isolation is MainActor, so mark these explicitly nonisolated
+// so the nonisolated classifier/use-case functions below can reference them.
+
+// Stem tokens — longest variants first so "SFXOnly" wins over "SFX"
+nonisolated private let _mixoutTokens: [String] = [
+    "DialOnly", "SyncOnly", "SFXOnly", "MusicOnly",
+    "SyncMix", "MusicMix", "AmbMix", "SFXMix", "DialMix",
+    "Dial", "Sync", "SFX", "Music", "Amb", "Bed",
+    "VoxOnly", "Vox", "MxOnly",
+]
+nonisolated private let _fullMixTokens: [String] = ["Fullmix", "FM"]
+nonisolated private let _deliverableTokens: [String] = [
+    "TV", "WEB", "DGTL", "Digital", "Broadcast", "OTT",
+]
+nonisolated private let _videoExtensions: Set<String> = [
+    "mov", "mp4", "m4v", "mxf", "avi", "mkv", "prores",
+]
+
+nonisolated private let _bucketFullmixes = "01_Fullmixes"
+nonisolated private let _bucketMixouts   = "02_Mixouts"
+nonisolated private let _bucketQt        = "03_Quicktime References"
+
+// MARK: - Classifier
+
 /// Pure, stateless classifier. All matching is case-insensitive.
-enum FinalsClassifier {
+nonisolated enum FinalsClassifier {
 
-    // Stem tokens — longest variants first so "SFXOnly" wins over "SFX"
-    static let mixoutTokens: [String] = [
-        "DialOnly", "SyncOnly", "SFXOnly", "MusicOnly",
-        "SyncMix", "MusicMix", "AmbMix", "SFXMix", "DialMix",
-        "Dial", "Sync", "SFX", "Music", "Amb", "Bed",
-        "VoxOnly", "Vox", "MxOnly",
-    ]
-
-    // Mix-type tokens (suffix signals full mix)
-    static let fullMixTokens: [String] = ["Fullmix", "FM"]
-
-    // Deliverable / format tokens that can precede the mix label
-    static let deliverableTokens: [String] = [
-        "TV", "WEB", "DGTL", "Digital", "Broadcast", "OTT",
-    ]
-
-    static let videoExtensions: Set<String> = [
-        "mov", "mp4", "m4v", "mxf", "avi", "mkv", "prores",
-    ]
+    static var mixoutTokens:    [String]    { _mixoutTokens }
+    static var fullMixTokens:   [String]    { _fullMixTokens }
+    static var deliverableTokens: [String]  { _deliverableTokens }
+    static var videoExtensions: Set<String> { _videoExtensions }
 
     /// Classify a filename. Returns (category, cleaned basename with Pro Tools _NN removed).
-    static func classify(filename: String) -> (category: FinalsCategory, cleanedBasename: String) {
+    nonisolated static func classify(filename: String) -> (category: FinalsCategory, cleanedBasename: String) {
         let fileURL = URL(fileURLWithPath: filename)
         let ext = fileURL.pathExtension.lowercased()
         let rawBasename = fileURL.deletingPathExtension().lastPathComponent
         let cleaned = stripProToolsSuffix(rawBasename)
         let upper = cleaned.uppercased()
 
-        // 1. Video → QT reference
-        if videoExtensions.contains(ext) {
+        if _videoExtensions.contains(ext) {
             return (.qtReference, cleaned)
         }
 
-        // 2. Full mix check
-        for mixToken in fullMixTokens {
+        for mixToken in _fullMixTokens {
             if containsToken(upper, token: mixToken.uppercased()) {
                 let deliverable = detectDeliverable(in: upper, before: mixToken.uppercased())
                 return (.fullMix(deliverable: deliverable), cleaned)
             }
         }
 
-        // 3. Mixout (stem) — trailing _Token and/or any segment that names a stem (SyncMix, …, or "SFX"/"Music"/…)
         if hasTrailingMixoutStem(upper) || anySegmentIndicatesMixout(upper) {
             return (.mixout, cleaned)
         }
@@ -61,38 +68,33 @@ enum FinalsClassifier {
         return (.unclassified, cleaned)
     }
 
-    // MARK: Helpers
-
-    /// Remove a trailing `_<digits-only>` Pro Tools export suffix.
-    static func stripProToolsSuffix(_ basename: String) -> String {
+    nonisolated static func stripProToolsSuffix(_ basename: String) -> String {
         if let range = basename.range(of: #"_\d+$"#, options: .regularExpression) {
             return String(basename[..<range.lowerBound])
         }
         return basename
     }
 
-    /// Token is present when bounded by `_`, start-of-string, or end-of-string.
-    private static func containsToken(_ upper: String, token: String) -> Bool {
+    nonisolated private static func containsToken(_ upper: String, token: String) -> Bool {
         let bounds = ["_\(token)_", "_\(token)", "\(token)_"]
         for b in bounds where upper.contains(b) { return true }
         return upper == token
     }
 
-    /// Stem token must appear as the final segment: `_TOKEN` at end or the whole name.
-    private static func hasSuffixToken(_ upper: String, token: String) -> Bool {
+    nonisolated private static func hasSuffixToken(_ upper: String, token: String) -> Bool {
         upper.hasSuffix("_\(token)") || upper == token
     }
 
-    private static func hasTrailingMixoutStem(_ upper: String) -> Bool {
-        for stemToken in mixoutTokens {
+    nonisolated private static func hasTrailingMixoutStem(_ upper: String) -> Bool {
+        for stemToken in _mixoutTokens {
             if hasSuffixToken(upper, token: stemToken.uppercased()) { return true }
         }
         return false
     }
 
-    /// True if any underscore-separated segment names a stem (engineers use mid-name tokens like `SyncMix`, not only `_SFX` at end).
-    private static func anySegmentIndicatesMixout(_ upper: String) -> Bool {
-        let tokensByLength = mixoutTokens.map { $0.uppercased() }.sorted { $0.count > $1.count }
+    /// True if any underscore-separated segment names a stem.
+    nonisolated private static func anySegmentIndicatesMixout(_ upper: String) -> Bool {
+        let tokensByLength = _mixoutTokens.map { $0.uppercased() }.sorted { $0.count > $1.count }
         let parts = upper.split(separator: "_").map { String($0).uppercased() }
         for u in parts where !u.isEmpty {
             if u == "FM" || u.contains("FULLMIX") { continue }
@@ -100,13 +102,12 @@ enum FinalsClassifier {
                 if u == t { return true }
                 if u.hasSuffix(t), t.count >= 4 { return true }
             }
-            // Broad substring cues (full-mix already ruled out on whole basename)
-            if u.contains("SFX") { return true }
-            if u.contains("MUSIC") { return true }
-            if u.contains("AMB") { return true }
-            if u.contains("DIAL") { return true }
-            if u.contains("BED") { return true }
-            if u.contains("VOX") { return true }
+            if u.contains("SFX")    { return true }
+            if u.contains("MUSIC")  { return true }
+            if u.contains("AMB")    { return true }
+            if u.contains("DIAL")   { return true }
+            if u.contains("BED")    { return true }
+            if u.contains("VOX")    { return true }
             if u == "MX" || u.contains("MXONLY") { return true }
             if u.contains("SYNC") {
                 if u == "ASYNC" { continue }
@@ -117,11 +118,10 @@ enum FinalsClassifier {
         return false
     }
 
-    /// Find the deliverable token (e.g. "TV", "WEB") in the part before the mix label.
-    private static func detectDeliverable(in upper: String, before mixToken: String) -> String? {
+    nonisolated private static func detectDeliverable(in upper: String, before mixToken: String) -> String? {
         guard let mixRange = upper.range(of: mixToken) else { return nil }
         let prefix = String(upper[..<mixRange.lowerBound])
-        for d in deliverableTokens where containsToken(prefix, token: d.uppercased()) {
+        for d in _deliverableTokens where containsToken(prefix, token: d.uppercased()) {
             return d.uppercased()
         }
         return nil
@@ -130,17 +130,17 @@ enum FinalsClassifier {
 
 // MARK: - Move plan types
 
-struct FinalsMoveItem {
+struct FinalsMoveItem: Sendable {
     let source: URL
     let destination: URL
 }
 
-struct FinalsMoveConflict {
+struct FinalsMoveConflict: Sendable {
     let source: URL
     let destination: URL
 }
 
-struct FinalsMoveError: LocalizedError {
+struct FinalsMoveError: LocalizedError, Sendable {
     let conflicts: [FinalsMoveConflict]
     var errorDescription: String? {
         let names = conflicts.map { $0.destination.lastPathComponent }.joined(separator: "\n  ")
@@ -148,28 +148,27 @@ struct FinalsMoveError: LocalizedError {
     }
 }
 
-struct FinalsMovePreview {
+nonisolated struct FinalsMovePreview: Sendable {
     let fullMixes: [FinalsMoveItem]
     let mixouts: [FinalsMoveItem]
     let qtReferences: [FinalsMoveItem]
     let unclassified: [URL]
 
     var allItems: [FinalsMoveItem] { fullMixes + mixouts + qtReferences }
-    var isEmpty: Bool { allItems.isEmpty }
+    var isEmpty: Bool { fullMixes.isEmpty && mixouts.isEmpty && qtReferences.isEmpty }
 }
 
 // MARK: - Use case
 
-struct FinalsFolderOrganizationUseCase {
+nonisolated struct FinalsFolderOrganizationUseCase {
 
     enum Buckets {
-        static let fullmixes = "01_Fullmixes"
-        static let mixouts   = "02_Mixouts"
-        static let qt        = "03_Quicktime References"
+        static var fullmixes: String { _bucketFullmixes }
+        static var mixouts:   String { _bucketMixouts }
+        static var qt:        String { _bucketQt }
     }
 
-    /// Build a dry-run preview without touching disk.
-    static func buildPlan(root: URL) -> FinalsMovePreview {
+    nonisolated static func buildPlan(root: URL) -> FinalsMovePreview {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
             at: root,
@@ -179,16 +178,15 @@ struct FinalsFolderOrganizationUseCase {
             return FinalsMovePreview(fullMixes: [], mixouts: [], qtReferences: [], unclassified: [])
         }
 
-        // Paths already inside destination buckets — skip them during re-runs
         let destRoots: [String] = [
-            root.appendingPathComponent(Buckets.fullmixes).path,
-            root.appendingPathComponent(Buckets.mixouts).path,
-            root.appendingPathComponent(Buckets.qt).path,
+            root.appendingPathComponent(_bucketFullmixes).path,
+            root.appendingPathComponent(_bucketMixouts).path,
+            root.appendingPathComponent(_bucketQt).path,
         ]
 
         var fullMixes: [FinalsMoveItem] = []
-        var mixouts: [FinalsMoveItem] = []
-        var qtRefs: [FinalsMoveItem] = []
+        var mixouts:   [FinalsMoveItem] = []
+        var qtRefs:    [FinalsMoveItem] = []
         var unclassified: [URL] = []
 
         for case let fileURL as URL in enumerator {
@@ -205,20 +203,20 @@ struct FinalsFolderOrganizationUseCase {
             case .fullMix(let deliverable):
                 let dir: URL
                 if let d = deliverable {
-                    dir = root.appendingPathComponent(Buckets.fullmixes).appendingPathComponent(d)
+                    dir = root.appendingPathComponent(_bucketFullmixes).appendingPathComponent(d)
                 } else {
-                    dir = root.appendingPathComponent(Buckets.fullmixes)
+                    dir = root.appendingPathComponent(_bucketFullmixes)
                 }
                 fullMixes.append(FinalsMoveItem(source: fileURL, destination: dir.appendingPathComponent(newFilename)))
             case .mixout:
                 mixouts.append(FinalsMoveItem(
                     source: fileURL,
-                    destination: root.appendingPathComponent(Buckets.mixouts).appendingPathComponent(newFilename)
+                    destination: root.appendingPathComponent(_bucketMixouts).appendingPathComponent(newFilename)
                 ))
             case .qtReference:
                 qtRefs.append(FinalsMoveItem(
                     source: fileURL,
-                    destination: root.appendingPathComponent(Buckets.qt).appendingPathComponent(newFilename)
+                    destination: root.appendingPathComponent(_bucketQt).appendingPathComponent(newFilename)
                 ))
             case .unclassified:
                 unclassified.append(fileURL)
@@ -228,8 +226,7 @@ struct FinalsFolderOrganizationUseCase {
         return FinalsMovePreview(fullMixes: fullMixes, mixouts: mixouts, qtReferences: qtRefs, unclassified: unclassified)
     }
 
-    /// Detect name collisions; returns empty array when safe to proceed.
-    static func detectConflicts(in preview: FinalsMovePreview) -> [FinalsMoveConflict] {
+    nonisolated static func detectConflicts(in preview: FinalsMovePreview) -> [FinalsMoveConflict] {
         let fm = FileManager.default
         return preview.allItems.compactMap { item in
             fm.fileExists(atPath: item.destination.path)
@@ -238,9 +235,7 @@ struct FinalsFolderOrganizationUseCase {
         }
     }
 
-    /// Apply the plan: creates destination directories, then moves files.
-    /// Throws `FinalsMoveError` on conflicts or a filesystem error on I/O failure.
-    static func execute(preview: FinalsMovePreview) throws {
+    nonisolated static func execute(preview: FinalsMovePreview) throws {
         let conflicts = detectConflicts(in: preview)
         guard conflicts.isEmpty else { throw FinalsMoveError(conflicts: conflicts) }
 

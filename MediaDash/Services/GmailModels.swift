@@ -18,12 +18,6 @@ struct GmailLabelListItem: Codable {
     let type: String?
 }
 
-struct GmailThread: Codable {
-    let id: String
-    let messages: [GmailMessage]?
-    let historyId: String?
-}
-
 struct GmailMessageReference: Codable {
     let id: String
     let threadId: String

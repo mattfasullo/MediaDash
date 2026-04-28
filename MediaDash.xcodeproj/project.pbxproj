@@ -259,7 +259,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2610;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					EF7B66512ECD48C80002FEED = {
 						CreatedOnToolsVersion = 26.1.1;
@@ -678,6 +678,7 @@
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MediaDashFinderSync/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -709,6 +710,7 @@
 				DEVELOPMENT_TEAM = 9XPBY59H89;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MediaDashFinderSync/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

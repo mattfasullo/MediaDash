@@ -138,6 +138,11 @@ final class MediaDashFinderSyncPrincipal: FIFinderSync {
         writePayloadAndOpenURL(action: "audioOnly", paths: paths)
     }
 
+    @objc private func editOnSimian(_ sender: Any?) {
+        let paths = (Self.controller.selectedItemURLs() ?? []).map(\.path)
+        writePayloadAndOpenURL(action: "editOnSimian", paths: paths)
+    }
+
     /// Swift imports `menuForMenuKind:` as `menu(for:)`; implementing the old name can compile but never run.
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
         // #region agent log
@@ -159,11 +164,14 @@ final class MediaDashFinderSyncPrincipal: FIFinderSync {
         convertItem.target = self
         let simianItem = NSMenuItem(title: "Upload to Simian in MediaDash", action: #selector(simian(_:)), keyEquivalent: "")
         simianItem.target = self
+        let editOnSimianItem = NSMenuItem(title: "Edit on Simian", action: #selector(editOnSimian(_:)), keyEquivalent: "")
+        editOnSimianItem.target = self
         let audioOnlyItem = NSMenuItem(title: "Create audio only", action: #selector(audioOnly(_:)), keyEquivalent: "")
         audioOnlyItem.target = self
         menu.addItem(stageItem)
         menu.addItem(convertItem)
         menu.addItem(simianItem)
+        menu.addItem(editOnSimianItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(audioOnlyItem)
         // #region agent log

@@ -177,9 +177,14 @@ struct SharedKeychainService {
         return getKey(shared: .simianPassword, personalKey: "simian_password")
     }
     
-    /// Get Airtable API key (shared or personal)
+    /// Get Airtable API key — tries personal key, then shared team Keychain key,
+    /// then falls back to the built-in read-only token in `AirtableConfig`.
     static func getAirtableAPIKey() -> String? {
-        return getKey(shared: .airtableAPIKey, personalKey: "airtable_api_key")
+        if let key = getKey(shared: .airtableAPIKey, personalKey: "airtable_api_key") {
+            return key
+        }
+        let readOnly = AirtableConfig.readOnlyDocketToken
+        return readOnly.isEmpty ? nil : readOnly
     }
     
 }

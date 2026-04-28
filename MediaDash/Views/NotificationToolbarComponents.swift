@@ -56,8 +56,8 @@ struct NotificationTabButton: View {
 
 struct EmailRefreshButton: View {
     @EnvironmentObject var emailScanningService: EmailScanningService
+    @EnvironmentObject var settingsManager: SettingsManager
     var notificationCenter: NotificationCenter? = nil
-    var grabbedIndicatorService: GrabbedIndicatorService? = nil
     @State private var isHovered = false
     @State private var isRefreshing = false
     @State private var statusMessage: String?
@@ -71,16 +71,21 @@ struct EmailRefreshButton: View {
                 statusMessage = nil
 
                 Task { @MainActor in
+                    guard settingsManager.currentSettings.newDocketDetectionMode == .email else {
+                        isRefreshing = false
+                        statusMessage = "Gmail refresh only applies when detection mode is Email"
+                        statusTimer?.invalidate()
+                        statusTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                            statusMessage = nil
+                        }
+                        return
+                    }
+
                     let service = emailScanningService
 
                     let beforeCount = notificationCenter?.notifications.filter { $0.status == .pending }.count ?? 0
 
                     await service.scanUnreadEmails(forceRescan: true)
-
-                    if let grabbedService = grabbedIndicatorService {
-                        print("EmailRefreshButton: Triggering grabbed reply check after scan...")
-                        await grabbedService.checkForGrabbedReplies()
-                    }
 
                     let afterCount = notificationCenter?.notifications.filter { $0.status == .pending }.count ?? 0
                     let newCount = afterCount - beforeCount
@@ -114,8 +119,85 @@ struct EmailRefreshButton: View {
                 }
             }
             .buttonStyle(.plain)
-            .help(statusMessage ?? "Refresh emails")
-            .disabled(isRefreshing || emailScanningService.isScanning)
+            .help(statusMessage ?? "Refresh new-docket emails from Gmail (Email mode only)")
+            .disabled(isRefreshing || emailScanningService.isScanning || settingsManager.currentSettings.newDocketDetectionMode != .email)
+            .onHover { hovering in
+                isHovered = hovering
+            }
+
+            if let status = statusMessage {
+                Text(status)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
+                    .animation(.easeInOut, value: statusMessage)
+            }
+        }
+        .onDisappear {
+            statusTimer?.invalidate()
+        }
+    }
+}
+
+// MARK: - Airtable New-Docket Refresh (detection mode Airtable)
+
+struct AirtableDocketRefreshButton: View {
+    @EnvironmentObject var airtableDocketScanningService: AirtableDocketScanningService
+    @EnvironmentObject var settingsManager: SettingsManager
+    var notificationCenter: NotificationCenter? = nil
+    @State private var isHovered = false
+    @State private var isRefreshing = false
+    @State private var statusMessage: String?
+    @State private var statusTimer: Timer?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(action: {
+                guard !isRefreshing else { return }
+                isRefreshing = true
+                statusMessage = nil
+
+                Task { @MainActor in
+                    let before = notificationCenter?.activeNotifications.count ?? 0
+                    await airtableDocketScanningService.scanNow()
+                    let after = notificationCenter?.activeNotifications.count ?? 0
+                    let delta = after - before
+
+                    isRefreshing = false
+
+                    if let err = airtableDocketScanningService.lastError, !err.isEmpty {
+                        statusMessage = err
+                    } else if delta > 0 {
+                        statusMessage = "✅ Found \(delta) new"
+                    } else {
+                        statusMessage = "✓ Up to date"
+                    }
+
+                    statusTimer?.invalidate()
+                    statusTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                        statusMessage = nil
+                    }
+                }
+            }) {
+                ZStack {
+                    Circle()
+                        .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
+                        .frame(width: 24, height: 24)
+
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                        .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+                }
+            }
+            .buttonStyle(.plain)
+            .help(statusMessage ?? "Check Airtable for new docket records")
+            .disabled(
+                isRefreshing
+                    || airtableDocketScanningService.isScanning
+                    || settingsManager.currentSettings.newDocketDetectionMode == .email
+            )
             .onHover { hovering in
                 isHovered = hovering
             }

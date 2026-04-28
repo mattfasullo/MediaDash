@@ -1386,6 +1386,7 @@ class SimianService: ObservableObject {
             return SimianFile(
                 id: id,
                 title: title,
+                fileName: SimianService.stringValue(fileDict["file_name"]),
                 fileType: SimianService.stringValue(fileDict["file_type"]),
                 mediaURL: mediaFileURL,
                 folderId: folderId,
@@ -1449,6 +1450,7 @@ class SimianService: ObservableObject {
         return SimianFileInfo(
             id: fileId,
             title: SimianService.stringValue(fileInfo["title"]),
+            fileName: SimianService.stringValue(fileInfo["file_name"]),
             mediaSize: SimianService.stringValue(fileInfo["media_size"]),
             uploadedAt: SimianService.uploadDateFromPayload(fileInfo)
         )
@@ -1943,12 +1945,8 @@ class SimianService: ObservableObject {
             "auth_token": authToken,
             "auth_key": authKey,
             "file_id": fileId,
-            // Keep `name` for label/title, and include filename aliases so one
-            // rename action updates both fields when supported by the API.
-            "name": newName,
-            "file_name": newName,
-            "filename": newName,
-            "title": newName
+            "title": newName,
+            "file_name": newName
         ]
         request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }
             .joined(separator: "&")
@@ -3109,6 +3107,8 @@ struct SimianFolder: Identifiable, Hashable {
 struct SimianFile: Identifiable, Hashable {
     let id: String
     let title: String
+    /// The stored filename on the server (e.g. "clip.wav"), as returned by `get_file_info` / `get_project_files`.
+    let fileName: String?
     let fileType: String?
     let mediaURL: URL?
     let folderId: String?
@@ -3144,6 +3144,8 @@ enum SimianProjectDateField: String, CaseIterable, Identifiable {
 struct SimianFileInfo: Identifiable, Hashable {
     let id: String
     let title: String?
+    /// The stored filename on the server (e.g. "clip.wav"), as returned by `get_file_info`.
+    let fileName: String?
     let mediaSize: String?
     /// Present when `get_file_info` includes upload/created metadata (list APIs sometimes omit it).
     let uploadedAt: Date?

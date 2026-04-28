@@ -179,9 +179,7 @@ enum ServicesSetupPromptBuilder {
             isConnected: settings.gmailEnabled && (SharedKeychainService.getGmailAccessToken() != nil && !(SharedKeychainService.getGmailAccessToken() ?? "").isEmpty),
             needsSetup: !settings.gmailEnabled || (settings.gmailEnabled && !(SharedKeychainService.getGmailAccessToken() != nil && !(SharedKeychainService.getGmailAccessToken() ?? "").isEmpty)),
             disabledFunctions: [
-                "Email scanning for new dockets",
-                "File delivery notifications",
-                "Grabbed indicator for media files"
+                "Email scanning for new dockets"
             ]
         )
         
