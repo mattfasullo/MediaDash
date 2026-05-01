@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.14</title>
+            <description><![CDATA[
+                <p>More options for the read-only Airtable token when polling dockets (shared team file, plist key, debug env). Simian remembers recent projects. Cleaner debug logging. Reliability tweaks for Asana, notifications, and email scanning.</p>
+            ]]></description>
+            <pubDate>Fri, 01 May 2026 14:20:41 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.14/MediaDash.zip"
+                sparkle:version="240"
+                sparkle:shortVersionString="1.14"
+                sparkle:edSignature="9FVN58H26WuCtcl2WihWbe81iokmYmeqQq4o3CYHG4ymMg6Wm1658QGGd22+QfxC0ud9f7+1NCoPI9Z9jYMUAQ=="
+                length="15385490"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.13</title>
             <description><![CDATA[
                 <p>Smarter duplicate detection when docket folders use optional letter suffixes before the job name. Improvements to Gmail scanning, Simian staging, and Airtable docket workflows; notification polish; Simian tree and post view refinements.</p>

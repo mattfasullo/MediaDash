@@ -2,8 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>AirtableReadOnlyDocketToken</key>
+	<string></string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.13</string>
+	<string>1.14</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -28,7 +30,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>230</string>
+	<string>240</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>SUAllowsAutomaticUpdates</key>
@@ -41,7 +43,5 @@
 	<string>https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>mkwmbcnLrJH+vvLx8Y4rs6OfEEU11wSA3b+ea84rZbQ=</string>
-	<key>AirtableReadOnlyDocketToken</key>
-	<string></string>
 </dict>
 </plist>
