@@ -188,6 +188,10 @@ struct AuthenticatedRootView: View {
                 // #endregion
                 // Sync settings manager with profile settings (applying built-in docket defaults)
                 settingsManager.currentSettings = SettingsManager.applyDocketConfigDefaults(to: profile.settings)
+                SharedKeychainService.updateAirtableSharedCacheContextForServerToken(
+                    sharedCacheURL: settingsManager.currentSettings.sharedCacheURL,
+                    allowTeamServerAirtableTokenFile: true
+                )
                 
                 // Update email scanning service references
                 emailScanningService.mediaManager = manager
@@ -291,6 +295,10 @@ struct AuthenticatedRootView: View {
                 }
             }
             .onChange(of: settingsManager.currentSettings) { _, newSettings in
+                SharedKeychainService.updateAirtableSharedCacheContextForServerToken(
+                    sharedCacheURL: newSettings.sharedCacheURL,
+                    allowTeamServerAirtableTokenFile: true
+                )
                 // Update the profile when settings change
                 sessionManager.updateProfile(settings: newSettings)
                 

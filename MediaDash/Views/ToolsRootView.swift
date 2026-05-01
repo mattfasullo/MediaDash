@@ -42,6 +42,11 @@ struct ToolsRootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
                 settingsManager.currentSettings = SettingsManager.applyDocketConfigDefaults(to: profile.settings)
+                let s = settingsManager.currentSettings
+                SharedKeychainService.updateAirtableSharedCacheContextForServerToken(
+                    sharedCacheURL: s.sharedCacheURL,
+                    allowTeamServerAirtableTokenFile: true
+                )
                 configureToolsCache()
             }
             .onChange(of: sessionManager.authenticationState) { _, newState in
@@ -52,6 +57,10 @@ struct ToolsRootView: View {
             .onChange(of: settingsManager.currentSettings) { _, newSettings in
                 sessionManager.updateProfile(settings: newSettings)
                 mediaManager.updateConfig(settings: newSettings)
+                SharedKeychainService.updateAirtableSharedCacheContextForServerToken(
+                    sharedCacheURL: newSettings.sharedCacheURL,
+                    allowTeamServerAirtableTokenFile: true
+                )
                 configureToolsCache()
             }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("OpenSettings"))) { _ in

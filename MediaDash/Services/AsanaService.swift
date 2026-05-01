@@ -410,10 +410,14 @@ class AsanaService: ObservableObject {
         let finalProjects: [AsanaProject]
         if let max = maxProjects, activeProjects.count > max {
             finalProjects = Array(activeProjects.prefix(max))
-            print("🟢 [AsanaService] Limited to \(max) active projects (out of \(activeProjects.count) total)")
+            if AsanaSyncLogging.verbose {
+                print("🟢 [AsanaService] Limited to \(max) active projects (out of \(activeProjects.count) total)")
+            }
         } else {
             finalProjects = activeProjects
-            print("🟢 [AsanaService] Successfully fetched \(activeProjects.count) active projects")
+            if AsanaSyncLogging.verbose {
+                print("🟢 [AsanaService] Successfully fetched \(activeProjects.count) active projects")
+            }
         }
         
         return finalProjects
@@ -645,9 +649,9 @@ class AsanaService: ObservableObject {
     ///   - maxTasks: Maximum number of tasks to fetch per project (stops early if reached)
     ///   - modifiedSince: Optional date to only fetch tasks modified since this date (for incremental sync)
     func fetchTasks(workspaceID: String?, projectID: String?, maxTasks: Int? = nil, modifiedSince: Date? = nil) async throws -> [AsanaTask] {
-        #if DEBUG
-        print("🔵 [AsanaService] fetchTasks() called - Workspace: \(workspaceID ?? "nil"), Project: \(projectID ?? "nil")")
-        #endif
+        if AsanaSyncLogging.verbose {
+            print("🔵 [AsanaService] fetchTasks() called - Workspace: \(workspaceID ?? "nil"), Project: \(projectID ?? "nil")")
+        }
         guard accessToken != nil else {
             print("🔴 [AsanaService] ERROR: No access token")
             throw AsanaError.notAuthenticated
@@ -668,6 +672,12 @@ class AsanaService: ObservableObject {
         var offset: String? = nil
         let limit = 100 // Asana's max is 100 per page
         
+        if let modifiedSince = modifiedSince, AsanaSyncLogging.verbose {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            print("🔄 [AsanaService] Using incremental sync with modified_since: \(formatter.string(from: modifiedSince))")
+        }
+        
         repeat {
             var components = URLComponents(string: "\(baseURL)/tasks")!
             var queryItems: [URLQueryItem] = [
@@ -686,7 +696,6 @@ class AsanaService: ObservableObject {
                 formatter.formatOptions = [.withInternetDateTime]
                 let modifiedSinceString = formatter.string(from: modifiedSince)
                 queryItems.append(URLQueryItem(name: "modified_since", value: modifiedSinceString))
-                print("🔄 [AsanaService] Using incremental sync with modified_since: \(modifiedSinceString)")
             }
             
             // Asana requires exactly one of: project, tag, section, user_task_list, or assignee + workspace
@@ -757,7 +766,9 @@ class AsanaService: ObservableObject {
     ///   - maxTasks: Maximum number of tasks to fetch (for safety, default 5000)
     /// - Returns: Array of tasks matching the search criteria
     func searchWorkspaceTasks(workspaceID: String, modifiedSince: Date, maxTasks: Int? = 5000) async throws -> [AsanaTask] {
-        print("🔍 [AsanaService] searchWorkspaceTasks() - searching workspace \(workspaceID)")
+        if AsanaSyncLogging.verbose {
+            print("🔍 [AsanaService] searchWorkspaceTasks() - searching workspace \(workspaceID)")
+        }
         
         guard accessToken != nil else {
             throw AsanaError.notAuthenticated
@@ -823,13 +834,17 @@ class AsanaService: ObservableObject {
             
             // Stop if we've reached the max
             if let max = maxTasks, allTasks.count >= max {
-                print("🔍 [AsanaService] Workspace search reached max limit (\(max) tasks)")
+                if AsanaSyncLogging.verbose {
+                    print("🔍 [AsanaService] Workspace search reached max limit (\(max) tasks)")
+                }
                 break
             }
             
         } while offset != nil
         
-        print("🔍 [AsanaService] Workspace search returned \(allTasks.count) tasks from \(pageCount) pages (modified since \(modifiedSinceString))")
+        if AsanaSyncLogging.verbose {
+            print("🔍 [AsanaService] Workspace search returned \(allTasks.count) tasks from \(pageCount) pages (modified since \(modifiedSinceString))")
+        }
         
         // Apply max limit if specified
         if let max = maxTasks, allTasks.count > max {
@@ -847,7 +862,9 @@ class AsanaService: ObservableObject {
     ///   - daysBack: Number of previous days to include for lookback workflows
     /// - Returns: Array of session tasks with due dates in the specified range
     func searchUpcomingSessions(workspaceID: String?, daysAhead: Int = 7, daysBack: Int = 0) async throws -> [AsanaTask] {
-        print("📅 [AsanaService] searchUpcomingSessions() - searching sessions from \(daysBack) days back through next \(daysAhead) days")
+        if AsanaSyncLogging.verbose {
+            print("📅 [AsanaService] searchUpcomingSessions() - searching sessions from \(daysBack) days back through next \(daysAhead) days")
+        }
         
         guard accessToken != nil else {
             throw AsanaError.notAuthenticated
@@ -859,7 +876,9 @@ class AsanaService: ObservableObject {
             let workspaces = try await fetchWorkspaces()
             if let firstWorkspace = workspaces.first {
                 finalWorkspaceID = firstWorkspace.gid
-                print("📅 [AsanaService] Resolved workspace: \(firstWorkspace.name) (\(firstWorkspace.gid))")
+                if AsanaSyncLogging.verbose {
+                    print("📅 [AsanaService] Resolved workspace: \(firstWorkspace.name) (\(firstWorkspace.gid))")
+                }
             } else {
                 throw AsanaError.apiError("No workspaces found. Please specify a workspace ID in settings.")
             }
@@ -892,7 +911,9 @@ class AsanaService: ObservableObject {
         let startExclusiveString = dateFormatter.string(from: startExclusive)
         let endDateString = dateFormatter.string(from: endDate)
         
-        print("📅 [AsanaService] Searching sessions with due_on.after=\(startExclusiveString) to due_on.before=\(endDateString)")
+        if AsanaSyncLogging.verbose {
+            print("📅 [AsanaService] Searching sessions with due_on.after=\(startExclusiveString) to due_on.before=\(endDateString)")
+        }
         
         var allSessions: [AsanaTask] = []
         var offset: String? = nil
@@ -947,7 +968,9 @@ class AsanaService: ObservableObject {
             }
             
             allSessions.append(contentsOf: pageSessions)
-            print("📅 [AsanaService] Page fetched: \(pageSessions.count) sessions (filtered from \(wrapper.data.count) results)")
+            if AsanaSyncLogging.verbose {
+                print("📅 [AsanaService] Page fetched: \(pageSessions.count) sessions (filtered from \(wrapper.data.count) results)")
+            }
             
             // Check for next page
             if let nextPage = wrapper.nextPage {
@@ -957,7 +980,9 @@ class AsanaService: ObservableObject {
             }
         } while offset != nil
         
-        print("📅 [AsanaService] Total parent sessions found: \(allSessions.count)")
+        if AsanaSyncLogging.verbose {
+            print("📅 [AsanaService] Total parent sessions found: \(allSessions.count)")
+        }
         
         return allSessions
     }
@@ -1260,7 +1285,8 @@ class AsanaService: ObservableObject {
     /// - Returns: DocketSyncResult containing dockets and discovered docket-bearing project IDs
     func fetchDockets(workspaceID: String?, projectID: String?, docketField: String?, jobNameField: String?, modifiedSince: Date? = nil, knownDocketBearingProjects: [String]? = nil, forceDiscovery: Bool = false, progressCallback: SyncProgressCallback? = nil) async throws -> DocketSyncResult {
         let syncStartTime = Date()
-        print("🔄 [SYNC] Starting Asana sync at \(syncStartTime)...")
+        let syncKind = modifiedSince != nil ? "incremental" : "full"
+        print("🔄 [SYNC] Starting Asana docket sync (\(syncKind))…")
         
         isFetching = true
         lastError = nil
@@ -1283,6 +1309,9 @@ class AsanaService: ObservableObject {
         // Track sync metadata for DocketSyncResult
         var isDiscoverySync = forceDiscovery // Will be set to true if we scan all projects
         var projectsQueried = 0
+        var syncCompletedViaWorkspaceSearch = false
+        var didRunParallelProjectFetch = false
+        var projectFetchErrorsRemaining = 0
         
         // Fetch all projects and get tasks from each
         var finalWorkspaceID = workspaceID
@@ -1307,17 +1336,22 @@ class AsanaService: ObservableObject {
             
             if let modifiedSince = modifiedSince {
                 progressCallback?(0.05, "Searching workspace for recent changes...")
-                print("🔍 [SYNC] Attempting workspace-level search (Premium feature) for tasks since \(modifiedSince)")
+                if AsanaSyncLogging.verbose {
+                    print("🔍 [SYNC] Attempting workspace-level search (Premium feature) for tasks since \(modifiedSince)")
+                }
                 
                 do {
                     let searchStartTime = Date()
                     let searchResults = try await searchWorkspaceTasks(workspaceID: workspaceID, modifiedSince: modifiedSince)
                     let searchDuration = Date().timeIntervalSince(searchStartTime)
                     
-                    print("✅ [SYNC] Workspace search found \(searchResults.count) modified tasks in \(String(format: "%.2f", searchDuration))s")
+                    if AsanaSyncLogging.verbose {
+                        print("✅ [SYNC] Workspace search found \(searchResults.count) modified tasks in \(String(format: "%.2f", searchDuration))s")
+                    }
                     
                     allTasks = searchResults
                     usedWorkspaceSearch = true
+                    syncCompletedViaWorkspaceSearch = true
                     
                     // Still need to fetch projects for metadata, but we can do this quickly
                     progressCallback?(0.50, "Fetching project metadata...")
@@ -1336,6 +1370,7 @@ class AsanaService: ObservableObject {
             
             // For FULL sync or if workspace search failed, use parallel project iteration
             if !usedWorkspaceSearch {
+                didRunParallelProjectFetch = true
                 progressCallback?(0.05, "Fetching project list (\(syncType) sync)...")
                 
                 // Fetch ALL projects (no limit to ensure we get all dockets)
@@ -1350,16 +1385,20 @@ class AsanaService: ObservableObject {
                     let knownProjectSet = Set(knownProjects)
                     projects = allProjects.filter { knownProjectSet.contains($0.gid) }
                     isDiscoverySync = false
-                    print("🚀 [SMART SYNC] Using \(projects.count) known docket-bearing projects (out of \(allProjects.count) total)")
+                    if AsanaSyncLogging.verbose {
+                        print("🚀 [SMART SYNC] Using \(projects.count) known docket-bearing projects (out of \(allProjects.count) total)")
+                    }
                     progressCallback?(0.08, "Smart sync: \(projects.count) docket projects")
                 } else {
                     // Full discovery: scan all projects
                     projects = allProjects
                     isDiscoverySync = true
-                    if modifiedSince != nil {
-                        print("🔄 [SYNC] Found \(projects.count) projects, checking for updated tasks since \(modifiedSince!)...")
-                    } else {
-                        print("🔄 [SYNC] Found \(projects.count) projects, fetching ALL tasks from each (full discovery)...")
+                    if AsanaSyncLogging.verbose {
+                        if modifiedSince != nil {
+                            print("🔄 [SYNC] Found \(projects.count) projects, checking for updated tasks since \(modifiedSince!)...")
+                        } else {
+                            print("🔄 [SYNC] Found \(projects.count) projects, fetching ALL tasks from each (full discovery)...")
+                        }
                     }
                     progressCallback?(0.08, "Discovery: \(projects.count) projects")
                 }
@@ -1414,7 +1453,7 @@ class AsanaService: ObservableObject {
                         let avgTime = responseTimes.reduce(0, +) / Double(responseTimes.count)
                         shouldThrottle = avgTime > responseTimeThreshold
                         
-                        if shouldThrottle && responseTimes.count == maxResponseTimeSamples {
+                        if AsanaSyncLogging.verbose, shouldThrottle && responseTimes.count == maxResponseTimeSamples {
                             print("⚠️ [SYNC] Response times high (avg \(String(format: "%.2f", avgTime))s), enabling throttling")
                         }
                     }
@@ -1438,8 +1477,9 @@ class AsanaService: ObservableObject {
                 
                 let progressTracker = SyncProgressTracker(total: totalProjects)
                 
-                let parallelFetchStartTime = Date()
-                print("🚀 [SYNC] Starting parallel fetch with \(concurrencyLimit) concurrent requests for \(totalProjects) projects")
+                if AsanaSyncLogging.verbose {
+                    print("🚀 [SYNC] Starting parallel fetch with \(concurrencyLimit) concurrent requests for \(totalProjects) projects")
+                }
                 
                 // Use TaskGroup for parallel fetching with concurrency limit
                 // Result includes project index, project info for retry, and the fetched tasks (or empty on error)
@@ -1454,8 +1494,8 @@ class AsanaService: ObservableObject {
                         if let error = result.error {
                             await progressTracker.recordFailure(index: result.index, project: result.project, error: error)
                             print("⚠️ [SYNC] Error fetching tasks from project \(result.index + 1) '\(result.project.name)': \(error.localizedDescription)")
-                        } else if completed % 10 == 0 || completed == totalProjects {
-                            print("🔄 [SYNC] Progress: \(completed)/\(totalProjects) projects (\(result.tasks.count) tasks from '\(result.project.name)')")
+                        } else if AsanaSyncLogging.verbose && (completed % 100 == 0 || completed == totalProjects) {
+                            print("🔄 [SYNC] Progress: \(completed)/\(totalProjects) projects")
                         }
                         
                         // Update progress callback
@@ -1555,28 +1595,24 @@ class AsanaService: ObservableObject {
                             for t in tasks { taskGidToProjectGid[t.gid] = project.gid }
                             retrySuccessCount += 1
                             retryTaskCount += tasks.count
-                            print("✅ [SYNC] Retry succeeded for '\(project.name)': \(tasks.count) tasks")
+                            if AsanaSyncLogging.verbose {
+                                print("✅ [SYNC] Retry succeeded for '\(project.name)': \(tasks.count) tasks")
+                            }
                         } catch {
                             print("❌ [SYNC] Retry failed for '\(project.name)': \(error.localizedDescription)")
                         }
                     }
                     
                     let stillFailed = failedProjects.count - retrySuccessCount
+                    projectFetchErrorsRemaining = stillFailed
                     if stillFailed > 0 {
                         print("⚠️ [SYNC] \(stillFailed) projects still failed after retry - some dockets may be missing")
                     }
-                    if retrySuccessCount > 0 {
+                    if AsanaSyncLogging.verbose, retrySuccessCount > 0 {
                         print("✅ [SYNC] Retry recovered \(retryTaskCount) tasks from \(retrySuccessCount) projects")
                     }
                 }
                 
-                let parallelFetchDuration = Date().timeIntervalSince(parallelFetchStartTime)
-                let failedCount = await progressTracker.getFailedProjects().count
-                if failedCount > 0 {
-                    print("✅ [SYNC] Parallel fetch complete: \(allTasks.count) tasks from \(totalProjects) projects in \(String(format: "%.2f", parallelFetchDuration))s (\(failedCount) projects had errors)")
-                } else {
-                    print("✅ [SYNC] Parallel fetch complete: \(allTasks.count) tasks from \(totalProjects) projects in \(String(format: "%.2f", parallelFetchDuration))s")
-                }
                 progressCallback?(0.85, "Fetched \(allTasks.count) tasks total")
             } // end if !usedWorkspaceSearch
         }
@@ -1721,14 +1757,25 @@ class AsanaService: ObservableObject {
         let subtaskCount = finalDockets.compactMap { $0.subtasks?.count }.reduce(0, +)
         let docketsWithDueDate = finalDockets.filter { $0.dueDate != nil && !($0.dueDate?.isEmpty ?? true) }.count
         let syncDuration = Date().timeIntervalSince(syncStartTime)
-        print("✅ [SYNC] Complete: \(finalDockets.count) dockets with numbers from \(allTasks.count) tasks")
-        print("   - \(tasksWithoutDockets.count) tasks without docket numbers")
-        print("   - \(docketsWithDueDate) dockets have due dates (required for calendar)")
-        print("   - \(discoveredDocketBearingProjects.count) projects contain dockets (for smart sync)")
-        if subtaskCount > 0 {
-            print("   - \(subtaskCount) subtasks attached to docket tasks")
+        
+        if syncCompletedViaWorkspaceSearch {
+            print("✅ [SYNC] Complete: \(finalDockets.count) dockets, \(allTasks.count) tasks (workspace search), \(String(format: "%.1f", syncDuration))s")
+        } else if didRunParallelProjectFetch {
+            print("✅ [SYNC] Complete: \(finalDockets.count) dockets, \(allTasks.count) tasks, \(projectsQueried) projects, \(String(format: "%.1f", syncDuration))s")
+        } else {
+            print("✅ [SYNC] Complete: \(finalDockets.count) dockets, \(allTasks.count) tasks, \(String(format: "%.1f", syncDuration))s")
         }
-        print("⏱️ [SYNC] Total sync time: \(String(format: "%.2f", syncDuration)) seconds")
+        if projectFetchErrorsRemaining > 0 {
+            print("⚠️ [SYNC] \(projectFetchErrorsRemaining) project(s) still failed after retry - dockets may be incomplete")
+        }
+        if AsanaSyncLogging.verbose {
+            print("   - \(tasksWithoutDockets.count) tasks without docket numbers")
+            print("   - \(docketsWithDueDate) dockets have due dates (required for calendar)")
+            print("   - \(discoveredDocketBearingProjects.count) projects contain dockets (for smart sync)")
+            if subtaskCount > 0 {
+                print("   - \(subtaskCount) subtasks attached to docket tasks")
+            }
+        }
         
         progressCallback?(1.0, "Sync complete: \(finalDockets.count) dockets")
         

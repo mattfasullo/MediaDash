@@ -62,8 +62,6 @@ struct DocketMetadata: Codable, Identifiable {
 class DocketMetadataManager: ObservableObject {
     @Published var metadata: [String: DocketMetadata] = [:]
     private var settings: AppSettings?
-    /// DEBUG: avoids repeating the same "Loaded N dockets" line when metadata reloads without count changes.
-    private var lastDebugLoggedLoadedCount: Int?
 
     private var csvFileURL: URL {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -269,12 +267,6 @@ class DocketMetadataManager: ObservableObject {
             }
 
             metadata = loadedMetadata
-            #if DEBUG
-            if lastDebugLoggedLoadedCount != loadedMetadata.count {
-                lastDebugLoggedLoadedCount = loadedMetadata.count
-                print("DocketMetadataManager: Loaded \(loadedMetadata.count) dockets from CSV")
-            }
-            #endif
 
             if loadedMetadata.isEmpty {
                 print("DocketMetadataManager: WARNING - No dockets were loaded. Check CSV format:")

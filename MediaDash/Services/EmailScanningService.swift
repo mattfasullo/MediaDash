@@ -1380,7 +1380,6 @@ class EmailScanningService: ObservableObject {
         }
         do {
             scanBatchSimianProjects = try await simian.getProjectList()
-            emailScanDebug("EmailScanningService: Cached \(scanBatchSimianProjects?.count ?? 0) Simian project(s) for this scan")
         } catch {
             emailScanDebug("EmailScanningService: ⚠️ Could not fetch Simian project list for scan cache: \(error.localizedDescription)")
             scanBatchSimianProjects = nil

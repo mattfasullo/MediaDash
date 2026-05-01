@@ -63,10 +63,9 @@ class AsanaCacheManager: ObservableObject {
     private var lastSharedCacheError: String?
     private var lastEmptyFileCheck: Date?
     
-    /// DEBUG-only: last `newStatus` we logged (avoids spam because `cacheStatus` updates asynchronously).
-    private var lastDebugLoggedCacheStatus: CacheStatus = .unknown
-    /// DEBUG-only: avoids logging every `reloadLastSyncDate()` when the value is unchanged.
-    private var lastDebugLoggedLastSyncDate: Date?
+    /// DEBUG-only: dedupe across multiple managers + repeated calls (same process).
+    private static var lastDebugLoggedCacheStatus: CacheStatus = .unknown
+    private static var lastDebugLoggedLastSyncDate: Date?
     
     // Date formatter for YYYY-MM-DD comparison
     private static let dateOnlyFormatter: DateFormatter = {
@@ -551,8 +550,8 @@ class AsanaCacheManager: ObservableObject {
         }
         
         #if DEBUG
-        if newStatus != lastDebugLoggedCacheStatus {
-            lastDebugLoggedCacheStatus = newStatus
+        if newStatus != Self.lastDebugLoggedCacheStatus {
+            Self.lastDebugLoggedCacheStatus = newStatus
             switch newStatus {
             case .serverConnectedUsingShared:
                 print("🟢 [Cache Status] Server connected, using shared cache")
@@ -909,14 +908,14 @@ class AsanaCacheManager: ObservableObject {
            let cached = try? JSONDecoder().decode(CachedDockets.self, from: data) {
             lastSyncDate = cached.lastSync
             #if DEBUG
-            if lastDebugLoggedLastSyncDate != cached.lastSync {
-                lastDebugLoggedLastSyncDate = cached.lastSync
+            if Self.lastDebugLoggedLastSyncDate != cached.lastSync {
+                Self.lastDebugLoggedLastSyncDate = cached.lastSync
                 print("🔄 [Cache] Reloaded lastSyncDate from shared cache: \(cached.lastSync)")
             }
             #endif
         } else {
             lastSyncDate = nil
-            lastDebugLoggedLastSyncDate = nil
+            Self.lastDebugLoggedLastSyncDate = nil
         }
     }
     
@@ -1057,10 +1056,14 @@ class AsanaCacheManager: ObservableObject {
                     }
                     // Check if it's been too long since a full sync (more than 7 days)
                     else if integrity.needsFullSync(maxAgeDays: 7) {
-                        let daysSince = integrity.lastFullSyncDate.map { 
-                            Calendar.current.dateComponents([.day], from: $0, to: Date()).day ?? 0
-                        } ?? Int.max
-                        forceFullSyncReason = "No full sync in \(daysSince) days"
+                        let ageNote: String
+                        if let lastFull = integrity.lastFullSyncDate {
+                            let daysSince = Calendar.current.dateComponents([.day], from: lastFull, to: Date()).day ?? 0
+                            ageNote = "\(daysSince) day(s) since last full sync"
+                        } else {
+                            ageNote = "no full sync on record"
+                        }
+                        forceFullSyncReason = "Full sync stale (\(ageNote), max 7 days)"
                         print("⚠️ [Cache] \(forceFullSyncReason!) - forcing full sync")
                     }
                 }
@@ -1178,7 +1181,7 @@ class AsanaCacheManager: ObservableObject {
                     knownDocketBearingProjects = integrity.docketBearingProjectIDs
                     needsDiscovery = integrity.needsDiscovery(maxAgeDays: 7)
                     
-                    if let projects = knownDocketBearingProjects, !projects.isEmpty {
+                    if let projects = knownDocketBearingProjects, !projects.isEmpty, AsanaSyncLogging.verbose {
                         print("📊 [Cache] Found \(projects.count) known docket-bearing projects (discovery \(needsDiscovery ? "needed" : "not needed"))")
                     }
                 }
@@ -1199,11 +1202,13 @@ class AsanaCacheManager: ObservableObject {
         // 2. AND cache health checks passed (no forceFullSyncReason)
         let useIncremental = existingLastSync != nil && !existingDockets.isEmpty && existingHasDueDateInfo && forceFullSyncReason == nil
         
-        if let reason = forceFullSyncReason {
-            print("📊 [Cache] Sync decision: FULL SYNC REQUIRED - \(reason)")
-            print("   existingDockets=\(existingDockets.count), existingWithDueDate=\(existingWithDueDate.count)")
-        } else {
-            print("📊 [Cache] Sync decision: useIncremental=\(useIncremental), existingDockets=\(existingDockets.count), existingWithDueDate=\(existingWithDueDate.count)")
+        if AsanaSyncLogging.verbose {
+            if let reason = forceFullSyncReason {
+                print("📊 [Cache] Sync decision: FULL SYNC REQUIRED - \(reason)")
+                print("   existingDockets=\(existingDockets.count), existingWithDueDate=\(existingWithDueDate.count)")
+            } else {
+                print("📊 [Cache] Sync decision: useIncremental=\(useIncremental), existingDockets=\(existingDockets.count), existingWithDueDate=\(existingWithDueDate.count)")
+            }
         }
         
         if useIncremental {
@@ -1262,20 +1267,26 @@ class AsanaCacheManager: ObservableObject {
                 allProjects.formUnion(syncResult.docketBearingProjectIDs)
                 discoveredProjectIDs = Array(allProjects)
                 wasDiscovery = syncResult.wasDiscovery
-                print("🟢 [Cache] Incremental sync: \(syncResult.dockets.count) updated, \(merged.count) total dockets")
+                if AsanaSyncLogging.verbose {
+                    print("🟢 [Cache] Incremental sync: \(syncResult.dockets.count) updated, \(merged.count) total dockets")
+                }
             } else if useIncremental && syncResult.dockets.isEmpty {
                 // No changes since last sync
                 merged = existingDockets
                 wasFullSync = false
                 discoveredProjectIDs = knownDocketBearingProjects // Keep existing
                 wasDiscovery = false
-                print("🟢 [Cache] No changes since last sync, using existing \(merged.count) dockets")
+                if AsanaSyncLogging.verbose {
+                    print("🟢 [Cache] No changes since last sync, using existing \(merged.count) dockets")
+                }
             } else {
                 merged = syncResult.dockets
                 wasFullSync = true
                 discoveredProjectIDs = Array(syncResult.docketBearingProjectIDs)
                 wasDiscovery = syncResult.wasDiscovery
-                print("🟢 [Cache] Full sync: \(merged.count) dockets from Asana (\(syncResult.projectsQueried) projects queried)")
+                if AsanaSyncLogging.verbose {
+                    print("🟢 [Cache] Full sync: \(merged.count) dockets from Asana (\(syncResult.projectsQueried) projects queried)")
+                }
             }
             
             self.cachedDockets = merged
@@ -1317,7 +1328,9 @@ class AsanaCacheManager: ObservableObject {
                     syncPhase = "Saving to cache..."
                     try await saveToSharedCache(dockets: syncResult.dockets, url: sharedURL, lastSync: lastSyncDate, isFullSync: true, docketBearingProjectIDs: Array(syncResult.docketBearingProjectIDs), isDiscovery: true)
                 }
-                print("🟢 [Cache] Full sync complete: \(syncResult.dockets.count) dockets from \(syncResult.projectsQueried) projects")
+                if AsanaSyncLogging.verbose {
+                    print("🟢 [Cache] Full sync complete: \(syncResult.dockets.count) dockets from \(syncResult.projectsQueried) projects")
+                }
             } else {
                 throw error
             }
@@ -1488,8 +1501,10 @@ class AsanaCacheManager: ObservableObject {
         let syncTimestamp = lastSync ?? Date()
         let data = try await encodeCachedDockets(dockets: dockets, lastSync: syncTimestamp, previousPeakCount: previousPeakCount, isFullSync: isFullSync, docketBearingProjectIDs: finalProjectIDs, isDiscovery: isDiscovery)
         
-        print("📝 [Cache] Saving to shared cache at: \(fileURL.path)")
-        print("📝 [Cache] Original path was: \(url)")
+        if AsanaSyncLogging.verbose {
+            print("📝 [Cache] Saving to shared cache at: \(fileURL.path)")
+            print("📝 [Cache] Original path was: \(url)")
+        }
         
         // Verify the final path is a file (has .json extension)
         guard fileURL.pathExtension == "json" else {
@@ -1498,7 +1513,9 @@ class AsanaCacheManager: ObservableObject {
         
         // Create parent directory if it doesn't exist
         let parentDir = fileURL.deletingLastPathComponent()
-        print("📝 [Cache] Parent directory: \(parentDir.path)")
+        if AsanaSyncLogging.verbose {
+            print("📝 [Cache] Parent directory: \(parentDir.path)")
+        }
         
         // Check if parent is actually a directory
         var parentIsDirectory: ObjCBool = false
@@ -1509,7 +1526,9 @@ class AsanaCacheManager: ObservableObject {
         } else {
             // Parent doesn't exist, create it
             try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
-            print("📝 [Cache] Created parent directory: \(parentDir.path)")
+            if AsanaSyncLogging.verbose {
+                print("📝 [Cache] Created parent directory: \(parentDir.path)")
+            }
         }
         
         // Check if target already exists and is a directory (shouldn't happen, but handle it)
@@ -1522,12 +1541,16 @@ class AsanaCacheManager: ObservableObject {
         // This is safer than temp file + move on network volumes
         do {
             try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
-            print("🟢 [Cache] Saved \(dockets.count) dockets to shared cache at: \(fileURL.path)")
+            if AsanaSyncLogging.verbose {
+                print("🟢 [Cache] Saved \(dockets.count) dockets to shared cache at: \(fileURL.path)")
+            }
         } catch {
             // If atomic write fails (e.g., on network volumes), try non-atomic write
             print("⚠️ [Cache] Atomic write failed, trying non-atomic: \(error.localizedDescription)")
             try data.write(to: fileURL, options: [])
-            print("🟢 [Cache] Saved \(dockets.count) dockets to shared cache (non-atomic) at: \(fileURL.path)")
+            if AsanaSyncLogging.verbose {
+                print("🟢 [Cache] Saved \(dockets.count) dockets to shared cache (non-atomic) at: \(fileURL.path)")
+            }
         }
     }
     
@@ -1787,7 +1810,9 @@ class AsanaCacheManager: ObservableObject {
                 isDiscovery: true
             )
         }
-        print("🟢 [Cache] Force sync complete: \(syncResult.dockets.count) dockets from \(syncResult.projectsQueried) projects (\(syncResult.docketBearingProjectIDs.count) have dockets)")
+        if AsanaSyncLogging.verbose {
+            print("🟢 [Cache] Force sync complete: \(syncResult.dockets.count) dockets from \(syncResult.projectsQueried) projects (\(syncResult.docketBearingProjectIDs.count) have dockets)")
+        }
     }
     
     /// Clear the cache state

@@ -59,9 +59,38 @@ class AirtableDocketScanningService: ObservableObject {
         guard !Task.isCancelled else { return }
         guard !isScanning else { return }
 
-        guard let settings = settingsManager?.currentSettings,
-              let apiKey = SharedKeychainService.getAirtableAPIKey(), !apiKey.isEmpty else {
-            lastError = "Airtable API key is not configured"
+        guard let settings = settingsManager?.currentSettings else {
+            lastError = "Airtable scan: settings not loaded. Try signing in again or restarting the app."
+            return
+        }
+
+        let sharedForToken = settings.sharedCacheURL
+        let sharedURLNonEmpty = sharedForToken.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
+
+        guard var apiKey = SharedKeychainService.getAirtableAPIKey(sharedCacheURLForServerToken: sharedForToken), !apiKey.isEmpty else {
+            if !sharedURLNonEmpty {
+                lastError = "Airtable API key is not configured. In Settings, set **Shared Cache URL** to the folder that contains `\(AirtableConfig.sharedServerReadOnlyTokenFileName)` (next to the docket cache), or paste a personal token under Airtable in Settings."
+            } else {
+                lastError = "Airtable API key is not configured. Add `\(AirtableConfig.sharedServerReadOnlyTokenFileName)` to your shared cache folder (one line: read-only PAT), or paste a token in Settings."
+            }
+            return
+        }
+        apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else {
+            if !sharedURLNonEmpty {
+                lastError = "Airtable API key is not configured. In Settings, set **Shared Cache URL** to the folder that contains `\(AirtableConfig.sharedServerReadOnlyTokenFileName)` (next to the docket cache), or paste a personal token under Airtable in Settings."
+            } else {
+                lastError = "Airtable API key is not configured. Add `\(AirtableConfig.sharedServerReadOnlyTokenFileName)` to your shared cache folder (one line: read-only PAT), or paste a token in Settings."
+            }
+            return
+        }
+
+        if apiKey.count < AirtableConfig.minimumPracticalPersonalAccessTokenLength {
+            lastError = """
+            Airtable token is too short (\(apiKey.count) characters). A full personal access token is usually much longer. \
+            Fix `\(AirtableConfig.sharedServerReadOnlyTokenFileName)` on your shared cache (one complete line, no quotes) \
+            or save a full token in Settings — a truncated `pat…` string will always get HTTP 401.
+            """
             return
         }
 
@@ -199,6 +228,11 @@ class AirtableDocketScanningService: ObservableObject {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let err  = json["error"] as? [String: Any],
                    let msg  = err["message"] as? String {
+                    if http.statusCode == 401 {
+                        throw AirtableError.apiError(
+                            "\(msg) (HTTP 401). Airtable refused the bearer token. Create a new personal access token at airtable.com/create/tokens with scope data.records:read and access to the docket base. Team file: \(AirtableConfig.sharedServerReadOnlyTokenFileName) must be exactly one line (full pat… string, no Bearer prefix, no quotes). If the line looks short or was pasted in half, replace it with a freshly copied token."
+                        )
+                    }
                     throw AirtableError.apiError(msg)
                 }
                 throw AirtableError.apiError("HTTP \(http.statusCode)")

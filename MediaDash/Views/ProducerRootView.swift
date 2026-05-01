@@ -89,6 +89,10 @@ struct ProducerRootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
                 settingsManager.currentSettings = SettingsManager.applyDocketConfigDefaults(to: profile.settings)
+                SharedKeychainService.updateAirtableSharedCacheContextForServerToken(
+                    sharedCacheURL: nil,
+                    allowTeamServerAirtableTokenFile: false
+                )
                 configureProducerCache()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     evaluateServicesPromptIfNeeded()
@@ -102,6 +106,10 @@ struct ProducerRootView: View {
             }
             .onChange(of: settingsManager.currentSettings) { _, newSettings in
                 sessionManager.updateProfile(settings: newSettings)
+                SharedKeychainService.updateAirtableSharedCacheContextForServerToken(
+                    sharedCacheURL: nil,
+                    allowTeamServerAirtableTokenFile: false
+                )
                 configureProducerCache()
             }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("OpenSettings"))) { _ in

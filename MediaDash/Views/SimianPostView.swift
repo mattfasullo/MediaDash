@@ -26,7 +26,9 @@ struct SimianPostView: View {
     @State private var searchText = ""
     @State private var allProjects: [SimianProject] = []
     @State private var projectInfos: [String: SimianProjectInfo] = [:]
-    @State private var projectSortOrder: ProjectSortOrder = .nameAsc
+    @State private var projectSortOrder: ProjectSortOrder = .recentOpenedHere
+    /// Bumped when `SimianRecentProjectsStore` changes so `filteredProjects` recomputes.
+    @State private var recentProjectsStoreRevision: Int = 0
     @State private var isLoadingProjectInfos = false
     @State private var isLoadingProjects = false
     @State private var projectLoadError: String?
@@ -95,6 +97,7 @@ struct SimianPostView: View {
 
     /// Creating folder on server (Finder-style Cmd+N / New Folder with Selection).
     @State private var isCreatingFolder = false
+    @State private var isSortingSimianChildren = false
 
     @FocusState private var isSearchFocused: Bool
     @FocusState private var isProjectListFocused: Bool
@@ -108,6 +111,20 @@ struct SimianPostView: View {
         let term = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let projects = term.isEmpty ? allProjects : allProjects.filter { $0.name.lowercased().contains(term) }
         switch projectSortOrder {
+        case .recentOpenedHere:
+            let _ = recentProjectsStoreRevision
+            let recent: [String]
+            if case .loggedIn(let profile) = sessionManager.authenticationState {
+                recent = SimianRecentProjectsStore.orderedIds(for: profile.id)
+            } else {
+                recent = []
+            }
+            return projects.sorted { a, b in
+                let ia = recent.firstIndex(of: a.id) ?? Int.max
+                let ib = recent.firstIndex(of: b.id) ?? Int.max
+                if ia != ib { return ia < ib }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
         case .nameAsc:
             return projects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         case .nameDesc:
@@ -135,6 +152,16 @@ struct SimianPostView: View {
     private var browsingProjectId: String? {
         guard selectedProjectName != nil else { return nil }
         return selectedProjectIds.first
+    }
+
+    /// Toolbar / batch sort: one selected folder → sort inside it; otherwise sort the current breadcrumb folder (or project root).
+    private var sortTargetParentFolderIdForToolbar: String? {
+        let folderIds = selectedItemIds.compactMap { id -> String? in
+            guard id.hasPrefix("f-"), id.count > 2 else { return nil }
+            return String(id.dropFirst(2))
+        }
+        if folderIds.count == 1 { return folderIds[0] }
+        return currentParentFolderId
     }
 
     private var isSimianSearchInputActive: Bool {
@@ -1694,6 +1721,7 @@ struct SimianPostView: View {
                     }
                 }
                 Picker("Sort", selection: $projectSortOrder) {
+                    Text("Recent (this account)").tag(ProjectSortOrder.recentOpenedHere)
                     Text("Name (A\u{2013}Z)").tag(ProjectSortOrder.nameAsc)
                     Text("Name (Z\u{2013}A)").tag(ProjectSortOrder.nameDesc)
                     Text("Last edited (newest)").tag(ProjectSortOrder.lastEditedNewest)
@@ -1788,6 +1816,10 @@ struct SimianPostView: View {
         isProjectListFocused = false
         isFolderListFocused = false
         loadFolders(projectId: project.id, parentFolderId: nil)
+        if case .loggedIn(let profile) = sessionManager.authenticationState {
+            SimianRecentProjectsStore.recordOpen(profileId: profile.id, projectId: project.id)
+            recentProjectsStoreRevision += 1
+        }
         // #region agent log
         logFocusSnapshot("openProject sync (before load completes)", hypothesisId: "H1")
         // #endregion
@@ -1807,6 +1839,12 @@ struct SimianPostView: View {
                 .help("New Folder (⌘N)")
                 .disabled(isCreatingFolder)
                 Button(action: { refreshCurrentView() }) { Image(systemName: "arrow.clockwise").font(.system(size: 12)) }.buttonStyle(.borderless).help("Refresh folders and files")
+                Button(action: { runSortChildrenAlphabetically(projectId: projectId, parentFolderId: sortTargetParentFolderIdForToolbar) }) {
+                    Image(systemName: "line.3.horizontal.decrease").font(.system(size: 12))
+                }
+                .buttonStyle(.borderless)
+                .help("Sort subfolders and files A–Z in the current folder. If exactly one folder is selected, sorts inside that folder instead.")
+                .disabled(isSortingSimianChildren || isLoadingFolders || isCreatingFolder)
             }.padding(.horizontal, 12).padding(.vertical, 8).background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
 
             if isLoadingFolders {
@@ -2108,6 +2146,32 @@ struct SimianPostView: View {
         case .delete(let treeId):
             let ids = treeIdsForMultiSelectContextAction(rightClickedTreeId: treeId)
             enqueueDeleteForTreeIds(ids, treeList: treeList)
+        case .sortChildrenAlphabetically(let folderId):
+            runSortChildrenAlphabetically(projectId: projectId, parentFolderId: folderId)
+        }
+    }
+
+    private func runSortChildrenAlphabetically(projectId: String, parentFolderId: String?) {
+        guard !isSortingSimianChildren else { return }
+        isSortingSimianChildren = true
+        statusMessage = ""
+        updateSimianServiceConfiguration()
+        Task {
+            do {
+                try await sortChildrenAlphabetically(projectId: projectId, parentFolderId: parentFolderId)
+                await MainActor.run {
+                    isSortingSimianChildren = false
+                    statusMessage = "Sorted by name (A\u{2013}Z)."
+                    statusIsError = false
+                    refreshCurrentView()
+                }
+            } catch {
+                await MainActor.run {
+                    isSortingSimianChildren = false
+                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    statusIsError = true
+                }
+            }
         }
     }
 
@@ -2655,7 +2719,10 @@ struct SimianPostView: View {
     }
 
     private func uploadDroppedFiles(projectId: String, folderId: String?, destinationFolderName: String?, fileURLs: [URL]) {
-        let itemsToUpload = fileURLs.map { FileItem(url: $0) }
+        let sortedURLs = fileURLs.sorted { a, b in
+            a.path.localizedStandardCompare(b.path) == .orderedAscending
+        }
+        let itemsToUpload = sortedURLs.map { FileItem(url: $0) }
         let totalFiles = itemsToUpload.reduce(0) { $0 + $1.fileCount }
         let resolvedDestinationFolderName = SimianFolderNaming.effectiveDestinationFolderName(
             providedName: destinationFolderName,
@@ -2698,6 +2765,12 @@ struct SimianPostView: View {
                         progressCounter.increment(); Task { @MainActor in uploadCurrent = progressCounter.value; uploadTotal = totalFiles; uploadFileName = fileName }
                     }
                 }
+                if !looseItems.isEmpty {
+                    try await applyAlphanumericChildrenSort(projectId: projectId, parentFolderId: looseFolderId)
+                }
+                if !dirItems.isEmpty {
+                    try await applyAlphanumericChildrenSort(projectId: projectId, parentFolderId: folderId)
+                }
                 await MainActor.run {
                     isUploading = false; statusMessage = "Uploaded \(progressCounter.value) file(s)."; statusIsError = false
                     if browsingProjectId == projectId {
@@ -2728,6 +2801,8 @@ struct SimianPostView: View {
             if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { subfolders.append(item) }
             else if (try? item.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true { filesHere.append(item) }
         }
+        filesHere.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        subfolders.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
         for fileURL in filesHere {
             uploadProgress(fileURL.lastPathComponent)
             _ = try await simianService.uploadFile(
@@ -2741,13 +2816,42 @@ struct SimianPostView: View {
             let existing = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: simianFolderId)
             try await uploadFolderWithStructure(projectId: projectId, destinationFolderId: simianFolderId, localFolderURL: sub, existingFolderNames: existing.map { $0.name }, uploadProgress: uploadProgress)
         }
+        try await applyAlphanumericChildrenSort(projectId: projectId, parentFolderId: simianFolderId)
+    }
+
+    /// Reorders child folders and files in Simian to Finder-style alphanumeric order (names / titles).
+    private func sortChildrenAlphabetically(projectId: String, parentFolderId: String?) async throws {
+        let folders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: parentFolderId)
+        let files: [SimianFile]
+        if let pid = parentFolderId {
+            files = try await simianService.getProjectFiles(projectId: projectId, folderId: pid)
+        } else {
+            files = []
+        }
+        let sortedFolderIds = folders.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map(\.id)
+        let sortedFileIds = files.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }.map(\.id)
+        if !sortedFolderIds.isEmpty {
+            try await simianService.updateFolderSort(projectId: projectId, parentFolderId: parentFolderId, folderIds: sortedFolderIds)
+        }
+        if let pid = parentFolderId, !sortedFileIds.isEmpty {
+            try await simianService.updateFileSort(projectId: projectId, folderId: pid, fileIds: sortedFileIds)
+        }
+    }
+
+    private func applyAlphanumericChildrenSort(projectId: String, parentFolderId: String?) async throws {
+        try await Task.sleep(nanoseconds: 200_000_000)
+        try await sortChildrenAlphabetically(projectId: projectId, parentFolderId: parentFolderId)
     }
 }
 
 // MARK: - Sort order
 
 enum ProjectSortOrder: String, CaseIterable {
-    case nameAsc = "name_asc"; case nameDesc = "name_desc"; case lastEditedNewest = "last_newest"; case lastEditedOldest = "last_oldest"
+    case recentOpenedHere = "recent_mediadash"
+    case nameAsc = "name_asc"
+    case nameDesc = "name_desc"
+    case lastEditedNewest = "last_newest"
+    case lastEditedOldest = "last_oldest"
     var usesLastEdited: Bool { self == .lastEditedNewest || self == .lastEditedOldest }
 }
 

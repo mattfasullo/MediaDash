@@ -8,6 +8,7 @@
 import SwiftUI
 import AppKit
 import FinderSync
+import Darwin
 
 @main
 struct MediaDashApp: App {
@@ -21,6 +22,9 @@ struct MediaDashApp: App {
         let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != nil
         let isPlayground = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PLAYGROUNDS"] != nil
         if !isPreview && !isPlayground {
+            // Avoid Xcode/debugger terminates with “signal 13” (SIGPIPE) when stderr or socket write ends lose their reader (e.g. console disconnect during `SystemStderrNoiseFilter` forward).
+            _ = Darwin.signal(SIGPIPE, SIG_IGN)
+            SystemStderrNoiseFilter.installIfNeeded()
             _ = FileLogger.shared
             // One-time flip of existing email-detection profiles to Airtable.
             // Must run before SessionManager loads its persisted WorkspaceProfile.

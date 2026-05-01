@@ -134,7 +134,9 @@ class SessionManager: ObservableObject {
         saveProfile(profile)
         authenticationState = .loggedIn(profile)
         syncStatus = .localOnly // Start with local, will update if sync succeeds
+        #if DEBUG
         print("SessionManager: Restored session for '\(profile.name)'")
+        #endif
 
         // If this is a user profile (not local), try to reload settings from shared storage
         // This ensures settings sync when app starts if they were updated on another machine
@@ -523,7 +525,9 @@ class SessionManager: ObservableObject {
             let data = try Data(contentsOf: settingsURL)
             let settings = try JSONDecoder().decode(AppSettings.self, from: data)
             #if DEBUG
+            #if DEBUG
             print("SessionManager: Successfully loaded settings from \(settingsFile) (modified: \(modificationDate))")
+            #endif
             #endif
             return (settings, modificationDate)
         } catch {

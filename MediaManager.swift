@@ -1565,10 +1565,6 @@ class MediaManager: ObservableObject {
                 }
                 self.indexingFolders.remove(folder)
                 self.isIndexing = !self.indexingFolders.isEmpty
-
-                #if DEBUG
-                print("\(folder.displayName): Indexed \(index.count) items")
-                #endif
             }
         }
     }

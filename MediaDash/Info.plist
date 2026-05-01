@@ -41,5 +41,7 @@
 	<string>https://raw.githubusercontent.com/mattfasullo/MediaDash/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>mkwmbcnLrJH+vvLx8Y4rs6OfEEU11wSA3b+ea84rZbQ=</string>
+	<key>AirtableReadOnlyDocketToken</key>
+	<string></string>
 </dict>
 </plist>

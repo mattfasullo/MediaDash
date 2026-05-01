@@ -138,9 +138,6 @@ class SimianService: ObservableObject {
     
     /// Authenticate with Simian API (two-step process)
     private func authenticate() async throws {
-        #if DEBUG
-        print("🔐 SimianService: Authenticating…")
-        #endif
         guard let baseURLString = baseURL, !baseURLString.isEmpty,
               let base = URL(string: baseURLString) else {
             print("❌ SimianService.authenticate() failed: Not configured (no baseURL)")
@@ -160,12 +157,6 @@ class SimianService: ObservableObject {
         setupRequest.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         
         let (setupData, setupResponse) = try await session.data(for: setupRequest)
-        
-        #if DEBUG
-        if let httpResponse = setupResponse as? HTTPURLResponse {
-            print("🔐 SimianService: Setup HTTP \(httpResponse.statusCode)")
-        }
-        #endif
         
         guard let setupHttpResponse = setupResponse as? HTTPURLResponse,
               (200...299).contains(setupHttpResponse.statusCode) else {
@@ -207,16 +198,7 @@ class SimianService: ObservableObject {
             .joined(separator: "&")
             .data(using: .utf8)
         
-        #if DEBUG
-        print("🔐 SimianService: Logging in as \(username)…")
-        #endif
         let (loginData, loginResponse) = try await session.data(for: loginRequest)
-        
-        #if DEBUG
-        if let httpResponse = loginResponse as? HTTPURLResponse {
-            print("🔐 SimianService: Login HTTP \(httpResponse.statusCode)")
-        }
-        #endif
         
         guard let loginHttpResponse = loginResponse as? HTTPURLResponse,
               (200...299).contains(loginHttpResponse.statusCode) else {
@@ -355,28 +337,6 @@ class SimianService: ObservableObject {
             
             print("   HTTP Status Code: \(httpResponse.statusCode)")
             
-            // #region agent log
-            let logDataCreateJob: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "CREATE_JOB",
-                "location": "SimianService.swift:318",
-                "message": "createJob() response received",
-                "data": [
-                    "statusCode": httpResponse.statusCode,
-                    "dataLength": data.count,
-                    "responseString": String(data: data, encoding: .utf8) ?? "nil"
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let logLine = (try? JSONSerialization.data(withJSONObject: logDataCreateJob)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(logLine)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-            // #endregion
             
             // Log raw response for debugging
             if let responseString = String(data: data, encoding: .utf8) {
@@ -825,39 +785,6 @@ class SimianService: ObservableObject {
     func getProjectFolders(projectId: String, parentFolderId: String? = nil) async throws -> [SimianFolder] {
         let rawFolders = try await getFolders(projectId: projectId, parentFolderId: parentFolderId)
         
-        // #region agent log
-        do {
-            let sample = rawFolders.prefix(3).map { folder -> [String: Any] in
-                [
-                    "id": folder["id"] ?? "nil",
-                    "name": folder["name"] ?? "nil",
-                    "sub_files": folder["sub_files"] ?? "nil",
-                    "sub_folders": folder["sub_folders"] ?? "nil"
-                ]
-            }
-            let logData: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H5",
-                "location": "SimianService.swift:getProjectFolders",
-                "message": "getProjectFolders payload",
-                "data": [
-                    "projectId": projectId,
-                    "parentFolderId": parentFolderId ?? "root",
-                    "folderCount": rawFolders.count,
-                    "sample": sample
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(line)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-        }
-        // #endregion
         return rawFolders.compactMap { folder in
             guard let id = SimianService.stringValue(folder["id"]),
                   let name = SimianService.stringValue(folder["name"]) else {
@@ -1156,30 +1083,6 @@ class SimianService: ObservableObject {
         
         let endpointURL = base.appendingPathComponent("get_files").appendingPathComponent(projectId)
         
-        // #region agent log
-        do {
-            let logData: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H1",
-                "location": "SimianService.swift:getProjectFiles",
-                "message": "getProjectFiles request",
-                "data": [
-                    "projectId": projectId,
-                    "folderId": folderId ?? "root",
-                    "endpoint": endpointURL.absoluteString
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(line)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-        }
-        // #endregion
         
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
@@ -1203,31 +1106,6 @@ class SimianService: ObservableObject {
             throw SimianError.apiError("Invalid response from API")
         }
         
-        // #region agent log
-        do {
-            let logData: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H1",
-                "location": "SimianService.swift:getProjectFiles",
-                "message": "getProjectFiles response",
-                "data": [
-                    "projectId": projectId,
-                    "folderId": folderId ?? "root",
-                    "statusCode": httpResponse.statusCode,
-                    "dataLength": data.count
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(line)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-        }
-        // #endregion
         
         guard (200...299).contains(httpResponse.statusCode) else {
             let errorMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
@@ -1248,87 +1126,7 @@ class SimianService: ObservableObject {
             payloadArray = []
         }
 
-        // #region agent log
-        do {
-            let statusValue = root["status"] as? String ?? "unknown"
-            let messageValue = root["message"] as? String ?? "unknown"
-            let logData: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H1",
-                "location": "SimianService.swift:getProjectFiles",
-                "message": "getProjectFiles payload parsed",
-                "data": [
-                    "projectId": projectId,
-                    "folderId": folderId ?? "root",
-                    "payloadCount": payloadArray.count,
-                    "status": statusValue,
-                    "message": messageValue,
-                    "dataLength": data.count
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(line)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-        }
-        // #endregion
-
-        if data.count < 512, let responseString = String(data: data, encoding: .utf8) {
-            // #region agent log
-            do {
-                let logData: [String: Any] = [
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "H1",
-                    "location": "SimianService.swift:getProjectFiles",
-                    "message": "getProjectFiles raw response",
-                    "data": [
-                        "projectId": projectId,
-                        "folderId": folderId ?? "root",
-                        "response": responseString
-                    ],
-                    "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-                ]
-                if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                    let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                    logFile.seekToEndOfFile()
-                    logFile.write(line)
-                    logFile.write("\n".data(using: .utf8)!)
-                    logFile.closeFile()
-                }
-            }
-            // #endregion
-        }
-        
         if payloadArray.isEmpty {
-            // #region agent log
-            do {
-                let logData: [String: Any] = [
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "H6",
-                    "location": "SimianService.swift:getProjectFiles",
-                    "message": "getProjectFiles empty payload",
-                    "data": [
-                        "projectId": projectId,
-                        "folderId": folderId ?? "root"
-                    ],
-                    "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-                ]
-                if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                    let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                    logFile.seekToEndOfFile()
-                    logFile.write(line)
-                    logFile.write("\n".data(using: .utf8)!)
-                    logFile.closeFile()
-                }
-            }
-            // #endregion
             
             if let folderId = folderId, !folderId.isEmpty {
                 // Attempt alternate URL format for diagnostics
@@ -1353,33 +1151,8 @@ class SimianService: ObservableObject {
                    (200...299).contains(altHttp.statusCode),
                    let altJson = try? JSONSerialization.jsonObject(with: altData) as? [String: Any],
                    let altRoot = altJson["root"] as? [String: Any] {
-                    let altPayload = (altRoot["payload"] as? [[String: Any]]) ??
+                    _ = (altRoot["payload"] as? [[String: Any]]) ??
                         ((altRoot["payload"] as? [String: Any]).map { [$0] } ?? [])
-                    // #region agent log
-                    do {
-                        let logData: [String: Any] = [
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "H6",
-                            "location": "SimianService.swift:getProjectFiles",
-                            "message": "alternate get_files result",
-                            "data": [
-                                "projectId": projectId,
-                                "folderId": folderId,
-                                "statusCode": altHttp.statusCode,
-                                "payloadCount": altPayload.count
-                            ],
-                            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-                        ]
-                        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                            let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                            logFile.seekToEndOfFile()
-                            logFile.write(line)
-                            logFile.write("\n".data(using: .utf8)!)
-                            logFile.closeFile()
-                        }
-                    }
-                    // #endregion
                 }
             }
         }
@@ -1476,29 +1249,6 @@ class SimianService: ObservableObject {
         var request = URLRequest(url: sourceURL)
         request.httpMethod = "GET"
         
-        // #region agent log
-        do {
-            let logData: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H2",
-                "location": "SimianService.swift:downloadFile",
-                "message": "downloadFile request",
-                "data": [
-                    "host": sourceURL.host ?? "nil",
-                    "path": sourceURL.path
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(line)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-        }
-        // #endregion
         
         let (tempURL, response) = try await session.download(for: request)
         
@@ -1507,30 +1257,6 @@ class SimianService: ObservableObject {
             throw SimianError.apiError("Failed to download file: \(sourceURL.lastPathComponent)")
         }
         
-        // #region agent log
-        do {
-            let logData: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H2",
-                "location": "SimianService.swift:downloadFile",
-                "message": "downloadFile response",
-                "data": [
-                    "statusCode": httpResponse.statusCode,
-                    "host": sourceURL.host ?? "nil",
-                    "path": sourceURL.path
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(line)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-        }
-        // #endregion
         
         let fileManager = FileManager.default
         let destinationFolder = destinationURL.deletingLastPathComponent()
@@ -1646,32 +1372,8 @@ class SimianService: ObservableObject {
         headRequest.httpMethod = "HEAD"
         headRequest.timeoutInterval = 60 * 10
         
-        // #region agent log
-        do {
-            let logData: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H7",
-                "location": "SimianService.swift:downloadProjectArchive",
-                "message": "archive download request",
-                "data": [
-                    "projectId": projectId,
-                    "url": archiveURL.absoluteString
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(line)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-        }
-        // #endregion
         
         let (_, headResponse) = try await archiveSession.data(for: headRequest)
-        let headStatus = (headResponse as? HTTPURLResponse)?.statusCode ?? -1
         let headSize = (headResponse as? HTTPURLResponse)?.value(forHTTPHeaderField: "x-archive-estimated-size") ?? "nil"
         let estimatedBytes: Int64? = {
             if let value = Int64(headSize) {
@@ -1685,30 +1387,6 @@ class SimianService: ObservableObject {
         
         try Task.checkCancellation()
         
-        // #region agent log
-        do {
-            let logData: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H7",
-                "location": "SimianService.swift:downloadProjectArchive",
-                "message": "archive HEAD response",
-                "data": [
-                    "projectId": projectId,
-                    "statusCode": headStatus,
-                    "estimatedSize": headSize
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(line)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-        }
-        // #endregion
         
         let maxAttempts = 3
         var lastError: Error?
@@ -1742,58 +1420,9 @@ class SimianService: ObservableObject {
                     throw SimianError.apiError("Archive download failed: \(archiveURL.lastPathComponent)")
                 }
                 guard (200...299).contains(httpResponse.statusCode) else {
-            // #region agent log
-            do {
-                let logData: [String: Any] = [
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "H7",
-                    "location": "SimianService.swift:downloadProjectArchive",
-                    "message": "archive download non-2xx",
-                    "data": [
-                        "projectId": projectId,
-                        "statusCode": httpResponse.statusCode,
-                        "contentType": httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "nil"
-                    ],
-                    "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-                ]
-                if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                    let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                    logFile.seekToEndOfFile()
-                    logFile.write(line)
-                    logFile.write("\n".data(using: .utf8)!)
-                    logFile.closeFile()
-                }
-            }
-            // #endregion
                     throw SimianError.apiError("Archive download failed: \(archiveURL.lastPathComponent)")
                 }
         
-        // #region agent log
-        do {
-            let logData: [String: Any] = [
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H7",
-                "location": "SimianService.swift:downloadProjectArchive",
-                "message": "archive download response",
-                "data": [
-                    "projectId": projectId,
-                    "statusCode": httpResponse.statusCode,
-                    "contentType": httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "nil",
-                    "contentDisposition": httpResponse.value(forHTTPHeaderField: "Content-Disposition") ?? "nil"
-                ],
-                "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-            ]
-            if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                let line = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-                logFile.seekToEndOfFile()
-                logFile.write(line)
-                logFile.write("\n".data(using: .utf8)!)
-                logFile.closeFile()
-            }
-        }
-        // #endregion
         
                 let fileManager = FileManager.default
                 let destinationFolder = destinationURL.deletingLastPathComponent()
@@ -2312,54 +1941,9 @@ class SimianService: ObservableObject {
     /// - Returns: Array of Simian users
     /// Per API docs: get_users - Get all system users that have project access
     func getUsers() async throws -> [SimianUser] {
-        // #region agent log
-        let logData: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "A",
-            "location": "SimianService.swift:322",
-            "message": "getUsers() called",
-            "data": [
-                "baseURL": baseURL ?? "nil",
-                "hasAuthToken": authToken != nil,
-                "hasAuthKey": authKey != nil
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logData)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
         
         try await ensureAuthenticated()
         
-        // #region agent log
-        let logDataAuthState: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "G",
-            "location": "SimianService.swift:863",
-            "message": "Authentication state after ensureAuthenticated",
-            "data": [
-                "hasAuthToken": authToken != nil,
-                "hasAuthKey": authKey != nil,
-                "authTokenLength": authToken?.count ?? 0,
-                "authKeyLength": authKey?.count ?? 0
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logDataAuthState)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
         
         guard let baseURLString = baseURL, !baseURLString.isEmpty,
               let base = URL(string: baseURLString),
@@ -2371,28 +1955,6 @@ class SimianService: ObservableObject {
         // Use get_users endpoint per API documentation
         let endpointURL = base.appendingPathComponent("get_users")
         
-        // #region agent log
-        let logData2: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "B",
-            "location": "SimianService.swift:333",
-            "message": "Request URL and params",
-            "data": [
-                "endpointURL": endpointURL.absoluteString,
-                "hasAuthKey": !authKey.isEmpty,
-                "hasAuthToken": !authToken.isEmpty
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logData2)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
         
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
@@ -2408,28 +1970,6 @@ class SimianService: ObservableObject {
         
         let (data, response) = try await session.data(for: request)
         
-        // #region agent log
-        let logData3: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "C",
-            "location": "SimianService.swift:347",
-            "message": "Response received",
-            "data": [
-                "statusCode": (response as? HTTPURLResponse)?.statusCode ?? -1,
-                "dataLength": data.count,
-                "responseString": String(data: data, encoding: .utf8) ?? "nil"
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logData3)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw SimianError.apiError("Invalid response from API")
@@ -2439,35 +1979,6 @@ class SimianService: ObservableObject {
             let errorMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
             throw SimianError.apiError("Failed to fetch users: \(errorMessage)")
         }
-        
-        // Parse response
-        let responseString = String(data: data, encoding: .utf8) ?? "Unable to decode"
-        #if DEBUG
-        print("🔍 SimianService.getUsers() raw response: \(responseString)")
-        #endif
-        
-        // #region agent log
-        let logDataResponse: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "H",
-            "location": "SimianService.swift:945",
-            "message": "getUsers API response received",
-            "data": [
-                "statusCode": (response as? HTTPURLResponse)?.statusCode ?? -1,
-                "responseLength": data.count,
-                "responsePreview": String(responseString.prefix(500))
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logDataResponse)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
         
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             print("⚠️ SimianService.getUsers() failed to parse JSON")
@@ -2479,97 +1990,30 @@ class SimianService: ObservableObject {
             throw SimianError.apiError("Invalid response format: missing 'root'")
         }
         
-        // #region agent log
-        let logData4: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "D",
-            "location": "SimianService.swift:368",
-            "message": "Root object parsed",
-            "data": [
-                "rootKeys": Array(root.keys),
-                "status": root["status"] as? String ?? "nil",
-                "message": root["message"] as? String ?? "nil"
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logData4)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
         
         guard let payload = root["payload"] else {
             print("⚠️ SimianService.getUsers() missing 'payload' key. Root: \(root)")
             throw SimianError.apiError("Invalid response format: missing 'payload'")
         }
         
-        // #region agent log
-        let logData5: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "E",
-            "location": "SimianService.swift:373",
-            "message": "Payload extracted",
-            "data": [
-                "payloadType": String(describing: type(of: payload)),
-                "isArray": payload is [Any],
-                "isDict": payload is [String: Any],
-                "payloadValue": String(describing: payload)
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logData5)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
         
-        // Handle different payload formats
         var userArray: [[String: Any]] = []
         if let payloadArray = payload as? [[String: Any]] {
             userArray = payloadArray
-            print("🔍 SimianService.getUsers() payload is an array with \(payloadArray.count) items")
         } else if let payloadDict = payload as? [String: Any] {
-            // Maybe payload is a dictionary with users inside?
-            print("🔍 SimianService.getUsers() payload is a dictionary, not array: \(payloadDict)")
-            print("🔍 SimianService.getUsers() dictionary keys: \(payloadDict.keys.joined(separator: ", "))")
-            // Try to find users array within the dictionary
             if let users = payloadDict["users"] as? [[String: Any]] {
                 userArray = users
-                print("🔍 SimianService.getUsers() found 'users' key with \(users.count) items")
             } else if let users = payloadDict["data"] as? [[String: Any]] {
                 userArray = users
-                print("🔍 SimianService.getUsers() found 'data' key with \(users.count) items")
             } else {
-                // Log all keys to help debug
-                print("⚠️ SimianService.getUsers() payload dictionary doesn't contain 'users' or 'data' keys")
-                print("   Available keys: \(payloadDict.keys.joined(separator: ", "))")
+                #if DEBUG
+                print("⚠️ SimianService.getUsers() unexpected payload; keys: \(payloadDict.keys.sorted().joined(separator: ", "))")
+                #endif
             }
         } else {
-            print("⚠️ SimianService.getUsers() payload is neither array nor dict: \(type(of: payload))")
-            print("   Payload value: \(payload)")
-        }
-        
-        print("🔍 SimianService.getUsers() found \(userArray.count) users in payload")
-        
-        // Log first user structure for debugging
-        if let firstUser = userArray.first {
-            print("🔍 SimianService.getUsers() first user structure: \(firstUser)")
-            print("   Keys: \(firstUser.keys.joined(separator: ", "))")
-        } else if userArray.isEmpty {
-            print("⚠️ SimianService.getUsers() payload is empty array")
-            print("   This could mean:")
-            print("   1. No users have 'project access' permissions in Simian")
-            print("   2. The authenticated user doesn't have permission to view other users")
-            print("   3. Users exist but need to be granted project access")
-            print("   Note: get_users only returns users with 'project access' permissions")
+            #if DEBUG
+            print("⚠️ SimianService.getUsers() payload type: \(String(describing: type(of: payload)))")
+            #endif
         }
         
         var users = userArray.compactMap { userDict -> SimianUser? in
@@ -2587,7 +2031,9 @@ class SimianService: ObservableObject {
             } else if let userID = userDict["userID"] as? Int {
                 idString = String(userID)
             } else {
+                #if DEBUG
                 print("⚠️ SimianService.getUsers() user missing or invalid 'id' field: \(userDict["id"] ?? "nil")")
+                #endif
                 idString = nil
             }
             
@@ -2604,12 +2050,9 @@ class SimianService: ObservableObject {
                   !firstName.isEmpty,
                   !lastName.isEmpty,
                   !email.isEmpty else {
-                print("⚠️ SimianService.getUsers() failed to parse user:")
-                print("   id: \(idString ?? "nil")")
-                print("   firstname: '\(firstName)'")
-                print("   lastname: '\(lastName)'")
-                print("   email: '\(email)'")
-                print("   Full dict: \(userDict)")
+                #if DEBUG
+                print("⚠️ SimianService.getUsers() skipped user row (missing id/name/email): id=\(idString ?? "nil") email='\(email)'")
+                #endif
                 return nil
             }
             
@@ -2622,22 +2065,27 @@ class SimianService: ObservableObject {
             )
         }
         
-        print("✅ SimianService.getUsers() successfully parsed \(users.count) users")
+        #if DEBUG
+        print("✅ SimianService.getUsers: \(users.count) user(s)")
+        #endif
         
         // If get_users returned empty, try fallback: get_project_users from a template project
         if users.isEmpty && userArray.isEmpty {
-            print("⚠️ WARNING: get_users returned empty array, trying fallback with get_project_users")
-            print("   Attempting to get users from template projects as workaround...")
+            #if DEBUG
+            print("⚠️ SimianService.getUsers: empty payload — trying template-project fallback…")
+            #endif
             
             // Try to get users from template projects
+            var projectsChecked = 0
             do {
                 let templates = try await getTemplates()
-                print("   Found \(templates.count) template projects, trying to get users from them...")
+                #if DEBUG
+                print("   …scanning up to 20 of \(templates.count) template project(s) for users")
+                #endif
                 
                 // Try all templates to aggregate users from multiple projects
                 // This ensures we get all users, not just from one project
                 var existingEmails = Set(users.map { $0.email.lowercased() })
-                var projectsChecked = 0
                 let maxProjectsToCheck = min(templates.count, 20) // Check up to 20 projects to get comprehensive user list
                 
                 for template in templates.prefix(maxProjectsToCheck) {
@@ -2646,58 +2094,44 @@ class SimianService: ObservableObject {
                         projectsChecked += 1
                         
                         if !projectUsers.isEmpty {
-                            print("   ✅ Found \(projectUsers.count) users from template project '\(template.name)' (ID: \(template.id))")
-                            
                             // Merge with existing users (avoid duplicates by email)
-                            var newUsersCount = 0
                             for projectUser in projectUsers {
                                 if !existingEmails.contains(projectUser.email.lowercased()) {
                                     users.append(projectUser)
                                     existingEmails.insert(projectUser.email.lowercased())
-                                    newUsersCount += 1
                                 }
                             }
-                            
-                            if newUsersCount > 0 {
-                                print("   Added \(newUsersCount) new users (total: \(users.count))")
-                            } else {
-                                print("   All users already in list (total: \(users.count))")
-                            }
-                        } else {
-                            print("   ⚠️ Template project '\(template.name)' has no users")
                         }
                     } catch {
+                        #if DEBUG
                         print("   ⚠️ Failed to get users from template '\(template.name)': \(error.localizedDescription)")
+                        #endif
                         continue
                     }
                 }
-                
-                print("   Checked \(projectsChecked) template projects, found \(users.count) total unique users")
                 
                 // Check if essential users are present
                 let foundEmails = Set(users.map { $0.email.lowercased() })
                 let missingEssentialEmails = essentialUserEmails.filter { !foundEmails.contains($0.lowercased()) }
                 
                 if !missingEssentialEmails.isEmpty {
-                    print("   ⚠️ Missing essential users: \(missingEssentialEmails.joined(separator: ", "))")
-                    print("   Searching through more projects to find essential users...")
+                    #if DEBUG
+                    print("   ⚠️ Missing essential users: \(missingEssentialEmails.joined(separator: ", ")) — scanning more templates…")
+                    #endif
                     
                     // Try to find essential users in remaining projects
                     let remainingProjects = Array(templates.dropFirst(maxProjectsToCheck))
-                    var additionalProjectsChecked = 0
                     let maxAdditionalProjects = min(remainingProjects.count, 30) // Check up to 30 more projects
                     
                     for template in remainingProjects.prefix(maxAdditionalProjects) {
                         do {
                             let projectUsers = try await getProjectUsers(projectId: template.id)
-                            additionalProjectsChecked += 1
                             
                             for projectUser in projectUsers {
                                 let userEmail = projectUser.email.lowercased()
                                 if missingEssentialEmails.contains(userEmail) && !existingEmails.contains(userEmail) {
                                     users.append(projectUser)
                                     existingEmails.insert(userEmail)
-                                    print("   ✅ Found essential user: \(projectUser.email) from project '\(template.name)'")
                                 } else if !existingEmails.contains(userEmail) {
                                     // Also add other users we find
                                     users.append(projectUser)
@@ -2708,7 +2142,6 @@ class SimianService: ObservableObject {
                             // If we found all essential users, we can stop early
                             let stillMissing = essentialUserEmails.filter { !existingEmails.contains($0.lowercased()) }
                             if stillMissing.isEmpty {
-                                print("   ✅ Found all essential users! Stopping search.")
                                 break
                             }
                         } catch {
@@ -2716,35 +2149,26 @@ class SimianService: ObservableObject {
                         }
                     }
                     
-                    print("   Checked \(additionalProjectsChecked) additional projects for essential users")
-                    
                     // Check again after additional search
                     let finalFoundEmails = Set(users.map { $0.email.lowercased() })
                     let stillMissing = essentialUserEmails.filter { !finalFoundEmails.contains($0.lowercased()) }
+                    #if DEBUG
                     if !stillMissing.isEmpty {
-                        print("   ⚠️ WARNING: Still missing essential users after extended search: \(stillMissing.joined(separator: ", "))")
-                        print("   These users may not exist in Simian or may not be assigned to any projects.")
-                    } else {
-                        print("   ✅ All essential users found!")
+                        print("   ⚠️ Still missing essential users after extended search: \(stillMissing.joined(separator: ", "))")
                     }
-                } else {
-                    print("   ✅ All essential users are present in the list")
+                    #endif
                 }
             } catch {
+                #if DEBUG
                 print("   ⚠️ Failed to get templates for fallback: \(error.localizedDescription)")
+                #endif
             }
             
-            if users.isEmpty {
-                print("⚠️ WARNING: Both get_users and get_project_users fallback returned empty")
-                print("   The API endpoint is working, but no users are being returned.")
-                print("   This typically means:")
-                print("   1. No users have been granted 'project access' permissions in Simian")
-                print("   2. The authenticated user doesn't have admin permissions to view all users")
-                print("   3. Template projects don't have any users assigned")
-                print("   Solution: Check Simian admin settings to ensure users have project access")
-            } else {
-                print("✅ Successfully retrieved \(users.count) users using fallback method")
+            #if DEBUG
+            if !users.isEmpty {
+                print("✅ SimianService.getUsers: template fallback → \(users.count) user(s) (checked \(projectsChecked) template project(s))")
             }
+            #endif
         }
         
         // If get_users returns empty, it might mean:
@@ -2757,37 +2181,8 @@ class SimianService: ObservableObject {
         // If the list is empty, users may need to be granted project access in Simian first.
         
         if users.isEmpty {
-            print("⚠️ SimianService.getUsers() returned 0 users")
-            print("   This could mean:")
-            print("   1. No users have been granted 'project access' in Simian")
-            print("   2. The authenticated user doesn't have admin permissions")
-            print("   3. Users exist but need to be configured with project access")
-            print("   Note: get_users only returns users with project access permissions")
+            print("⚠️ SimianService.getUsers: 0 users (check Simian project access; template fallback may also return empty)")
         }
-        
-        // #region agent log
-        let logData6: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "G",
-            "location": "SimianService.swift:414",
-            "message": "getUsers() completed",
-            "data": [
-                "usersCount": users.count,
-                "userArrayCount": userArray.count,
-                "parsedSuccessfully": users.count > 0,
-                "payloadWasEmpty": userArray.isEmpty
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logData6)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
         
         return users
     }
@@ -2967,28 +2362,6 @@ class SimianService: ObservableObject {
         
         let (data, response) = try await session.data(for: request)
         
-        // #region agent log
-        let logDataTemplates: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "TEMPLATES",
-            "location": "SimianService.swift:683",
-            "message": "getTemplates() response received",
-            "data": [
-                "statusCode": (response as? HTTPURLResponse)?.statusCode ?? -1,
-                "dataLength": data.count,
-                "responseString": String(data: data, encoding: .utf8) ?? "nil"
-            ],
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let logFile = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-            let logLine = (try? JSONSerialization.data(withJSONObject: logDataTemplates)) ?? Data()
-            logFile.seekToEndOfFile()
-            logFile.write(logLine)
-            logFile.write("\n".data(using: .utf8)!)
-            logFile.closeFile()
-        }
-        // #endregion
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw SimianError.apiError("Invalid response from API")
@@ -2998,12 +2371,6 @@ class SimianService: ObservableObject {
             let errorMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
             throw SimianError.apiError("Failed to fetch project templates: \(errorMessage)")
         }
-        
-        #if DEBUG
-        if let responseString = String(data: data, encoding: .utf8) {
-            print("🔍 SimianService.getTemplates() raw response: \(responseString)")
-        }
-        #endif
         
         // Parse response - get_project_list returns array of projects
         // Use do-catch to capture JSON parsing errors
@@ -3035,7 +2402,7 @@ class SimianService: ObservableObject {
                 throw SimianError.apiError("Invalid response format: Payload is not an array")
             }
             
-            return payloadArray.compactMap { projectDict in
+            let templates = payloadArray.compactMap { projectDict -> SimianTemplate? in
                 // get_project_list returns: {"id":"3","project_name":"3.0 Test Project"}
                 guard let id = projectDict["id"] as? String,
                       let name = projectDict["project_name"] as? String else {
@@ -3047,6 +2414,10 @@ class SimianService: ObservableObject {
                     name: name
                 )
             }
+            #if DEBUG
+            print("SimianService.getTemplates: \(templates.count) template project(s)")
+            #endif
+            return templates
         } catch let error as SimianError {
             throw error
         } catch {

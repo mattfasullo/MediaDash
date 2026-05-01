@@ -11,6 +11,43 @@ import Foundation
 /// Service for managing shared team keys in Keychain
 /// All shared keys are only accessible to authenticated @graysonmusicgroup.com users
 struct SharedKeychainService {
+    /// Updated when settings load; used to read `mediadash_airtable_readonly_token.txt` beside shared docket cache.
+    nonisolated(unsafe) private static var airtableSharedCacheURLForServerTokenFile: String?
+    private static let lastSharedCacheURLForAirtableTokenKey = "mediadash_last_shared_cache_url_for_airtable_token"
+    /// Media / tools enable team token file lookup; Producer disables it (see `ProducerRootView`).
+    nonisolated(unsafe) private static var allowTeamServerAirtableTokenFileLookup = true
+
+    /// Call from app bootstrap when `sharedCacheURL` may contain the team token file.
+    /// - Parameter allowTeamServerAirtableTokenFile: `false` for **Producer** role — clears persisted path and disables file lookup until a media/tools session runs again.
+    static func updateAirtableSharedCacheContextForServerToken(
+        sharedCacheURL: String?,
+        allowTeamServerAirtableTokenFile: Bool
+    ) {
+        allowTeamServerAirtableTokenFileLookup = allowTeamServerAirtableTokenFile
+        if !allowTeamServerAirtableTokenFile {
+            airtableSharedCacheURLForServerTokenFile = nil
+            UserDefaults.standard.removeObject(forKey: lastSharedCacheURLForAirtableTokenKey)
+            return
+        }
+        airtableSharedCacheURLForServerTokenFile = sharedCacheURL
+        let t = sharedCacheURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if t.isEmpty {
+            UserDefaults.standard.removeObject(forKey: lastSharedCacheURLForAirtableTokenKey)
+        } else {
+            UserDefaults.standard.set(t, forKey: lastSharedCacheURLForAirtableTokenKey)
+        }
+    }
+
+    private static func resolvedSharedCacheURLForAirtableServerFile(explicit: String?) -> String? {
+        guard allowTeamServerAirtableTokenFileLookup else { return nil }
+        if let e = explicit?.trimmingCharacters(in: .whitespacesAndNewlines), !e.isEmpty { return e }
+        if let s = airtableSharedCacheURLForServerTokenFile?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { return s }
+        if let u = UserDefaults.standard.string(forKey: lastSharedCacheURLForAirtableTokenKey)?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty {
+            return u
+        }
+        return nil
+    }
+
     /// Allowed email domain for shared key access
     static let allowedEmailDomain = "graysonmusicgroup.com"
     
@@ -85,32 +122,6 @@ struct SharedKeychainService {
     /// Get a shared key from Keychain (only for Grayson employees)
     /// Falls back to personal key if shared key doesn't exist
     static func getKey(shared: SharedKey, personalKey: String) -> String? {
-        // #region agent log
-        let logData: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "D",
-            "location": "SharedKeychainService.swift:getKey",
-            "message": "SharedKeychainService.getKey called",
-            "data": [
-                "sharedKey": shared.keychainKey,
-                "personalKey": personalKey,
-                "isGraysonEmployee": isCurrentUserGraysonEmployee(),
-                "timestamp": Date().timeIntervalSince1970
-            ],
-            "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
-        ]
-        if let json = try? JSONSerialization.data(withJSONObject: logData),
-           let jsonString = String(data: json, encoding: .utf8) {
-            if let fileHandle = FileHandle(forWritingAtPath: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log") {
-                fileHandle.seekToEndOfFile()
-                fileHandle.write((jsonString + "\n").data(using: .utf8)!)
-                fileHandle.closeFile()
-            } else {
-                try? (jsonString + "\n").write(toFile: "/Users/mattfasullo/Projects/MediaDash/.cursor/debug.log", atomically: true, encoding: .utf8)
-            }
-        }
-        // #endregion
         // First try shared key (only if Grayson employee)
         if isCurrentUserGraysonEmployee() {
             if let sharedKey = KeychainService.retrieve(key: shared.keychainKey) {
@@ -177,15 +188,31 @@ struct SharedKeychainService {
         return getKey(shared: .simianPassword, personalKey: "simian_password")
     }
     
-    /// Get Airtable API key — tries personal key, then shared team Keychain key,
-    /// then falls back to the built-in read-only token in `AirtableConfig`.
-    static func getAirtableAPIKey() -> String? {
-        if let key = getKey(shared: .airtableAPIKey, personalKey: "airtable_api_key") {
-            return key
+    /// Get Airtable API key — when a shared cache path resolves, **`mediadash_airtable_readonly_token.txt` on the share first** (team canonical), then Keychain (personal + shared), then other fallbacks.
+    /// - Parameter sharedCacheURLForServerToken: Pass `settings.sharedCacheURL` when available so lookup does not depend on startup order.
+    static func getAirtableAPIKey(sharedCacheURLForServerToken explicitSharedCacheURL: String? = nil) -> String? {
+        let resolvedPath = resolvedSharedCacheURLForAirtableServerFile(explicit: explicitSharedCacheURL)
+        let rawKeychain = getKey(shared: .airtableAPIKey, personalKey: "airtable_api_key")
+
+        if let server = AirtableConfig.readOnlyTokenFromSharedCacheDirectory(sharedCacheURLString: resolvedPath) {
+            let n = AirtableConfig.normalizeAirtablePersonalAccessToken(server)
+            if !n.isEmpty, n.count >= AirtableConfig.minimumPracticalPersonalAccessTokenLength {
+                return n
+            }
         }
-        let readOnly = AirtableConfig.readOnlyDocketToken
-        return readOnly.isEmpty ? nil : readOnly
+        if let key = rawKeychain {
+            let n = AirtableConfig.normalizeAirtablePersonalAccessToken(key)
+            if !n.isEmpty {
+                return n
+            }
+        }
+        let readOnly = AirtableConfig.effectiveReadOnlyDocketToken
+        let n = AirtableConfig.normalizeAirtablePersonalAccessToken(readOnly)
+        if n.isEmpty {
+            return nil
+        }
+        return n
     }
-    
+
 }
 

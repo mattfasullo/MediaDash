@@ -19,6 +19,7 @@ enum SimianTreeContextAction {
     case openInBrowser(treeId: String)
     case downloadFolder(folderId: String, folderName: String)
     case downloadFile(fileId: String)
+    case sortChildrenAlphabetically(folderId: String?)
     case delete(treeId: String)
 }
 
@@ -653,6 +654,8 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
                 add("Edit on Simian", action: .openInBrowser(treeId: node.treeId))
                 add("Download folder contents\u{2026}", action: .downloadFolder(folderId: fid, folderName: fn))
                 menu.addItem(.separator())
+                add("Sort contents A\u{2013}Z", action: .sortChildrenAlphabetically(folderId: fid))
+                menu.addItem(.separator())
                 let delItem = NSMenuItem(title: removeTitle, action: #selector(menuAction(_:)), keyEquivalent: "")
                 delItem.target = self; delItem.representedObject = SimianTreeContextAction.delete(treeId: node.treeId)
                 menu.addItem(delItem)
@@ -677,8 +680,10 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             add("New Folder", action: .newFolder(parentFolderId: v.currentParentFolderId))
             menu.addItem(.separator())
             if let pid = v.currentParentFolderId {
+                add("Sort items A\u{2013}Z", action: .sortChildrenAlphabetically(folderId: pid))
                 add("Edit on Simian", action: .openInBrowser(treeId: "f-\(pid)"))
             } else {
+                add("Sort folders A\u{2013}Z", action: .sortChildrenAlphabetically(folderId: nil))
                 add("Edit on Simian", action: .openInBrowser(treeId: ""))
             }
         }

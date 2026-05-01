@@ -47,3 +47,6 @@ dsa_priv.pem
 *~
 .#*
 MediaDash/Services/OAuthConfig.swift
+
+# Local-only token reference (never commit PATs)
+docs/AIRTABLE_READ_ONLY_TOKEN.local.md

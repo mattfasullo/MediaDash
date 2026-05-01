@@ -4382,6 +4382,7 @@ struct NewDocketDetectionSection: View {
     @Binding var settings: AppSettings
     @Binding var hasUnsavedChanges: Bool
     @EnvironmentObject var airtableDocketScanningService: AirtableDocketScanningService
+    @State private var airtablePersonalTokenInput = ""
 
     private var effectiveBaseID: String {
         let s = (settings.airtableBaseID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4446,6 +4447,62 @@ struct NewDocketDetectionSection: View {
                         readOnlyRow("Docket column", value: effectiveDocketField)
                         readOnlyRow("Job name column", value: effectiveJobField)
 
+                        Divider()
+                            .padding(.vertical, 4)
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Airtable access (media team)")
+                                .font(.system(size: 13, weight: .medium))
+                            Text("Polling needs a read-only API token. Use **either** the team file `\(AirtableConfig.sharedServerReadOnlyTokenFileName)` on your shared volume (same folder as `mediadash_docket_cache.json`) **or** a personal token (saved to this Mac’s Keychain). When the **Shared cache folder** is set and that file exists and is readable, it **takes precedence** over a saved personal token. The folder field below matches **Asana Integration → Advanced Options → Shared Cache**.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Personal token")
+                                    .font(.system(size: 12, weight: .medium))
+                                HStack(spacing: 8) {
+                                    SecureField("Paste read-only token, then Save", text: $airtablePersonalTokenInput)
+                                        .textFieldStyle(.roundedBorder)
+                                    Button("Save") { saveMediaAirtablePersonalToken() }
+                                        .disabled(airtablePersonalTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                }
+                                Button("Create token at airtable.com…") {
+                                    if let u = URL(string: "https://airtable.com/create/tokens") {
+                                        NSWorkspace.shared.open(u)
+                                    }
+                                }
+                                .buttonStyle(.link)
+                                .font(.system(size: 11))
+                            }
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Shared cache folder (team token file)")
+                                    .font(.system(size: 12, weight: .medium))
+                                Toggle("Use shared cache (Asana sync + token path)", isOn: Binding(
+                                    get: { settings.useSharedCache },
+                                    set: {
+                                        settings.useSharedCache = $0
+                                        hasUnsavedChanges = true
+                                    }
+                                ))
+                                .font(.system(size: 12))
+                                TextField(
+                                    "/Volumes/.../MediaDash_Cache",
+                                    text: Binding(
+                                        get: { settings.sharedCacheURL ?? "" },
+                                        set: {
+                                            settings.sharedCacheURL = $0.isEmpty ? nil : $0
+                                            hasUnsavedChanges = true
+                                        }
+                                    )
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                Text("The app reads the token file from this directory whenever the field is non-empty, even if you leave the toggle off.")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
                         HStack(spacing: 6) {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
@@ -4468,6 +4525,121 @@ struct NewDocketDetectionSection: View {
                 }
             }
         }
+        .onAppear {
+            // #region agent log
+            Self.debug634d73Log(
+                hypothesisId: "B",
+                location: "NewDocketDetectionSection.onAppear",
+                message: "section appeared",
+                data: [
+                    "airtableMode": settings.newDocketDetectionMode == .airtable,
+                    "hasSharedPath": sharedCachePathForTokenLoggingNonEmpty
+                ]
+            )
+            // #endregion
+            if settings.newDocketDetectionMode == .airtable {
+                syncAirtablePersonalTokenFieldFromKeychain()
+            }
+        }
+        .onChange(of: settings.newDocketDetectionMode) { _, mode in
+            // #region agent log
+            Self.debug634d73Log(
+                hypothesisId: "B",
+                location: "NewDocketDetectionSection.onChangeMode",
+                message: "detection mode changed",
+                data: [
+                    "airtableMode": mode == .airtable,
+                    "hasSharedPath": sharedCachePathForTokenLoggingNonEmpty
+                ]
+            )
+            // #endregion
+            if mode == .airtable {
+                syncAirtablePersonalTokenFieldFromKeychain()
+            }
+        }
+        .onChange(of: settings.sharedCacheURL) { _, _ in
+            if settings.newDocketDetectionMode == .airtable {
+                syncAirtablePersonalTokenFieldFromKeychain()
+            }
+        }
+    }
+
+    private var sharedCachePathForTokenLoggingNonEmpty: Bool {
+        let t = settings.sharedCacheURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !t.isEmpty
+    }
+
+    // #region agent log
+    private static func debug634d73Log(hypothesisId: String, location: String, message: String, data: [String: Bool]) {
+        let logPath = "/Users/mattfasullo/Projects/MediaDash/.cursor/debug-634d73.log"
+        let ts = Int64(Date().timeIntervalSince1970 * 1000)
+        let payload: [String: Any] = [
+            "sessionId": "634d73",
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "timestamp": ts,
+            "data": data
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let json = try? JSONSerialization.data(withJSONObject: payload),
+              var line = String(data: json, encoding: .utf8) else { return }
+        line.append("\n")
+        guard let d = line.data(using: .utf8) else { return }
+        if FileManager.default.fileExists(atPath: logPath),
+           let h = try? FileHandle(forWritingTo: URL(fileURLWithPath: logPath)) {
+            defer { _ = try? h.close() }
+            _ = try? h.seekToEnd()
+            _ = try? h.write(contentsOf: d)
+        } else {
+            _ = try? d.write(to: URL(fileURLWithPath: logPath), options: .atomic)
+        }
+    }
+    // #endregion
+
+    private func syncAirtablePersonalTokenFieldFromKeychain() {
+        let explicit = settings.sharedCacheURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pathArg = (explicit?.isEmpty ?? true) ? nil : explicit
+        let resolved = SharedKeychainService.getAirtableAPIKey(sharedCacheURLForServerToken: pathArg)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let t = resolved, !t.isEmpty {
+            airtablePersonalTokenInput = t
+        } else {
+            airtablePersonalTokenInput = ""
+        }
+
+        // #region agent log
+        let kcGrayson = SharedKeychainService.isCurrentUserGraysonEmployee()
+        let hasSharedKC = KeychainService.retrieve(key: SharedKeychainService.SharedKey.airtableAPIKey.keychainKey) != nil
+        let hasPersonalKC = KeychainService.retrieve(key: "airtable_api_key") != nil
+        let fullNE = resolved != nil && !resolved!.isEmpty
+        let fieldNE = !airtablePersonalTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        Self.debug634d73Log(
+            hypothesisId: "A",
+            location: "NewDocketDetectionSection.syncAirtablePersonalTokenFieldFromKeychain",
+            message: "after sync from resolved API key",
+            data: [
+                "fullResolvedNonEmpty": fullNE,
+                "fieldNonEmptyAfterSync": fieldNE,
+                "hasSharedPath": sharedCachePathForTokenLoggingNonEmpty,
+                "kcGrayson": kcGrayson,
+                "hasSharedKeychainEntry": hasSharedKC,
+                "hasPersonalKeychainEntry": hasPersonalKC
+            ]
+        )
+        // #endregion
+    }
+
+    private func saveMediaAirtablePersonalToken() {
+        let t = airtablePersonalTokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        _ = KeychainService.store(key: "airtable_api_key", value: t)
+        if SharedKeychainService.isCurrentUserGraysonEmployee() {
+            _ = SharedKeychainService.setSharedKey(t, for: .airtableAPIKey)
+        }
+        hasUnsavedChanges = true
+        syncAirtablePersonalTokenFieldFromKeychain()
     }
 
     private func readOnlyRow(_ label: String, value: String) -> some View {

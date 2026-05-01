@@ -16,6 +16,8 @@ class NotificationSyncManager: ObservableObject {
     
     /// DEBUG: only log when merged completion count changes (avoids spam from repeated sync calls).
     private var lastDebugLoggedSyncCompletionCount: Int?
+    /// DEBUG: "No shared cache URL" can fire from every `configure()` caller — log once per process.
+    private static var didLogNoSharedCacheURL = false
     
     private init() {
         // Load last sync date from UserDefaults
@@ -86,7 +88,10 @@ class NotificationSyncManager: ObservableObject {
     func syncWithSharedCache() async {
         guard let sharedURL = sharedCacheURL else {
             #if DEBUG
-            print("📋 [NotificationSync] No shared cache URL configured")
+            if !Self.didLogNoSharedCacheURL {
+                Self.didLogNoSharedCacheURL = true
+                print("📋 [NotificationSync] No shared cache URL configured")
+            }
             #endif
             return
         }
@@ -157,10 +162,6 @@ class NotificationSyncManager: ObservableObject {
             return
         }
         
-        #if DEBUG
-        print("📋 [NotificationSync] Saving completion status for notification \(notificationId)")
-        #endif
-        
         do {
             // Load existing data
             let localData = try await loadLocalCompletionData()
@@ -192,10 +193,6 @@ class NotificationSyncManager: ObservableObject {
             
             // Save to shared cache
             try await saveSharedCompletionData(updatedData, to: sharedURL)
-            
-            #if DEBUG
-            print("📋 [NotificationSync] Successfully saved completion status")
-            #endif
         } catch {
             print("📋 [NotificationSync] Failed to save completion status: \(error.localizedDescription)")
         }

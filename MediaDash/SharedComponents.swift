@@ -1,6 +1,13 @@
 import SwiftUI
 import CryptoKit
 
+// MARK: - Asana sync logging
+
+/// Flip to `true` when debugging Asana API / sync (very noisy). Default is quiet console.
+enum AsanaSyncLogging: Sendable {
+    nonisolated static let verbose = false
+}
+
 // MARK: - Cache Integrity
 
 /// Cache format version constants
