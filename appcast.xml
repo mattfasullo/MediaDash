@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.15</title>
+            <description><![CDATA[
+                <p>Simian uploads keep original filenames (no automatic date stamp). Drag-reorder in the tree is more reliable when folders and files are mixed. Folder and file sort updates now surface API failures.</p>
+            ]]></description>
+            <pubDate>Tue, 05 May 2026 17:09:30 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.15/MediaDash.zip"
+                sparkle:version="250"
+                sparkle:shortVersionString="1.15"
+                sparkle:edSignature="4qThEoa+SQMlzWOmQRsYPW83LpzUiN0hho6CHSSzOmblr2Egte48yKUksWCetBD4Iw62wx5W+N/1KgiHS6eyCg=="
+                length="15387424"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.14</title>
             <description><![CDATA[
                 <p>More options for the read-only Airtable token when polling dockets (shared team file, plist key, debug env). Simian remembers recent projects. Cleaner debug logging. Reliability tweaks for Asana, notifications, and email scanning.</p>

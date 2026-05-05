@@ -5,7 +5,7 @@
 	<key>AirtableReadOnlyDocketToken</key>
 	<string></string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.14</string>
+	<string>1.15</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -30,7 +30,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>240</string>
+	<string>250</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>SUAllowsAutomaticUpdates</key>
