@@ -952,19 +952,13 @@ class SimianService: ObservableObject {
         return nil
     }
 
-    /// Upload a single file to a Simian project (root or into a folder).
+    /// Upload a single file to a Simian project (root or into a folder). The uploaded ``fileURL.lastPathComponent`` is sent as-is (no automatic date stamp).
     /// - Parameters:
     ///   - projectId: Simian project ID
     ///   - folderId: Optional folder ID (nil = project root)
     ///   - fileURL: Local file URL to upload
-    ///   - musicExtensionsForUploadNaming: Used with ``SimianFolderNaming/simianUploadVideoExtensions`` so video/audio uploads get `_Mmmdd.yy` before the extension when the name does not already end with that stamp.
     /// - Returns: Uploaded file ID from response
-    func uploadFile(
-        projectId: String,
-        folderId: String?,
-        fileURL: URL,
-        musicExtensionsForUploadNaming: [String]? = nil
-    ) async throws -> String {
+    func uploadFile(projectId: String, folderId: String?, fileURL: URL) async throws -> String {
         try await ensureAuthenticated()
 
         let trimmedProjectId = projectId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -996,9 +990,7 @@ class SimianService: ObservableObject {
             appendPart(name: "folder_id", value: folderId)
         }
 
-        let resolvedMusicExtensions = musicExtensionsForUploadNaming ?? AppSettings.default.musicExtensions
-        let musicExtSet = Set(resolvedMusicExtensions.map { $0.lowercased() })
-        let filename = SimianFolderNaming.multipartUploadFilename(forLocalFileURL: fileURL, musicExtensionsLowercased: musicExtSet)
+        let filename = SimianFolderNaming.multipartUploadFilename(forLocalFileURL: fileURL)
         guard let fileData = try? Data(contentsOf: fileURL) else {
             throw SimianError.apiError("Could not read file: \(fileURL.path)")
         }
@@ -1778,6 +1770,7 @@ class SimianService: ObservableObject {
             let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
             throw SimianError.apiError("Failed to update folder sort: \(msg)")
         }
+        try Self.requireSuccessRootResponse(data, action: "update folder sort")
     }
 
     /// Update file sort order within a folder
@@ -1810,6 +1803,7 @@ class SimianService: ObservableObject {
             let msg = String(data: data, encoding: .utf8) ?? "HTTP error"
             throw SimianError.apiError("Failed to update file sort: \(msg)")
         }
+        try Self.requireSuccessRootResponse(data, action: "update file sort")
     }
 
     /// Get a Simian short link for a folder (same as Share → Get Shortlink → Create Link in Simian UI).

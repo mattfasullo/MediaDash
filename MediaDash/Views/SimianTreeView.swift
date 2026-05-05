@@ -586,19 +586,28 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             if let pn = item as? SimianTreeNode, pn.kind == .folder { parentFolderId = pn.itemId }
             else { parentFolderId = view.currentParentFolderId }
 
-            // Find the item at childIndex to get the "insert before" id
+            // Find the item at childIndex (insert-before slot) in the combined folder+file row list.
             let all = orderedDropRowNodes(parentFolderId: parentFolderId)
-            let dropBeforeNode = childIndex < all.count ? all[childIndex] : nil
 
             let folderIds = parsed.itemIds.compactMap { $0.hasPrefix("f-") ? String($0.dropFirst(2)) : nil }
             let fileIds = parsed.itemIds.compactMap { $0.hasPrefix("file-") ? String($0.dropFirst(5)) : nil }
 
             if !folderIds.isEmpty {
-                let dropBeforeId = dropBeforeNode?.kind == .folder ? dropBeforeNode?.itemId : nil
+                // Map combined-list childIndex to folder-only "insert before" id (folders and files share one visual
+                // order but Simian/API reorder is per-type; legacy kind-matched anchors dropped nil on cross-type gaps).
+                let folderOrderIds = all.compactMap { $0.kind == .folder ? $0.itemId : nil }
+                let insertPosAmongRemain = all.prefix(childIndex).filter { $0.kind == .folder }.compactMap(\.itemId).filter { !folderIds.contains($0) }.count
+                let remainFolderIds = folderOrderIds.filter { !folderIds.contains($0) }
+                let safeFolderPos = min(max(0, insertPosAmongRemain), remainFolderIds.count)
+                let dropBeforeId = safeFolderPos < remainFolderIds.count ? remainFolderIds[safeFolderPos] : nil
                 view.onReorderFolders(parsed.projectId, folderIds, parentFolderId, dropBeforeId)
             }
             if !fileIds.isEmpty, let pid = parentFolderId {
-                let dropBeforeId = dropBeforeNode?.kind == .file ? dropBeforeNode?.itemId : nil
+                let fileOrderIds = all.compactMap { $0.kind == .file ? $0.itemId : nil }
+                let insertPosAmongRemain = all.prefix(childIndex).filter { $0.kind == .file }.compactMap(\.itemId).filter { !fileIds.contains($0) }.count
+                let remainFileIds = fileOrderIds.filter { !fileIds.contains($0) }
+                let safeFilePos = min(max(0, insertPosAmongRemain), remainFileIds.count)
+                let dropBeforeId = safeFilePos < remainFileIds.count ? remainFileIds[safeFilePos] : nil
                 view.onReorderFiles(parsed.projectId, fileIds, pid, dropBeforeId)
             }
         }

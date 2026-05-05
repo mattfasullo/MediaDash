@@ -2321,38 +2321,57 @@ struct SimianPostView: View {
 
     /// Reorder one or more dragged items relative to a target position in the tree.
     private func reorderItems(projectId: String, draggedIds: [String], targetId: String?, treeList: [SimianTreeItem]) {
-        // For now, handle the first dragged item to determine type, then batch
         let folderIds = draggedIds.compactMap { id -> String? in id.hasPrefix("f-") ? String(id.dropFirst(2)) : nil }
         let fileIds = draggedIds.compactMap { id -> String? in id.hasPrefix("file-") ? String(id.dropFirst(5)) : nil }
 
-        if !folderIds.isEmpty, let targetId = targetId, targetId.hasPrefix("f-") {
-            let targetFolderId = String(targetId.dropFirst(2))
-            // Find parent from target
-            if let targetItem = treeList.first(where: { $0.id == targetId }), case .folder(_, _, _, let parentId) = targetItem {
-                reorderFolders(projectId: projectId, folderIds: folderIds, parentFolderId: parentId, dropBeforeFolderId: targetFolderId)
-            }
-        }
-        if !fileIds.isEmpty, let targetId = targetId, targetId.hasPrefix("file-") {
-            let targetFileId = String(targetId.dropFirst(5))
-            if let targetItem = treeList.first(where: { $0.id == targetId }), case .file(_, _, _, let parentId) = targetItem {
-                reorderFiles(projectId: projectId, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: targetFileId)
-            }
-        }
-        // If targetId is nil (insert at end), use the first dragged item of each type to determine parent.
-        // Search is type-specific so a mixed selection (f- and file-) resolves each type independently.
-        if targetId == nil {
-            if !folderIds.isEmpty {
-                if let firstDragged = treeList.first(where: { $0.id.hasPrefix("f-") && draggedIds.contains($0.id) }),
-                   case .folder(_, _, _, let parentId) = firstDragged {
-                    reorderFolders(projectId: projectId, folderIds: folderIds, parentFolderId: parentId, dropBeforeFolderId: nil)
+        func parentForReorder() -> String? {
+            if let targetId, let item = treeList.first(where: { $0.id == targetId }) {
+                switch item {
+                case .folder(_, _, _, let p), .file(_, _, _, let p): return p
                 }
             }
-            if !fileIds.isEmpty {
-                if let firstDragged = treeList.first(where: { $0.id.hasPrefix("file-") && draggedIds.contains($0.id) }),
-                   case .file(_, _, _, let parentId) = firstDragged {
-                    reorderFiles(projectId: projectId, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: nil)
+            if let first = draggedIds.first, let item = treeList.first(where: { $0.id == first }) {
+                switch item {
+                case .folder(_, _, _, let p), .file(_, _, _, let p): return p
                 }
             }
+            return currentParentFolderId
+        }
+
+        let parentFolderId = parentForReorder()
+        let combined = outlineCombinedSiblingItems(parentFolderId: parentFolderId)
+        let childIndex: Int = {
+            if let targetId, let idx = combined.firstIndex(where: { $0.id == targetId }) { return idx }
+            return combined.count
+        }()
+
+        if !folderIds.isEmpty {
+            let folderOrderIds = combined.compactMap { item -> String? in
+                if case .folder(let f, _, _, _) = item { return f.id }
+                return nil
+            }
+            let insertPosAmongRemain = combined.prefix(childIndex).compactMap { item -> String? in
+                if case .folder(let f, _, _, _) = item, !folderIds.contains(f.id) { return f.id }
+                return nil
+            }.count
+            let remainFolderIds = folderOrderIds.filter { !folderIds.contains($0) }
+            let safeFolderPos = min(max(0, insertPosAmongRemain), remainFolderIds.count)
+            let dropBeforeFolderId = safeFolderPos < remainFolderIds.count ? remainFolderIds[safeFolderPos] : nil
+            reorderFolders(projectId: projectId, folderIds: folderIds, parentFolderId: parentFolderId, dropBeforeFolderId: dropBeforeFolderId)
+        }
+        if !fileIds.isEmpty, let pid = parentFolderId {
+            let fileOrderIds = combined.compactMap { item -> String? in
+                if case .file(let f, _, _, _) = item { return f.id }
+                return nil
+            }
+            let insertPosAmongRemain = combined.prefix(childIndex).compactMap { item -> String? in
+                if case .file(let f, _, _, _) = item, !fileIds.contains(f.id) { return f.id }
+                return nil
+            }.count
+            let remainFileIds = fileOrderIds.filter { !fileIds.contains($0) }
+            let safeFilePos = min(max(0, insertPosAmongRemain), remainFileIds.count)
+            let dropBeforeFileId = safeFilePos < remainFileIds.count ? remainFileIds[safeFilePos] : nil
+            reorderFiles(projectId: projectId, fileIds: fileIds, parentFolderId: pid, dropBeforeFileId: dropBeforeFileId)
         }
     }
 
@@ -2377,6 +2396,14 @@ struct SimianPostView: View {
         }
         reordered.insert(contentsOf: moved, at: insertIdx)
         let ids = reordered.map { $0.id }
+        let originalIds = siblings.map { $0.id }
+        guard ids != originalIds else {
+            Task { @MainActor in
+                statusMessage = "Folder order unchanged. Simian lists every subfolder above files; there must be at least two subfolders to reorder among them."
+                statusIsError = false
+            }
+            return
+        }
         Task {
             do {
                 try await simianService.updateFolderSort(projectId: projectId, parentFolderId: parentFolderId, folderIds: ids)
@@ -2417,6 +2444,14 @@ struct SimianPostView: View {
         }
         reordered.insert(contentsOf: moved, at: insertIdx)
         let ids = reordered.map { $0.id }
+        let originalIds = siblings.map { $0.id }
+        guard ids != originalIds else {
+            Task { @MainActor in
+                statusMessage = "File order unchanged."
+                statusIsError = false
+            }
+            return
+        }
         Task {
             do {
                 try await simianService.updateFileSort(projectId: projectId, folderId: pid, fileIds: ids)
@@ -2653,6 +2688,25 @@ struct SimianPostView: View {
         return folderFilesCache[id] ?? []
     }
 
+    /// Folders then files, matching `SimianTreeView.orderedDropRowNodes` / outline data source.
+    private func outlineCombinedSiblingItems(parentFolderId: String?) -> [SimianTreeItem] {
+        let folders = folderSiblings(parentId: parentFolderId)
+        let files: [SimianFile]
+        if parentFolderId == nil {
+            files = currentFiles
+        } else if parentFolderId == currentParentFolderId {
+            files = currentFiles
+        } else if let pid = parentFolderId {
+            files = folderFilesCache[pid] ?? []
+        } else {
+            files = []
+        }
+        var out: [SimianTreeItem] = []
+        for f in folders { out.append(.folder(f, depth: 0, path: "", parentFolderId: parentFolderId)) }
+        for f in files { out.append(.file(f, depth: 0, path: "", parentFolderId: parentFolderId)) }
+        return out
+    }
+
     enum SimianTreeItem: Identifiable {
         case folder(SimianFolder, depth: Int, path: String, parentFolderId: String?)
         case file(SimianFile, depth: Int, path: String, parentFolderId: String?)
@@ -2751,12 +2805,7 @@ struct SimianPostView: View {
                 for fileItem in looseItems {
                     progressCounter.increment()
                     await MainActor.run { uploadCurrent = progressCounter.value; uploadTotal = totalFiles; uploadFileName = fileItem.name }
-                    _ = try await simianService.uploadFile(
-                        projectId: projectId,
-                        folderId: looseFolderId,
-                        fileURL: fileItem.url,
-                        musicExtensionsForUploadNaming: settingsManager.currentSettings.musicExtensions
-                    )
+                    _ = try await simianService.uploadFile(projectId: projectId, folderId: looseFolderId, fileURL: fileItem.url)
                 }
 
                 for fileItem in dirItems {
@@ -2805,12 +2854,7 @@ struct SimianPostView: View {
         subfolders.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
         for fileURL in filesHere {
             uploadProgress(fileURL.lastPathComponent)
-            _ = try await simianService.uploadFile(
-                projectId: projectId,
-                folderId: simianFolderId,
-                fileURL: fileURL,
-                musicExtensionsForUploadNaming: settingsManager.currentSettings.musicExtensions
-            )
+            _ = try await simianService.uploadFile(projectId: projectId, folderId: simianFolderId, fileURL: fileURL)
         }
         for sub in subfolders {
             let existing = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: simianFolderId)
