@@ -49,6 +49,7 @@ struct DashboardView: View {
     @Binding var showQuickSearchSheet: Bool
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
+    @Binding var showVideoSheet: Bool
     
     let wpDate: Date
     let prepDate: Date
@@ -77,6 +78,7 @@ struct DashboardView: View {
                 showQuickSearchSheet: $showQuickSearchSheet,
                 showSettingsSheet: $showSettingsSheet,
                 showVideoConverterSheet: $showVideoConverterSheet,
+                showVideoSheet: $showVideoSheet,
                 leftPanelCollapsed: $leftPanelCollapsed,
                 rightPanelCollapsed: $rightPanelCollapsed,
                 wpDate: wpDate,
@@ -198,6 +200,7 @@ struct DashboardTopBar: View {
     @Binding var showQuickSearchSheet: Bool
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
+    @Binding var showVideoSheet: Bool
     @Binding var leftPanelCollapsed: Bool
     @Binding var rightPanelCollapsed: Bool
     
@@ -306,13 +309,32 @@ struct DashboardTopBar: View {
                 }
                 
                 DashboardQuickAction(
-                    title: "Video",
-                    icon: "film.fill",
+                    title: "Tools",
+                    icon: "wrench.and.screwdriver.fill",
                     color: Color(red: 0.50, green: 0.25, blue: 0.35),
                     shortcut: "⌘4",
                     disabled: false
                 ) {
-                    // Video functionality to be implemented later
+                    showVideoSheet = true
+                }
+                .popover(isPresented: $showVideoSheet, arrowEdge: .bottom) {
+                    VideoView(
+                        isPresented: $showVideoSheet,
+                        onOpenVideoConverter: {
+                            showVideoSheet = false
+                            showVideoConverterSheet = true
+                        },
+                        onOpenRestripe: {
+                            showVideoSheet = false
+                            RestripeWindowManager.shared.show()
+                        },
+                        onOpenNormalizer: {
+                            showVideoSheet = false
+                            NormalizerWindowManager.shared.show()
+                        }
+                    )
+                    .compactSheetBorder()
+                    .frame(width: 380, height: 270)
                 }
             }
             
@@ -2070,6 +2092,7 @@ struct DashboardNotificationCard: View {
         showQuickSearchSheet: .constant(false),
         showSettingsSheet: .constant(false),
         showVideoConverterSheet: .constant(false),
+        showVideoSheet: .constant(false),
         wpDate: Date(),
         prepDate: Date(),
         dateFormatter: DateFormatter(),

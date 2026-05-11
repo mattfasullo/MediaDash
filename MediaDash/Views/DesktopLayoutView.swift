@@ -24,6 +24,7 @@ struct DesktopLayoutView: View {
     @Binding var showQuickSearchSheet: Bool
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
+    @Binding var showVideoSheet: Bool
     @Binding var showNotificationCenter: Bool
     
     let wpDate: Date
@@ -48,6 +49,7 @@ struct DesktopLayoutView: View {
                 showQuickSearchSheet: $showQuickSearchSheet,
                 showSettingsSheet: $showSettingsSheet,
                 showVideoConverterSheet: $showVideoConverterSheet,
+                showVideoSheet: $showVideoSheet,
                 showNotificationCenter: $showNotificationCenter,
                 showDetailsPanel: $showDetailsPanel,
                 wpDate: wpDate,
@@ -107,6 +109,7 @@ struct DesktopToolbar: View {
     @Binding var showQuickSearchSheet: Bool
     @Binding var showSettingsSheet: Bool
     @Binding var showVideoConverterSheet: Bool
+    @Binding var showVideoSheet: Bool
     @Binding var showNotificationCenter: Bool
     @Binding var showDetailsPanel: Bool
     
@@ -183,14 +186,33 @@ struct DesktopToolbar: View {
                     .frame(height: 28)
                 
                 ToolbarActionButton(
-                    title: "Video",
+                    title: "Tools",
                     subtitle: "",
-                    icon: "film.fill",
+                    icon: "wrench.and.screwdriver.fill",
                     color: Color(red: 0.50, green: 0.25, blue: 0.25),
                     shortcut: "⌘4",
                     disabled: false
                 ) {
-                    // Video functionality to be implemented later
+                    showVideoSheet = true
+                }
+                .popover(isPresented: $showVideoSheet, arrowEdge: .bottom) {
+                    VideoView(
+                        isPresented: $showVideoSheet,
+                        onOpenVideoConverter: {
+                            showVideoSheet = false
+                            showVideoConverterSheet = true
+                        },
+                        onOpenRestripe: {
+                            showVideoSheet = false
+                            RestripeWindowManager.shared.show()
+                        },
+                        onOpenNormalizer: {
+                            showVideoSheet = false
+                            NormalizerWindowManager.shared.show()
+                        }
+                    )
+                    .compactSheetBorder()
+                    .frame(width: 380, height: 270)
                 }
             }
             
@@ -1158,6 +1180,7 @@ struct DetailRow: View {
         showQuickSearchSheet: .constant(false),
         showSettingsSheet: .constant(false),
         showVideoConverterSheet: .constant(false),
+        showVideoSheet: .constant(false),
         showNotificationCenter: .constant(false),
         wpDate: Date(),
         prepDate: Date(),

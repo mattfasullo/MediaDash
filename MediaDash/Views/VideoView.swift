@@ -2,7 +2,7 @@
 //  VideoView.swift
 //  MediaDash
 //
-//  Media layups hub: Video conversion, Restriping, Post to Simian, etc.
+//  Tools hub: video conversion, restriping, LUFS normalizer, etc.
 //
 
 import SwiftUI
@@ -13,6 +13,8 @@ struct VideoView: View {
     var onOpenVideoConverter: () -> Void
     /// Dismiss popover and open Restripe window (or no-op if not implemented).
     var onOpenRestripe: () -> Void
+    /// Dismiss popover and open LUFS Normalizer window.
+    var onOpenNormalizer: () -> Void
 
     var body: some View {
         VStack(spacing: 8) {
@@ -32,6 +34,15 @@ struct VideoView: View {
             ) {
                 isPresented = false
                 onOpenRestripe()
+            }
+
+            VideoOptionRow(
+                title: "Normalizer",
+                subtitle: "Normalize staged audio or muxed clips to -14 or -24 LUFS (WAV out)",
+                icon: "slider.horizontal.3"
+            ) {
+                isPresented = false
+                onOpenNormalizer()
             }
         }
         .padding(20)
@@ -93,6 +104,7 @@ private struct VideoOptionRow: View {
     VideoView(
         isPresented: .constant(true),
         onOpenVideoConverter: {},
-        onOpenRestripe: {}
+        onOpenRestripe: {},
+        onOpenNormalizer: {}
     )
 }

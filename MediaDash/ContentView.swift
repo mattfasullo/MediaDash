@@ -434,6 +434,7 @@ struct ContentView: View {
                         showQuickSearchSheet: $showQuickSearchSheet,
                         showSettingsSheet: $showSettingsSheet,
                         showVideoConverterSheet: $showVideoConverterSheet,
+                        showVideoSheet: $showVideoSheet,
                         wpDate: wpDate,
                         prepDate: prepDate,
                         dateFormatter: dateFormatter,

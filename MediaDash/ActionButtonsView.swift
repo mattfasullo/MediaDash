@@ -136,7 +136,7 @@ struct ActionButtonsView: View {
                 .keyboardShortcut("3", modifiers: .command)
 
                 ActionButtonWithShortcut(
-                    title: "Video",
+                    title: "Tools",
                     subtitle: "",
                     shortcut: "⌘4",
                     color: Color(red: 0.50, green: 0.25, blue: 0.25),  // Subtle dark red
@@ -144,7 +144,7 @@ struct ActionButtonsView: View {
                     isFocused: keyboardFocus.focusedButton == .convert,
                     showShortcut: isCommandKeyHeld,
                     theme: currentTheme,
-                    iconName: "film"
+                    iconName: "wrench.and.screwdriver"
                 ) {
                     showVideoSheet = true
                 }
@@ -157,7 +157,7 @@ struct ActionButtonsView: View {
                         isKeyboardMode = false
                     }
                     hoverInfo = hovering ?
-                        "Media layups: video conversion, restriping" :
+                        "Tools: conversion, restriping, LUFS normalizer…" :
                         "Ready."
                 }
                 .keyboardShortcut("4", modifiers: .command)
@@ -171,10 +171,14 @@ struct ActionButtonsView: View {
                         onOpenRestripe: {
                             showVideoSheet = false
                             RestripeWindowManager.shared.show()
+                        },
+                        onOpenNormalizer: {
+                            showVideoSheet = false
+                            NormalizerWindowManager.shared.show()
                         }
                     )
                     .compactSheetBorder()
-                    .frame(width: 380, height: 180)
+                    .frame(width: 380, height: 270)
                 }
             }
         }
