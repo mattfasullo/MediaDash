@@ -1876,8 +1876,13 @@ struct SimianPostView: View {
                     onMoveIntoFolder: { pid, itemIds, targetFolderId in
                         moveItemsIntoFolder(projectId: pid, itemIds: itemIds, targetFolderId: targetFolderId)
                     },
-                    onExternalFileDrop: { providers, folderId, folderName in
-                        handleExternalFileDrop(providers: providers, folderId: folderId, destinationFolderName: folderName)
+                    onExternalFileDrop: { providers, folderId, folderName, simianParent in
+                        handleExternalFileDrop(
+                            providers: providers,
+                            folderId: folderId,
+                            destinationFolderName: folderName,
+                            knownSimianParentOfDestinationFolder: .some(simianParent)
+                        )
                     },
                     onSelectionChange: { ids in selectedItemIds = ids },
                     onCommitRename: { commitInlineRename() },
@@ -1915,20 +1920,34 @@ struct SimianPostView: View {
 
     // MARK: - Upload via context menu
 
-    private func uploadToFolder(folderId: String?, destinationFolderName: String?) {
+    private func uploadToFolder(folderId: String?, destinationFolderName: String?, knownSimianParentOfDestinationFolder: String?? = nil) {
         guard let projectId = browsingProjectId else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
         panel.message = "Select files or folders to upload"
         panel.begin { response in
             guard response == .OK, !panel.urls.isEmpty else { return }
-            DispatchQueue.main.async { uploadDroppedFiles(projectId: projectId, folderId: folderId, destinationFolderName: destinationFolderName, fileURLs: panel.urls) }
+            DispatchQueue.main.async {
+                uploadDroppedFiles(
+                    projectId: projectId,
+                    folderId: folderId,
+                    destinationFolderName: destinationFolderName,
+                    knownSimianParentOfDestinationFolder: knownSimianParentOfDestinationFolder,
+                    fileURLs: panel.urls
+                )
+            }
         }
     }
 
-    private func uploadStagedFiles(folderId: String?, destinationFolderName: String?) {
+    private func uploadStagedFiles(folderId: String?, destinationFolderName: String?, knownSimianParentOfDestinationFolder: String?? = nil) {
         guard let projectId = browsingProjectId, !manager.selectedFiles.isEmpty else { return }
-        uploadDroppedFiles(projectId: projectId, folderId: folderId, destinationFolderName: destinationFolderName, fileURLs: manager.selectedFiles.map { $0.url })
+        uploadDroppedFiles(
+            projectId: projectId,
+            folderId: folderId,
+            destinationFolderName: destinationFolderName,
+            knownSimianParentOfDestinationFolder: knownSimianParentOfDestinationFolder,
+            fileURLs: manager.selectedFiles.map { $0.url }
+        )
     }
 
     /// Selected tree rows whose parent folder matches the folder we are currently browsing (for empty-area context menu).
@@ -2104,10 +2123,10 @@ struct SimianPostView: View {
     private func handleSimianTreeContextAction(_ action: SimianTreeContextAction, projectId: String) {
         let treeList = flatTreeList(projectId: projectId)
         switch action {
-        case .uploadTo(let folderId, let folderName):
-            uploadToFolder(folderId: folderId, destinationFolderName: folderName)
-        case .uploadStagedFiles(let folderId, let folderName):
-            uploadStagedFiles(folderId: folderId, destinationFolderName: folderName)
+        case .uploadTo(let folderId, let folderName, let simParent):
+            uploadToFolder(folderId: folderId, destinationFolderName: folderName, knownSimianParentOfDestinationFolder: .some(simParent))
+        case .uploadStagedFiles(let folderId, let folderName, let simParent):
+            uploadStagedFiles(folderId: folderId, destinationFolderName: folderName, knownSimianParentOfDestinationFolder: .some(simParent))
         case .newFolderWithSelection(let treeId):
             if treeId.isEmpty {
                 startNewFolderWithSelectionFromCurrentDirectory(treeList: treeList)
@@ -2749,13 +2768,43 @@ struct SimianPostView: View {
         return result
     }
 
+    /// Resolves the Simian parent folder id of the **upload destination folder** using breadcrumb + caches.
+    /// - `nil` (outer): could not infer (skip auto-nesting).
+    /// - `.some(nil)`: destination is a direct child of the Simian project root.
+    /// - `.some(id)`: destination is nested (child of `id`).
+    private func inferSimianParentOfUploadDestination(forFolderId folderId: String?) -> String?? {
+        guard let fid = folderId else { return .some(nil) }
+        if fid == currentParentFolderId {
+            if folderBreadcrumb.count <= 1 { return .some(nil) }
+            return .some(folderBreadcrumb[folderBreadcrumb.count - 2].id)
+        }
+        if currentFolders.contains(where: { $0.id == fid }) {
+            return .some(currentParentFolderId)
+        }
+        if let pid = folderChildrenCache.first(where: { $0.value.contains(where: { $0.id == fid }) })?.key {
+            return .some(pid)
+        }
+        return nil
+    }
+
     // MARK: - File drop handling
 
-    private func handleExternalFileDrop(providers: [NSItemProvider], folderId: String?, destinationFolderName: String?) -> Bool {
+    private func handleExternalFileDrop(
+        providers: [NSItemProvider],
+        folderId: String?,
+        destinationFolderName: String?,
+        knownSimianParentOfDestinationFolder: String?? = nil
+    ) -> Bool {
         guard let projectId = browsingProjectId else { return false }
         loadURLsFromProviders(providers) { urls in
             guard !urls.isEmpty else { return }
-            uploadDroppedFiles(projectId: projectId, folderId: folderId, destinationFolderName: destinationFolderName, fileURLs: urls)
+            uploadDroppedFiles(
+                projectId: projectId,
+                folderId: folderId,
+                destinationFolderName: destinationFolderName,
+                knownSimianParentOfDestinationFolder: knownSimianParentOfDestinationFolder,
+                fileURLs: urls
+            )
         }
         return true
     }
@@ -2772,7 +2821,13 @@ struct SimianPostView: View {
         group.notify(queue: .main) { completion(urls) }
     }
 
-    private func uploadDroppedFiles(projectId: String, folderId: String?, destinationFolderName: String?, fileURLs: [URL]) {
+    private func uploadDroppedFiles(
+        projectId: String,
+        folderId: String?,
+        destinationFolderName: String?,
+        knownSimianParentOfDestinationFolder: String?? = nil,
+        fileURLs: [URL]
+    ) {
         let sortedURLs = fileURLs.sorted { a, b in
             a.path.localizedStandardCompare(b.path) == .orderedAscending
         }
@@ -2791,9 +2846,21 @@ struct SimianPostView: View {
                 let progressCounter = ProgressCounter()
                 let looseItems = itemsToUpload.filter { !$0.isDirectory }
                 let dirItems = itemsToUpload.filter { $0.isDirectory }
-                let shouldNestLoose = SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: resolvedDestinationFolderName)
-                    && folderId != nil
+                let resolvedParent: String?? = {
+                    switch knownSimianParentOfDestinationFolder {
+                    case nil: return inferSimianParentOfUploadDestination(forFolderId: folderId)
+                    case .some(let p): return .some(p)
+                    }
+                }()
+                let shouldNestLoose = folderId != nil
                     && !looseItems.isEmpty
+                    && {
+                        guard case .some(let simianParent) = resolvedParent else { return false }
+                        return SimianFolderNaming.shouldAutoNestLooseFiles(
+                            inDestinationFolderNamed: resolvedDestinationFolderName,
+                            simianParentFolderIdOfDestination: simianParent
+                        )
+                    }()
 
                 var looseFolderId = folderId
                 if shouldNestLoose, let parentId = folderId {

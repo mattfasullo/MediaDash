@@ -30,7 +30,7 @@ enum SimianFolderNaming {
 
     /// Simian “main” category folders: loose file uploads get a dated `NN_MmmDD.yy` subfolder.
     static let looseFileAutoNestParentFolderNames: Set<String> = [
-        "POSTINGS", "PICTURE", "FINALS", "MUSIC", "SESSIONS"
+        "POSTINGS", "PICTURE", "FINALS", "MUSIC", "SESSIONS", "APPROVALS"
     ]
 
     /// Whether the destination folder name should trigger auto-nesting of loose files into `NN_MmmDD.yy`.
@@ -38,6 +38,16 @@ enum SimianFolderNaming {
         guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return false }
         let upper = name.uppercased()
         return looseFileAutoNestParentFolderNames.contains(upper)
+    }
+
+    /// Like `shouldAutoNestLooseFiles(inDestinationFolderNamed:)` but only for category buckets that sit **directly under the Simian project root**
+    /// (`simianParentFolderIdOfDestination == nil`). Same-named folders nested deeper upload without an extra dated wrapper.
+    static func shouldAutoNestLooseFiles(
+        inDestinationFolderNamed name: String?,
+        simianParentFolderIdOfDestination: String?
+    ) -> Bool {
+        guard simianParentFolderIdOfDestination == nil else { return false }
+        return shouldAutoNestLooseFiles(inDestinationFolderNamed: name)
     }
 
     /// Resolve destination folder name for auto-nesting checks.

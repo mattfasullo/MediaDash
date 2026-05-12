@@ -13,14 +13,15 @@ enum FinalsCategory: Equatable, Sendable {
 // Project default isolation is MainActor, so mark these explicitly nonisolated
 // so the nonisolated classifier/use-case functions below can reference them.
 
-// Stem tokens — longest variants first so "SFXOnly" wins over "SFX"
+// Known announcer / stem labels (reference; classification is full-mix vs QT vs everything-else → mixout).
 nonisolated private let _mixoutTokens: [String] = [
     "DialOnly", "SyncOnly", "SFXOnly", "MusicOnly",
-    "SyncMix", "MusicMix", "AmbMix", "SFXMix", "DialMix",
+    "SyncMix", "MusicMix", "AmbMix", "SFXMix", "DialMix", "AnncrMix", "Anncr",
     "Dial", "Sync", "SFX", "Music", "Amb", "Bed",
     "VoxOnly", "Vox", "MxOnly",
 ]
-nonisolated private let _fullMixTokens: [String] = ["Fullmix", "FM"]
+/// Full-mix markers (case-insensitive). Anything else that is not a QT ref is treated as a mixout.
+nonisolated private let _fullMixTokens: [String] = ["Fullmix", "FullMix", "FM"]
 nonisolated private let _deliverableTokens: [String] = [
     "TV", "WEB", "DGTL", "Digital", "Broadcast", "OTT",
 ]
@@ -35,6 +36,8 @@ nonisolated private let _bucketQt        = "03_Quicktime References"
 // MARK: - Classifier
 
 /// Pure, stateless classifier. All matching is case-insensitive.
+/// **Quicktime** (by extension) → reference bucket. **Full mix** if `FM`, `Fullmix`, or `FullMix` appears as a bounded token.
+/// Otherwise → **mixout** (catch-all for Finals stems).
 nonisolated enum FinalsClassifier {
 
     static var mixoutTokens:    [String]    { _mixoutTokens }
@@ -61,11 +64,8 @@ nonisolated enum FinalsClassifier {
             }
         }
 
-        if hasTrailingMixoutStem(upper) || anySegmentIndicatesMixout(upper) {
-            return (.mixout, cleaned)
-        }
-
-        return (.unclassified, cleaned)
+        // Catch-all: in Finals workflow, stems that are not full mixes / not reference video → mixouts.
+        return (.mixout, cleaned)
     }
 
     nonisolated static func stripProToolsSuffix(_ basename: String) -> String {
@@ -79,43 +79,6 @@ nonisolated enum FinalsClassifier {
         let bounds = ["_\(token)_", "_\(token)", "\(token)_"]
         for b in bounds where upper.contains(b) { return true }
         return upper == token
-    }
-
-    nonisolated private static func hasSuffixToken(_ upper: String, token: String) -> Bool {
-        upper.hasSuffix("_\(token)") || upper == token
-    }
-
-    nonisolated private static func hasTrailingMixoutStem(_ upper: String) -> Bool {
-        for stemToken in _mixoutTokens {
-            if hasSuffixToken(upper, token: stemToken.uppercased()) { return true }
-        }
-        return false
-    }
-
-    /// True if any underscore-separated segment names a stem.
-    nonisolated private static func anySegmentIndicatesMixout(_ upper: String) -> Bool {
-        let tokensByLength = _mixoutTokens.map { $0.uppercased() }.sorted { $0.count > $1.count }
-        let parts = upper.split(separator: "_").map { String($0).uppercased() }
-        for u in parts where !u.isEmpty {
-            if u == "FM" || u.contains("FULLMIX") { continue }
-            for t in tokensByLength {
-                if u == t { return true }
-                if u.hasSuffix(t), t.count >= 4 { return true }
-            }
-            if u.contains("SFX")    { return true }
-            if u.contains("MUSIC")  { return true }
-            if u.contains("AMB")    { return true }
-            if u.contains("DIAL")   { return true }
-            if u.contains("BED")    { return true }
-            if u.contains("VOX")    { return true }
-            if u == "MX" || u.contains("MXONLY") { return true }
-            if u.contains("SYNC") {
-                if u == "ASYNC" { continue }
-                if u.hasPrefix("ASYNC") { continue }
-                return true
-            }
-        }
-        return false
     }
 
     nonisolated private static func detectDeliverable(in upper: String, before mixToken: String) -> String? {

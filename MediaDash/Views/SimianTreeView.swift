@@ -9,8 +9,9 @@ import UniformTypeIdentifiers
 // MARK: - Context menu action enum
 
 enum SimianTreeContextAction {
-    case uploadTo(folderId: String?, folderName: String?)
-    case uploadStagedFiles(folderId: String?, folderName: String?)
+    /// `simianParentFolderIdOfDestination` is the Simian parent of the **upload target folder** (`nil` = project root).
+    case uploadTo(folderId: String?, folderName: String?, simianParentFolderIdOfDestination: String?)
+    case uploadStagedFiles(folderId: String?, folderName: String?, simianParentFolderIdOfDestination: String?)
     case newFolderWithSelection(treeId: String)
     case newFolder(parentFolderId: String?)
     case beginRename(treeId: String)
@@ -92,7 +93,7 @@ struct SimianTreeView: NSViewRepresentable {
     var onReorderFolders: (_ projectId: String, _ folderIds: [String], _ parentId: String?, _ dropBeforeId: String?) -> Void
     var onReorderFiles: (_ projectId: String, _ fileIds: [String], _ parentId: String, _ dropBeforeId: String?) -> Void
     var onMoveIntoFolder: (_ projectId: String, _ itemIds: [String], _ targetFolderId: String) -> Void
-    var onExternalFileDrop: (_ providers: [NSItemProvider], _ folderId: String?, _ folderName: String?) -> Bool
+    var onExternalFileDrop: (_ providers: [NSItemProvider], _ folderId: String?, _ folderName: String?, _ simianParentFolderIdOfDestination: String?) -> Bool
     var onSelectionChange: (Set<String>) -> Void
     var onCommitRename: () -> Void
     var onCancelRename: () -> Void
@@ -268,13 +269,31 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             syncSelectionToOutlineView(newView.selectedItemIds, in: ov)
         }
 
-        // Reload rows where inline rename state changed
+        // Update rows where inline rename state changed.
+        // Avoid reloadData(forRowIndexes:) — it goes through AppKit's layout pipeline which dispatches work to
+        // background threads at default QoS, causing a priority inversion on the user-interactive main thread.
+        // Directly reconfiguring the existing cell view stays on-thread and avoids cross-thread waiting.
+        // Still defer past SwiftUI's update phase so AppKit's row geometry is stable when we ask for row(forItem:).
         if prev.inlineRenameItemId != newView.inlineRenameItemId {
             let affected = Set([prev.inlineRenameItemId, newView.inlineRenameItemId].compactMap { $0 })
-            for treeId in affected {
-                if let n = nodeCache[treeId] {
+            DispatchQueue.main.async { [weak self, weak ov] in
+                guard let self, let ov else { return }
+                for treeId in affected {
+                    guard let n = nodeCache[treeId] else { continue }
                     let row = ov.row(forItem: n)
-                    if row >= 0 { ov.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0)) }
+                    guard row >= 0,
+                          let cell = ov.view(atColumn: 0, row: row, makeIfNecessary: false) as? SimianTreeCell
+                    else { continue }
+                    let isRenaming = view.inlineRenameItemId == n.treeId
+                    cell.configure(
+                        node: n,
+                        isInlineRenaming: isRenaming,
+                        renameText: isRenaming ? view.inlineRenameText : n.displayName,
+                        isLoading: n.kind == .folder && view.loadingFolderIds.contains(n.itemId ?? ""),
+                        onRenameTextChange: { [weak self] t in self?.view.inlineRenameText = t },
+                        onCommitRename: { [weak self] in self?.view.onCommitRename() },
+                        onCancelRename: { [weak self] in self?.view.onCancelRename() }
+                    )
                 }
             }
         }
@@ -299,6 +318,22 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
         for f in v.currentFiles { _ = cachedNode(forFile: f, parentFolderId: v.currentParentFolderId) }
         for (pid, children) in v.folderChildrenCache { for f in children { _ = cachedNode(forFolder: f, parentFolderId: pid) } }
         for (pid, files) in v.folderFilesCache { for f in files { _ = cachedNode(forFile: f, parentFolderId: pid) } }
+    }
+
+    /// Upload target for an external Finder drop: Simian folder id, display name, and that folder’s Simian parent (`nil` = project root).
+    private func externalFinderUploadTarget(from targetNode: SimianTreeNode?) -> (folderId: String?, folderName: String?, simianParentFolderIdOfDestination: String?) {
+        guard let tn = targetNode else {
+            let fid = view.currentParentFolderId
+            guard let fid else { return (nil, nil, nil) }
+            let folderNode = nodeCache["f-\(fid)"]
+            return (fid, folderNode?.displayName, folderNode?.parentFolderId)
+        }
+        if tn.kind == .folder {
+            return (tn.itemId, tn.displayName, tn.parentFolderId)
+        }
+        guard let parentFid = tn.parentFolderId else { return (nil, nil, nil) }
+        let folderNode = nodeCache["f-\(parentFid)"]
+        return (parentFid, folderNode?.displayName, folderNode?.parentFolderId)
     }
 
     private func syncExpansion(in ov: NSOutlineView, expandedIds: Set<String>) {
@@ -563,12 +598,8 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
         if isExternal, let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], !urls.isEmpty {
             let providers = urls.map { NSItemProvider(item: $0 as NSURL, typeIdentifier: UTType.fileURL.identifier) }
             let targetNode = item as? SimianTreeNode
-            let folderId = targetNode?.kind == .folder ? targetNode?.itemId : view.currentParentFolderId
-            let folderName: String? = {
-                guard let fid = folderId else { return nil }
-                return nodeCache["f-\(fid)"]?.displayName
-            }()
-            _ = view.onExternalFileDrop(providers, folderId, folderName)
+            let (folderId, folderName, simianParent) = externalFinderUploadTarget(from: targetNode)
+            _ = view.onExternalFileDrop(providers, folderId, folderName, simianParent)
             return true
         }
 
@@ -650,8 +681,8 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
                 return "Remove from Simian\u{2026}"
             }()
             if node.kind == .folder, let fid = node.itemId, let fn = node.folder?.name {
-                add("Upload to \u{201C}\(fn)\u{201D}\u{2026}", action: .uploadTo(folderId: fid, folderName: fn))
-                if v.stagedFileCount > 0 { add("Upload \(v.stagedFileCount) staged file(s) here", action: .uploadStagedFiles(folderId: fid, folderName: fn)) }
+                add("Upload to \u{201C}\(fn)\u{201D}\u{2026}", action: .uploadTo(folderId: fid, folderName: fn, simianParentFolderIdOfDestination: node.parentFolderId))
+                if v.stagedFileCount > 0 { add("Upload \(v.stagedFileCount) staged file(s) here", action: .uploadStagedFiles(folderId: fid, folderName: fn, simianParentFolderIdOfDestination: node.parentFolderId)) }
                 menu.addItem(.separator())
                 add("New Folder with Selection", action: .newFolderWithSelection(treeId: node.treeId))
                 add("New Folder", action: .newFolder(parentFolderId: fid))
@@ -682,8 +713,12 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
                 menu.addItem(delItem)
             }
         } else {
-            add("Upload to\u{2026}", action: .uploadTo(folderId: v.currentParentFolderId, folderName: nil))
-            if v.stagedFileCount > 0 { add("Upload \(v.stagedFileCount) staged file(s) here", action: .uploadStagedFiles(folderId: v.currentParentFolderId, folderName: nil)) }
+            let cur = v.currentParentFolderId
+            let curNode = cur.flatMap { nodeCache["f-\($0)"] }
+            let curName = curNode?.displayName
+            let curParent = curNode?.parentFolderId
+            add("Upload to\u{2026}", action: .uploadTo(folderId: cur, folderName: curName, simianParentFolderIdOfDestination: curParent))
+            if v.stagedFileCount > 0 { add("Upload \(v.stagedFileCount) staged file(s) here", action: .uploadStagedFiles(folderId: cur, folderName: curName, simianParentFolderIdOfDestination: curParent)) }
             menu.addItem(.separator())
             add("New Folder with Selection", action: .newFolderWithSelection(treeId: ""))
             add("New Folder", action: .newFolder(parentFolderId: v.currentParentFolderId))

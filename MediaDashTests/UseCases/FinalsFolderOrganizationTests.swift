@@ -87,6 +87,13 @@ final class FinalsFolderOrganizationTests: XCTestCase {
         XCTAssertEqual(FinalsClassifier.classify(filename: "04_Adidas_30FR_Rev1_Apr24_AmbMix_15.wav").category, .mixout)
     }
 
+    func testClassify_mixout_anncrMix_proToolsStem() {
+        let name = "02_A&W Smash Burgers_Napkins_May5_15_AnncrMix_07.wav"
+        let (cat, base) = FinalsClassifier.classify(filename: name)
+        XCTAssertEqual(cat, .mixout)
+        XCTAssertEqual(base, "02_A&W Smash Burgers_Napkins_May5_15_AnncrMix")
+    }
+
     func testClassify_mixout_stemInMiddleSegment() {
         let (cat, _) = FinalsClassifier.classify(filename: "01_Adidas_30EN_Rev1_Apr24_SFX_handle.wav")
         XCTAssertEqual(cat, .mixout)
@@ -110,16 +117,21 @@ final class FinalsFolderOrganizationTests: XCTestCase {
         XCTAssertEqual(cat, .qtReference)
     }
 
-    // MARK: - Unclassified
+    // MARK: - Non–full-mix → mixout (catch-all)
 
-    func testClassify_unclassified() {
+    func testClassify_catchAll_arbitraryName_isMixout() {
         let (cat, _) = FinalsClassifier.classify(filename: "RandomFile.wav")
-        XCTAssertEqual(cat, .unclassified)
+        XCTAssertEqual(cat, .mixout)
     }
 
-    func testClassify_unclassified_aiff() {
+    func testClassify_catchAll_aiff_isMixout() {
         let (cat, _) = FinalsClassifier.classify(filename: "SomeTrack.aiff")
-        XCTAssertEqual(cat, .unclassified)
+        XCTAssertEqual(cat, .mixout)
+    }
+
+    func testClassify_mixout_anncr_trailingStem() {
+        let (cat, _) = FinalsClassifier.classify(filename: "Spot_15_Anncr.wav")
+        XCTAssertEqual(cat, .mixout)
     }
 
     // MARK: - Precedence: full mix beats stem token when Fullmix is present
@@ -153,9 +165,9 @@ final class FinalsFolderOrganizationTests: XCTestCase {
         let preview = FinalsFolderOrganizationUseCase.buildPlan(root: tmp)
 
         XCTAssertEqual(preview.fullMixes.count, 2)
-        XCTAssertEqual(preview.mixouts.count, 2)
+        XCTAssertEqual(preview.mixouts.count, 3)
         XCTAssertEqual(preview.qtReferences.count, 1)
-        XCTAssertEqual(preview.unclassified.count, 1)
+        XCTAssertEqual(preview.unclassified.count, 0)
 
         // WEB should go into 01_Fullmixes/WEB
         let webDest = preview.fullMixes.first(where: { $0.source.lastPathComponent.contains("WEB") })?.destination

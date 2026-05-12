@@ -40,6 +40,12 @@ final class SimianLooseFileFolderNamingTests: XCTestCase {
         XCTAssertFalse(SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: ""))
     }
 
+    func testShouldAutoNest_nestedCategoryFolderByParent_skipped() {
+        XCTAssertFalse(SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: "FINALS", simianParentFolderIdOfDestination: "parent-postings-or-any"))
+        XCTAssertFalse(SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: "APPROVALS", simianParentFolderIdOfDestination: "x"))
+        XCTAssertTrue(SimianFolderNaming.shouldAutoNestLooseFiles(inDestinationFolderNamed: "APPROVALS", simianParentFolderIdOfDestination: nil))
+    }
+
     func testEffectiveDestinationFolderName_prefersProvidedName() {
         let out = SimianFolderNaming.effectiveDestinationFolderName(
             providedName: " FINALS ",
