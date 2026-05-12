@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.16</title>
+            <description><![CDATA[
+                <p>Finals organization treats non-full-mix and non-QuickTime audio as mixouts, with FullMix token matching and announcer stems. Simian adds APPROVALS dated loose uploads at the project root only, skips extra wrappers for nested category folders, improves upload parent handling, and refreshes tree cells after inline rename.</p>
+            ]]></description>
+            <pubDate>Tue, 12 May 2026 19:37:22 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.16/MediaDash.zip"
+                sparkle:version="260"
+                sparkle:shortVersionString="1.16"
+                sparkle:edSignature="slIggDjezOuPKnaZtNEww83rJIg60cZAjpyz2B7GCi2aj86ZjsDWhsmC/BBOioQaPLZnQkPyshB2RKuubw+sCw=="
+                length="15477640"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.15</title>
             <description><![CDATA[
                 <p>Simian uploads keep original filenames (no automatic date stamp). Drag-reorder in the tree is more reliable when folders and files are mixed. Folder and file sort updates now surface API failures.</p>
