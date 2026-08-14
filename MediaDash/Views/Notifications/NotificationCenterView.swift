@@ -63,6 +63,7 @@ struct NotificationCenterView: View {
     @State private var cacheInfo: String?
     @State private var showCacheInfo = false
     @State private var isLoadingCache = false // Keep for fallback if file write fails
+    @ObservedObject private var approvalQueue = DocketApprovalQueue.shared
     
     // Computed properties for filtered notifications
     // Active notifications exclude completed ones (those go to history section)
@@ -193,11 +194,49 @@ struct NotificationCenterView: View {
                 .buttonStyle(.plain)
                 .help("Close")
             }
-            
+
+            if approvalQueue.isBannerVisible {
+                approvalProgressBanner
+            }
         }
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
         .contentShape(Rectangle())
+    }
+
+    private var approvalProgressBanner: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if approvalQueue.activeLabel != nil {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Text(approvalBannerText)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            if approvalQueue.activeLabel != nil {
+                ProgressView(value: min(max(approvalQueue.activeFraction, 0), 1))
+                    .progressViewStyle(.linear)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private var approvalBannerText: String {
+        if let label = approvalQueue.activeLabel {
+            let message = approvalQueue.activeMessage.isEmpty ? "Creating…" : approvalQueue.activeMessage
+            if approvalQueue.queuedCount > 0 {
+                return "\(label) — \(message)  ·  \(approvalQueue.queuedCount) waiting"
+            }
+            return "\(label) — \(message)"
+        }
+        if approvalQueue.queuedCount == 1 {
+            return "1 docket queued"
+        }
+        return "\(approvalQueue.queuedCount) dockets queued"
     }
     
     private var emailStatusBannerContent: some View {
@@ -1079,6 +1118,7 @@ struct NotificationRowView: View {
     @Binding var processingStatusById: [UUID: String]
     @Binding var debugInfo: String?
     @Binding var showDebugInfo: Bool
+    @ObservedObject private var approvalQueue = DocketApprovalQueue.shared
     
     @StateObject private var simianService = SimianService()
     @State private var showActions = false
@@ -1102,6 +1142,15 @@ struct NotificationRowView: View {
     @State private var pendingSimianDocketNumber: String = ""
     @State private var pendingSimianJobName: String = ""
     @State private var pendingSimianSourceEmail: String?
+
+    private var isApprovalLocked: Bool {
+        switch approvalQueue.state(for: notificationId) {
+        case .queued, .inProgress, .succeeded:
+            return true
+        default:
+            return false
+        }
+    }
     
     // Get current notification from center (always up-to-date)
     private var notification: Notification? {
@@ -1124,55 +1173,29 @@ struct NotificationRowView: View {
         }
     }
     
-    /// Create Simian project with user-provided parameters
-    /// Create both Simian project and Work Picture folder using the values from the dialog
-    private func createSimianProject(
+    /// Queue Work Picture + Simian creation so the sheet can close immediately.
+    private func enqueueConfirmedApproval(
         notificationId: UUID,
         docketNumber: String,
         jobName: String,
-        projectManager: String?,
         template: String?
-    ) async {
-        print("🔔 NotificationCenterView.createSimianProject() called")
-        print("   notificationId: \(notificationId)")
-        print("   docketNumber: \(docketNumber)")
-        print("   jobName: \(jobName)")
-        print("   projectManager: \(projectManager ?? "nil")")
-        print("   template: \(template ?? "nil")")
-        
-        // Get the latest notification state
+    ) {
         guard var updatedNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) else {
-            print("⚠️ Could not find notification with id \(notificationId)")
-            await MainActor.run {
-                processingNotification = nil
-            }
             return
         }
         guard updatedNotification.requiresDocketConfirmation != true else {
-            print("⚠️ createSimianProject blocked: notification still requires docket confirmation")
-            await MainActor.run {
-                processingNotification = nil
-                processingStatusById[notificationId] = nil
-            }
             return
         }
-        
-        // Update notification with the job name and docket number from dialog
+
         notificationCenter.updateJobName(updatedNotification, to: jobName)
         if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
             updatedNotification = currentNotification
         }
-        
         notificationCenter.updateDocketNumber(updatedNotification, to: docketNumber)
         if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
             updatedNotification = currentNotification
         }
-        
-        let shouldCreateSimian = updatedNotification.shouldCreateSimianJob || 
-            (settingsManager.currentSettings.simianEnabled && simianService.isConfigured)
-        let shouldCreateWorkPicture = updatedNotification.shouldCreateWorkPicture
-        
-        // If docket was found in Asana, use Asana's name for WP and Simian so we don't create duplicates with different spelling
+
         let existenceInfo = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
         let (effectiveDocketNumber, effectiveJobName): (String, String) = {
             if existenceInfo.existsInAsana, let asana = existenceInfo.asanaDocketInfo {
@@ -1180,190 +1203,24 @@ struct NotificationRowView: View {
             }
             return (docketNumber, jobName)
         }()
-        
-        print("🔔 createSimianProject: shouldCreateSimian = \(shouldCreateSimian), shouldCreateWorkPicture = \(shouldCreateWorkPicture)")
-        print("🔔 createSimianProject: notification.shouldCreateWorkPicture = \(updatedNotification.shouldCreateWorkPicture)")
-        print("🔔 createSimianProject: notification.shouldCreateSimianJob = \(updatedNotification.shouldCreateSimianJob)")
-        if effectiveDocketNumber != docketNumber || effectiveJobName != jobName {
-            print("🔔 createSimianProject: Using Asana name for creation: \(effectiveDocketNumber)_\(effectiveJobName)")
-        }
-        
-        let playAddingSound = settingsManager.currentSettings.resolvedSoundDocketAddingEnabled
-        let playAddedSound = settingsManager.currentSettings.resolvedSoundDocketAddedEnabled
-        let addingVolume = settingsManager.currentSettings.resolvedSoundDocketAddingVolume
-        let addedVolume = settingsManager.currentSettings.resolvedSoundDocketAddedVolume
-        await MainActor.run {
-            DocketAddSounds.startLoading(enabled: playAddingSound, volume: addingVolume)
-        }
-        
-        var simianError: Error?
-        var workPictureError: Error?
-        
-        // Create Work Picture folder if requested (use Asana name when found so folder matches Asana)
-        if shouldCreateWorkPicture {
-            do {
-                updateProcessingStatus(notificationId, "Creating Work Picture folder...")
-                print("🔔 Creating Work Picture folder with docket: \(effectiveDocketNumber), job: \(effectiveJobName)")
-                try await emailScanningService.createDocketFromNotification(
-                    updatedNotification,
-                    effectiveDocketNumber: effectiveDocketNumber,
-                    effectiveJobName: effectiveJobName
-                )
-                print("✅ Work Picture folder created successfully")
-                
-                await MainActor.run {
-                    if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                        notificationCenter.updateDuplicateDetection(currentNotification, mediaManager: mediaManager, settingsManager: settingsManager)
-                        // Mark as in Work Picture
-                        notificationCenter.markAsInWorkPicture(currentNotification)
-                    }
-                }
-            } catch {
-                print("❌ Work Picture folder creation failed: \(error.localizedDescription)")
-                workPictureError = error
+
+        if effectiveDocketNumber != docketNumber {
+            notificationCenter.updateDocketNumber(updatedNotification, to: effectiveDocketNumber)
+            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
+                updatedNotification = currentNotification
             }
         }
-        
-        // Create Simian project if requested (use Asana name when found so project matches Asana)
-        if shouldCreateSimian {
-            updateSimianServiceConfiguration()
-            
-            do {
-                // Check if project already exists in Simian before creating
-                updateProcessingStatus(notificationId, "Checking for existing Simian project...")
-                let projectAlreadyExists = try await simianService.projectExists(docketNumber: effectiveDocketNumber, jobName: effectiveJobName)
-                
-                if projectAlreadyExists {
-                    print("⚠️ Simian project already exists: \(effectiveDocketNumber)_\(effectiveJobName)")
-                    await MainActor.run {
-                        let errorNotification = Notification(
-                            type: .error,
-                            title: "Simian Project Already Exists",
-                            message: "Project \(effectiveDocketNumber)_\(effectiveJobName) already exists in Simian"
-                        )
-                        notificationCenter.add(errorNotification)
-                        
-                        // Mark as in Simian (pre-existing, not created by us)
-                        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                            notificationCenter.markAsInSimian(currentNotification, createdByUs: false)
-                        }
-                    }
-                } else {
-                    updateProcessingStatus(notificationId, "Creating Simian project...")
-                    print("🔔 Creating Simian project with docket: \(effectiveDocketNumber), job: \(effectiveJobName)")
-                    try await simianService.createJob(
-                        docketNumber: effectiveDocketNumber,
-                        jobName: effectiveJobName,
-                        projectManager: projectManager,
-                        projectTemplate: template ?? settingsManager.currentSettings.simianProjectTemplate
-                    )
-                    print("✅ Simian project created successfully")
-                    
-                    await MainActor.run {
-                        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                            notificationCenter.markAsInSimian(currentNotification, createdByUs: true)
-                        }
-                    }
-                }
-            } catch {
-                print("❌ Simian project creation failed: \(error.localizedDescription)")
-                simianError = error
-            }
+        if effectiveJobName != jobName {
+            notificationCenter.updateJobName(updatedNotification, to: effectiveJobName)
         }
-        
-        // Handle results and cleanup
-        let wpCreationOK = !shouldCreateWorkPicture || workPictureError == nil
-        let simCreationOK = !shouldCreateSimian || simianError == nil
-        let attemptedCreation = shouldCreateWorkPicture || shouldCreateSimian
-        await MainActor.run {
-            DocketAddSounds.stopLoading()
-            if attemptedCreation && wpCreationOK && simCreationOK {
-                DocketAddSounds.playDocketAdded(enabled: playAddedSound, volume: addedVolume)
-            }
-            processingNotification = nil
-            processingStatusById[notificationId] = nil
-        }
-        
-        // Show error notifications if any failed
-        if let wpError = workPictureError {
-            await MainActor.run {
-                let errorNotification = Notification(
-                    type: .error,
-                    title: "Work Picture Creation Failed",
-                    message: wpError.localizedDescription
-                )
-                notificationCenter.add(errorNotification)
-            }
-        }
-        
-        if let simError = simianError {
-            await MainActor.run {
-                let errorNotification = Notification(
-                    type: .error,
-                    title: "Simian Project Creation Failed",
-                    message: simError.localizedDescription
-                )
-                notificationCenter.add(errorNotification)
-            }
-        }
-        
-        // Mark email as read and track interaction
-        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-            // Mark email as read
-            await markEmailAsReadIfNeeded(currentNotification)
-            
-            await MainActor.run {
-                
-                if let emailId = currentNotification.emailId {
-                    var details: [String: String] = [:]
-                    if shouldCreateWorkPicture && workPictureError == nil {
-                        details["createdWorkPicture"] = "true"
-                    }
-                    if shouldCreateSimian && simianError == nil {
-                        details["createdSimianJob"] = "true"
-                    }
-                    details["docketNumber"] = docketNumber
-                    EmailFeedbackTracker.shared.recordInteraction(
-                        emailId: emailId,
-                        type: .approved,
-                        details: details.isEmpty ? nil : details
-                    )
-                }
-                
-                // Close dialog
-                showSimianProjectDialog = false
-                
-                // Build history note based on what was created/failed
-                var historyParts: [String] = []
-                
-                if shouldCreateWorkPicture {
-                    if workPictureError == nil {
-                        historyParts.append("Created in Work Picture")
-                    } else {
-                        historyParts.append("Work Picture failed")
-                    }
-                }
-                
-                if shouldCreateSimian {
-                    if simianError == nil {
-                        historyParts.append("Created in Simian")
-                    } else {
-                        historyParts.append("Simian failed")
-                    }
-                }
-                
-                let historyNote = historyParts.isEmpty ? "Approved" : historyParts.joined(separator: " • ")
-                
-                // Mark as completed instead of removing (moves to history)
-                Task {
-                    try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 second delay
-                    if let finalNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                        notificationCenter.markAsCompleted(finalNotification, historyNote: historyNote)
-                        print("✅ Marked notification as completed: \(historyNote)")
-                    }
-                }
-            }
-        }
+
+        DocketApprovalCoordinator.shared.enqueue(
+            notificationId: notificationId,
+            docketNumber: effectiveDocketNumber,
+            jobName: effectiveJobName,
+            projectManager: nil,
+            template: template
+        )
     }
     
     var body: some View {
@@ -1500,56 +1357,23 @@ struct NotificationRowView: View {
                     initialJobName: pendingSimianJobName,
                     isSimianEnabled: isSimianEnabled,
                     onConfirm: { docketNumber, jobName, _, template in
-                        Task {
-                            await createSimianProject(
-                                notificationId: notificationId,
-                                docketNumber: docketNumber,
-                                jobName: jobName,
-                                projectManager: nil,
-                                template: template
-                            )
-                        }
+                        enqueueConfirmedApproval(
+                            notificationId: notificationId,
+                            docketNumber: docketNumber,
+                            jobName: jobName,
+                            template: template
+                        )
                     }
                 )
                 .sheetBorder()
             }
         }
         .onChange(of: showSimianProjectDialog) { oldValue, newValue in
-            // If dialog is dismissed (closed), clean up pending state
-            // BUT don't remove notification here - let createSimianProject handle that
-            // This prevents the notification from being removed prematurely
             if oldValue == true && newValue == false {
-                // Wait a moment to check if this was a cancellation or successful completion
-                // The createSimianProject function will close the dialog after completion
-                Task {
-                    try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 second delay
-                    
-                    await MainActor.run {
-                        // Only clear pending state if notification was cancelled (not processed)
-                        // Check if notification still exists and hasn't been processed
-                        if let notificationId = pendingSimianNotificationId {
-                            // Check if notification was actually processed (marked as in Simian or Work Picture)
-                            let wasProcessed = notificationCenter.notifications.first(where: { $0.id == notificationId })?.isInSimian == true ||
-                                notificationCenter.notifications.first(where: { $0.id == notificationId })?.isInWorkPicture == true
-                            
-                            if !wasProcessed {
-                                // Dialog was cancelled - DON'T remove notification, just clear pending state
-                                // The notification should remain visible so the user can try again
-                                print("🔔 Simian dialog was cancelled - preserving notification so user can try again")
-                                pendingSimianNotificationId = nil
-                                pendingSimianDocketNumber = ""
-                                pendingSimianJobName = ""
-                                processingNotification = nil
-                                return
-                            }
-                        }
-                        
-                        // Dialog was dismissed after processing - just clear pending state
-                        pendingSimianNotificationId = nil
-                        pendingSimianDocketNumber = ""
-                        pendingSimianJobName = ""
-                    }
-                }
+                pendingSimianNotificationId = nil
+                pendingSimianDocketNumber = ""
+                pendingSimianJobName = ""
+                pendingSimianSourceEmail = nil
             }
         }
         .sheet(isPresented: $showJobNameEditDialog) {
@@ -1864,16 +1688,7 @@ struct NotificationRowView: View {
                 .disabled(simianToggleDisabled)
                 .opacity(simianToggleDisabled ? 0.5 : 1.0)
             
-            if processingNotification == notificationId {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                    Text(processingStatusById[notificationId] ?? "Processing approval...")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                .padding(.vertical, 2)
-            }
+            approvalJobStatusView()
             
             approveArchiveButtons(
                 notification: currentNotification,
@@ -1996,7 +1811,7 @@ struct NotificationRowView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(processingNotification == notificationId || awaitingReviewConfirmation)
+                .disabled(isApprovalLocked || awaitingReviewConfirmation)
                 .help(awaitingReviewConfirmation ? "Confirm this is a new docket using the banner above before approving." : "Approve and create Work Picture / Simian as selected")
             }
             
@@ -2018,7 +1833,58 @@ struct NotificationRowView: View {
                 }
             }
             .controlSize(.small)
-            .disabled(processingNotification == notificationId)
+            .disabled(isApprovalLocked)
+        }
+    }
+
+    @ViewBuilder
+    private func approvalJobStatusView() -> some View {
+        switch approvalQueue.state(for: notificationId) {
+        case .queued:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .scaleEffect(0.6)
+                Text("Queued…")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 2)
+        case .inProgress(let message, let fraction):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                ProgressView(value: min(max(fraction, 0), 1))
+                    .progressViewStyle(.linear)
+            }
+            .padding(.vertical, 2)
+        case .succeeded:
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.system(size: 12))
+                Text("Created")
+                    .font(.system(size: 11))
+                    .foregroundColor(.green)
+            }
+            .padding(.vertical, 2)
+        case .failed(let message):
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                    .font(.system(size: 12))
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 2)
+        case nil:
+            EmptyView()
         }
     }
     
@@ -2370,13 +2236,7 @@ struct NotificationRowView: View {
         guard let updatedNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) else {
             return
         }
-        
-        processingNotification = notificationId
-        updateProcessingStatus(notificationId, "Preparing approval...")
-        
-        // Check if we should show the dialog (if Simian is enabled OR if Work Picture is enabled)
-        // The dialog allows setting docket number and job name that apply to both systems
-        // IMPORTANT: Show dialog FIRST, do NOT create anything yet - wait for dialog confirmation
+
         await MainActor.run {
             updateSimianServiceConfiguration()
         }

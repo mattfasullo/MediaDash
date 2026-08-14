@@ -198,6 +198,14 @@ struct AuthenticatedRootView: View {
                 emailScanningService.settingsManager = settingsManager
                 emailScanningService.asanaCacheManager = asanaCacheManager
                 emailScanningService.simianService = simianService
+
+                DocketApprovalCoordinator.shared.configure(
+                    notificationCenter: notificationCenter,
+                    emailScanningService: emailScanningService,
+                    mediaManager: manager,
+                    settingsManager: settingsManager,
+                    simianService: simianService
+                )
                 
                 // Wire up Asana docket scanning service
                 asanaDocketScanningService.settingsManager = settingsManager
@@ -209,6 +217,7 @@ struct AuthenticatedRootView: View {
                 airtableDocketScanningService.settingsManager = settingsManager
                 airtableDocketScanningService.notificationCenter = notificationCenter
                 airtableDocketScanningService.mediaManager = manager
+                SettingsWindowManager.shared.airtableDocketScanningService = airtableDocketScanningService
                 
                 // Cloudflare Worker / APNs relay (disabled — polling only for now)
                 // PushNotificationManager.shared.appNotificationCenter = notificationCenter

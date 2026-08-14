@@ -8,19 +8,29 @@ final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDelegate 
     
     @Published private(set) var isVisible = false
     private var settingsWindow: NSWindow?
-    
+    /// Media session registers this so Settings (a separate window) can reset Airtable seen-dockets.
+    weak var airtableDocketScanningService: AirtableDocketScanningService?
+
     private override init() {
         super.init()
     }
-    
-    func show(settingsManager: SettingsManager, sessionManager: SessionManager) {
+
+    func show(
+        settingsManager: SettingsManager,
+        sessionManager: SessionManager,
+        airtableDocketScanningService: AirtableDocketScanningService? = nil
+    ) {
+        if let service = airtableDocketScanningService {
+            self.airtableDocketScanningService = service
+        }
+
         if let existingWindow = settingsWindow {
             existingWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             isVisible = true
             return
         }
-        
+
         let binding = Binding<Bool>(
             get: { [weak self] in
                 self?.isVisible ?? false
@@ -31,9 +41,13 @@ final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDelegate 
                 }
             }
         )
-        
-        let rootView = SettingsView(settingsManager: settingsManager, isPresented: binding)
-            .environmentObject(sessionManager)
+
+        let rootView = SettingsView(
+            settingsManager: settingsManager,
+            isPresented: binding,
+            airtableDocketScanningService: airtableDocketScanningService ?? self.airtableDocketScanningService
+        )
+        .environmentObject(sessionManager)
         
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.frame = NSRect(x: 0, y: 0, width: 600, height: 700)

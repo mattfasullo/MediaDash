@@ -904,9 +904,8 @@ class EmailScanningService: ObservableObject {
         )
         
         if result.success {
-            // Refresh dockets
             await MainActor.run {
-                manager.refreshDockets()
+                manager.registerCreatedDocket(result.docketName)
             }
             
             // Mark email as read if we have email ID

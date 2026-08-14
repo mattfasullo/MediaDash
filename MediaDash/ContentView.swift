@@ -369,7 +369,11 @@ struct ContentView: View {
             }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: Foundation.Notification.Name("OpenSettings"))) { _ in
                 // Open settings when requested (e.g., from menu bar status item)
-                SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
+                SettingsWindowManager.shared.show(
+                    settingsManager: settingsManager,
+                    sessionManager: sessionManager,
+                    airtableDocketScanningService: airtableDocketScanningService
+                )
             }
             .onReceive(Foundation.NotificationCenter.default.publisher(for: NotificationWindowManager.notificationWindowDidCloseNotification)) { _ in
                 showNotificationCenter = false
@@ -574,7 +578,11 @@ struct ContentView: View {
                 .overlay(alignment: .topTrailing) {
                     // Settings button in very top right - only in compact mode
                     Button(action: { 
-                        SettingsWindowManager.shared.show(settingsManager: settingsManager, sessionManager: sessionManager)
+                        SettingsWindowManager.shared.show(
+                            settingsManager: settingsManager,
+                            sessionManager: sessionManager,
+                            airtableDocketScanningService: airtableDocketScanningService
+                        )
                     }) {
                         Image(systemName: "gearshape")
                             .font(.system(size: 14))

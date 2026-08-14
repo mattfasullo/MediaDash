@@ -7,14 +7,14 @@ final class DocketMetadataTests: XCTestCase {
     // MARK: - DocketMetadata Model Tests
 
     func testMetadataInitialization() {
-        let metadata = DocketMetadata(
+        var metadata = DocketMetadata(
             docketNumber: "26150",
-            jobName: "Test Campaign",
-            client: "Test Client",
-            producer: "John Doe",
-            status: "Active",
-            agency: "Test Agency"
+            jobName: "Test Campaign"
         )
+        metadata.client = "Test Client"
+        metadata.producer = "John Doe"
+        metadata.status = "Active"
+        metadata.agency = "Test Agency"
 
         XCTAssertEqual(metadata.docketNumber, "26150")
         XCTAssertEqual(metadata.jobName, "Test Campaign")
@@ -47,12 +47,12 @@ final class DocketMetadataTests: XCTestCase {
 
     func testCSVFieldEscaping() {
         // Test the private escapeCSVField function indirectly via metadata
-        let metadata = DocketMetadata(
+        var metadata = DocketMetadata(
             docketNumber: "26150",
-            jobName: "Campaign with, comma",
-            client: "Client with \"quotes\"",
-            notes: "Notes with\nnewline"
+            jobName: "Campaign with, comma"
         )
+        metadata.client = "Client with \"quotes\""
+        metadata.notes = "Notes with\nnewline"
 
         // The metadata should store the raw values
         XCTAssertEqual(metadata.jobName, "Campaign with, comma")

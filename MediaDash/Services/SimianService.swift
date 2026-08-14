@@ -1880,6 +1880,7 @@ class SimianService: ObservableObject {
             
             // Create each folder in the new project
             for templateFolder in templateFolders {
+                await Task.yield()
                 guard let folderName = templateFolder["name"] as? String,
                       let folderId = templateFolder["id"] as? String else {
                     continue

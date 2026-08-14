@@ -32,7 +32,7 @@ final class NotificationTests: XCTestCase {
         XCTAssertEqual(notification.title, "New Docket")
         XCTAssertEqual(notification.docketNumber, "26150")
         XCTAssertEqual(notification.jobName, "Test Campaign")
-        XCTAssertFalse(notification.isRead)
+        XCTAssertEqual(notification.status, .pending)
     }
 
     func testNotificationIDGeneration() {
@@ -135,12 +135,15 @@ final class NotificationTests: XCTestCase {
             message: "Message"
         )
 
-        XCTAssertFalse(notification.isRead)
+        XCTAssertEqual(notification.status, .pending)
 
-        var mutableNotification = notification
-        mutableNotification.markAsRead()
+        notificationCenter.add(notification)
+        notificationCenter.updateStatus(notification, to: .approved)
 
-        XCTAssertTrue(mutableNotification.isRead)
+        XCTAssertEqual(
+            notificationCenter.notifications.first { $0.id == notification.id }?.status,
+            .approved
+        )
     }
 
     func testUnreadCountUpdates() {

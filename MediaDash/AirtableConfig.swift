@@ -96,7 +96,12 @@ enum AirtableConfig {
     static let docketBaseID  = "appv3o3vhhb5QokNc"
     static let docketTableID = "tblrV5JzTdRvTg4jW"
 
-    /// Exact Airtable column names.
+    /// Display names (CSV import left a BOM on Docket and lowercased the job title;
+    /// lookups also match by field ID and BOM/case-insensitive name).
     static let docketNumberField = "Docket"
     static let jobNameField      = "Licensor/Project Title"
+
+    /// Stable IDs on the default docket table (`docketTableID`).
+    static let docketNumberFieldID = "fldSWLZ9ONL1UzNx7"
+    static let jobNameFieldID      = "fldkfsB2Ny0Zza1AK"
 }

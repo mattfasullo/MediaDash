@@ -175,6 +175,7 @@ struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
     @EnvironmentObject var sessionManager: SessionManager
     @Binding var isPresented: Bool
+    var airtableDocketScanningService: AirtableDocketScanningService?
 
     @State private var settings: AppSettings
     @State private var showNewProfileSheet = false
@@ -189,9 +190,14 @@ struct SettingsView: View {
     @State private var manualAuthURL: URL?
     @State private var manualAuthState = ""
 
-    init(settingsManager: SettingsManager, isPresented: Binding<Bool>) {
+    init(
+        settingsManager: SettingsManager,
+        isPresented: Binding<Bool>,
+        airtableDocketScanningService: AirtableDocketScanningService? = nil
+    ) {
         self.settingsManager = settingsManager
         self._isPresented = isPresented
+        self.airtableDocketScanningService = airtableDocketScanningService
         self._settings = State(initialValue: settingsManager.currentSettings)
     }
     
@@ -397,7 +403,8 @@ struct SettingsView: View {
                     if !isProducer && !isTools {
                         NewDocketDetectionSection(
                             settings: $settings,
-                            hasUnsavedChanges: $hasUnsavedChanges
+                            hasUnsavedChanges: $hasUnsavedChanges,
+                            airtableDocketScanningService: airtableDocketScanningService
                         )
 
                         if settings.newDocketDetectionMode == .email {
@@ -4381,7 +4388,7 @@ struct NewProfileView: View {
 struct NewDocketDetectionSection: View {
     @Binding var settings: AppSettings
     @Binding var hasUnsavedChanges: Bool
-    @EnvironmentObject var airtableDocketScanningService: AirtableDocketScanningService
+    var airtableDocketScanningService: AirtableDocketScanningService?
     @State private var airtablePersonalTokenInput = ""
 
     private var effectiveBaseID: String {
@@ -4513,13 +4520,14 @@ struct NewDocketDetectionSection: View {
                         }
 
                         Button(action: {
-                            airtableDocketScanningService.clearSeenRecords()
+                            airtableDocketScanningService?.clearSeenRecords()
                         }) {
                             Label("Reset seen dockets", systemImage: "arrow.counterclockwise")
                                 .font(.system(size: 11))
                         }
                         .buttonStyle(.plain)
                         .foregroundColor(.secondary)
+                        .disabled(airtableDocketScanningService == nil)
                         .help("Clears the list of already-detected dockets so the next scan re-evaluates all recent rows.")
                     }
                 }

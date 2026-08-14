@@ -1543,6 +1543,12 @@ class MediaManager: ObservableObject {
             }
         }
     }
+
+    /// Add a newly created docket without rescanning the share.
+    func registerCreatedDocket(_ docketName: String) {
+        guard !docketName.isEmpty, !dockets.contains(docketName) else { return }
+        dockets.append(docketName)
+    }
     
     func buildSessionIndex(folder: SearchFolder = .sessions) {
         // Skip if this folder is already being indexed or is already cached

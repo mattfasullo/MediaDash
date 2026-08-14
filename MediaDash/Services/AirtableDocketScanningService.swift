@@ -1,10 +1,9 @@
 import Foundation
 import Combine
 
-/// Scans an Airtable base for docket rows where the job name field was **recently assigned**
-/// (non-empty + `LAST_MODIFIED_TIME` on that field after the scan cutoff). Rows often exist
-/// early with only a docket number prefilled; the signal for a "new" docket is filling
-/// **Licensor/Project Title** (or whatever `airtableJobNameField` is set to).
+/// Scans an Airtable base for docket rows with a non-empty job title whose **record**
+/// was modified after the scan cutoff (`LAST_MODIFIED_TIME()`). Per-column last-modified
+/// on the job title is blank after CSV import, so whole-record activity is the signal.
 @MainActor
 class AirtableDocketScanningService: ObservableObject {
     @Published var isScanning = false
@@ -113,32 +112,50 @@ class AirtableDocketScanningService: ObservableObject {
 
         let docketField = settings.airtableDocketNumberField.nilIfEmpty ?? AirtableConfig.docketNumberField
         let jobField    = settings.airtableJobNameField.nilIfEmpty      ?? AirtableConfig.jobNameField
+        let usingDefaultDocketTable = baseID == AirtableConfig.docketBaseID && tableID == AirtableConfig.docketTableID
+        let docketFieldID = usingDefaultDocketTable ? AirtableConfig.docketNumberFieldID : nil
+        let jobFieldID = usingDefaultDocketTable ? AirtableConfig.jobNameFieldID : nil
+        let jobFormulaRef = jobFieldID ?? jobField
         let simianProjectNames = await fetchSimianProjectNamesForScan()
 
         do {
-            let records = try await fetchRecordsJobFieldAssignedAfter(
+            let records = try await fetchRecentlyModifiedRecordsWithJob(
                 cutoff:      cutoff,
                 baseID:      baseID,
                 tableID:     tableID,
-                jobField:    jobField,
-                docketField: docketField,
+                jobFormulaRef: jobFormulaRef,
+                returnFieldsByFieldId: usingDefaultDocketTable,
                 apiKey:      apiKey
             )
 
             for record in records {
                 guard !seenRecordIds.contains(record.id) else { continue }
 
-                guard let rawDocket = record.fields[docketField] as? String,
-                      isValidDocketNumber(rawDocket) else {
-                    // Mark unseen/invalid records so we don't keep re-evaluating them.
+                // Missing docket column (rename / BOM / wrong key) is not a permanent skip.
+                guard AirtableRecordFields.hasField(
+                    in: record.fields,
+                    fieldID: docketFieldID,
+                    names: [docketField, AirtableConfig.docketNumberField]
+                ) else {
+                    continue
+                }
+
+                guard let rawDocket = AirtableRecordFields.string(
+                    in: record.fields,
+                    fieldID: docketFieldID,
+                    names: [docketField, AirtableConfig.docketNumberField]
+                ), isValidDocketNumber(rawDocket) else {
                     markSeen(record.id)
                     continue
                 }
 
                 let docketNumber = rawDocket
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
                     .replacingOccurrences(of: "-US", with: "", options: [.caseInsensitive, .anchored])
-                let jobName      = (record.fields[jobField] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let jobName = AirtableRecordFields.string(
+                    in: record.fields,
+                    fieldID: jobFieldID,
+                    names: [jobField, AirtableConfig.jobNameField]
+                ) ?? ""
 
                 // Don't markSeen here — an empty job name is transient (not yet filled in).
                 // The LAST_MODIFIED_TIME filter will re-surface this record once it's filled.
@@ -181,23 +198,21 @@ class AirtableDocketScanningService: ObservableObject {
         let fields: [String: Any]
     }
 
-    /// Fetch records where `jobField` is non-empty and was last modified after `cutoff`.
-    /// Paginates fully; both `docketField` and `jobField` are requested so a single API
-    /// call returns everything needed.
-    private func fetchRecordsJobFieldAssignedAfter(
+    /// Fetch records with a non-empty job title whose **record** changed after `cutoff`.
+    private func fetchRecentlyModifiedRecordsWithJob(
         cutoff:      Date,
         baseID:      String,
         tableID:     String,
-        jobField:    String,
-        docketField: String,
+        jobFormulaRef: String,
+        returnFieldsByFieldId: Bool,
         apiKey:      String
     ) async throws -> [AirtableRecord] {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let cutoffString = formatter.string(from: cutoff)
-
-        let jobRef = Self.airtableFieldReference(jobField)
-        let filterFormula = "AND(NOT(\(jobRef)=\"\"), IS_AFTER(LAST_MODIFIED_TIME(\(jobRef)), '\(cutoffString)'))"
+        let filterFormula = AirtableDocketScanFilter.recentlyModifiedNonemptyJobFormula(
+            jobFieldReference: jobFormulaRef,
+            cutoff: cutoff
+        )
 
         let urlString = "\(baseURL)/\(baseID)/\(tableID)"
         var results: [AirtableRecord] = []
@@ -209,6 +224,9 @@ class AirtableDocketScanningService: ObservableObject {
                 URLQueryItem(name: "filterByFormula", value: filterFormula),
                 URLQueryItem(name: "pageSize", value: "100")
             ]
+            if returnFieldsByFieldId {
+                items.append(URLQueryItem(name: "returnFieldsByFieldId", value: "true"))
+            }
             if let offset {
                 items.append(URLQueryItem(name: "offset", value: offset))
             }
@@ -259,15 +277,6 @@ class AirtableDocketScanningService: ObservableObject {
         } while offset != nil
 
         return results
-    }
-
-    /// Wraps an Airtable field name for use inside `filterByFormula` (curly-brace syntax).
-    /// Fix 5: escapes backslashes and `}` so custom field names can't break the formula.
-    private static func airtableFieldReference(_ name: String) -> String {
-        let escaped = name
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "}", with: "\\}")
-        return "{\(escaped)}"
     }
 
     // MARK: - Notification
