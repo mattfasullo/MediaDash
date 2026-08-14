@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.17</title>
+            <description><![CDATA[
+                <p>New docket Approve no longer freezes the window — Work Picture and Simian jobs queue in the background with a progress strip. Airtable detection finds titled dockets again, and Reset seen dockets no longer crashes Settings.</p>
+            ]]></description>
+            <pubDate>Fri, 14 Aug 2026 20:06:07 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.17/MediaDash.zip"
+                sparkle:version="270"
+                sparkle:shortVersionString="1.17"
+                sparkle:edSignature="snVSlR5+gnXAGFgqV3G+eE7p4l//pIlQPAcobY3GYc0m9OV/R+SYzMhY6HQ1nYJbPomt1fBVoe6j+QVICIoPAQ=="
+                length="15525520"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.16</title>
             <description><![CDATA[
                 <p>Finals organization treats non-full-mix and non-QuickTime audio as mixouts, with FullMix token matching and announcer stems. Simian adds APPROVALS dated loose uploads at the project root only, skips extra wrappers for nested category folders, improves upload parent handling, and refreshes tree cells after inline rename.</p>
