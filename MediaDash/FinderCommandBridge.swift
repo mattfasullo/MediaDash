@@ -14,19 +14,57 @@ extension Foundation.Notification.Name {
 
     /// New Finder / URL commands were queued; `AuthenticatedRootView` applies when UI is ready.
     static let mediaDashFinderCommandsPending = Foundation.Notification.Name("mediaDashFinderCommandsPending")
+
+    /// Arrange Finals finished; userInfo `paths` is `[String]` of folder paths to refresh in staging.
+    static let mediaDashRefreshStagedFolders = Foundation.Notification.Name("mediaDashRefreshStagedFolders")
+
+    /// Finder File / Prep: show docket sheet. userInfo `action` is `file` or `prep`, `paths` is `[String]`.
+    static let mediaDashFinderFileOrPrep = Foundation.Notification.Name("mediaDashFinderFileOrPrep")
+}
+
+/// Keep Arrange Finals in the background: bounce activation back to Finder.
+enum FinderFocus {
+    static var restoreFinderAfterActivation = false
+
+    nonisolated static func shouldActivateApp(for batch: [FinderCommandPayload]) -> Bool {
+        batch.contains { $0.action != .arrangeFinals }
+    }
+
+    static func beginBackgroundFinderAction() {
+        restoreFinderAfterActivation = true
+        activateFinder()
+    }
+
+    static func activateFinder() {
+        NSWorkspace.shared.runningApplications
+            .first(where: { $0.bundleIdentifier == "com.apple.finder" })?
+            .activate(options: [.activateIgnoringOtherApps])
+    }
+
+    static func handleDidBecomeActive() {
+        guard restoreFinderAfterActivation else { return }
+        activateFinder()
+    }
+
+    static func handleDidResignActive() {
+        restoreFinderAfterActivation = false
+    }
 }
 
 /// Actions delivered from Finder Sync or `mediadash://` URLs.
-enum FinderIncomingAction: String, Codable, Sendable {
+nonisolated enum FinderIncomingAction: String, Codable, Sendable {
     case stage
     case convert
     case simian
     case audioOnly
     case editOnSimian
+    case arrangeFinals
+    case file
+    case prep
 }
 
 /// JSON payload written by the Finder Sync extension (App Group) or parsed from URLs.
-struct FinderCommandPayload: Codable, Sendable {
+nonisolated struct FinderCommandPayload: Codable, Sendable {
     let action: FinderIncomingAction
     let paths: [String]
 }
@@ -100,20 +138,30 @@ final class FinderCommandBridge {
 
     // MARK: - Apply (editor session only)
 
+    /// Remove and return queued payloads. Used by `applyPendingCommands` and tests.
+    func dequeuePending() -> [FinderCommandPayload] {
+        queueLock.lock()
+        let batch = pendingPayloads
+        pendingPayloads.removeAll()
+        queueLock.unlock()
+        return batch
+    }
+
     /// Run queued commands using staging / Simian / video UI. Call after splash when `MediaManager` is ready.
     func applyPendingCommands(
         manager: MediaManager,
         settingsManager: SettingsManager,
         sessionManager: SessionManager
     ) {
-        queueLock.lock()
-        let batch = pendingPayloads
-        pendingPayloads.removeAll()
-        queueLock.unlock()
+        let batch = dequeuePending()
 
         guard !batch.isEmpty else { return }
 
-        NSApp.activate(ignoringOtherApps: true)
+        if FinderFocus.shouldActivateApp(for: batch) {
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            FinderFocus.beginBackgroundFinderAction()
+        }
 
         for payload in batch {
             let urls = payload.paths.compactMap { path -> URL? in
@@ -144,6 +192,85 @@ final class FinderCommandBridge {
                 Task {
                     await Self.openFoldersOnSimian(urls: urls, settingsManager: settingsManager)
                 }
+            case .arrangeFinals:
+                Self.applyArrangeFinals(urls: urls, manager: manager)
+            case .file, .prep:
+                Foundation.NotificationCenter.default.post(
+                    name: .mediaDashFinderFileOrPrep,
+                    object: nil,
+                    userInfo: [
+                        "action": payload.action.rawValue,
+                        "paths": payload.paths
+                    ]
+                )
+            }
+        }
+    }
+
+    static func applyArrangeFinals(urls: [URL], manager: MediaManager?) {
+        Task.detached(priority: .userInitiated) {
+            let prepared = FinalsFinderArrange.prepareRoots(from: urls)
+            var arranged: [FinalsFinderArrange] = []
+            var failures: [String] = prepared.moveFailures
+            var emptyNames: [String] = []
+            var arrangedURLs: [URL] = []
+
+            for root in prepared.roots {
+                switch FinalsFinderArrange.run(url: root) {
+                case .skippedNotDirectory:
+                    continue
+                case .empty:
+                    emptyNames.append(root.lastPathComponent)
+                case .arranged(let fileCount, let folderName):
+                    arranged.append(.arranged(fileCount: fileCount, folderName: folderName))
+                    arrangedURLs.append(root)
+                case .failed(let message):
+                    failures.append("\(root.lastPathComponent): \(message)")
+                }
+            }
+
+            await MainActor.run {
+                if !arrangedURLs.isEmpty {
+                    if let manager {
+                        for url in arrangedURLs {
+                            manager.refreshStagedFolder(url: url)
+                        }
+                    }
+                    Foundation.NotificationCenter.default.post(
+                        name: .mediaDashRefreshStagedFolders,
+                        object: nil,
+                        userInfo: ["paths": arrangedURLs.map(\.path)]
+                    )
+                }
+
+                if !failures.isEmpty {
+                    NotificationService.shared.showBanner(
+                        title: "Arrange Finals Failed",
+                        body: failures.joined(separator: "\n")
+                    )
+                }
+
+                if arranged.isEmpty, failures.isEmpty, !emptyNames.isEmpty {
+                    NotificationService.shared.showBanner(
+                        title: "Arrange Finals",
+                        body: "No classifiable files in \(emptyNames.joined(separator: ", "))"
+                    )
+                } else if !arranged.isEmpty {
+                    let total = arranged.reduce(0) { sum, item in
+                        if case .arranged(let count, _) = item { return sum + count }
+                        return sum
+                    }
+                    let names = arranged.compactMap { item -> String? in
+                        if case .arranged(_, let name) = item { return name }
+                        return nil
+                    }
+                    NotificationService.shared.showBanner(
+                        title: "Finals arranged",
+                        body: "Moved \(total) file\(total == 1 ? "" : "s") in \(names.joined(separator: ", "))"
+                    )
+                }
+
+                FinderFocus.beginBackgroundFinderAction()
             }
         }
     }

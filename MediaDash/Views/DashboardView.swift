@@ -87,7 +87,6 @@ struct DashboardView: View {
                 attempt: attempt,
                 cacheManager: cacheManager
             )
-            .draggableLayout(id: "dashboardTopBar")
             
             // Main Content with Panels
             GeometryReader { geometry in
@@ -100,7 +99,6 @@ struct DashboardView: View {
                         )
                         .frame(width: leftPanelWidth)
                         .transition(.move(edge: .leading).combined(with: .opacity))
-                        .draggableLayout(id: "dashboardLeftPanel")
                         
                         // Left Divider
                         ResizableDivider(
@@ -120,7 +118,6 @@ struct DashboardView: View {
                         selectedFileIndex: $selectedFileIndex
                     )
                     .frame(minWidth: 400)
-                    .draggableLayout(id: "dashboardStagingArea")
                     
                     // Right Panel - Notifications
                     if !rightPanelCollapsed {
@@ -139,7 +136,6 @@ struct DashboardView: View {
                         )
                         .frame(width: rightPanelWidth)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
-                        .draggableLayout(id: "dashboardRightPanel")
                     }
                 }
             }

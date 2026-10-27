@@ -114,6 +114,8 @@ struct ContentView: View {
     // Logic for auto-docket selection
     @State private var showDocketSelectionSheet = false
     @State private var pendingJobType: JobType? = nil
+    /// Finder File / Prep selection — used as `runJob` filesOverride so staging is not required.
+    @State private var pendingFinderFiles: [FileItem]? = nil
     /// When true, next docket confirm will run file then open prep for a matching calendar session.
     @State private var pendingFileThenPrep = false
     /// After filing, open prep window for this session when isProcessing becomes false.
@@ -191,12 +193,9 @@ struct ContentView: View {
         return formatter
     }()
     
-    @StateObject private var layoutEditManager = LayoutEditManager.shared
-    
     var body: some View {
         mainContentView
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .environmentObject(layoutEditManager)
             .focusable()
             .focused($mainViewFocused)
             .onAppear {
@@ -229,31 +228,6 @@ struct ContentView: View {
                 // Backup listener in ContentView - create test notification directly
                 print("🔔 ContentView received CreateTestDocketNotification")
                 createTestDocketNotificationFromMenu()
-            }
-            .onKeyPress { keyPress in
-                // Handle arrow keys for layout editing
-                if layoutEditManager.isEditMode, let selectedId = layoutEditManager.selectedViewId {
-                    let step: CGFloat = 1.0 // 1 pixel per key press
-                    var delta = CGSize.zero
-                    
-                    switch keyPress.key {
-                    case .leftArrow:
-                        delta = CGSize(width: -step, height: 0)
-                    case .rightArrow:
-                        delta = CGSize(width: step, height: 0)
-                    case .upArrow:
-                        delta = CGSize(width: 0, height: -step)
-                    case .downArrow:
-                        delta = CGSize(width: 0, height: step)
-                    default:
-                        return .ignored
-                    }
-                    
-                    // moveOffset already defers internally, so we can call it directly
-                    layoutEditManager.moveOffset(delta, for: selectedId)
-                    return .handled
-                }
-                return .ignored
             }
             .modifier(KeyboardHandlersModifier(
                 isKeyboardMode: $isKeyboardMode,
@@ -311,6 +285,7 @@ struct ContentView: View {
                 initialSearchText: $initialSearchText,
                 showDocketSelectionSheet: $showDocketSelectionSheet,
                 pendingJobType: $pendingJobType,
+                pendingFinderFiles: $pendingFinderFiles,
                 showManualPrepSheet: $showManualPrepSheet,
                 existingPrepFolderForJob: $existingPrepFolderForJob,
                 wpDate: wpDate,
@@ -446,72 +421,10 @@ struct ContentView: View {
                         cacheManager: cacheManager
                     )
                     .frame(minWidth: LayoutMode.dashboardMinWidth, maxWidth: .infinity, minHeight: LayoutMode.dashboardMinHeight, maxHeight: .infinity)
-                    .draggableLayout(id: "dashboardView")
                     .focusable()
                     .focused($mainViewFocused)
                     .focusEffectDisabled()
                     
-                }
-                .overlay(alignment: .topLeading) {
-                    // Layout Edit Mode Indicator
-                    if layoutEditManager.isEditMode {
-                        HStack(spacing: 12) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "hand.draw")
-                                    .foregroundColor(.blue)
-                                Text("Layout Edit Mode")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(.blue)
-                                Text("(Cmd+Shift+E to exit)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            Divider()
-                                .frame(height: 20)
-                            
-                            // Undo/Redo buttons
-                            Button(action: {
-                                layoutEditManager.undo()
-                            }) {
-                                Image(systemName: "arrow.uturn.backward")
-                                    .font(.system(size: 11))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!layoutEditManager.canUndo)
-                            .foregroundColor(layoutEditManager.canUndo ? .blue : .gray)
-                            .help("Undo (Cmd+Z)")
-                            
-                            Button(action: {
-                                layoutEditManager.redo()
-                            }) {
-                                Image(systemName: "arrow.uturn.forward")
-                                    .font(.system(size: 11))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!layoutEditManager.canRedo)
-                            .foregroundColor(layoutEditManager.canRedo ? .blue : .gray)
-                            .help("Redo (Cmd+Shift+Z)")
-                            
-                            Divider()
-                                .frame(height: 20)
-                            
-                            Button(action: {
-                                layoutEditManager.resetAllOffsets()
-                            }) {
-                                Image(systemName: "arrow.counterclockwise")
-                                    .font(.system(size: 11))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(.blue)
-                            .help("Reset Layout")
-                        }
-                        .padding(8)
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(6)
-                        .padding(.top, 8)
-                        .padding(.leading, 8)
-                    }
                 }
             } else {
                 // Compact Mode - Phone-like compact interface
@@ -544,7 +457,6 @@ struct ContentView: View {
                             onFileThenPrep: attemptFileThenPrep,
                             showVideoSheet: $showVideoSheet
                         )
-                        .draggableLayout(id: "sidebar")
                         
                         StagingAreaView(
                             cacheManager: cacheManager,
@@ -556,7 +468,6 @@ struct ContentView: View {
                         )
                         .environmentObject(manager)
                         .layoutPriority(1)
-                        .draggableLayout(id: "stagingArea")
                     }
                     .frame(minWidth: LayoutMode.minWidth, maxWidth: .infinity, minHeight: LayoutMode.minHeight, maxHeight: .infinity)
                     // Full-width titlebar seam paint (behind both columns; ZStack sibling was easy to miss or clip).
@@ -592,70 +503,8 @@ struct ContentView: View {
                     .help("Settings (⌘,)")
                     .padding(.top, 8)
                     .padding(.trailing, 8)
-                    .offset(x: 2.7109375, y: -29.5390625) // Layout edit: dashboardButton offset
-                    .draggableLayout(id: "dashboardButtonGroup")
+                    .offset(x: 2.7109375, y: -29.5390625)
                     .zIndex(1000) // Ensure it stays on top
-                }
-                .overlay(alignment: .topLeading) {
-                    // Layout Edit Mode Indicator
-                    if layoutEditManager.isEditMode {
-                        HStack(spacing: 12) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "hand.draw")
-                                    .foregroundColor(.blue)
-                                Text("Layout Edit Mode")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(.blue)
-                                Text("(Cmd+Shift+E to exit)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            Divider()
-                                .frame(height: 20)
-                            
-                            // Undo/Redo buttons
-                            Button(action: {
-                                layoutEditManager.undo()
-                            }) {
-                                Image(systemName: "arrow.uturn.backward")
-                                    .font(.system(size: 11))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!layoutEditManager.canUndo)
-                            .foregroundColor(layoutEditManager.canUndo ? .blue : .gray)
-                            .help("Undo (Cmd+Z)")
-                            
-                            Button(action: {
-                                layoutEditManager.redo()
-                            }) {
-                                Image(systemName: "arrow.uturn.forward")
-                                    .font(.system(size: 11))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!layoutEditManager.canRedo)
-                            .foregroundColor(layoutEditManager.canRedo ? .blue : .gray)
-                            .help("Redo (Cmd+Shift+Z)")
-                            
-                            Divider()
-                                .frame(height: 20)
-                            
-                            Button(action: {
-                                layoutEditManager.resetAllOffsets()
-                            }) {
-                                Image(systemName: "arrow.counterclockwise")
-                                    .font(.system(size: 11))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(.blue)
-                            .help("Reset Layout")
-                        }
-                        .padding(8)
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(6)
-                        .padding(.top, 8)
-                        .padding(.leading, 8)
-                    }
                 }
             }
         }
@@ -3973,7 +3822,6 @@ struct KeyboardHandlersModifier: ViewModifier {
         driver.isKeyboardModeBinding = $isKeyboardMode
         driver.getFocusDescription = { String(describing: MainWindowKeyboardFocus.shared.focusedButton) }
         let mainWindowKeyHandler: (NSEvent) -> Bool = { event in
-            if LayoutEditManager.shared.isEditMode { return true }
             driver.isKeyboardModeBinding?.wrappedValue = true
             let keyCode = event.keyCode
             switch keyCode {
@@ -4008,10 +3856,6 @@ struct KeyboardHandlersModifier: ViewModifier {
                     hypothesisId: "H9"
                 )
                 // #endregion
-                // Don't handle arrow keys if in layout edit mode
-                if LayoutEditManager.shared.isEditMode {
-                    return .ignored
-                }
                 isKeyboardMode = true
                 moveGridFocus(.left)
                 return .handled
@@ -4025,10 +3869,6 @@ struct KeyboardHandlersModifier: ViewModifier {
                     hypothesisId: "H9"
                 )
                 // #endregion
-                // Don't handle arrow keys if in layout edit mode
-                if LayoutEditManager.shared.isEditMode {
-                    return .ignored
-                }
                 isKeyboardMode = true
                 moveGridFocus(.right)
                 return .handled
@@ -4042,10 +3882,6 @@ struct KeyboardHandlersModifier: ViewModifier {
                     hypothesisId: "H9"
                 )
                 // #endregion
-                // Don't handle arrow keys if in layout edit mode
-                if LayoutEditManager.shared.isEditMode {
-                    return .ignored
-                }
                 isKeyboardMode = true
                 moveGridFocus(.up)
                 return .handled
@@ -4059,10 +3895,6 @@ struct KeyboardHandlersModifier: ViewModifier {
                     hypothesisId: "H9"
                 )
                 // #endregion
-                // Don't handle arrow keys if in layout edit mode
-                if LayoutEditManager.shared.isEditMode {
-                    return .ignored
-                }
                 isKeyboardMode = true
                 moveGridFocus(.down)
                 return .handled
@@ -4199,6 +4031,7 @@ struct SheetsModifier: ViewModifier {
     @Binding var initialSearchText: String
     @Binding var showDocketSelectionSheet: Bool
     @Binding var pendingJobType: JobType?
+    @Binding var pendingFinderFiles: [FileItem]?
     @Binding var showManualPrepSheet: Bool
     @Binding var existingPrepFolderForJob: String?
     let wpDate: Date
@@ -4234,6 +4067,19 @@ struct SheetsModifier: ViewModifier {
                 )
                 .sheetBorder()
             }
+            .onReceive(Foundation.NotificationCenter.default.publisher(for: .mediaDashFinderFileOrPrep)) { note in
+                let paths = note.userInfo?["paths"] as? [String] ?? []
+                let items = paths.compactMap { path -> FileItem? in
+                    guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { return nil }
+                    return FileItem(url: URL(fileURLWithPath: path))
+                }
+                guard !items.isEmpty else { return }
+                let action = note.userInfo?["action"] as? String
+                pendingFinderFiles = items
+                pendingJobType = action == FinderIncomingAction.prep.rawValue ? .prep : .workPicture
+                pendingFileThenPrep = false
+                showDocketSelectionSheet = true
+            }
             .sheet(isPresented: $showSearchSheet, onDismiss: {
                 initialSearchText = ""
             }) {
@@ -4243,9 +4089,11 @@ struct SheetsModifier: ViewModifier {
             .sheet(isPresented: $showDocketSelectionSheet, onDismiss: {
                 pendingJobType = nil
                 pendingFileThenPrep = false
+                pendingFinderFiles = nil
             }) {
                 let selectedJobType = pendingJobType ?? .workPicture
                 let shouldFileThenPrep = pendingFileThenPrep
+                let finderFiles = pendingFinderFiles
 
                 DocketSearchView(
                     manager: manager,
@@ -4256,6 +4104,21 @@ struct SheetsModifier: ViewModifier {
                     onConfirm: { docket, existingPrepFolderName in
                         if shouldFileThenPrep {
                             onFileThenPrepConfirm(docket)
+                            showDocketSelectionSheet = false
+                            return
+                        }
+
+                        if let finderFiles, !finderFiles.isEmpty {
+                            manager.runJob(
+                                type: selectedJobType,
+                                docket: docket,
+                                wpDate: wpDate,
+                                prepDate: prepDate,
+                                existingPrepFolderName: existingPrepFolderName,
+                                filesOverride: finderFiles
+                            )
+                            pendingFinderFiles = nil
+                            pendingJobType = nil
                             showDocketSelectionSheet = false
                             return
                         }

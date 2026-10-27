@@ -65,6 +65,122 @@ enum SimianDropTargeting {
         let normalizedY = max(0, min(yInRow / rowHeight, 1))
         return normalizedY >= 0.30 && normalizedY <= 0.70
     }
+
+    /// Sibling insertion index for a pointer on a row. `siblingIndex` is that row's index in its parent.
+    /// The bottom band inserts after the row. The last row treats everything below its top band as "after",
+    /// which is the only gap below the list.
+    static func siblingInsertChildIndex(yInRow: CGFloat, rowHeight: CGFloat, siblingIndex: Int, isLastSibling: Bool) -> Int {
+        guard rowHeight > 0, siblingIndex >= 0 else { return max(0, siblingIndex) }
+        let normalizedY = max(0, min(yInRow / rowHeight, 1))
+        if normalizedY >= 0.70 { return siblingIndex + 1 }
+        if isLastSibling && normalizedY >= 0.30 { return siblingIndex + 1 }
+        return siblingIndex
+    }
+}
+
+/// Mixed folder/file order for one Simian folder (or the project root).
+enum SimianListOrdering {
+    /// Insert `movingIds` at the outline drop index. `childIndex` counts positions in `currentIds`, which still includes the dragged rows.
+    static func insertedOrder(currentIds: [String], movingIds: [String], childIndex: Int) -> [String] {
+        let movingSet = Set(movingIds)
+        let dragged = currentIds.filter { movingSet.contains($0) }
+        guard !dragged.isEmpty else { return currentIds }
+        let draggedSet = Set(dragged)
+        let remaining = currentIds.filter { !draggedSet.contains($0) }
+        let boundedIndex = min(max(0, childIndex), currentIds.count)
+        let removedBefore = currentIds.prefix(boundedIndex).filter { draggedSet.contains($0) }.count
+        let insertAt = min(max(0, boundedIndex - removedBefore), remaining.count)
+        var result = remaining
+        result.insert(contentsOf: dragged, at: insertAt)
+        return result
+    }
+
+    /// One row in the order the public Simian link should show, top to bottom.
+    /// Simian's web sorter addresses folders as `c_<id>` and files as `f_<id>`.
+    struct LinkSortMove: Equatable {
+        let moveNode: String
+        let parentNode: String
+        let position: Int
+    }
+
+    /// The public link sorts folders and files on one shared index.
+    /// `position` is the row's index in that mixed list. The project root is folder `1000000`.
+    static func linkSortMoves(parentFolderId: String?, orderedTreeIds: [String]) -> [LinkSortMove] {
+        let parent = parentFolderId.flatMap { $0.isEmpty ? nil : $0 } ?? "1000000"
+        let nodes: [String] = orderedTreeIds.compactMap { treeId in
+            if treeId.hasPrefix("file-") {
+                let id = String(treeId.dropFirst(5))
+                return id.isEmpty ? nil : "f_\(id)"
+            }
+            if treeId.hasPrefix("f-") {
+                let id = String(treeId.dropFirst(2))
+                return id.isEmpty ? nil : "c_\(id)"
+            }
+            return nil
+        }
+        return nodes.enumerated().map { index, node in
+            LinkSortMove(moveNode: node, parentNode: "c_\(parent)", position: index)
+        }
+    }
+
+    /// Keep a saved mixed order, drop ids that are gone, and append new folders then new files.
+    /// With no saved order, folders stay above files (the server lists them separately).
+    static func reconciled(saved: [String]?, folderIds: [String], fileIds: [String]) -> [String] {
+        let folderTree = folderIds.map { "f-\($0)" }
+        let fileTree = fileIds.map { "file-\($0)" }
+        let valid = Set(folderTree + fileTree)
+        guard let saved, !saved.isEmpty else { return folderTree + fileTree }
+        var order = saved.filter { valid.contains($0) }
+        var seen = Set(order)
+        for id in folderTree where !seen.contains(id) {
+            order.append(id)
+            seen.insert(id)
+        }
+        for id in fileTree where !seen.contains(id) {
+            order.append(id)
+            seen.insert(id)
+        }
+        return order
+    }
+
+    /// One string for both the visible label and the stored file name.
+    /// If the typed name has no extension, keep the current file's extension on both.
+    static func unifiedRenameName(typed: String, currentTitle: String, currentFileName: String?) -> String {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        let ext = preferredExtension(currentFileName: currentFileName, currentTitle: currentTitle)
+        guard !ext.isEmpty else { return trimmed }
+        let typedExt = (trimmed as NSString).pathExtension
+        if typedExt.isEmpty { return "\(trimmed).\(ext)" }
+        return trimmed
+    }
+
+    private static func preferredExtension(currentFileName: String?, currentTitle: String) -> String {
+        if let currentFileName {
+            let ext = (currentFileName as NSString).pathExtension
+            if !ext.isEmpty { return ext }
+        }
+        return (currentTitle as NSString).pathExtension
+    }
+}
+
+enum SimianSiblingOrderStore {
+    private static let defaultsKey = "simianSiblingOrder.v1"
+
+    static func load() -> [String: [String]] {
+        guard let raw = UserDefaults.standard.dictionary(forKey: defaultsKey) else { return [:] }
+        var result: [String: [String]] = [:]
+        for (key, value) in raw {
+            if let ids = value as? [String] {
+                result[key] = ids
+            }
+        }
+        return result
+    }
+
+    static func save(_ order: [String: [String]]) {
+        UserDefaults.standard.set(order, forKey: defaultsKey)
+    }
 }
 
 // MARK: - NSViewRepresentable
@@ -80,6 +196,8 @@ struct SimianTreeView: NSViewRepresentable {
     let expandedFolderIds: Set<String>
     let selectedItemIds: Set<String>
     let inlineRenameItemId: String?
+    /// Mixed child order keyed by parent folder id, or `""` for the project root. Missing key = folders then files.
+    let siblingOrder: [String: [String]]
     let currentParentFolderId: String?
     let stagedFileCount: Int
     let focusTrigger: Int
@@ -90,9 +208,9 @@ struct SimianTreeView: NSViewRepresentable {
     var onToggleExpand: (String) -> Void
     var onSpringLoadExpand: (String) -> Void
     var onLoadChildren: (String) -> Void
-    var onReorderFolders: (_ projectId: String, _ folderIds: [String], _ parentId: String?, _ dropBeforeId: String?) -> Void
-    var onReorderFiles: (_ projectId: String, _ fileIds: [String], _ parentId: String, _ dropBeforeId: String?) -> Void
+    var onReorderSiblings: (_ projectId: String, _ parentId: String?, _ orderedTreeIds: [String]) -> Void
     var onMoveIntoFolder: (_ projectId: String, _ itemIds: [String], _ targetFolderId: String) -> Void
+    var onOpenItem: (_ treeId: String) -> Void
     var onExternalFileDrop: (_ providers: [NSItemProvider], _ folderId: String?, _ folderName: String?, _ simianParentFolderIdOfDestination: String?) -> Bool
     var onSelectionChange: (Set<String>) -> Void
     var onCommitRename: () -> Void
@@ -135,6 +253,8 @@ struct SimianTreeView: NSViewRepresentable {
         ov.registerForDraggedTypes(types)
         ov.setDraggingSourceOperationMask(.move, forLocal: true)
         ov.setDraggingSourceOperationMask([.move, .copy], forLocal: false)
+        ov.target = context.coordinator
+        ov.doubleAction = #selector(SimianTreeCoordinator.openClickedItem(_:))
         // Prefer insertion gaps over “on row” drops so sibling reorder is easier than “move into folder”.
         ov.draggingDestinationFeedbackStyle = .gap
 
@@ -241,7 +361,9 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             prev.currentFolders != newView.currentFolders ||
             prev.currentFiles != newView.currentFiles ||
             prev.folderChildrenCache != newView.folderChildrenCache ||
-            prev.folderFilesCache != newView.folderFilesCache
+            prev.folderFilesCache != newView.folderFilesCache ||
+            prev.siblingOrder != newView.siblingOrder ||
+            prev.currentParentFolderId != newView.currentParentFolderId
 
         if dataChanged {
             refreshNodeCache(from: newView)
@@ -356,8 +478,7 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
         for n in rowsToCollapse { ov.collapseItem(n) }
     }
 
-    /// Row order for drops must match `outlineView(_:child:ofItem:)` / `folderSiblings` — not only `folderChildrenCache`,
-    /// because navigated-in listings live in `currentFolders` / `currentFiles` while the cache may still be empty.
+    /// Visual row order: a saved mixed order when the user has rearranged this folder, otherwise folders then files.
     private func orderedDropRowNodes(parentFolderId: String?) -> [SimianTreeNode] {
         let folders: [SimianFolder]
         let files: [SimianFile]
@@ -369,7 +490,27 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             folders = view.folderChildrenCache[pid] ?? []
             files = view.folderFilesCache[pid] ?? []
         }
-        return folders.compactMap { nodeCache["f-\($0.id)"] } + files.compactMap { nodeCache["file-\($0.id)"] }
+        let key = parentFolderId ?? ""
+        let ids = SimianListOrdering.reconciled(
+            saved: view.siblingOrder[key],
+            folderIds: folders.map(\.id),
+            fileIds: files.map(\.id)
+        )
+        let foldersById = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0) })
+        let filesById = Dictionary(uniqueKeysWithValues: files.map { ($0.id, $0) })
+        return ids.compactMap { treeId in
+            if treeId.hasPrefix("f-") {
+                let id = String(treeId.dropFirst(2))
+                guard let folder = foldersById[id] else { return nil }
+                return cachedNode(forFolder: folder, parentFolderId: parentFolderId)
+            }
+            if treeId.hasPrefix("file-") {
+                let id = String(treeId.dropFirst(5))
+                guard let file = filesById[id] else { return nil }
+                return cachedNode(forFile: file, parentFolderId: parentFolderId)
+            }
+            return nil
+        }
     }
 
     private func syncSelectionToOutlineView(_ ids: Set<String>, in ov: NSOutlineView) {
@@ -385,23 +526,30 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
     // MARK: - NSOutlineViewDataSource
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        if item == nil { return view.currentFolders.count + view.currentFiles.count }
+        if item == nil { return orderedDropRowNodes(parentFolderId: view.currentParentFolderId).count }
         guard let n = item as? SimianTreeNode, n.kind == .folder, let fid = n.itemId else { return 0 }
-        return (view.folderChildrenCache[fid]?.count ?? 0) + (view.folderFilesCache[fid]?.count ?? 0)
+        return orderedDropRowNodes(parentFolderId: fid).count
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        let parentId: String?
         if item == nil {
-            if index < view.currentFolders.count {
-                return cachedNode(forFolder: view.currentFolders[index], parentFolderId: view.currentParentFolderId)
-            }
-            return cachedNode(forFile: view.currentFiles[index - view.currentFolders.count], parentFolderId: view.currentParentFolderId)
+            parentId = view.currentParentFolderId
+        } else if let parent = item as? SimianTreeNode, parent.kind == .folder {
+            parentId = parent.itemId
+        } else {
+            return NSObject()
         }
-        guard let parent = item as? SimianTreeNode, let fid = parent.itemId else { return NSObject() }
-        let cf = view.folderChildrenCache[fid] ?? []
-        if index < cf.count { return cachedNode(forFolder: cf[index], parentFolderId: fid) }
-        let files = view.folderFilesCache[fid] ?? []
-        return cachedNode(forFile: files[index - cf.count], parentFolderId: fid)
+        let rows = orderedDropRowNodes(parentFolderId: parentId)
+        guard index >= 0, index < rows.count else { return NSObject() }
+        return rows[index]
+    }
+
+    @objc func openClickedItem(_ sender: Any?) {
+        guard let ov = outlineView else { return }
+        let row = ov.clickedRow >= 0 ? ov.clickedRow : ov.selectedRow
+        guard row >= 0, let node = ov.item(atRow: row) as? SimianTreeNode, node.kind == .folder else { return }
+        view.onOpenItem(node.treeId)
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
@@ -512,6 +660,43 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
 
     // MARK: - Drop destination
 
+    /// Sibling insertion for a reorder drag. The pointer below the last row, or on that row's lower area, inserts after it.
+    private func siblingReorderDrop(
+        in outlineView: NSOutlineView,
+        location: NSPoint,
+        hoveredRow: Int
+    ) -> (parent: Any?, childIndex: Int)? {
+        if hoveredRow >= 0, let hoveredNode = outlineView.item(atRow: hoveredRow) as? SimianTreeNode {
+            let parentItem = outlineView.parent(forItem: hoveredNode)
+            let siblingIndex = outlineView.childIndex(forItem: hoveredNode)
+            guard siblingIndex >= 0 else { return nil }
+            let rowRect = outlineView.rect(ofRow: hoveredRow)
+            let isLast = siblingIndex == outlineView.numberOfChildren(ofItem: parentItem) - 1
+            let childIndex = SimianDropTargeting.siblingInsertChildIndex(
+                yInRow: location.y - rowRect.minY,
+                rowHeight: rowRect.height,
+                siblingIndex: siblingIndex,
+                isLastSibling: isLast
+            )
+            return (parentItem, childIndex)
+        }
+
+        guard outlineView.numberOfRows > 0 else { return nil }
+        let lastRow = outlineView.numberOfRows - 1
+        guard let lastItem = outlineView.item(atRow: lastRow) else { return nil }
+        let lastRect = outlineView.rect(ofRow: lastRow)
+        let parentItem = outlineView.parent(forItem: lastItem)
+        if location.y >= lastRect.maxY {
+            return (parentItem, outlineView.numberOfChildren(ofItem: parentItem))
+        }
+        if location.y < outlineView.rect(ofRow: 0).minY {
+            if let first = outlineView.item(atRow: 0) {
+                return (outlineView.parent(forItem: first), 0)
+            }
+        }
+        return nil
+    }
+
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex childIndex: Int) -> NSDragOperation {
         let location = outlineView.convert(info.draggingLocation, from: nil)
         let hoveredRow = outlineView.row(at: location)
@@ -538,33 +723,15 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             ?? info.draggingPasteboard.string(forType: .string),
               let parsed = parseSimianMultiDrag(str) else { return [] }
 
-        // Can't drop onto a dragged item
-        if let targetNode = item as? SimianTreeNode, parsed.itemIds.contains(targetNode.treeId) { return [] }
-        if let hoveredNode, parsed.itemIds.contains(hoveredNode.treeId) { return [] }
-
-        // With .gap feedback style, NSOutlineView often proposes insert-as-child.
-        // If the pointer is clearly centered on a folder row, treat it as explicit move-into.
-        if isHoveringFolderCenter, let hoveredNode {
+        // Center of a folder row moves into that folder. The dragged row itself is not a destination.
+        if isHoveringFolderCenter, let hoveredNode, !parsed.itemIds.contains(hoveredNode.treeId) {
             outlineView.setDropItem(hoveredNode, dropChildIndex: NSOutlineViewDropOnItemIndex)
             return .move
         }
 
-        // NSOutlineView's default tracking proposes "insert as child N of folder X" when the cursor is
-        // near the bottom half of a collapsed folder row.  For reordering siblings that is wrong:
-        // we want "insert before folder X at folder X's parent level".  Redirect the proposal whenever
-        // the proposed item is a folder that is NOT the actual parent of the dragged items (i.e. it is
-        // a sibling being misproposed as parent).  The NSOutlineViewDropOnItemIndex case (-1) is
-        // intentional "drop ON folder" (move-into) and must NOT be redirected.  Likewise, when the
-        // proposed item IS the true parent (its id matches parsed.parentId), it is a legitimate
-        // "insert inside parent" proposal and must not be redirected.
-        if childIndex != NSOutlineViewDropOnItemIndex,
-           let proposedNode = item as? SimianTreeNode,
-           proposedNode.itemId != parsed.parentId {
-            let idxInParent = outlineView.childIndex(forItem: proposedNode)
-            if idxInParent >= 0 {
-                let parentItem = outlineView.parent(forItem: proposedNode)
-                outlineView.setDropItem(parentItem, dropChildIndex: idxInParent)
-            }
+        // Gap feedback never proposes an index past the last sibling. Place that gap from the pointer.
+        if let drop = siblingReorderDrop(in: outlineView, location: location, hoveredRow: hoveredRow) {
+            outlineView.setDropItem(drop.parent, dropChildIndex: drop.childIndex)
         }
 
         // Spring-load: hover over closed folder → expand after delay (external drops only; internal drags are almost always reorder)
@@ -612,35 +779,18 @@ final class SimianTreeCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineV
             guard let fn = item as? SimianTreeNode, fn.kind == .folder, let fid = fn.itemId else { return false }
             view.onMoveIntoFolder(parsed.projectId, parsed.itemIds, fid)
         } else {
-            // Drop between rows → reorder
+            // Drop between rows → one mixed folder/file order.
             let parentFolderId: String?
             if let pn = item as? SimianTreeNode, pn.kind == .folder { parentFolderId = pn.itemId }
             else { parentFolderId = view.currentParentFolderId }
 
-            // Find the item at childIndex (insert-before slot) in the combined folder+file row list.
             let all = orderedDropRowNodes(parentFolderId: parentFolderId)
-
-            let folderIds = parsed.itemIds.compactMap { $0.hasPrefix("f-") ? String($0.dropFirst(2)) : nil }
-            let fileIds = parsed.itemIds.compactMap { $0.hasPrefix("file-") ? String($0.dropFirst(5)) : nil }
-
-            if !folderIds.isEmpty {
-                // Map combined-list childIndex to folder-only "insert before" id (folders and files share one visual
-                // order but Simian/API reorder is per-type; legacy kind-matched anchors dropped nil on cross-type gaps).
-                let folderOrderIds = all.compactMap { $0.kind == .folder ? $0.itemId : nil }
-                let insertPosAmongRemain = all.prefix(childIndex).filter { $0.kind == .folder }.compactMap(\.itemId).filter { !folderIds.contains($0) }.count
-                let remainFolderIds = folderOrderIds.filter { !folderIds.contains($0) }
-                let safeFolderPos = min(max(0, insertPosAmongRemain), remainFolderIds.count)
-                let dropBeforeId = safeFolderPos < remainFolderIds.count ? remainFolderIds[safeFolderPos] : nil
-                view.onReorderFolders(parsed.projectId, folderIds, parentFolderId, dropBeforeId)
-            }
-            if !fileIds.isEmpty, let pid = parentFolderId {
-                let fileOrderIds = all.compactMap { $0.kind == .file ? $0.itemId : nil }
-                let insertPosAmongRemain = all.prefix(childIndex).filter { $0.kind == .file }.compactMap(\.itemId).filter { !fileIds.contains($0) }.count
-                let remainFileIds = fileOrderIds.filter { !fileIds.contains($0) }
-                let safeFilePos = min(max(0, insertPosAmongRemain), remainFileIds.count)
-                let dropBeforeId = safeFilePos < remainFileIds.count ? remainFileIds[safeFilePos] : nil
-                view.onReorderFiles(parsed.projectId, fileIds, pid, dropBeforeId)
-            }
+            let newOrder = SimianListOrdering.insertedOrder(
+                currentIds: all.map(\.treeId),
+                movingIds: parsed.itemIds,
+                childIndex: childIndex
+            )
+            view.onReorderSiblings(parsed.projectId, parentFolderId, newOrder)
         }
         return true
     }
@@ -918,7 +1068,8 @@ final class SimianTreeCell: NSView {
         } else {
             nameLabel.isHidden = false; renameField.isHidden = true
             nameLabel.stringValue = node.displayName
-            if let f = simianFile, let ext = SimianTreeCell.resolvedExtension(f), let ft = fileIcon {
+            if let f = simianFile, let ext = SimianTreeCell.resolvedExtension(f), let ft = fileIcon,
+               !node.displayName.lowercased().hasSuffix(".\(ext.lowercased())") {
                 applyTag((".\(ext)", ft.color))
             } else {
                 applyTag(nil)

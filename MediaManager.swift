@@ -558,21 +558,6 @@ struct AppConfig: Sendable {
             
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: docketPath.path, isDirectory: &isDir) && isDir.boolValue {
-                // #region agent log
-                do {
-                    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "AppConfig.findDocketYear", "message": "findDocketYear FOUND", "data": ["docket": docket, "year": year, "docketPath": docketPath.path, "serverBase": settings.serverBasePath], "sessionId": "debug-session", "hypothesisId": "H1"]
-                    let d = try JSONSerialization.data(withJSONObject: payload)
-                    let line = String(data: d, encoding: .utf8)! + "\n"
-                    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-                    let url = URL(fileURLWithPath: path)
-                    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-                    if let stream = OutputStream(url: url, append: true) {
-                        stream.open()
-                        _ = line.data(using: .utf8)!.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: line.utf8.count) }
-                        stream.close()
-                    }
-                } catch {}
-                // #endregion
                 return year
             }
         }
@@ -1751,13 +1736,13 @@ class MediaManager: ObservableObject {
         conversionProgress.removeAll()
     }
     
-    /// - Parameter filesOverride: When non-nil (prep only), uses these files instead of staging — e.g. Finder drop onto a prep chip. Skips clearing staging after success.
+    /// - Parameter filesOverride: When non-nil, uses these files instead of staging (Finder File / Prep / chip drops). Skips clearing staging after success.
     func runJob(type: JobType, docket: String, wpDate: Date, prepDate: Date, existingPrepFolderName: String? = nil, filesOverride: [FileItem]? = nil) {
         let files: [FileItem]
         if let o = filesOverride {
-            guard type == .prep else { return }
+            guard type == .prep || type == .workPicture else { return }
             guard !o.isEmpty else {
-                errorMessage = "No files to prep."
+                errorMessage = type == .prep ? "No files to prep." : "No files to file."
                 showError = true
                 return
             }
@@ -1900,6 +1885,8 @@ class MediaManager: ObservableObject {
                     let dest = destFolder.appendingPathComponent(f.name)
                     let fileSize = f.fileSize ?? 0
                     let bytesBeforeThisFile = cumulativeBytesCopied
+                    let baseProgress = currentStep / total
+                    let progressPerFile = 1.0 / total
 
                     // Skip if file already exists, otherwise copy it
                     if fm.fileExists(atPath: dest.path) {
@@ -1907,13 +1894,27 @@ class MediaManager: ObservableObject {
                         print("Skipping existing file: \(f.name)")
                         // Still count bytes for skipped files to keep progress accurate
                         cumulativeBytesCopied += fileSize
+                    } else if f.isDirectory {
+                        let copySuccess = self.copyDirectoryWithProgress(from: f.url, to: dest) { fraction, name in
+                            let adjustedProgress = baseProgress + (progressPerFile * fraction)
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self = self else { return }
+                                self.fileProgress[f.id] = fraction
+                                self.progress = min(adjustedProgress, 1.0)
+                                FloatingProgressManager.shared.updateProgress(adjustedProgress, currentFile: name)
+                            }
+                        }
+                        if copySuccess {
+                            cumulativeBytesCopied += fileSize
+                        } else {
+                            failedFiles.append(f.name)
+                        }
                     } else {
                         // Use progress-aware copy for large files
-                        let baseProgress = currentStep / total
-                        let progressPerFile = 1.0 / total
-
                         let copySuccess = self.copyItemWithProgress(from: f.url, to: dest) { bytesWritten, fileTotalBytes in
-                            let filePortionComplete = Double(bytesWritten) / Double(fileTotalBytes)
+                            let filePortionComplete = fileTotalBytes > 0
+                                ? Double(bytesWritten) / Double(fileTotalBytes)
+                                : 1
                             let adjustedProgress = baseProgress + (progressPerFile * filePortionComplete)
                             let currentTotalBytes = bytesBeforeThisFile + bytesWritten
 
@@ -1940,6 +1941,9 @@ class MediaManager: ObservableObject {
                     await MainActor.run {
                         self.fileProgress[f.id] = 1.0
                         self.progress = p
+                        // Small files and finished folders never hit the byte callback, so the
+                        // floating bar would stay at 0 until the job completed.
+                        FloatingProgressManager.shared.updateProgress(p, currentFile: f.name)
 
                         // Update completion state
                         if type == .both {
@@ -2416,6 +2420,53 @@ class MediaManager: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Copy a folder file-by-file so the floating progress bar moves. `copyItem` on a directory reports no progress.
+    nonisolated private func copyDirectoryWithProgress(
+        from source: URL,
+        to dest: URL,
+        progress: @escaping (_ fraction: Double, _ currentName: String) -> Void
+    ) -> Bool {
+        let fm = FileManager.default
+        let files = MediaLogic.getAllFiles(at: source)
+        do {
+            try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+        } catch {
+            return false
+        }
+        if files.isEmpty {
+            progress(1, source.lastPathComponent)
+            return true
+        }
+        let sourcePath = source.standardizedFileURL.path
+        for (index, file) in files.enumerated() {
+            let full = file.standardizedFileURL.path
+            let relative: String
+            if full.hasPrefix(sourcePath + "/") {
+                relative = String(full.dropFirst(sourcePath.count + 1))
+            } else {
+                relative = file.lastPathComponent
+            }
+            let target = dest.appendingPathComponent(relative)
+            let parent = target.deletingLastPathComponent()
+            if !fm.fileExists(atPath: parent.path) {
+                do {
+                    try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+                } catch {
+                    return false
+                }
+            }
+            if !fm.fileExists(atPath: target.path) {
+                do {
+                    try fm.copyItem(at: file, to: target)
+                } catch {
+                    return false
+                }
+            }
+            progress(Double(index + 1) / Double(files.count), file.lastPathComponent)
+        }
+        return true
     }
 
     /// Copy a file with progress reporting for large files

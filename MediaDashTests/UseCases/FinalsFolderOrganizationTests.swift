@@ -169,13 +169,13 @@ final class FinalsFolderOrganizationTests: XCTestCase {
         XCTAssertEqual(preview.qtReferences.count, 1)
         XCTAssertEqual(preview.unclassified.count, 0)
 
-        // WEB should go into 01_Fullmixes/WEB
+        // WEB should go into 01_WAV_2448_Fullmixes/WEB
         let webDest = preview.fullMixes.first(where: { $0.source.lastPathComponent.contains("WEB") })?.destination
-        XCTAssertTrue(webDest?.path.contains("01_Fullmixes/WEB") ?? false, "WEB fullmix should be in WEB subfolder")
+        XCTAssertTrue(webDest?.path.contains("01_WAV_2448_Fullmixes/WEB") ?? false, "WEB fullmix should be in WEB subfolder")
 
-        // TV should go into 01_Fullmixes/TV
+        // TV should go into 01_WAV_2448_Fullmixes/TV
         let tvDest = preview.fullMixes.first(where: { $0.source.lastPathComponent.contains("TV") })?.destination
-        XCTAssertTrue(tvDest?.path.contains("01_Fullmixes/TV") ?? false, "TV fullmix should be in TV subfolder")
+        XCTAssertTrue(tvDest?.path.contains("01_WAV_2448_Fullmixes/TV") ?? false, "TV fullmix should be in TV subfolder")
     }
 
     func testDetectConflicts_returnsTrueWhenFileExists() throws {
@@ -185,7 +185,7 @@ final class FinalsFolderOrganizationTests: XCTestCase {
 
         // Create source and a pre-existing destination
         try "src".write(to: tmp.appendingPathComponent("Spot_WEB_Fullmix.wav"), atomically: true, encoding: .utf8)
-        let destDir = tmp.appendingPathComponent("01_Fullmixes/WEB")
+        let destDir = tmp.appendingPathComponent("01_WAV_2448_Fullmixes/WEB")
         try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
         try "existing".write(to: destDir.appendingPathComponent("Spot_WEB_Fullmix.wav"), atomically: true, encoding: .utf8)
 
@@ -208,14 +208,14 @@ final class FinalsFolderOrganizationTests: XCTestCase {
         try FinalsFolderOrganizationUseCase.execute(preview: preview)
 
         // Suffix stripped
-        let renamedFullmix = tmp.appendingPathComponent("01_Fullmixes/WEB/01_Ad_WEB_Fullmix.wav")
+        let renamedFullmix = tmp.appendingPathComponent("01_WAV_2448_Fullmixes/WEB/01_Ad_WEB_Fullmix.wav")
         XCTAssertTrue(FileManager.default.fileExists(atPath: renamedFullmix.path), "Fullmix should be renamed and moved")
 
-        let movedSFX = tmp.appendingPathComponent("02_Mixouts/01_Ad_SFX.wav")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: movedSFX.path), "SFX stem should be in 02_Mixouts")
+        let movedSFX = tmp.appendingPathComponent("02_WAV_2448_Mixouts/01_Ad_SFX.wav")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: movedSFX.path), "SFX stem should be in 02_WAV_2448_Mixouts")
 
-        let movedQT = tmp.appendingPathComponent("03_Quicktime References/Ref.mov")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: movedQT.path), "Video should be in 03_Quicktime References")
+        let movedQT = tmp.appendingPathComponent("03_Quicktimes/Ref.mov")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: movedQT.path), "Video should be in 03_Quicktimes")
     }
 
     func testExecute_throwsOnConflict() throws {
@@ -224,7 +224,7 @@ final class FinalsFolderOrganizationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         try "src".write(to: tmp.appendingPathComponent("Spot_WEB_Fullmix.wav"), atomically: true, encoding: .utf8)
-        let destDir = tmp.appendingPathComponent("01_Fullmixes/WEB")
+        let destDir = tmp.appendingPathComponent("01_WAV_2448_Fullmixes/WEB")
         try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
         try "existing".write(to: destDir.appendingPathComponent("Spot_WEB_Fullmix.wav"), atomically: true, encoding: .utf8)
 

@@ -177,6 +177,12 @@ struct AuthenticatedRootView: View {
             guard !showSplashScreen, initializationComplete else { return }
             applyPendingFinderCommandsIfReady()
         }
+        .onReceive(Foundation.NotificationCenter.default.publisher(for: .mediaDashRefreshStagedFolders)) { note in
+            let paths = note.userInfo?["paths"] as? [String] ?? []
+            for path in paths {
+                manager.refreshStagedFolder(url: URL(fileURLWithPath: path))
+            }
+        }
         .onChange(of: showSplashScreen) { _, newValue in
             if !newValue, initializationComplete {
                 applyPendingFinderCommandsIfReady()

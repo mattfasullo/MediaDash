@@ -105,7 +105,7 @@ Role is part of `AppSettings` / onboarding; it changes which root view loads.
 ### 4.3 Settings access
 
 - **Gear** (top-right): opens **Settings** window (`SettingsWindowManager`).
-- Menu: standard app menu includes **Check for Updates**, **Finder extension** helpers, **layout edit** commands (§12).
+- Menu: standard app menu includes **Check for Updates** and **Finder extension** helpers.
 
 ---
 
@@ -442,9 +442,6 @@ From `MediaDashApp` / command groups:
 - **Quit** — ⌘Q (rebound group).
 - **Check for updates** (Sparkle).
 - **Finder extension** management + help alert.
-- **Layout edit mode** — ⌘⇧E toggle (`LayoutEditManager`) — draggable UI offsets for power users.
-- **Export layout** — ⌘⌥E.
-- **Undo / redo layout** — ⌘Z / ⌘⇧Z while editing layout.
 
 ---
 

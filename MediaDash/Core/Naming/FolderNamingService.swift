@@ -16,8 +16,13 @@ struct FolderNamingService: Sendable {
     
     /// Format a date using the app-wide standard format
     nonisolated func formatDate(_ date: Date) -> String {
+        Self.standardDateString(date)
+    }
+
+    /// `Oct26.26`, `Nov05.26` — same stamp used for Finder Arrange Finals wrappers.
+    nonisolated static func standardDateString(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = Self.standardDateFormat
+        formatter.dateFormat = standardDateFormat
         formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter.string(from: date)
     }

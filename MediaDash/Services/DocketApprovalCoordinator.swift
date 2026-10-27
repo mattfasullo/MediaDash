@@ -100,18 +100,19 @@ final class DocketApprovalCoordinator {
             return .failure(DocketApprovalProcessError.notificationMissing)
         }
 
-        notificationCenter.updateJobName(updatedNotification, to: job.jobName)
-        if let current = notificationCenter.notifications.first(where: { $0.id == job.notificationId }) {
-            updatedNotification = current
-        }
-        notificationCenter.updateDocketNumber(updatedNotification, to: job.docketNumber)
+        notificationCenter.applyApprovalUpdate(
+            id: job.notificationId,
+            docketNumber: job.docketNumber,
+            jobName: job.jobName
+        )
         if let current = notificationCenter.notifications.first(where: { $0.id == job.notificationId }) {
             updatedNotification = current
         }
 
-        let shouldCreateSimian = updatedNotification.shouldCreateSimianJob ||
-            (settingsManager.currentSettings.simianEnabled && simianService.isConfigured)
-        let shouldCreateWorkPicture = updatedNotification.shouldCreateWorkPicture
+        let shouldCreateSimian = !updatedNotification.isInSimian &&
+            (updatedNotification.shouldCreateSimianJob ||
+             (settingsManager.currentSettings.simianEnabled && simianService.isConfigured))
+        let shouldCreateWorkPicture = updatedNotification.shouldCreateWorkPicture && !updatedNotification.isInWorkPicture
 
         let playAddingSound = settingsManager.currentSettings.resolvedSoundDocketAddingEnabled
         let playAddedSound = settingsManager.currentSettings.resolvedSoundDocketAddedEnabled
@@ -121,6 +122,7 @@ final class DocketApprovalCoordinator {
 
         var workPictureError: Error?
         var simianError: Error?
+        var simianAlreadyExisted = false
 
         if shouldCreateWorkPicture {
             do {
@@ -131,8 +133,11 @@ final class DocketApprovalCoordinator {
                     effectiveJobName: job.jobName
                 )
                 if let current = notificationCenter.notifications.first(where: { $0.id == job.notificationId }) {
-                    notificationCenter.updateDuplicateDetection(current, mediaManager: mediaManager, settingsManager: settingsManager)
-                    notificationCenter.markAsInWorkPicture(current)
+                    notificationCenter.applyApprovalUpdate(
+                        id: current.id,
+                        isInWorkPicture: true,
+                        workPictureCreatedByUs: true
+                    )
                 }
             } catch {
                 workPictureError = error
@@ -155,15 +160,13 @@ final class DocketApprovalCoordinator {
                     jobName: job.jobName
                 )
                 if projectAlreadyExists {
-                    notificationCenter.add(
-                        Notification(
-                            type: .error,
-                            title: "Simian Project Already Exists",
-                            message: "Project \(job.docketLabel) already exists in Simian"
+                    simianAlreadyExisted = true
+                    if notificationCenter.notifications.contains(where: { $0.id == job.notificationId }) {
+                        notificationCenter.applyApprovalUpdate(
+                            id: job.notificationId,
+                            isInSimian: true,
+                            simianCreatedByUs: false
                         )
-                    )
-                    if let current = notificationCenter.notifications.first(where: { $0.id == job.notificationId }) {
-                        notificationCenter.markAsInSimian(current, createdByUs: false)
                     }
                 } else {
                     await progress("Creating Simian project...", 0.7)
@@ -173,8 +176,12 @@ final class DocketApprovalCoordinator {
                         projectManager: job.projectManager,
                         projectTemplate: job.template ?? settingsManager.currentSettings.simianProjectTemplate
                     )
-                    if let current = notificationCenter.notifications.first(where: { $0.id == job.notificationId }) {
-                        notificationCenter.markAsInSimian(current, createdByUs: true)
+                    if notificationCenter.notifications.contains(where: { $0.id == job.notificationId }) {
+                        notificationCenter.applyApprovalUpdate(
+                            id: job.notificationId,
+                            isInSimian: true,
+                            simianCreatedByUs: true
+                        )
                     }
                 }
             } catch {
@@ -223,7 +230,13 @@ final class DocketApprovalCoordinator {
             historyParts.append(workPictureError == nil ? "Created in Work Picture" : "Work Picture failed")
         }
         if shouldCreateSimian {
-            historyParts.append(simianError == nil ? "Created in Simian" : "Simian failed")
+            if simianError != nil {
+                historyParts.append("Simian failed")
+            } else if simianAlreadyExisted {
+                historyParts.append("Already in Simian")
+            } else {
+                historyParts.append("Created in Simian")
+            }
         }
         historyNotes[job.notificationId] = historyParts.isEmpty ? "Approved" : historyParts.joined(separator: " • ")
 

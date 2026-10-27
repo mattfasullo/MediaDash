@@ -112,6 +112,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize floating progress window manager (it auto-shows/hides based on FloatingProgressManager.shared.isVisible)
         _ = FloatingProgressWindowManager.shared
 
+        NSApp.servicesProvider = MediaDashServicesProvider.shared
+        NSUpdateDynamicServices()
+
         // Finder Sync is registered with Launch Services when the host app is registered.
         // Re-register on launch so the embedded .appex is discoverable (helps after copy to /Applications, etc.).
         registerEmbeddedFinderSyncWithLaunchServices()
@@ -119,51 +122,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Cache sync status item removed - sync is now handled internally by AsanaCacheManager
     }
 
-    // #region agent log
     private static let kMediaDashAppGroup = "group.mattfasullo.MediaDash"
-    /// Cursor session ingest path (main app only); Finder Sync extension cannot write here.
-    private static let kMediaDashDebugLogMirrorPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-55b33e.log"
-
-    private static func appendDebugNDJSONLine(_ line: String) {
-        let payload = (line + "\n").data(using: .utf8) ?? Data()
-        func appendFile(atPath path: String) {
-            if FileManager.default.fileExists(atPath: path) {
-                if let h = FileHandle(forWritingAtPath: path) {
-                    h.seekToEndOfFile()
-                    h.write(payload)
-                    try? h.close()
-                }
-            } else {
-                try? payload.write(to: URL(fileURLWithPath: path))
-            }
-        }
-        if let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: kMediaDashAppGroup)?
-            .appendingPathComponent("debug-55b33e.log") {
-            appendFile(atPath: groupURL.path)
-        }
-        appendFile(atPath: kMediaDashDebugLogMirrorPath)
-    }
-
-    private static func mediaDashDebugNDJSON(location: String, message: String, hypothesisId: String, data: [String: String] = [:]) {
-        var data = data
-        if let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: kMediaDashAppGroup)?
-            .appendingPathComponent("debug-55b33e.log") {
-            data["groupDebugLogPath"] = groupURL.path
-        }
-        let dict: [String: Any] = [
-            "sessionId": "55b33e",
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000),
-            "location": location,
-            "message": message,
-            "hypothesisId": hypothesisId,
-            "runId": "pre-fix",
-            "data": data
-        ]
-        guard let json = try? JSONSerialization.data(withJSONObject: dict),
-              let line = String(data: json, encoding: .utf8) else { return }
-        appendDebugNDJSONLine(line)
-    }
-    // #endregion
+    private static let kFinderSyncRestartedBuildKey = "finderSyncRestartedBuild"
 
     /// Registers the app bundle and embedded Finder Sync extension with Launch Services.
     /// Finder Sync does not appear in the same System Settings sheet as Apple’s Quick Actions (Rotate, Markup, …).
@@ -173,19 +133,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         LSRegisterURL(appURL as CFURL, true)
         let appex = appURL.appendingPathComponent("Contents/PlugIns/MediaDashFinderSync.appex", isDirectory: true)
         let appexExists = FileManager.default.fileExists(atPath: appex.path)
-        // #region agent log
-        Self.mediaDashDebugNDJSON(
-            location: "AppDelegate.swift:registerEmbeddedFinderSyncWithLaunchServices",
-            message: "host app registration",
-            hypothesisId: "D",
-            data: [
-                "appPath": appURL.path,
-                "appexPath": appex.path,
-                "appexExists": appexExists ? "true" : "false",
-                "appexBundleID": Bundle(url: appex)?.bundleIdentifier ?? ""
-            ]
-        )
-        // #endregion
         guard appexExists else { return }
         LSRegisterURL(appex as CFURL, true)
 
@@ -197,16 +144,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 Self.stripQuarantineFromBundle(at: appURL)
             }
             // DTS / dev forums: stale Launch Services DB can prevent Finder from loading Finder Sync even when PlugInKit exits 0.
-            let lsExit = Self.runLSRegisterForceTrusted(appURL: appURL)
-            // #region agent log
-            Self.mediaDashDebugNDJSON(
-                location: "AppDelegate.swift:runLSRegisterForceTrusted",
-                message: "lsregister -f -R -trusted finished",
-                hypothesisId: "D",
-                data: ["terminationStatus": String(lsExit)]
-            )
-            // #endregion
+            _ = Self.runLSRegisterForceTrusted(appURL: appURL)
             Self.runPlugInKitAddAndUseFinderSync(appexPath: appex.path, bundleID: extensionBundleID)
+            Self.restartFinderIfExtensionNotLoaded()
         }
     }
 
@@ -272,23 +212,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return -1
             }
         }
-        let addExit = run(["-a", appexPath])
-        var useExit: Int32 = -2
+        _ = run(["-a", appexPath])
         if let id = bundleID {
-            useExit = run(["-e", "use", "-i", id])
+            _ = run(["-e", "use", "-i", id])
         }
-        // #region agent log
-        mediaDashDebugNDJSON(
-            location: "AppDelegate.swift:runPlugInKitAddAndUseFinderSync",
-            message: "pluginkit finished",
-            hypothesisId: "D",
-            data: [
-                "addTerminationStatus": String(addExit),
-                "useTerminationStatus": String(useExit),
-                "bundleID": bundleID ?? ""
-            ]
-        )
-        // #endregion
+    }
+
+    /// Finder caches its plugin list at launch. pluginkit enablement does not load the appex
+    /// until Finder restarts. Restart once per build if the extension has never written its heartbeat.
+    private static func restartFinderIfExtensionNotLoaded() {
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        let key = kFinderSyncRestartedBuildKey
+        if UserDefaults.standard.string(forKey: key) == build {
+            return
+        }
+        if finderSyncHeartbeatExists() {
+            UserDefaults.standard.set(build, forKey: key)
+            return
+        }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        task.arguments = ["Finder"]
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            return
+        }
+        UserDefaults.standard.set(build, forKey: key)
+    }
+
+    private static func finderSyncHeartbeatExists() -> Bool {
+        guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: kMediaDashAppGroup)?
+            .appendingPathComponent("finder-sync-loaded.json") else {
+            return false
+        }
+        return FileManager.default.fileExists(atPath: url.path)
     }
 
     // MARK: - Remote Notifications (APNs) — Cloudflare relay disabled (see GatekeeperView)
@@ -310,6 +269,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     //         PushNotificationManager.shared.handleIncomingPush(userInfo)
     //     }
     // }
+
+    func applicationDidBecomeActive(_ notification: Foundation.Notification) {
+        FinderFocus.handleDidBecomeActive()
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
@@ -405,6 +368,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationDidResignActive(_ notification: Foundation.Notification) {
+        FinderFocus.handleDidResignActive()
         // Ensure debounced notification persistence is written before long background stretches
         NotificationCenter.flushPendingPersistenceIfAny()
     }

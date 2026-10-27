@@ -2,21 +2,6 @@ import SwiftUI
 import AppKit
 import Combine
 
-// #region agent log
-private func _debugLogWP(_ message: String, _ data: [String: Any], _ hypothesisId: String) {
-    let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "NotificationCenterView", "message": message, "data": data, "sessionId": "debug-session", "hypothesisId": hypothesisId]
-    guard let d = try? JSONSerialization.data(withJSONObject: payload), let line = String(data: d, encoding: .utf8) else { return }
-    let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-    let url = URL(fileURLWithPath: path)
-    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-    guard let stream = OutputStream(url: url, append: true) else { return }
-    stream.open()
-    defer { stream.close() }
-    let out = (line + "\n").data(using: .utf8)!
-    _ = out.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: out.count) }
-}
-// #endregion
-
 /// Information about where a docket already exists
 struct DocketExistenceInfo {
     var existsInWorkPicture: Bool = false
@@ -63,6 +48,8 @@ struct NotificationCenterView: View {
     @State private var cacheInfo: String?
     @State private var showCacheInfo = false
     @State private var isLoadingCache = false // Keep for fallback if file write fails
+    @State private var isServerConnectedCached = false
+    @StateObject private var simianService = SimianService()
     @ObservedObject private var approvalQueue = DocketApprovalQueue.shared
     
     // Computed properties for filtered notifications
@@ -157,72 +144,68 @@ struct NotificationCenterView: View {
     }
     
     private var headerSection: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text("New Dockets")
-                    .font(.system(size: 16, weight: .semibold))
-                
-                Spacer()
-                
-                if notificationCenter.unreadCount > 0 {
-                    Text("\(notificationCenter.unreadCount)")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                
-                if settingsManager.currentSettings.newDocketDetectionMode == .email {
-                    EmailRefreshButton(
-                        notificationCenter: notificationCenter
-                    )
-                    .environmentObject(emailScanningService)
-                    .environmentObject(settingsManager)
-                } else {
-                    AirtableDocketRefreshButton(
-                        notificationCenter: notificationCenter
-                    )
-                    .environmentObject(airtableDocketScanningService)
-                    .environmentObject(settingsManager)
-                }
-                
-                Button(action: {
-                    NotificationWindowManager.shared.hideNotificationWindow()
-                    isExpanded = false
-                }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Close")
-            }
+        HStack(spacing: 8) {
+            Text("New Dockets")
+                .font(.system(size: 16, weight: .semibold))
 
             if approvalQueue.isBannerVisible {
-                approvalProgressBanner
-            }
-        }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor))
-        .contentShape(Rectangle())
-    }
-
-    private var approvalProgressBanner: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                if approvalQueue.activeLabel != nil {
-                    ProgressView()
-                        .controlSize(.small)
-                }
+                ProgressView()
+                    .controlSize(.mini)
+                    .scaleEffect(approvalQueue.activeLabel == nil ? 0.01 : 1)
+                    .frame(width: 12, height: 12)
+                    .opacity(approvalQueue.activeLabel == nil ? 0 : 1)
                 Text(approvalBannerText)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
-                Spacer(minLength: 0)
+                    .truncationMode(.middle)
             }
+
+            Spacer(minLength: 8)
+            
+            if notificationCenter.unreadCount > 0 {
+                Text("\(notificationCenter.unreadCount)")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            
+            if settingsManager.currentSettings.newDocketDetectionMode == .email {
+                EmailRefreshButton(
+                    notificationCenter: notificationCenter
+                )
+                .environmentObject(emailScanningService)
+                .environmentObject(settingsManager)
+            } else {
+                AirtableDocketRefreshButton(
+                    notificationCenter: notificationCenter
+                )
+                .environmentObject(airtableDocketScanningService)
+                .environmentObject(settingsManager)
+            }
+            
+            Button(action: {
+                NotificationWindowManager.shared.hideNotificationWindow()
+                isExpanded = false
+            }) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Close")
+        }
+        .frame(minHeight: 20)
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(alignment: .bottom) {
             if approvalQueue.activeLabel != nil {
                 ProgressView(value: min(max(approvalQueue.activeFraction, 0), 1))
                     .progressViewStyle(.linear)
+                    .tint(.accentColor)
+                    .frame(height: 2)
+                    .padding(.horizontal, 16)
             }
         }
-        .padding(.top, 4)
+        .contentShape(Rectangle())
     }
 
     private var approvalBannerText: String {
@@ -453,7 +436,7 @@ struct NotificationCenterView: View {
         VStack(spacing: 0) {
             // Content - no tabs needed since we only show new dockets
             ScrollView {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     if !reviewNewDocketNotifications.isEmpty {
                         HStack {
                             Text("Needs review")
@@ -471,6 +454,8 @@ struct NotificationCenterView: View {
                                 emailScanningService: emailScanningService,
                                 mediaManager: mediaManager,
                                 settingsManager: settingsManager,
+                                simianService: simianService,
+                                isServerConnected: isServerConnectedCached,
                                 processingNotification: $processingNotification,
                                 processingStatusById: $processingStatusById,
                                 debugInfo: $debugInfo,
@@ -500,6 +485,8 @@ struct NotificationCenterView: View {
                                 emailScanningService: emailScanningService,
                                 mediaManager: mediaManager,
                                 settingsManager: settingsManager,
+                                simianService: simianService,
+                                isServerConnected: isServerConnectedCached,
                                 processingNotification: $processingNotification,
                                 processingStatusById: $processingStatusById,
                                 debugInfo: $debugInfo,
@@ -563,6 +550,8 @@ struct NotificationCenterView: View {
                                 emailScanningService: emailScanningService,
                                 mediaManager: mediaManager,
                                 settingsManager: settingsManager,
+                                simianService: simianService,
+                                isServerConnected: isServerConnectedCached,
                                 processingNotification: $processingNotification,
                                 processingStatusById: $processingStatusById,
                                 debugInfo: $debugInfo,
@@ -913,6 +902,10 @@ struct NotificationCenterView: View {
     }
     
     private func handleViewAppear() {
+        let path = settingsManager.currentSettings.serverBasePath
+        isServerConnectedCached = !path.isEmpty && FileManager.default.fileExists(atPath: path)
+        configureSharedSimianService()
+
         // Move cleanup operations to async Task to avoid modifying @Published properties during view update
         Task { @MainActor in
             notificationCenter.cleanupOldArchivedNotifications()
@@ -922,6 +915,19 @@ struct NotificationCenterView: View {
         }
         
         autoFetchEmail()
+    }
+
+    private func configureSharedSimianService() {
+        let settings = settingsManager.currentSettings
+        if let baseURL = settings.simianAPIBaseURL, !baseURL.isEmpty {
+            simianService.setBaseURL(baseURL)
+            if let username = SharedKeychainService.getSimianUsername(),
+               let password = SharedKeychainService.getSimianPassword() {
+                simianService.setCredentials(username: username, password: password)
+            }
+        } else {
+            simianService.clearConfiguration()
+        }
     }
     
     private func autoFetchEmail() {
@@ -1112,15 +1118,15 @@ struct NotificationRowView: View {
     let notificationId: UUID
     @ObservedObject var notificationCenter: NotificationCenter
     @ObservedObject var emailScanningService: EmailScanningService
-    @ObservedObject var mediaManager: MediaManager
+    let mediaManager: MediaManager
     @ObservedObject var settingsManager: SettingsManager
+    @ObservedObject var simianService: SimianService
+    let isServerConnected: Bool
     @Binding var processingNotification: UUID?
     @Binding var processingStatusById: [UUID: String]
     @Binding var debugInfo: String?
     @Binding var showDebugInfo: Bool
     @ObservedObject private var approvalQueue = DocketApprovalQueue.shared
-    
-    @StateObject private var simianService = SimianService()
     @State private var showActions = false
     @State private var showDocketInputDialog = false
     @State private var inputDocketNumber = ""
@@ -1180,20 +1186,11 @@ struct NotificationRowView: View {
         jobName: String,
         template: String?
     ) {
-        guard var updatedNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) else {
+        guard let updatedNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) else {
             return
         }
         guard updatedNotification.requiresDocketConfirmation != true else {
             return
-        }
-
-        notificationCenter.updateJobName(updatedNotification, to: jobName)
-        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-            updatedNotification = currentNotification
-        }
-        notificationCenter.updateDocketNumber(updatedNotification, to: docketNumber)
-        if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-            updatedNotification = currentNotification
         }
 
         let existenceInfo = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
@@ -1204,15 +1201,20 @@ struct NotificationRowView: View {
             return (docketNumber, jobName)
         }()
 
-        if effectiveDocketNumber != docketNumber {
-            notificationCenter.updateDocketNumber(updatedNotification, to: effectiveDocketNumber)
-            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                updatedNotification = currentNotification
-            }
-        }
-        if effectiveJobName != jobName {
-            notificationCenter.updateJobName(updatedNotification, to: effectiveJobName)
-        }
+        notificationCenter.applyApprovalUpdate(
+            id: notificationId,
+            docketNumber: effectiveDocketNumber,
+            jobName: effectiveJobName
+        )
+        let docketName = "\(effectiveDocketNumber)_\(effectiveJobName)"
+        let alreadyInWorkPicture = updatedNotification.isInWorkPicture
+            || existenceInfo.existsInWorkPicture
+            || docketExistsInCurrentWorkPicture(docketName)
+        notificationCenter.updateActionFlags(
+            updatedNotification,
+            workPicture: isServerConnected && !alreadyInWorkPicture,
+            simianJob: isSimianConnected && !updatedNotification.isInSimian
+        )
 
         DocketApprovalCoordinator.shared.enqueue(
             notificationId: notificationId,
@@ -1224,15 +1226,9 @@ struct NotificationRowView: View {
     }
     
     var body: some View {
-        // Guard to ensure notification exists
-        guard let notification = notification else {
-            // Log when notification is missing but count shows it exists
-            print("📋 NotificationRowView: ⚠️ Notification \(notificationId) not found in list but count shows notifications exist")
-            print("📋 NotificationRowView: Total notifications: \(notificationCenter.notifications.count), Unread count: \(notificationCenter.unreadCount)")
-            return AnyView(EmptyView())
+        if let notification {
+            notificationBody(notification)
         }
-        
-        return AnyView(notificationBody(notification))
     }
     
     private func notificationBody(_ notification: Notification) -> some View {
@@ -1272,10 +1268,9 @@ struct NotificationRowView: View {
         )
         .cornerRadius(8)
         .opacity(notification.type == .request && notification.status == .completed ? 0.6 : 1.0)
+        .animation(nil, value: approvalQueue.snapshot)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
+            isHovered = hovering
         }
         .contextMenu {
             notificationContextMenuContent(notification: notification)
@@ -1537,13 +1532,6 @@ struct NotificationRowView: View {
         }
     }
     
-    /// Check if server (Work Picture path) is connected/accessible
-    private var isServerConnected: Bool {
-        let path = settingsManager.currentSettings.serverBasePath
-        guard !path.isEmpty else { return false }
-        return FileManager.default.fileExists(atPath: path)
-    }
-    
     /// Check if Simian is configured and ready
     private var isSimianConnected: Bool {
         settingsManager.currentSettings.simianEnabled && simianService.isConfigured
@@ -1555,8 +1543,7 @@ struct NotificationRowView: View {
         // Update duplicate detection flags
         let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) ?? notification
         
-        // Check if folders exist in filesystem
-        let existsInWorkPicture = checkIfInWorkPicture(notification: currentNotification)
+        let existsInWorkPicture = currentNotification.isInWorkPicture
         let existsInSimian = currentNotification.isInSimian
         
         // Only show "Already exists" if folder was PRE-EXISTING (not created by us)
@@ -1565,17 +1552,9 @@ struct NotificationRowView: View {
         let wasPreExistingInSimian = existsInSimian && !currentNotification.simianCreatedByUs
         let wasAddedToWorkPicture = existsInWorkPicture && currentNotification.workPictureCreatedByUs
         let wasAddedToSimian = existsInSimian && currentNotification.simianCreatedByUs
-        
-        // For disabling toggles, use the full existence check (including ones we created)
-        let isInWorkPicture = existsInWorkPicture
-        let isInSimian = existsInSimian
-        
-        // Disable toggles when not connected to that service
-        let workPictureToggleDisabled = isInWorkPicture || !isServerConnected
-        let simianToggleDisabled = isInSimian || !isSimianConnected
         let neitherConnected = !isServerConnected && !isSimianConnected
         
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             if currentNotification.requiresDocketConfirmation == true {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("This message was not tagged “New Docket” in Gmail. Confirm if it’s a real new docket or dismiss.")
@@ -1616,79 +1595,25 @@ struct NotificationRowView: View {
                 .background(Color.orange.opacity(0.15))
                 .cornerRadius(6)
             }
-            // Visual indicators for both pre-existing and newly created destinations
-            if wasPreExistingInWorkPicture || wasPreExistingInSimian || wasAddedToWorkPicture || wasAddedToSimian {
-                HStack(spacing: 8) {
-                    if wasAddedToWorkPicture {
-                        Button(action: {
-                            openWorkPictureFolderForNotification(currentNotification)
-                        }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.green)
-                                Text("Added to Work Picture")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open this docket’s folder in Finder")
-                    }
-                    if wasPreExistingInWorkPicture {
-                        Button(action: {
-                            openWorkPictureFolderForNotification(currentNotification)
-                        }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.green)
-                                Text("Already in Work Picture")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open this docket’s folder in Finder")
-                    }
-                    if wasPreExistingInSimian {
-                        HStack(spacing: 4) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.blue)
-                            Text("Already in Simian")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    if wasAddedToSimian {
-                        HStack(spacing: 4) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.blue)
-                            Text("Added to Simian")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-                .padding(.horizontal, 8)
-                .background(Color.secondary.opacity(0.1))
-                .cornerRadius(4)
+            HStack(spacing: 6) {
+                destinationStatusChip(
+                    title: "Work Picture",
+                    exists: wasPreExistingInWorkPicture,
+                    added: wasAddedToWorkPicture,
+                    connected: isServerConnected,
+                    tint: .green,
+                    onOpen: existsInWorkPicture ? { openWorkPictureFolderForNotification(currentNotification) } : nil
+                )
+                destinationStatusChip(
+                    title: "Simian",
+                    exists: wasPreExistingInSimian,
+                    added: wasAddedToSimian,
+                    connected: isSimianConnected,
+                    tint: .blue,
+                    onOpen: nil
+                )
             }
-            
-            Toggle("Create Work Picture Folder", isOn: workPictureBinding())
-                .font(.system(size: 11))
-                .disabled(workPictureToggleDisabled)
-                .opacity(workPictureToggleDisabled ? 0.5 : 1.0)
-            
-            Toggle("Create Simian Job", isOn: simianJobBinding())
-                .font(.system(size: 11))
-                .disabled(simianToggleDisabled)
-                .opacity(simianToggleDisabled ? 0.5 : 1.0)
-            
-            approvalJobStatusView()
+            .frame(height: 20)
             
             approveArchiveButtons(
                 notification: currentNotification,
@@ -1697,28 +1622,52 @@ struct NotificationRowView: View {
         }
         .padding(.top, 4)
         .onAppear {
-            // #region agent log
-            _debugLogWP("newDocketActionsView WP state", ["existsInWorkPicture_live": checkIfInWorkPicture(notification: currentNotification), "isInWorkPicture_stored": currentNotification.isInWorkPicture, "docketNumber": currentNotification.docketNumber ?? "", "jobName": currentNotification.jobName ?? ""], "H4")
-            // #endregion
-            // Update duplicate detection when view appears
-            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                notificationCenter.updateDuplicateDetection(currentNotification, mediaManager: mediaManager, settingsManager: settingsManager)
-            }
-            // Update Simian service configuration first, then pre-load users if Simian is enabled
             updateSimianServiceConfiguration()
         }
     }
     
-    /// True only when the docket folder exists in Work Picture on disk (not Asana-only).
-    private func checkIfInWorkPicture(notification: Notification) -> Bool {
-        if let docketNumber = notification.docketNumber, docketNumber != "TBD",
-           let jobName = notification.jobName {
-            let info = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
-            return info.existsInWorkPicture
+    @ViewBuilder
+    private func destinationStatusChip(
+        title: String,
+        exists: Bool,
+        added: Bool,
+        connected: Bool,
+        tint: Color,
+        onOpen: (() -> Void)?
+    ) -> some View {
+        let icon = (exists || added) ? "checkmark.circle.fill" : (connected ? "circle" : "circle.slash")
+        let color: Color = (exists || added) ? tint : .secondary
+
+        let chip = HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 9))
+                .foregroundColor(color)
+                .frame(width: 10, height: 10)
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
         }
-        return false
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.secondary.opacity(0.08))
+        .cornerRadius(4)
+
+        let tip: String = {
+            if added { return "Added to \(title)" }
+            if exists { return "Already in \(title)" }
+            if !connected { return "\(title) is offline" }
+            return "Not in \(title)"
+        }()
+        if let onOpen {
+            Button(action: onOpen) { chip }
+                .buttonStyle(.plain)
+                .help("Open this docket’s folder in Finder")
+        } else {
+            chip.help(tip)
+        }
     }
-    
+
     /// Open the Work Picture folder for this docket in Finder. If the exact docket folder is found (by year), open it; otherwise open the current year’s Work Picture root.
     private func openWorkPictureFolderForNotification(_ notification: Notification) {
         guard let docketNumber = notification.docketNumber, docketNumber != "TBD",
@@ -1733,44 +1682,6 @@ struct NotificationRowView: View {
         }
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         NSWorkspace.shared.open(url)
-    }
-    
-    private func checkIfDocketExists(notification: Notification) -> Bool {
-        if let docketNumber = notification.docketNumber, docketNumber != "TBD",
-           let jobName = notification.jobName {
-            return docketExists(docketNumber: docketNumber, jobName: jobName)
-        }
-        return false
-    }
-    
-    private func workPictureBinding() -> Binding<Bool> {
-        Binding(
-            get: {
-                guard isServerConnected else { return false }
-                return notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateWorkPicture ?? true
-            },
-            set: { newValue in
-                guard isServerConnected else { return }
-                if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                    notificationCenter.updateActionFlags(currentNotification, workPicture: newValue)
-                }
-            }
-        )
-    }
-    
-    private func simianJobBinding() -> Binding<Bool> {
-        Binding(
-            get: {
-                guard isSimianConnected else { return false }
-                return notificationCenter.notifications.first(where: { $0.id == notificationId })?.shouldCreateSimianJob ?? true
-            },
-            set: { newValue in
-                guard isSimianConnected else { return }
-                if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                    notificationCenter.updateActionFlags(currentNotification, simianJob: newValue)
-                }
-            }
-        )
     }
     
     /// Extract email address from sourceEmail string (handles "Name <email@example.com>" format)
@@ -1800,6 +1711,8 @@ struct NotificationRowView: View {
     private func approveArchiveButtons(notification: Notification, hideApprove: Bool) -> some View {
         let awaitingReviewConfirmation = notification.requiresDocketConfirmation == true
         HStack(spacing: 8) {
+            approvalJobStatusView()
+            Spacer(minLength: 0)
             if !hideApprove {
                 Button("Approve") {
                     if notification.docketNumber == nil || notification.docketNumber == "TBD" {
@@ -1835,56 +1748,55 @@ struct NotificationRowView: View {
             .controlSize(.small)
             .disabled(isApprovalLocked)
         }
+        .frame(minHeight: 24)
     }
 
     @ViewBuilder
     private func approvalJobStatusView() -> some View {
-        switch approvalQueue.state(for: notificationId) {
-        case .queued:
-            HStack(spacing: 6) {
-                ProgressView()
-                    .scaleEffect(0.6)
-                Text("Queued…")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-            }
-            .padding(.vertical, 2)
-        case .inProgress(let message, let fraction):
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+        let state = approvalQueue.state(for: notificationId)
+        HStack(spacing: 6) {
+            Group {
+                switch state {
+                case .queued, .inProgress:
                     ProgressView()
-                        .scaleEffect(0.6)
-                    Text(message)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+                        .controlSize(.mini)
+                case .succeeded:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                case .failed:
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                case nil:
+                    Color.clear
                 }
-                ProgressView(value: min(max(fraction, 0), 1))
-                    .progressViewStyle(.linear)
             }
-            .padding(.vertical, 2)
-        case .succeeded:
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                    .font(.system(size: 12))
-                Text("Created")
-                    .font(.system(size: 11))
-                    .foregroundColor(.green)
-            }
-            .padding(.vertical, 2)
-        case .failed(let message):
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.orange)
-                    .font(.system(size: 12))
-                Text(message)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.vertical, 2)
-        case nil:
-            EmptyView()
+            .frame(width: 12, height: 12)
+
+            Text(approvalStatusText(state))
+                .font(.system(size: 11))
+                .foregroundColor(approvalStatusColor(state))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(state == nil ? 0 : 1)
+    }
+
+    private func approvalStatusText(_ state: DocketApprovalJobState?) -> String {
+        switch state {
+        case .queued: return "Queued…"
+        case .inProgress(let message, _): return message
+        case .succeeded: return "Created"
+        case .failed(let message): return message
+        case nil: return " "
+        }
+    }
+
+    private func approvalStatusColor(_ state: DocketApprovalJobState?) -> Color {
+        switch state {
+        case .succeeded: return .green
+        case .failed: return .secondary
+        default: return .secondary
         }
     }
     
@@ -1950,12 +1862,6 @@ struct NotificationRowView: View {
                     Text("Docket \(docketNumber): \(jobName)")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                    
-                    let existenceInfo = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
-                    
-                    if existenceInfo.existsInAsana {
-                        docketAsanaExistenceChip(existenceInfo: existenceInfo)
-                    }
                 } else {
                     Text("Docket \(docketNumber)")
                         .font(.system(size: 12))
@@ -2136,42 +2042,37 @@ struct NotificationRowView: View {
     }
     
     private func handleApprove() {
-        // Get the latest notification state from center
         guard let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }),
-              currentNotification.type == .newDocket,
-              let jobName = currentNotification.jobName else {
+              currentNotification.type == .newDocket else {
             return
         }
-        guard currentNotification.requiresDocketConfirmation != true else {
+
+        switch DocketApprovalPrompt.decide(
+            requiresConfirmation: currentNotification.requiresDocketConfirmation,
+            docketNumber: currentNotification.docketNumber,
+            jobName: currentNotification.jobName
+        ) {
+        case .blockedNeedsReview:
             return
-        }
-        
-        // Check if docket number is missing
-        if currentNotification.docketNumber == nil || currentNotification.docketNumber == "TBD" {
-            isDocketInputForApproval = true
-            showDocketInputDialog = true
-            return
-        }
-        
-        guard let docketNumber = currentNotification.docketNumber, docketNumber != "TBD" else {
-            return
-        }
-        
-        // Check if docket already exists in current year's Work Picture (only if creating Work Picture)
-        // Allow creation in Simian even if it exists in Work Picture, and vice versa
-        let docketName = "\(docketNumber)_\(jobName)"
-        if currentNotification.shouldCreateWorkPicture && docketExistsInCurrentWorkPicture(docketName) {
-            // Show error notification only if trying to create Work Picture
-            let errorNotification = Notification(
-                type: .error,
-                title: "Docket Already Exists",
-                message: "Docket \(docketNumber): \(jobName) already exists in Work Picture"
+        case .requestMissingFields:
+            if currentNotification.docketNumber == nil || currentNotification.docketNumber == "TBD" {
+                isDocketInputForApproval = true
+                showDocketInputDialog = true
+            } else {
+                presentMissingFieldsDialog(
+                    docketNumber: currentNotification.docketNumber ?? "",
+                    jobName: currentNotification.jobName ?? "",
+                    sourceEmail: currentNotification.sourceEmail
+                )
+            }
+        case .enqueue(let docketNumber, let jobName):
+            enqueueConfirmedApproval(
+                notificationId: notificationId,
+                docketNumber: docketNumber,
+                jobName: jobName,
+                template: settingsManager.currentSettings.simianProjectTemplate
             )
-            notificationCenter.add(errorNotification)
-            return
         }
-        
-        handleApproveWithDocket(docketNumber)
     }
     
     private func handleApproveWithDocket(_ providedDocketNumber: String?) {
@@ -2181,98 +2082,54 @@ struct NotificationRowView: View {
     }
     
     private func handleApproveWithDocketAsync(_ providedDocketNumber: String?) async {
-        // Get the latest notification state from center
         guard let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }),
-              currentNotification.type == .newDocket,
-              let jobName = currentNotification.jobName else {
+              currentNotification.type == .newDocket else {
             return
         }
-        guard currentNotification.requiresDocketConfirmation != true else {
-            await MainActor.run {
-                processingNotification = nil
-                processingStatusById[notificationId] = nil
-            }
-            return
-        }
-        
-        // Determine docket number: use provided, or generate YYXXX format
+
         let finalDocketNumber: String
         if let provided = providedDocketNumber, !provided.isEmpty {
             finalDocketNumber = provided
         } else {
-            // Generate YYXXX format (YY = year suffix, XXX = literal "XXX")
-            let year = Calendar.current.component(.year, from: Date())
-            let yearSuffix = String(year).suffix(2) // Last 2 digits of year (25 for 2025, 26 for 2026)
-            finalDocketNumber = "\(yearSuffix)XXX" // e.g., "25XXX", "26XXX"
-        }
-        
-        // Check if docket already exists in current year's Work Picture before creating Work Picture folder
-        // Note: We only check Work Picture here - Simian creation is independent
-        let docketName = "\(finalDocketNumber)_\(jobName)"
-        if docketExistsInCurrentWorkPicture(docketName) {
-            // Only prevent if user wants to create Work Picture folder
-            // Check the notification's shouldCreateWorkPicture flag
-            if currentNotification.shouldCreateWorkPicture {
-                await MainActor.run {
-                    processingNotification = nil
-                    processingStatusById[notificationId] = nil
-                    // Show error notification
-                    let errorNotification = Notification(
-                        type: .error,
-                        title: "Docket Already Exists",
-                        message: "Docket \(finalDocketNumber): \(jobName) already exists in Work Picture"
-                    )
-                    notificationCenter.add(errorNotification)
-                }
-                return
-            }
-            // If not creating Work Picture, allow Simian creation to proceed
-        }
-        
-        // Update notification with docket number
-        notificationCenter.updateDocketNumber(currentNotification, to: finalDocketNumber)
-        
-        // Get updated notification
-        guard let updatedNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) else {
-            return
+            let yearSuffix = String(Calendar.current.component(.year, from: Date())).suffix(2)
+            finalDocketNumber = "\(yearSuffix)XXX"
         }
 
         await MainActor.run {
-            updateSimianServiceConfiguration()
-        }
-        
-        let shouldCreateSimian = updatedNotification.shouldCreateSimianJob || 
-            (settingsManager.currentSettings.simianEnabled && simianService.isConfigured)
-        let shouldCreateWorkPicture = updatedNotification.shouldCreateWorkPicture
-        
-        print("🔔 handleApproveWithDocket: shouldCreateSimian = \(shouldCreateSimian), shouldCreateWorkPicture = \(shouldCreateWorkPicture)")
-        
-        // Show dialog FIRST if either Simian or Work Picture is being created
-        // This allows user to set docket number and job name that will be used for both
-        // DO NOT create Work Picture or Simian here - wait for dialog confirmation
-        if shouldCreateSimian || shouldCreateWorkPicture {
-            print("🔔 Showing project creation dialog FIRST (before creating anything)")
-            await MainActor.run {
-                showSimianProjectDialog = true
-                pendingSimianNotificationId = notificationId
-                pendingSimianDocketNumber = finalDocketNumber
-                pendingSimianJobName = jobName
-                pendingSimianSourceEmail = currentNotification.sourceEmail
-            }
-            // Don't remove notification here - it will be removed after both are created
-            // or if dialog is cancelled
-        } else {
-            // Neither is enabled - just remove notification
-            print("⚠️ Neither Simian nor Work Picture enabled - removing notification")
-            await MainActor.run {
-                processingNotification = nil
-                processingStatusById[notificationId] = nil
-            }
-            await markEmailAsReadIfNeeded(updatedNotification)
-            if let currentNotification = notificationCenter.notifications.first(where: { $0.id == notificationId }) {
-                await notificationCenter.remove(currentNotification, emailScanningService: emailScanningService)
+            processingNotification = nil
+            processingStatusById[notificationId] = nil
+
+            switch DocketApprovalPrompt.decide(
+                requiresConfirmation: currentNotification.requiresDocketConfirmation,
+                docketNumber: finalDocketNumber,
+                jobName: currentNotification.jobName
+            ) {
+            case .blockedNeedsReview:
+                return
+            case .requestMissingFields:
+                presentMissingFieldsDialog(
+                    docketNumber: finalDocketNumber,
+                    jobName: currentNotification.jobName ?? "",
+                    sourceEmail: currentNotification.sourceEmail
+                )
+            case .enqueue(let docketNumber, let jobName):
+                enqueueConfirmedApproval(
+                    notificationId: notificationId,
+                    docketNumber: docketNumber,
+                    jobName: jobName,
+                    template: settingsManager.currentSettings.simianProjectTemplate
+                )
             }
         }
+    }
+
+    private func presentMissingFieldsDialog(docketNumber: String, jobName: String, sourceEmail: String?) {
+        updateSimianServiceConfiguration()
+        showSimianProjectDialog = true
+        pendingSimianNotificationId = notificationId
+        pendingSimianDocketNumber = docketNumber
+        pendingSimianJobName = jobName
+        pendingSimianSourceEmail = sourceEmail
     }
     
     private func iconForType(_ type: NotificationType) -> String {
@@ -2319,12 +2176,6 @@ struct NotificationRowView: View {
         return formatter.localizedString(for: date, relativeTo: Date())
     }
     
-    /// Check if a docket already exists in Work Picture (simple check)
-    private func docketExists(docketNumber: String, jobName: String) -> Bool {
-        let info = checkDocketExistence(docketNumber: docketNumber, jobName: jobName)
-        return info.existsAnywhere
-    }
-
     @MainActor
     private func updateProcessingStatus(_ notificationId: UUID, _ status: String) {
         processingStatusById[notificationId] = status
@@ -2345,7 +2196,6 @@ struct NotificationRowView: View {
         // Check Work Picture via filesystem (same logic as openWorkPictureFolderForNotification)
         let docketName = "\(docketNumber)_\(jobName)"
         let config = AppConfig(settings: settingsManager.currentSettings)
-        let serverBase = settingsManager.currentSettings.serverBasePath
         let foundYear = config.findDocketYear(docket: docketName)
         let prefixMatchInLoadedDockets = DocketDuplicateDetection.workPictureContainsDocketNumber(
             docketNumber,
@@ -2354,10 +2204,6 @@ struct NotificationRowView: View {
         if foundYear != nil || prefixMatchInLoadedDockets {
             info.existsInWorkPicture = true
         }
-        // #region agent log
-        _debugLogWP("checkDocketExistence", ["docketNumber": docketNumber, "jobName": jobName, "docketName": docketName, "foundYear": foundYear as Any, "existsInWorkPicture": info.existsInWorkPicture, "serverBasePath": serverBase], "H1")
-        _debugLogWP("checkDocketExistence path", ["serverBasePath": serverBase, "workPictureFolderName": settingsManager.currentSettings.workPictureFolderName], "H2")
-        // #endregion
         
         // Check Asana cache by directly loading the cache file (no @Published updates)
         let settings = settingsManager.currentSettings

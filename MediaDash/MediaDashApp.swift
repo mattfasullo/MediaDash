@@ -69,66 +69,6 @@ struct MediaDashApp: App {
                 }
             }
             
-            CommandGroup(after: .toolbar) {
-                Button("Toggle Layout Edit Mode") {
-                    LayoutEditManager.shared.toggleEditMode()
-                }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
-                
-                Button("Export Layout to Desktop") {
-                    if let url = LayoutEditManager.shared.exportLayoutToDesktop() {
-                        // Show success notification
-                        let alert = NSAlert()
-                        alert.messageText = "Layout Exported"
-                        alert.informativeText = "Layout exported to:\n\(url.path)"
-                        alert.alertStyle = .informational
-                        alert.addButton(withTitle: "OK")
-                        alert.runModal()
-                    } else {
-                        let alert = NSAlert()
-                        alert.messageText = "Export Failed"
-                        alert.informativeText = "Failed to export layout. Check console for details."
-                        alert.alertStyle = .warning
-                        alert.addButton(withTitle: "OK")
-                        alert.runModal()
-                    }
-                }
-                .keyboardShortcut("e", modifiers: [.command, .option])
-                
-                Divider()
-                
-                Button("Undo Layout Change") {
-                    LayoutEditManager.shared.undo()
-                }
-                .keyboardShortcut("z", modifiers: .command)
-                
-                Button("Redo Layout Change") {
-                    LayoutEditManager.shared.redo()
-                }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
-                
-                Divider()
-                
-                Button("Reset Layout to Default") {
-                    let alert = NSAlert()
-                    alert.messageText = "Reset Layout?"
-                    alert.informativeText = "This will clear all layout changes and restore the original positions. This cannot be undone."
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "Reset")
-                    alert.addButton(withTitle: "Cancel")
-                    
-                    if alert.runModal() == .alertFirstButtonReturn {
-                        LayoutEditManager.shared.resetAllOffsets()
-                        let confirmAlert = NSAlert()
-                        confirmAlert.messageText = "Layout Reset"
-                        confirmAlert.informativeText = "All layout changes have been cleared. Restart the app to see the original layout."
-                        confirmAlert.alertStyle = .informational
-                        confirmAlert.addButton(withTitle: "OK")
-                        confirmAlert.runModal()
-                    }
-                }
-            }
-            
             // View Menu
             CommandMenu("View") {
                 DebugFeaturesToggleButton()

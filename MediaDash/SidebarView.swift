@@ -136,7 +136,6 @@ struct SidebarView: View {
                     onFileThenPrep: onFileThenPrep,
                     showVideoSheet: $showVideoSheet
                 )
-                .draggableLayout(id: "actionButtons")
 
                 Divider()
 
@@ -198,7 +197,6 @@ struct SidebarView: View {
                         }
                     }
                 }
-                .draggableLayout(id: "sidebarSecondaryNav")
 
                 Spacer(minLength: 0)
 
@@ -212,7 +210,6 @@ struct SidebarView: View {
                     }
                 }
                 .padding(.bottom, 12)
-                .draggableLayout(id: "sidebarBottomActions")
             }
             .padding(16)
             .frame(width: sidebarWidth)

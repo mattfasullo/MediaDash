@@ -156,4 +156,28 @@ final class NotificationTests: XCTestCase {
         // Both are unread
         XCTAssertGreaterThanOrEqual(notificationCenter.unreadCount, 0)
     }
+
+    func testAddContentsOfInsertsBothInOneCall() {
+        let first = Notification(
+            type: .newDocket,
+            title: "New Docket Detected",
+            message: "Docket 26101: One",
+            docketNumber: "26101",
+            jobName: "One"
+        )
+        let second = Notification(
+            type: .newDocket,
+            title: "New Docket Detected",
+            message: "Docket 26102: Two",
+            docketNumber: "26102",
+            jobName: "Two"
+        )
+
+        notificationCenter.add(contentsOf: [first, second])
+
+        let added = notificationCenter.notifications.filter {
+            $0.docketNumber == "26101" || $0.docketNumber == "26102"
+        }
+        XCTAssertEqual(added.count, 2)
+    }
 }

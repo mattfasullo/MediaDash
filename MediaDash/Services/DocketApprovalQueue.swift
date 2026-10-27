@@ -32,16 +32,26 @@ enum DocketApprovalJobState: Equatable {
     case failed(String)
 }
 
+struct DocketApprovalSnapshot: Equatable {
+    var states: [UUID: DocketApprovalJobState] = [:]
+    var activeLabel: String?
+    var activeMessage: String = ""
+    var activeFraction: Double = 0
+    var queuedCount: Int = 0
+}
+
 /// Serial queue for new-docket approval (Work Picture + Simian) so the UI stays usable.
 @MainActor
 final class DocketApprovalQueue: ObservableObject {
     static let shared = DocketApprovalQueue()
 
-    @Published private(set) var states: [UUID: DocketApprovalJobState] = [:]
-    @Published private(set) var activeLabel: String?
-    @Published private(set) var activeMessage: String = ""
-    @Published private(set) var activeFraction: Double = 0
-    @Published private(set) var queuedCount: Int = 0
+    @Published private(set) var snapshot = DocketApprovalSnapshot()
+
+    var states: [UUID: DocketApprovalJobState] { snapshot.states }
+    var activeLabel: String? { snapshot.activeLabel }
+    var activeMessage: String { snapshot.activeMessage }
+    var activeFraction: Double { snapshot.activeFraction }
+    var queuedCount: Int { snapshot.queuedCount }
 
     typealias ProgressHandler = @MainActor (String, Double) -> Void
     typealias Processor = (DocketApprovalJob, ProgressHandler) async -> Result<Void, Error>
@@ -53,15 +63,15 @@ final class DocketApprovalQueue: ObservableObject {
     private var isPumping = false
 
     var isBannerVisible: Bool {
-        activeLabel != nil || queuedCount > 0
+        snapshot.activeLabel != nil || snapshot.queuedCount > 0
     }
 
     func state(for id: UUID) -> DocketApprovalJobState? {
-        states[id]
+        snapshot.states[id]
     }
 
     func isBusy(_ id: UUID) -> Bool {
-        switch states[id] {
+        switch snapshot.states[id] {
         case .queued, .inProgress:
             return true
         default:
@@ -72,14 +82,18 @@ final class DocketApprovalQueue: ObservableObject {
     func enqueue(_ job: DocketApprovalJob) {
         if isBusy(job.notificationId) { return }
         pending.append(job)
-        states[job.notificationId] = .queued
-        queuedCount = pending.count
+        updateSnapshot { snap in
+            snap.states[job.notificationId] = .queued
+            snap.queuedCount = pending.count
+        }
         Task { await pump() }
     }
 
     func clearSucceeded(_ id: UUID) {
-        if case .succeeded = states[id] {
-            states.removeValue(forKey: id)
+        if case .succeeded = snapshot.states[id] {
+            updateSnapshot { snap in
+                snap.states.removeValue(forKey: id)
+            }
         }
     }
 
@@ -90,17 +104,21 @@ final class DocketApprovalQueue: ObservableObject {
 
         while !pending.isEmpty {
             let job = pending.removeFirst()
-            queuedCount = pending.count
-            activeLabel = job.docketLabel
-            activeMessage = "Starting…"
-            activeFraction = 0.05
-            states[job.notificationId] = .inProgress(message: activeMessage, fraction: activeFraction)
+            updateSnapshot { snap in
+                snap.queuedCount = pending.count
+                snap.activeLabel = job.docketLabel
+                snap.activeMessage = "Starting…"
+                snap.activeFraction = 0.05
+                snap.states[job.notificationId] = .inProgress(message: "Starting…", fraction: 0.05)
+            }
             await Task.yield()
 
             let progress: ProgressHandler = { [weak self] message, fraction in
-                self?.activeMessage = message
-                self?.activeFraction = fraction
-                self?.states[job.notificationId] = .inProgress(message: message, fraction: fraction)
+                self?.updateSnapshot { snap in
+                    snap.activeMessage = message
+                    snap.activeFraction = fraction
+                    snap.states[job.notificationId] = .inProgress(message: message, fraction: fraction)
+                }
             }
 
             let result: Result<Void, Error>
@@ -112,17 +130,29 @@ final class DocketApprovalQueue: ObservableObject {
 
             switch result {
             case .success:
-                states[job.notificationId] = .succeeded
-                activeFraction = 1
-                activeMessage = "Done"
+                updateSnapshot { snap in
+                    snap.states[job.notificationId] = .succeeded
+                    snap.activeFraction = 1
+                    snap.activeMessage = "Done"
+                }
             case .failure(let error):
-                states[job.notificationId] = .failed(error.localizedDescription)
+                updateSnapshot { snap in
+                    snap.states[job.notificationId] = .failed(error.localizedDescription)
+                }
             }
             onJobFinished?(job.notificationId, result)
-            activeLabel = nil
-            activeMessage = ""
-            activeFraction = 0
+            updateSnapshot { snap in
+                snap.activeLabel = nil
+                snap.activeMessage = ""
+                snap.activeFraction = 0
+            }
         }
+    }
+
+    private func updateSnapshot(_ mutate: (inout DocketApprovalSnapshot) -> Void) {
+        var next = snapshot
+        mutate(&next)
+        snapshot = next
     }
 }
 

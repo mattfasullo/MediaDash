@@ -5,7 +5,6 @@
 
 import Cocoa
 import FinderSync
-import os
 
 /// JSON shape must match `FinderCommandPayload` in the main app.
 private struct FinderHandoffPayload: Codable {
@@ -15,65 +14,46 @@ private struct FinderHandoffPayload: Codable {
 
 private let kAppGroup = "group.mattfasullo.MediaDash"
 
-// #region agent log
-/// Same mirror path as `AppDelegate` so Cursor ingest file lists extension lines (appex is not sandboxed).
-private let kMediaDashDebugLogMirrorPath = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug-55b33e.log"
-
-private let kInstrumentLogger = Logger(subsystem: "mattfasullo.MediaDash.FinderSync", category: "debugSession55b33e")
-
-private func appendDebugPayload(_ payload: Data, toFilePath path: String) {
-    let dirURL = URL(fileURLWithPath: path).deletingLastPathComponent()
-    try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
-    if FileManager.default.fileExists(atPath: path) {
-        if let h = FileHandle(forWritingAtPath: path) {
-            h.seekToEndOfFile()
-            h.write(payload)
-            try? h.close()
-        }
-    } else {
-        try? payload.write(to: URL(fileURLWithPath: path))
-    }
-}
-
-/// Primary: App Group. Secondary: mirror to repo `.cursor/` (same as main app) for one-file review.
-private func mediaDashDebugNDJSON(location: String, message: String, hypothesisId: String, data: [String: String] = [:]) {
-    let dict: [String: Any] = [
-        "sessionId": "55b33e",
-        "timestamp": Int(Date().timeIntervalSince1970 * 1000),
-        "location": location,
-        "message": message,
-        "hypothesisId": hypothesisId,
-        "runId": "pre-fix",
-        "data": data
-    ]
-    guard let json = try? JSONSerialization.data(withJSONObject: dict),
-          let line = String(data: json, encoding: .utf8) else { return }
-    let payload = (line + "\n").data(using: .utf8) ?? Data()
-    if let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: kAppGroup) {
-        appendDebugPayload(payload, toFilePath: base.appendingPathComponent("debug-55b33e.log").path)
-    }
-    appendDebugPayload(payload, toFilePath: kMediaDashDebugLogMirrorPath)
-}
-// #endregion
-
 @objc(MediaDashFinderSyncPrincipal)
 final class MediaDashFinderSyncPrincipal: FIFinderSync {
     override init() {
         super.init()
-        // #region agent log
-        let hostPath = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path
-        let groupLog = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: kAppGroup)?
-            .appendingPathComponent("debug-55b33e.log").path ?? ""
-        mediaDashDebugNDJSON(location: "FinderSync.swift:init", message: "FinderSync extension principal initialized", hypothesisId: "A", data: ["hostAppPath": hostPath, "appexBundleID": Bundle.main.bundleIdentifier ?? "", "groupDebugLogPath": groupLog])
-        kInstrumentLogger.info("FinderSync init (session 55b33e) host=\(hostPath, privacy: .public)")
-        // #endregion
-        // Required so Finder delivers `menuForMenuKind` / `selectedItemURLs` for items under these roots.
-        // `/` is not a supported watch root; recent macOS silently drops the whole set when it's present.
-        // Register user-visible roots instead; add more specific paths here as MediaDash tracks them via the App Group.
-        FIFinderSyncController.default().directoryURLs = Set([
-            URL(fileURLWithPath: "/Users"),
-            URL(fileURLWithPath: "/Volumes")
-        ])
+        let roots = Self.defaultWatchRoots()
+        FIFinderSyncController.default().directoryURLs = roots
+        Self.writeLoadHeartbeat(roots: roots)
+    }
+
+    /// Home plus each real mounted volume. `/`, `/Users`, and `/Volumes` are not valid
+    /// watch roots — Finder silently drops the entire set when any of those is present.
+    static func defaultWatchRoots() -> Set<URL> {
+        var roots: Set<URL> = [FileManager.default.homeDirectoryForCurrentUser]
+        let keys: [URLResourceKey] = [.volumeIsRootFileSystemKey]
+        guard let volumes = FileManager.default.mountedVolumeURLs(
+            includingResourceValuesForKeys: keys,
+            options: [.skipHiddenVolumes]
+        ) else {
+            return roots
+        }
+        for volume in volumes {
+            let values = try? volume.resourceValues(forKeys: [.volumeIsRootFileSystemKey])
+            if values?.volumeIsRootFileSystem == true { continue }
+            roots.insert(volume)
+        }
+        return roots
+    }
+
+    private static func writeLoadHeartbeat(roots: Set<URL>) {
+        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: kAppGroup) else {
+            return
+        }
+        let payload: [String: Any] = [
+            "loadedAt": ISO8601DateFormatter().string(from: Date()),
+            "roots": roots.map(\.path).sorted()
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) else {
+            return
+        }
+        try? data.write(to: base.appendingPathComponent("finder-sync-loaded.json"), options: .atomic)
     }
 
     private static var controller: FIFinderSyncController {
@@ -86,6 +66,15 @@ final class MediaDashFinderSyncPrincipal: FIFinderSync {
             .deletingLastPathComponent() // Contents
             .deletingLastPathComponent() // MyApp.app
         return appURL.lastPathComponent.contains("MediaDash-Dev") ? "mediadash-dev" : "mediadash"
+    }
+
+    private func selectedPaths(for menuKind: FIMenuKind) -> [String] {
+        let selected = (Self.controller.selectedItemURLs() ?? []).map(\.path)
+        if !selected.isEmpty { return selected }
+        if menuKind == .contextualMenuForContainer, let target = Self.controller.targetedURL() {
+            return [target.path]
+        }
+        return []
     }
 
     private func writePayloadAndOpenURL(action: String, paths: [String]) {
@@ -118,6 +107,27 @@ final class MediaDashFinderSyncPrincipal: FIFinderSync {
         }
     }
 
+    private func currentSelectionPaths() -> [String] {
+        let selected = (Self.controller.selectedItemURLs() ?? []).map(\.path)
+        if !selected.isEmpty { return selected }
+        if let target = Self.controller.targetedURL() {
+            return [target.path]
+        }
+        return []
+    }
+
+    @objc private func arrangeFinals(_ sender: Any?) {
+        writePayloadAndOpenURL(action: "arrangeFinals", paths: currentSelectionPaths())
+    }
+
+    @objc private func file(_ sender: Any?) {
+        writePayloadAndOpenURL(action: "file", paths: currentSelectionPaths())
+    }
+
+    @objc private func prep(_ sender: Any?) {
+        writePayloadAndOpenURL(action: "prep", paths: currentSelectionPaths())
+    }
+
     @objc private func stage(_ sender: Any?) {
         let paths = (Self.controller.selectedItemURLs() ?? []).map(\.path)
         writePayloadAndOpenURL(action: "stage", paths: paths)
@@ -143,21 +153,32 @@ final class MediaDashFinderSyncPrincipal: FIFinderSync {
         writePayloadAndOpenURL(action: "editOnSimian", paths: paths)
     }
 
-    /// Swift imports `menuForMenuKind:` as `menu(for:)`; implementing the old name can compile but never run.
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
-        // #region agent log
-        let kindRaw = String(describing: menuKind)
-        mediaDashDebugNDJSON(location: "FinderSync.swift:menu(for:)", message: "menu(for:) invoked", hypothesisId: "B", data: ["menuKind": kindRaw])
-        kInstrumentLogger.info("menu(for:) kind=\(kindRaw, privacy: .public)")
-        // #endregion
-        // Item menu in the file list; sidebar is a separate `FIMenuKind`.
-        guard menuKind == .contextualMenuForItems || menuKind == .contextualMenuForSidebar else {
-            // #region agent log
-            mediaDashDebugNDJSON(location: "FinderSync.swift:menu(for:)", message: "returning nil (menuKind not items/sidebar)", hypothesisId: "C", data: ["menuKind": kindRaw])
-            // #endregion
+        guard menuKind == .contextualMenuForItems
+            || menuKind == .contextualMenuForSidebar
+            || menuKind == .contextualMenuForContainer else {
             return nil
         }
+
+        let paths = selectedPaths(for: menuKind)
+        let hasSelection = !paths.isEmpty
+
         let menu = NSMenu(title: "")
+
+        let fileItem = NSMenuItem(title: "01_File", action: #selector(file(_:)), keyEquivalent: "")
+        fileItem.target = self
+        fileItem.isEnabled = hasSelection
+        menu.addItem(fileItem)
+        let prepItem = NSMenuItem(title: "02_Prep", action: #selector(prep(_:)), keyEquivalent: "")
+        prepItem.target = self
+        prepItem.isEnabled = hasSelection
+        menu.addItem(prepItem)
+        let arrangeItem = NSMenuItem(title: "03_Arrange Finals", action: #selector(arrangeFinals(_:)), keyEquivalent: "")
+        arrangeItem.target = self
+        arrangeItem.isEnabled = hasSelection
+        menu.addItem(arrangeItem)
+        menu.addItem(NSMenuItem.separator())
+
         let stageItem = NSMenuItem(title: "File in MediaDash", action: #selector(stage(_:)), keyEquivalent: "")
         stageItem.target = self
         let convertItem = NSMenuItem(title: "Convert in MediaDash", action: #selector(convert(_:)), keyEquivalent: "")
@@ -174,16 +195,6 @@ final class MediaDashFinderSyncPrincipal: FIFinderSync {
         menu.addItem(editOnSimianItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(audioOnlyItem)
-        // #region agent log
-        mediaDashDebugNDJSON(location: "FinderSync.swift:menu(for:)", message: "returning menu with items", hypothesisId: "B", data: ["itemCount": String(menu.items.count)])
-        // #endregion
         return menu
-    }
-
-    override func beginObservingDirectory(at url: URL) {
-        super.beginObservingDirectory(at: url)
-        // #region agent log
-        mediaDashDebugNDJSON(location: "FinderSync.swift:beginObservingDirectory", message: "beginObservingDirectory", hypothesisId: "E", data: ["url": url.path])
-        // #endregion
     }
 }

@@ -23,6 +23,30 @@ class NotificationService {
         }
     }
     
+    /// One OS banner for a scan batch instead of one alert per docket.
+    func showNewDocketsBatch(count: Int) {
+        guard count > 0 else { return }
+        if count == 1 {
+            showNewDocketNotification(docketNumber: nil, jobName: "1 new docket")
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "New Dockets Detected"
+        content.body = "\(count) new dockets"
+        content.sound = .default
+        content.categoryIdentifier = "NEW_DOCKET"
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                print("NotificationService: Failed to show batch notification: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Show a notification for a new docket
     func showNewDocketNotification(docketNumber: String?, jobName: String) {
         let content = UNMutableNotificationContent()
@@ -49,6 +73,23 @@ class NotificationService {
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
                 print("NotificationService: Failed to show notification: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func showBanner(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                print("NotificationService: Failed to show banner: \(error.localizedDescription)")
             }
         }
     }

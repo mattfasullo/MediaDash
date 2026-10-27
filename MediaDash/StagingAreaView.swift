@@ -802,9 +802,9 @@ struct CreateFinalsSheet: View {
     @ViewBuilder
     private func previewBody(_ preview: FinalsMovePreview) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            bucketRow(icon: "music.note.list", label: "Fullmixes", count: preview.fullMixes.count)
-            bucketRow(icon: "waveform", label: "Mixouts", count: preview.mixouts.count)
-            bucketRow(icon: "film", label: "Quicktime References", count: preview.qtReferences.count)
+            bucketRow(icon: "music.note.list", label: FinalsFolderOrganizationUseCase.Buckets.fullmixes, count: preview.fullMixes.count)
+            bucketRow(icon: "waveform", label: FinalsFolderOrganizationUseCase.Buckets.mixouts, count: preview.mixouts.count)
+            bucketRow(icon: "film", label: FinalsFolderOrganizationUseCase.Buckets.qt, count: preview.qtReferences.count)
 
             if !preview.unclassified.isEmpty {
                 Divider()

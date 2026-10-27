@@ -243,56 +243,57 @@ class NotificationCenter: ObservableObject {
     /// Add a new notification (prevents duplicates by emailId, threadId, or docket+jobName)
     /// If a notification already exists for the same thread, silently skips unless there's new actionable content
     func add(_ notification: Notification) {
-        // Check for duplicate by emailId if emailId is present
-        if let emailId = notification.emailId {
-            // Remove any existing notification with the same emailId
-            notifications.removeAll { $0.emailId == emailId }
-        }
+        add(contentsOf: [notification])
+    }
 
-        // Check for duplicate by threadId - skip if we already have a notification for this thread
-        // Replies to existing threads don't need new notifications (just conversation noise)
-        if let threadId = notification.threadId {
-            // For docket notifications, skip if we already have one for this thread
-            if notification.type == .newDocket {
-                let existingThreadNotification = notifications.first { existing in
-                    existing.threadId == threadId &&
-                    existing.type == .newDocket
-                }
-                if existingThreadNotification != nil {
-                    print("📋 [NotificationCenter] Skipping thread reply - already have docket notification for thread \(threadId)")
-                    return
-                }
-            }
-            // For requests, skip if we already have one for this thread
-            if notification.type == .request {
-                let existingThreadNotification = notifications.first { existing in
-                    existing.threadId == threadId && existing.type == .request
-                }
-                if existingThreadNotification != nil {
-                    print("📋 [NotificationCenter] Skipping thread reply - already have request notification for thread \(threadId)")
-                    return
-                }
+    /// Insert several notifications with one publish + one debounced save.
+    func add(contentsOf incoming: [Notification]) {
+        guard !incoming.isEmpty else { return }
+        var working = notifications
+        var didChange = false
+        for notification in incoming {
+            if insertPrepared(notification, into: &working) {
+                didChange = true
             }
         }
-
-        // Additional check: for newDocket, prevent duplicates with same docketNumber + jobName
-        if notification.type == .newDocket,
-           let docketNum = notification.docketNumber,
-           let jobName = notification.jobName {
-            let existingDocketNotification = notifications.first { existing in
-                existing.type == .newDocket &&
-                existing.docketNumber == docketNum &&
-                existing.jobName == jobName
-            }
-            if existingDocketNotification != nil {
-                print("📋 [NotificationCenter] Skipping duplicate - same docket+job already exists: \(docketNum) \(jobName)")
-                return
-            }
-        }
-
-        notifications.insert(notification, at: 0) // Add to top
+        guard didChange else { return }
+        notifications = working
+        rebuildIndices()
         updateUnreadCount()
         saveNotifications()
+    }
+
+    @discardableResult
+    private func insertPrepared(_ notification: Notification, into working: inout [Notification]) -> Bool {
+        if let emailId = notification.emailId {
+            working.removeAll { $0.emailId == emailId }
+        }
+
+        if let threadId = notification.threadId {
+            if notification.type == .newDocket,
+               working.contains(where: { $0.threadId == threadId && $0.type == .newDocket }) {
+                print("📋 [NotificationCenter] Skipping thread reply - already have docket notification for thread \(threadId)")
+                return false
+            }
+            if notification.type == .request,
+               working.contains(where: { $0.threadId == threadId && $0.type == .request }) {
+                print("📋 [NotificationCenter] Skipping thread reply - already have request notification for thread \(threadId)")
+                return false
+            }
+        }
+
+        if notification.type == .newDocket,
+           let docketNum = notification.docketNumber,
+           let jobName = notification.jobName,
+           working.contains(where: {
+               $0.type == .newDocket && $0.docketNumber == docketNum && $0.jobName == jobName
+           }) {
+            print("📋 [NotificationCenter] Skipping duplicate - same docket+job already exists: \(docketNum) \(jobName)")
+            return false
+        }
+
+        working.insert(notification, at: 0)
+        return true
     }
     
     /// Remove a notification and mark email as read
@@ -611,8 +612,6 @@ class NotificationCenter: ObservableObject {
         
         // Check Work Picture via filesystem (same as view + "Open in Finder") so we don't show "Already" when folder is missing
         let docketName = "\(docketNumber)_\(jobName)"
-        let hasSM = settingsManager != nil
-        let hasMM = mediaManager != nil
         if let settingsManager = settingsManager {
             let config = AppConfig(settings: settingsManager.currentSettings)
             let exactExists = config.findDocketYear(docket: docketName) != nil
@@ -625,21 +624,6 @@ class NotificationCenter: ObservableObject {
                 mediaManager.dockets.contains(docketName) ||
                 DocketDuplicateDetection.workPictureContainsDocketNumber(docketNumber, dockets: mediaManager.dockets)
         }
-        // #region agent log
-        do {
-            let payload: [String: Any] = ["timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "NotificationCenter.updateDuplicateDetection", "message": "updateDuplicateDetection WP", "data": ["docketName": docketName, "hasSettingsManager": hasSM, "hasMediaManager": hasMM, "isInWorkPicture": notifications[index].isInWorkPicture], "sessionId": "debug-session", "hypothesisId": "H3"]
-            let d = try JSONSerialization.data(withJSONObject: payload)
-            let line = String(data: d, encoding: .utf8)! + "\n"
-            let path = "/Users/mediamini1/Documents/Projects/MediaDash/.cursor/debug.log"
-            let url = URL(fileURLWithPath: path)
-            if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-            if let stream = OutputStream(url: url, append: true) {
-                stream.open()
-                _ = line.data(using: .utf8)!.withUnsafeBytes { stream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: line.utf8.count) }
-                stream.close()
-            }
-        } catch {}
-        // #endregion
         
         // Check Simian - for now, we'll track this via a property set when Simian job is created
         // In the future, this could check Simian API if available
@@ -669,6 +653,47 @@ class NotificationCenter: ObservableObject {
         notifications[index].isInWorkPicture = true
         if createdByUs {
             notifications[index].workPictureCreatedByUs = true
+        }
+        saveNotifications()
+    }
+
+    /// Apply several approval-time field writes in one publish.
+    func applyApprovalUpdate(
+        id: UUID,
+        docketNumber: String? = nil,
+        jobName: String? = nil,
+        isInWorkPicture: Bool? = nil,
+        workPictureCreatedByUs: Bool? = nil,
+        isInSimian: Bool? = nil,
+        simianCreatedByUs: Bool? = nil
+    ) {
+        guard let index = indexById(id) ?? notifications.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        if let docketNumber {
+            notifications[index].docketNumber = docketNumber
+        }
+        if let jobName {
+            notifications[index].jobName = jobName
+        }
+        let number = notifications[index].docketNumber
+        let name = notifications[index].jobName
+        if let number, number != "TBD", let name {
+            notifications[index].message = "Docket \(number): \(name)"
+        } else if let name {
+            notifications[index].message = "\(name) (Docket number pending)"
+        }
+        if let isInWorkPicture {
+            notifications[index].isInWorkPicture = isInWorkPicture
+        }
+        if let workPictureCreatedByUs {
+            notifications[index].workPictureCreatedByUs = workPictureCreatedByUs
+        }
+        if let isInSimian {
+            notifications[index].isInSimian = isInSimian
+        }
+        if let simianCreatedByUs {
+            notifications[index].simianCreatedByUs = simianCreatedByUs
         }
         saveNotifications()
     }

@@ -33,6 +33,69 @@
 	<string>270</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>MediaDash/01_File</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>file</string>
+			<key>NSPortName</key>
+			<string>MediaDash</string>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
+			<key>NSRequiredContext</key>
+			<dict>
+				<key>NSServiceCategory</key>
+				<string>public.item</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>MediaDash/02_Prep</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>prep</string>
+			<key>NSPortName</key>
+			<string>MediaDash</string>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
+			<key>NSRequiredContext</key>
+			<dict>
+				<key>NSServiceCategory</key>
+				<string>public.item</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>MediaDash/03_Arrange Finals</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>arrangeFinals</string>
+			<key>NSPortName</key>
+			<string>MediaDash</string>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
+			<key>NSRequiredContext</key>
+			<dict>
+				<key>NSServiceCategory</key>
+				<string>public.item</string>
+			</dict>
+		</dict>
+	</array>
 	<key>SUAllowsAutomaticUpdates</key>
 	<true/>
 	<key>SUAutomaticallyUpdate</key>

@@ -128,6 +128,7 @@ class AirtableDocketScanningService: ObservableObject {
                 apiKey:      apiKey
             )
 
+            var pendingNotifications: [Notification] = []
             for record in records {
                 guard !seenRecordIds.contains(record.id) else { continue }
 
@@ -169,11 +170,16 @@ class AirtableDocketScanningService: ObservableObject {
                     continue
                 }
 
-                let created = createNotification(docketNumber: docketNumber, jobName: jobName, recordId: record.id)
-                if created {
-                    totalDocketsDetected += 1
+                if let notification = makeNotification(docketNumber: docketNumber, jobName: jobName) {
+                    pendingNotifications.append(notification)
                 }
                 markSeen(record.id)
+            }
+
+            if !pendingNotifications.isEmpty, let nc = notificationCenter {
+                nc.add(contentsOf: pendingNotifications)
+                totalDocketsDetected += pendingNotifications.count
+                NotificationService.shared.showNewDocketsBatch(count: pendingNotifications.count)
             }
 
             // Fix 1: only advance the cutoff after a fully successful scan.
@@ -281,39 +287,25 @@ class AirtableDocketScanningService: ObservableObject {
 
     // MARK: - Notification
 
-    /// - Returns: `true` if a new notification was added; `false` if skipped (duplicate already listed).
-    @discardableResult
-    private func createNotification(docketNumber: String, jobName: String, recordId: String) -> Bool {
-        guard let nc = notificationCenter else { return false }
+    private func makeNotification(docketNumber: String, jobName: String) -> Notification? {
+        guard let nc = notificationCenter else { return nil }
 
         let alreadyExists = nc.notifications.contains {
             $0.type == .newDocket && $0.docketNumber == docketNumber
         }
-        guard !alreadyExists else { return false }
+        guard !alreadyExists else { return nil }
 
         let message = jobName.isEmpty
             ? "Docket \(docketNumber)"
             : "Docket \(docketNumber): \(jobName)"
 
-        let notification = Notification(
+        return Notification(
             type: .newDocket,
             title: "New Docket Detected",
             message: message,
             docketNumber: docketNumber,
             jobName: jobName.isEmpty ? nil : jobName
         )
-
-        nc.add(notification)
-
-        NotificationService.shared.showNewDocketNotification(
-            docketNumber: docketNumber,
-            jobName: jobName
-        )
-
-        #if DEBUG
-        print("AirtableDocketScanningService: ✅ Created notification for docket \(docketNumber) — \(jobName)")
-        #endif
-        return true
     }
 
     // MARK: - Validation

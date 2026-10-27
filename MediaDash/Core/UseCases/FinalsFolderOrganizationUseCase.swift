@@ -29,9 +29,9 @@ nonisolated private let _videoExtensions: Set<String> = [
     "mov", "mp4", "m4v", "mxf", "avi", "mkv", "prores",
 ]
 
-nonisolated private let _bucketFullmixes = "01_Fullmixes"
-nonisolated private let _bucketMixouts   = "02_Mixouts"
-nonisolated private let _bucketQt        = "03_Quicktime References"
+nonisolated private let _bucketFullmixes = "01_WAV_2448_Fullmixes"
+nonisolated private let _bucketMixouts   = "02_WAV_2448_Mixouts"
+nonisolated private let _bucketQt        = "03_Quicktimes"
 
 // MARK: - Classifier
 
@@ -142,9 +142,9 @@ nonisolated struct FinalsFolderOrganizationUseCase {
         }
 
         let destRoots: [String] = [
-            root.appendingPathComponent(_bucketFullmixes).path,
-            root.appendingPathComponent(_bucketMixouts).path,
-            root.appendingPathComponent(_bucketQt).path,
+            root.appendingPathComponent(_bucketFullmixes).resolvingSymlinksInPath().path,
+            root.appendingPathComponent(_bucketMixouts).resolvingSymlinksInPath().path,
+            root.appendingPathComponent(_bucketQt).resolvingSymlinksInPath().path,
         ]
 
         var fullMixes: [FinalsMoveItem] = []
@@ -155,7 +155,7 @@ nonisolated struct FinalsFolderOrganizationUseCase {
         for case let fileURL as URL in enumerator {
             guard let vals = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
                   vals.isRegularFile == true else { continue }
-            let path = fileURL.path
+            let path = fileURL.resolvingSymlinksInPath().path
             if destRoots.contains(where: { path.hasPrefix($0 + "/") || path == $0 }) { continue }
 
             let (category, cleanedBasename) = FinalsClassifier.classify(filename: fileURL.lastPathComponent)

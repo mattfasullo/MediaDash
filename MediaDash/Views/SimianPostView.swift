@@ -42,6 +42,8 @@ struct SimianPostView: View {
     @State private var selectedProjectName: String?
 
     @State private var folderBreadcrumb: [(id: String, name: String)] = []
+    /// Mixed folder/file order. Key is `projectId|parentFolderId` (`parentFolderId` empty at project root).
+    @State private var siblingOrder: [String: [String]] = SimianSiblingOrderStore.load()
     @State private var currentFolders: [SimianFolder] = []
     @State private var currentFiles: [SimianFile] = []
     @State private var isLoadingFolders = false
@@ -749,6 +751,16 @@ struct SimianPostView: View {
     private func handleCommandKeyPress(_ press: KeyPress) -> KeyPress.Result {
         guard press.modifiers.contains(.command) else { return .ignored }
 
+        // Cmd+R: reload the page you're on.
+        if press.characters.lowercased() == "r" {
+            guard !press.modifiers.contains(.shift),
+                  !press.modifiers.contains(.option),
+                  !press.modifiers.contains(.control) else { return .ignored }
+            if inlineRenameItemId != nil { return .ignored }
+            refreshCurrentView()
+            return .handled
+        }
+
         // Cmd+Down: open selected item (Finder-style).
         if press.key == .downArrow {
             // Project list mode: open selected project.
@@ -782,30 +794,14 @@ struct SimianPostView: View {
                 folderName = "Folder"
             }
 
-            if folderBreadcrumb.last?.id != folderId {
-                folderBreadcrumb.append((id: folderId, name: folderName))
-            }
-            selectedItemIds.removeAll()
-            expandedFolderIds.removeAll()
-            loadFolders(projectId: projectId, parentFolderId: folderId)
-            isFolderListFocused = true
-            syncFolderListFocusWithAppKit()
+            enterFolder(projectId: projectId, folderId: folderId, folderName: folderName)
             return .handled
         }
 
         // Cmd+Up: go up one level; exit project only when already at project root.
         if press.key == .upArrow {
-            guard let projectId = browsingProjectId, selectedProjectName != nil else { return .ignored }
-            if !folderBreadcrumb.isEmpty {
-                folderBreadcrumb.removeLast()
-                selectedItemIds.removeAll()
-                expandedFolderIds.removeAll()
-                loadFolders(projectId: projectId, parentFolderId: folderBreadcrumb.last?.id)
-                isFolderListFocused = true
-                syncFolderListFocusWithAppKit()
-            } else {
-                exitToProjectList(keepSelection: true)
-            }
+            guard browsingProjectId != nil, selectedProjectName != nil else { return .ignored }
+            goBack()
             return .handled
         }
 
@@ -845,6 +841,52 @@ struct SimianPostView: View {
         }
 
         return .ignored
+    }
+
+    private func enterFolder(projectId: String, folderId: String, folderName: String) {
+        if folderBreadcrumb.last?.id != folderId {
+            folderBreadcrumb.append((id: folderId, name: folderName))
+        }
+        selectedItemIds.removeAll()
+        expandedFolderIds.removeAll()
+        loadFolders(projectId: projectId, parentFolderId: folderId)
+        isFolderListFocused = true
+        syncFolderListFocusWithAppKit()
+    }
+
+    /// One level up: parent folder, project root, or the project list.
+    private func goBack() {
+        guard let projectId = browsingProjectId, selectedProjectName != nil else { return }
+        if !folderBreadcrumb.isEmpty {
+            folderBreadcrumb.removeLast()
+            selectedItemIds.removeAll()
+            expandedFolderIds.removeAll()
+            loadFolders(projectId: projectId, parentFolderId: folderBreadcrumb.last?.id)
+            isFolderListFocused = true
+            syncFolderListFocusWithAppKit()
+        } else {
+            exitToProjectList(keepSelection: true)
+        }
+    }
+
+    private func jumpToBreadcrumb(index: Int) {
+        guard let projectId = browsingProjectId, folderBreadcrumb.indices.contains(index) else { return }
+        folderBreadcrumb = Array(folderBreadcrumb.prefix(index + 1))
+        selectedItemIds.removeAll()
+        expandedFolderIds.removeAll()
+        loadFolders(projectId: projectId, parentFolderId: folderBreadcrumb.last?.id)
+        isFolderListFocused = true
+        syncFolderListFocusWithAppKit()
+    }
+
+    private func showProjectRoot() {
+        guard let projectId = browsingProjectId else { return }
+        folderBreadcrumb = []
+        selectedItemIds.removeAll()
+        expandedFolderIds.removeAll()
+        loadFolders(projectId: projectId, parentFolderId: nil)
+        isFolderListFocused = true
+        syncFolderListFocusWithAppKit()
     }
 
     private func exitToProjectList(keepSelection: Bool) {
@@ -921,13 +963,16 @@ struct SimianPostView: View {
                     await MainActor.run {
                         applyFolderRename(folderId: f.id, parentFolderId: parentId, newName: newName)
                         statusMessage = "Folder renamed"; statusIsError = false
+                        refreshCurrentView()
                     }
                 case .file(let f, _, _, let parentId):
-                    guard newName != f.title else { return }
-                    let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: f.id, newName: newName, currentFileName: f.fileName)
+                    let finalName = SimianListOrdering.unifiedRenameName(typed: newName, currentTitle: f.title, currentFileName: f.fileName)
+                    guard finalName != f.title || f.fileName != finalName else { return }
+                    let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: f.id, newName: finalName, currentFileName: f.fileName)
                     await MainActor.run {
-                        applyFileRename(fileId: f.id, parentFolderId: parentId, newName: newName, updatedFileName: updatedInfo.fileName)
+                        applyFileRename(fileId: f.id, parentFolderId: parentId, newName: finalName, updatedFileName: updatedInfo.fileName ?? finalName)
                         statusMessage = "File renamed"; statusIsError = false
+                        refreshCurrentView()
                     }
                 }
             } catch {
@@ -1115,9 +1160,10 @@ struct SimianPostView: View {
                             applyFolderRename(folderId: target.itemId, parentFolderId: target.parentFolderId, newName: newName)
                         }
                     } else {
-                        let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: target.itemId, newName: newName, currentFileName: target.currentFileName)
+                        let finalName = SimianListOrdering.unifiedRenameName(typed: newName, currentTitle: target.currentName, currentFileName: target.currentFileName)
+                        let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: target.itemId, newName: finalName, currentFileName: target.currentFileName)
                         await MainActor.run {
-                            applyFileRename(fileId: target.itemId, parentFolderId: target.parentFolderId, newName: newName, updatedFileName: updatedInfo.fileName)
+                            applyFileRename(fileId: target.itemId, parentFolderId: target.parentFolderId, newName: finalName, updatedFileName: updatedInfo.fileName ?? finalName)
                         }
                     }
                     renamedCount += 1
@@ -1128,6 +1174,7 @@ struct SimianPostView: View {
 
             await MainActor.run {
                 isBatchRenaming = false
+                if failures.isEmpty { refreshCurrentView() }
                 if failures.isEmpty {
                     showBatchRenameSheet = false
                     let skippedPart = skippedCount > 0 ? " (\(skippedCount) unchanged)" : ""
@@ -1212,9 +1259,10 @@ struct SimianPostView: View {
                             applyFolderRename(folderId: target.itemId, parentFolderId: target.parentFolderId, newName: newName)
                         }
                     } else {
-                        let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: target.itemId, newName: newName, currentFileName: target.currentFileName)
+                        let finalName = SimianListOrdering.unifiedRenameName(typed: newName, currentTitle: target.currentName, currentFileName: target.currentFileName)
+                        let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: target.itemId, newName: finalName, currentFileName: target.currentFileName)
                         await MainActor.run {
-                            applyFileRename(fileId: target.itemId, parentFolderId: target.parentFolderId, newName: newName, updatedFileName: updatedInfo.fileName)
+                            applyFileRename(fileId: target.itemId, parentFolderId: target.parentFolderId, newName: finalName, updatedFileName: updatedInfo.fileName ?? finalName)
                         }
                     }
                     renamedCount += 1
@@ -1224,6 +1272,7 @@ struct SimianPostView: View {
             }
             await MainActor.run {
                 isApplyingSimianAddDate = false
+                if failures.isEmpty { refreshCurrentView() }
                 if failures.isEmpty {
                     let skippedPart = skippedCount > 0 ? " (\(skippedCount) unchanged)" : ""
                     statusMessage = "\(label): \(renamedCount) item(s)\(skippedPart)"
@@ -1529,10 +1578,15 @@ struct SimianPostView: View {
                     await MainActor.run { applyFolderRename(folderId: renameItemId, parentFolderId: renameParentFolderId, newName: newName) }
                 } else {
                     let existingFileName = fileNameForFileId(renameItemId)
-                    let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: renameItemId, newName: newName, currentFileName: existingFileName)
-                    await MainActor.run { applyFileRename(fileId: renameItemId, parentFolderId: renameParentFolderId, newName: newName, updatedFileName: updatedInfo.fileName) }
+                    let finalName = SimianListOrdering.unifiedRenameName(typed: newName, currentTitle: renameCurrentName, currentFileName: existingFileName)
+                    let updatedInfo = try await simianService.renameFile(projectId: projectId, fileId: renameItemId, newName: finalName, currentFileName: existingFileName)
+                    await MainActor.run { applyFileRename(fileId: renameItemId, parentFolderId: renameParentFolderId, newName: finalName, updatedFileName: updatedInfo.fileName ?? finalName) }
                 }
-                await MainActor.run { statusMessage = renameIsFolder ? "Folder renamed" : "File renamed"; statusIsError = false }
+                await MainActor.run {
+                    statusMessage = renameIsFolder ? "Folder renamed" : "File renamed"
+                    statusIsError = false
+                    refreshCurrentView()
+                }
             } catch {
                 await MainActor.run { statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; statusIsError = true }
             }
@@ -1646,9 +1700,104 @@ struct SimianPostView: View {
     private func refreshCurrentView() {
         if let projectId = browsingProjectId {
             folderChildrenCache.removeAll(); folderFilesCache.removeAll()
-            loadFolders(projectId: projectId, parentFolderId: currentParentFolderId)
+            loadFolders(projectId: projectId, parentFolderId: currentParentFolderId, showsLoadingPlaceholder: false)
             for folderId in expandedFolderIds { loadFolderChildren(projectId: projectId, folderId: folderId) }
         } else { loadProjects() }
+    }
+
+    private func siblingOrderKey(projectId: String, parentFolderId: String?) -> String {
+        "\(projectId)|\(parentFolderId ?? "")"
+    }
+
+    private func treeSiblingOrder(projectId: String) -> [String: [String]] {
+        let prefix = "\(projectId)|"
+        var map: [String: [String]] = [:]
+        for (key, ids) in siblingOrder where key.hasPrefix(prefix) {
+            map[String(key.dropFirst(prefix.count))] = ids
+        }
+        return map
+    }
+
+    private func rememberSiblingOrder(projectId: String, parentFolderId: String?, ids: [String]) {
+        siblingOrder[siblingOrderKey(projectId: projectId, parentFolderId: parentFolderId)] = ids
+        SimianSiblingOrderStore.save(siblingOrder)
+    }
+
+    private func orderedTreeIds(projectId: String, parentFolderId: String?) -> [String] {
+        let folders = folderSiblings(parentId: parentFolderId)
+        let files = fileSiblings(parentFolderId: parentFolderId)
+        let saved = siblingOrder[siblingOrderKey(projectId: projectId, parentFolderId: parentFolderId)]
+        return SimianListOrdering.reconciled(saved: saved, folderIds: folders.map(\.id), fileIds: files.map(\.id))
+    }
+
+    /// Keep the current mixed row order, swapping in a new folder sequence or a new file sequence.
+    private func mixedOrder(projectId: String, parentFolderId: String?, replacingFolders: [String]? = nil, replacingFiles: [String]? = nil) -> [String] {
+        let current = orderedTreeIds(projectId: projectId, parentFolderId: parentFolderId)
+        var folders = replacingFolders
+        var files = replacingFiles
+        var result: [String] = []
+        var seen = Set<String>()
+        for treeId in current {
+            let next: String
+            if treeId.hasPrefix("f-"), var queue = folders, !queue.isEmpty {
+                next = "f-\(queue.removeFirst())"
+                folders = queue
+            } else if treeId.hasPrefix("file-"), var queue = files, !queue.isEmpty {
+                next = "file-\(queue.removeFirst())"
+                files = queue
+            } else {
+                next = treeId
+            }
+            if seen.insert(next).inserted { result.append(next) }
+        }
+        for id in folders ?? [] where seen.insert("f-\(id)").inserted {
+            result.append("f-\(id)")
+        }
+        for id in files ?? [] where seen.insert("file-\(id)").inserted {
+            result.append("file-\(id)")
+        }
+        return result
+    }
+
+    private func openTreeItem(_ treeId: String, projectId: String) {
+        guard treeId.hasPrefix("f-"), treeId.count > 2 else { return }
+        let folderId = String(treeId.dropFirst(2))
+        let treeList = flatTreeList(projectId: projectId)
+        let folderName: String
+        if let match = treeList.first(where: { $0.id == treeId }),
+           case .folder(let folder, _, _, _) = match {
+            folderName = folder.name
+        } else if let folder = folderSiblings(parentId: currentParentFolderId).first(where: { $0.id == folderId }) {
+            folderName = folder.name
+        } else {
+            folderName = cachedFolderName(forFolderId: folderId) ?? "Folder"
+        }
+        enterFolder(projectId: projectId, folderId: folderId, folderName: folderName)
+    }
+
+    /// Persist one mixed order, then put each row at that index on the public link.
+    private func reorderSiblings(projectId: String, parentFolderId: String?, orderedTreeIds: [String]) {
+        let current = self.orderedTreeIds(projectId: projectId, parentFolderId: parentFolderId)
+        guard orderedTreeIds != current else { return }
+        rememberSiblingOrder(projectId: projectId, parentFolderId: parentFolderId, ids: orderedTreeIds)
+        Task {
+            do {
+                try await simianService.applyPublicLinkOrder(
+                    projectId: projectId,
+                    parentFolderId: parentFolderId,
+                    orderedTreeIds: orderedTreeIds
+                )
+                await MainActor.run {
+                    statusMessage = "Order updated"
+                    statusIsError = false
+                }
+            } catch {
+                await MainActor.run {
+                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    statusIsError = true
+                }
+            }
+        }
     }
 
     // MARK: - View builders
@@ -1727,7 +1876,7 @@ struct SimianPostView: View {
                     Text("Last edited (newest)").tag(ProjectSortOrder.lastEditedNewest)
                     Text("Last edited (oldest)").tag(ProjectSortOrder.lastEditedOldest)
                 }.pickerStyle(.menu).labelsHidden().frame(width: 160).onChange(of: projectSortOrder) { _, _ in loadProjectInfosIfNeeded() }
-                Button(action: { refreshCurrentView() }) { Image(systemName: "arrow.clockwise").font(.system(size: 14)) }.buttonStyle(.borderless).help("Refresh project list")
+                Button(action: { refreshCurrentView() }) { Image(systemName: "arrow.clockwise").font(.system(size: 14)) }.buttonStyle(.borderless).help("Reload (⌘R)")
                 if isLoadingProjectInfos { ProgressView().scaleEffect(0.7) }
             }
         }.padding(.horizontal, 12).padding(.vertical, 8).background(Color(nsColor: .controlBackgroundColor)).frame(maxWidth: .infinity)
@@ -1752,7 +1901,7 @@ struct SimianPostView: View {
                             .contentShape(Rectangle())
                             .tag(project.id)
                             .id(project.id)
-                            .onTapGesture { openProject(project) }
+                            .onTapGesture(count: 2) { openProject(project) }
                         }
                     }
                     .listStyle(.inset(alternatesRowBackgrounds: true))
@@ -1828,9 +1977,22 @@ struct SimianPostView: View {
     private func folderBrowserView(projectId: String, projectName: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Button(action: { exitToProjectList(keepSelection: false) }) { Label("Back to projects", systemImage: "chevron.left").font(.caption) }.buttonStyle(.borderless)
-                Text("\u{2192}").font(.caption).foregroundStyle(.secondary)
-                Text(projectName).font(.caption).foregroundStyle(.secondary)
+                Button(action: { goBack() }) { Label("Back", systemImage: "chevron.left").font(.caption) }
+                    .buttonStyle(.borderless)
+                    .help("Back to the previous folder or project list")
+                Button(action: { showProjectRoot() }) {
+                    Text(projectName).font(.caption).lineLimit(1)
+                }
+                .buttonStyle(.borderless)
+                .help("Project root")
+                ForEach(Array(folderBreadcrumb.enumerated()), id: \.element.id) { index, crumb in
+                    Text("\u{203A}").font(.caption).foregroundStyle(.secondary)
+                    Button(action: { jumpToBreadcrumb(index: index) }) {
+                        Text(crumb.name).font(.caption).lineLimit(1)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(index == folderBreadcrumb.count - 1)
+                }
                 Spacer()
                 Button(action: { beginFinderStyleNewFolder(parentFolderId: currentParentFolderId, itemIdsToMove: []) }) {
                     Image(systemName: "folder.badge.plus").font(.system(size: 12))
@@ -1838,7 +2000,7 @@ struct SimianPostView: View {
                 .buttonStyle(.borderless)
                 .help("New Folder (⌘N)")
                 .disabled(isCreatingFolder)
-                Button(action: { refreshCurrentView() }) { Image(systemName: "arrow.clockwise").font(.system(size: 12)) }.buttonStyle(.borderless).help("Refresh folders and files")
+                Button(action: { refreshCurrentView() }) { Image(systemName: "arrow.clockwise").font(.system(size: 12)) }.buttonStyle(.borderless).help("Reload (⌘R)")
                 Button(action: { runSortChildrenAlphabetically(projectId: projectId, parentFolderId: sortTargetParentFolderIdForToolbar) }) {
                     Image(systemName: "line.3.horizontal.decrease").font(.system(size: 12))
                 }
@@ -1860,6 +2022,7 @@ struct SimianPostView: View {
                     expandedFolderIds: expandedFolderIds,
                     selectedItemIds: selectedItemIds,
                     inlineRenameItemId: inlineRenameItemId,
+                    siblingOrder: treeSiblingOrder(projectId: projectId),
                     currentParentFolderId: currentParentFolderId,
                     stagedFileCount: manager.selectedFiles.count,
                     focusTrigger: folderListFocusTrigger,
@@ -1867,14 +2030,14 @@ struct SimianPostView: View {
                     onToggleExpand: { folderId in toggleExpand(projectId: projectId, folderId: folderId) },
                     onSpringLoadExpand: { folderId in expandFolderForSpringLoad(projectId: projectId, folderId: folderId) },
                     onLoadChildren: { folderId in loadFolderChildren(projectId: projectId, folderId: folderId) },
-                    onReorderFolders: { pid, folderIds, parentId, dropBeforeId in
-                        reorderFolders(projectId: pid, folderIds: folderIds, parentFolderId: parentId, dropBeforeFolderId: dropBeforeId)
-                    },
-                    onReorderFiles: { pid, fileIds, parentId, dropBeforeId in
-                        reorderFiles(projectId: pid, fileIds: fileIds, parentFolderId: parentId, dropBeforeFileId: dropBeforeId)
+                    onReorderSiblings: { pid, parentId, orderedTreeIds in
+                        reorderSiblings(projectId: pid, parentFolderId: parentId, orderedTreeIds: orderedTreeIds)
                     },
                     onMoveIntoFolder: { pid, itemIds, targetFolderId in
                         moveItemsIntoFolder(projectId: pid, itemIds: itemIds, targetFolderId: targetFolderId)
+                    },
+                    onOpenItem: { treeId in
+                        openTreeItem(treeId, projectId: projectId)
                     },
                     onExternalFileDrop: { providers, folderId, folderName, simianParent in
                         handleExternalFileDrop(
@@ -2182,7 +2345,6 @@ struct SimianPostView: View {
                     isSortingSimianChildren = false
                     statusMessage = "Sorted by name (A\u{2013}Z)."
                     statusIsError = false
-                    refreshCurrentView()
                 }
             } catch {
                 await MainActor.run {
@@ -2418,15 +2580,17 @@ struct SimianPostView: View {
         let originalIds = siblings.map { $0.id }
         guard ids != originalIds else {
             Task { @MainActor in
-                statusMessage = "Folder order unchanged. Simian lists every subfolder above files; there must be at least two subfolders to reorder among them."
+                statusMessage = "Folder order unchanged."
                 statusIsError = false
             }
             return
         }
+        let mixed = mixedOrder(projectId: projectId, parentFolderId: parentFolderId, replacingFolders: ids)
         Task {
             do {
-                try await simianService.updateFolderSort(projectId: projectId, parentFolderId: parentFolderId, folderIds: ids)
+                try await simianService.applyPublicLinkOrder(projectId: projectId, parentFolderId: parentFolderId, orderedTreeIds: mixed)
                 await MainActor.run {
+                    rememberSiblingOrder(projectId: projectId, parentFolderId: parentFolderId, ids: mixed)
                     withAnimation(SimianReorderMotion.listSpring) {
                         if let pid = parentFolderId {
                             folderChildrenCache[pid] = reordered
@@ -2471,10 +2635,12 @@ struct SimianPostView: View {
             }
             return
         }
+        let mixed = mixedOrder(projectId: projectId, parentFolderId: pid, replacingFiles: ids)
         Task {
             do {
-                try await simianService.updateFileSort(projectId: projectId, folderId: pid, fileIds: ids)
+                try await simianService.applyPublicLinkOrder(projectId: projectId, parentFolderId: pid, orderedTreeIds: mixed)
                 await MainActor.run {
+                    rememberSiblingOrder(projectId: projectId, parentFolderId: pid, ids: mixed)
                     withAnimation(SimianReorderMotion.listSpring) {
                         folderFilesCache[pid] = reordered
                         if pid == currentParentFolderId { currentFiles = reordered }
@@ -2649,18 +2815,15 @@ struct SimianPostView: View {
         }
     }
 
-    private func loadFolders(projectId: String, parentFolderId: String?) {
-        isLoadingFolders = true
+    private func loadFolders(projectId: String, parentFolderId: String?, showsLoadingPlaceholder: Bool = true) {
+        if showsLoadingPlaceholder {
+            isLoadingFolders = true
+        }
         Task {
             do {
                 async let foldersTask = simianService.getProjectFolders(projectId: projectId, parentFolderId: parentFolderId)
-                let files: [SimianFile]
-                if let folderId = parentFolderId {
-                    files = try await simianService.getProjectFiles(projectId: projectId, folderId: folderId)
-                } else {
-                    files = []
-                }
-                let folders = try await foldersTask
+                async let filesTask = simianService.getProjectFiles(projectId: projectId, folderId: parentFolderId)
+                let (folders, files) = try await (foldersTask, filesTask)
                 await MainActor.run {
                     currentFolders = folders
                     currentFiles = files
@@ -2668,20 +2831,24 @@ struct SimianPostView: View {
                     // #region agent log
                     logFocusSnapshot("loadFolders completed (success)", hypothesisId: "H5")
                     // #endregion
-                    // After the new SimianTreeView mounts, make its NSOutlineView first responder.
-                    if selectedProjectName != nil {
+                    // After the loading placeholder is replaced, make the outline first responder.
+                    if showsLoadingPlaceholder, selectedProjectName != nil {
                         folderListFocusTrigger += 1
                     }
                 }
             } catch {
                 await MainActor.run {
-                    currentFolders = []
-                    currentFiles = []
+                    if showsLoadingPlaceholder {
+                        currentFolders = []
+                        currentFiles = []
+                    }
                     isLoadingFolders = false
+                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    statusIsError = true
                     // #region agent log
                     logFocusSnapshot("loadFolders completed (error)", hypothesisId: "H5")
                     // #endregion
-                    if selectedProjectName != nil {
+                    if showsLoadingPlaceholder, selectedProjectName != nil {
                         folderListFocusTrigger += 1
                     }
                 }
@@ -2693,7 +2860,6 @@ struct SimianPostView: View {
 
     // MARK: - Tree model
 
-    private let maxFoldersPerLevel = 200
     private let maxTotalTreeRows = 500
 
     private func folderSiblings(parentId: String?) -> [SimianFolder] {
@@ -2702,8 +2868,8 @@ struct SimianPostView: View {
         return folderChildrenCache[parentId] ?? []
     }
     private func fileSiblings(parentFolderId: String?) -> [SimianFile] {
+        if parentFolderId == currentParentFolderId { return currentFiles }
         guard let id = parentFolderId else { return [] }
-        if id == currentParentFolderId { return currentFiles }
         return folderFilesCache[id] ?? []
     }
 
@@ -2736,35 +2902,24 @@ struct SimianPostView: View {
 
     private func flatTreeList(projectId: String) -> [SimianTreeItem] {
         var result: [SimianTreeItem] = []
-        enum StackItem { case folders([SimianFolder], Int, String, String?); case files([SimianFile], Int, String, String?) }
-        var stack: [StackItem] = []
-        if !currentFiles.isEmpty {
-            stack.append(.files(currentFiles, 0, "", currentParentFolderId))
-        }
-        stack.append(.folders(currentFolders, 0, "", currentParentFolderId))
-        while !stack.isEmpty && result.count < maxTotalTreeRows {
-            switch stack.removeLast() {
-            case .folders(let folders, let depth, let pathPrefix, let parentId):
-                let capped = Array(folders.prefix(maxFoldersPerLevel))
-                for (i, f) in capped.enumerated() {
-                    guard result.count < maxTotalTreeRows else { break }
-                    let path = pathPrefix.isEmpty ? f.name : "\(pathPrefix) / \(f.name)"
-                    result.append(.folder(f, depth: depth, path: path, parentFolderId: parentId))
-                    if expandedFolderIds.contains(f.id) {
-                        let remaining = Array(capped.suffix(from: i + 1))
-                        if !remaining.isEmpty { stack.append(.folders(remaining, depth, pathPrefix, parentId)) }
-                        if let files = folderFilesCache[f.id], !files.isEmpty { stack.append(.files(Array(files.prefix(100)), depth + 1, path, f.id)) }
-                        if let children = folderChildrenCache[f.id] { stack.append(.folders(children, depth + 1, path, f.id)) }
-                        break
+        func appendLevel(parentId: String?, depth: Int, pathPrefix: String) {
+            let ids = orderedTreeIds(projectId: projectId, parentFolderId: parentId)
+            let foldersById = Dictionary(uniqueKeysWithValues: folderSiblings(parentId: parentId).map { ($0.id, $0) })
+            let filesById = Dictionary(uniqueKeysWithValues: fileSiblings(parentFolderId: parentId).map { ($0.id, $0) })
+            for treeId in ids {
+                guard result.count < maxTotalTreeRows else { return }
+                if treeId.hasPrefix("f-"), let folder = foldersById[String(treeId.dropFirst(2))] {
+                    let path = pathPrefix.isEmpty ? folder.name : "\(pathPrefix) / \(folder.name)"
+                    result.append(.folder(folder, depth: depth, path: path, parentFolderId: parentId))
+                    if expandedFolderIds.contains(folder.id) {
+                        appendLevel(parentId: folder.id, depth: depth + 1, pathPrefix: path)
                     }
-                }
-            case .files(let files, let depth, let path, let parentId):
-                for file in files {
-                    guard result.count < maxTotalTreeRows else { break }
-                    result.append(.file(file, depth: depth, path: "\(path) / \(file.title)", parentFolderId: parentId))
+                } else if treeId.hasPrefix("file-"), let file = filesById[String(treeId.dropFirst(5))] {
+                    result.append(.file(file, depth: depth, path: "\(pathPrefix) / \(file.title)", parentFolderId: parentId))
                 }
             }
         }
+        appendLevel(parentId: currentParentFolderId, depth: 0, pathPrefix: "")
         return result
     }
 
@@ -2933,20 +3088,18 @@ struct SimianPostView: View {
     /// Reorders child folders and files in Simian to Finder-style alphanumeric order (names / titles).
     private func sortChildrenAlphabetically(projectId: String, parentFolderId: String?) async throws {
         let folders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: parentFolderId)
-        let files: [SimianFile]
-        if let pid = parentFolderId {
-            files = try await simianService.getProjectFiles(projectId: projectId, folderId: pid)
-        } else {
-            files = []
+        let files = try await simianService.getProjectFiles(projectId: projectId, folderId: parentFolderId)
+        let combined = (folders.map { (name: $0.name, treeId: "f-\($0.id)") } + files.map { (name: $0.title, treeId: "file-\($0.id)") })
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let orderedTreeIds = combined.map(\.treeId)
+        await MainActor.run {
+            rememberSiblingOrder(projectId: projectId, parentFolderId: parentFolderId, ids: orderedTreeIds)
         }
-        let sortedFolderIds = folders.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map(\.id)
-        let sortedFileIds = files.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }.map(\.id)
-        if !sortedFolderIds.isEmpty {
-            try await simianService.updateFolderSort(projectId: projectId, parentFolderId: parentFolderId, folderIds: sortedFolderIds)
-        }
-        if let pid = parentFolderId, !sortedFileIds.isEmpty {
-            try await simianService.updateFileSort(projectId: projectId, folderId: pid, fileIds: sortedFileIds)
-        }
+        try await simianService.applyPublicLinkOrder(
+            projectId: projectId,
+            parentFolderId: parentFolderId,
+            orderedTreeIds: orderedTreeIds
+        )
     }
 
     private func applyAlphanumericChildrenSort(projectId: String, parentFolderId: String?) async throws {
