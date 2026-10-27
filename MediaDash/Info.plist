@@ -5,7 +5,7 @@
 	<key>AirtableReadOnlyDocketToken</key>
 	<string></string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.17</string>
+	<string>1.18</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -30,7 +30,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>270</string>
+	<string>280</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>NSServices</key>
@@ -45,15 +45,15 @@
 			<string>file</string>
 			<key>NSPortName</key>
 			<string>MediaDash</string>
-			<key>NSSendFileTypes</key>
-			<array>
-				<string>public.item</string>
-			</array>
 			<key>NSRequiredContext</key>
 			<dict>
 				<key>NSServiceCategory</key>
 				<string>public.item</string>
 			</dict>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
 		</dict>
 		<dict>
 			<key>NSMenuItem</key>
@@ -65,15 +65,15 @@
 			<string>prep</string>
 			<key>NSPortName</key>
 			<string>MediaDash</string>
-			<key>NSSendFileTypes</key>
-			<array>
-				<string>public.item</string>
-			</array>
 			<key>NSRequiredContext</key>
 			<dict>
 				<key>NSServiceCategory</key>
 				<string>public.item</string>
 			</dict>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
 		</dict>
 		<dict>
 			<key>NSMenuItem</key>
@@ -85,15 +85,15 @@
 			<string>arrangeFinals</string>
 			<key>NSPortName</key>
 			<string>MediaDash</string>
-			<key>NSSendFileTypes</key>
-			<array>
-				<string>public.item</string>
-			</array>
 			<key>NSRequiredContext</key>
 			<dict>
 				<key>NSServiceCategory</key>
 				<string>public.item</string>
 			</dict>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
 		</dict>
 	</array>
 	<key>SUAllowsAutomaticUpdates</key>

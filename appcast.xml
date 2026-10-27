@@ -5,6 +5,22 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.18</title>
+            <description><![CDATA[
+                <p>Finder Services for File, Prep, and Arrange Finals. Simian public links follow the order you set in the client, including folders mixed with files. You can drop at the top or bottom of a list, and reordering no longer flashes the tree. Layout edit mode is removed.</p>
+            ]]></description>
+            <pubDate>Tue, 27 Oct 2026 02:44:25 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.18/MediaDash.zip"
+                sparkle:version="280"
+                sparkle:shortVersionString="1.18"
+                sparkle:edSignature="jtNwWrJY3aTCoqm9QDj/NOtCkk8u0jn6Vj7LGwhCOMz7OUBzlAoh4G8Bq72ertEf5ruQ74pizqMxijnWAH/FDw=="
+                length="15435555"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.17</title>
             <description><![CDATA[
                 <p>New docket Approve no longer freezes the window — Work Picture and Simian jobs queue in the background with a progress strip. Airtable detection finds titled dockets again, and Reset seen dockets no longer crashes Settings.</p>
