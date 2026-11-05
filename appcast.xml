@@ -5,6 +5,31 @@
         <description>Most recent updates to MediaDash</description>
         <language>en</language>
         <item>
+            <title>Version 1.19</title>
+            <description><![CDATA[
+                <p>Simian Archiver
+- Empty jobs are flagged and left out of ZIP downloads, so they no longer fail as empty archives. Empty jobs last accessed more than 3 months ago can be deleted with archived jobs.
+- Permanent projects stay off the list, including Tom Westin and SizzleReel.
+- Clean up UNARCHIVE removes top-level folders whose oldest file was uploaded more than 3 months ago. The project stays.
+
+Dockets
+- A slash in a job name, such as "2027 TV/OLV", no longer splits the folder or Simian project.
+
+Setup
+- The services prompt no longer asks for Gmail when new dockets come from Airtable.</p>
+            ]]></description>
+            <pubDate>Thu, 05 Nov 2026 18:29:38 +0000</pubDate>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mattfasullo/MediaDash/releases/download/v1.19/MediaDash.zip"
+                sparkle:version="290"
+                sparkle:shortVersionString="1.19"
+                sparkle:edSignature="ot21pLkc+4shkXN9EOjqxxP4n3AHjTspRmkaeAdfGj5kIUs+GJnWJolGfWnhXZZUuRJfmArND3e8jXm/tmHJDA=="
+                length="15503491"
+                type="application/octet-stream"
+            />
+        </item>
+        <item>
             <title>Version 1.18</title>
             <description><![CDATA[
                 <p>Finder Services for File, Prep, and Arrange Finals. Simian public links follow the order you set in the client, including folders mixed with files. You can drop at the top or bottom of a list, and reordering no longer flashes the tree. Layout edit mode is removed.</p>
