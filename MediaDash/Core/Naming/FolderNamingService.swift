@@ -27,12 +27,33 @@ struct FolderNamingService: Sendable {
         return formatter.string(from: date)
     }
     
-    /// Sanitize a string for use in folder names (remove invalid characters)
-    nonisolated func sanitizeFolderName(_ name: String) -> String {
-        var t = name
+    /// Docket folder and Simian project title. A slash starts a discarded suffix.
+    /// A word glued to the slash is part of that suffix (`2027 TV/OLV` → `2027`).
+    nonisolated static func docketJobTitle(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let slash = trimmed.firstIndex(of: "/") else {
+            return singleFolderComponent(trimmed)
+        }
+        var head = String(trimmed[..<slash])
+        if let previous = trimmed.index(slash, offsetBy: -1, limitedBy: trimmed.startIndex),
+           !trimmed[previous].isWhitespace,
+           let wordBreak = head.lastIndex(where: { $0.isWhitespace }) {
+            head = String(head[..<wordBreak])
+        }
+        return singleFolderComponent(head)
+    }
+
+    /// One path component. `/` would otherwise split the name into nested folders.
+    nonisolated static func singleFolderComponent(_ name: String) -> String {
+        name
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Sanitize a string for use in folder names (remove invalid characters)
+    nonisolated func sanitizeFolderName(_ name: String) -> String {
+        var t = Self.singleFolderComponent(name)
         // Strip trailing date-like suffix (e.g. " - Feb 9", " - Feb 9.26", " - Feb.5.26")
         if let range = t.range(of: "\\s*[-–]\\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[.\\s\\d]*$", options: .regularExpression) {
             t = String(t[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)

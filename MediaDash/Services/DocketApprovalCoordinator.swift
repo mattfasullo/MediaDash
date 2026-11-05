@@ -99,6 +99,7 @@ final class DocketApprovalCoordinator {
         guard updatedNotification.requiresDocketConfirmation != true else {
             return .failure(DocketApprovalProcessError.notificationMissing)
         }
+        let projectJobName = FolderNamingService.docketJobTitle(job.jobName)
 
         notificationCenter.applyApprovalUpdate(
             id: job.notificationId,
@@ -130,7 +131,7 @@ final class DocketApprovalCoordinator {
                 try await emailScanningService.createDocketFromNotification(
                     updatedNotification,
                     effectiveDocketNumber: job.docketNumber,
-                    effectiveJobName: job.jobName
+                    effectiveJobName: projectJobName
                 )
                 if let current = notificationCenter.notifications.first(where: { $0.id == job.notificationId }) {
                     notificationCenter.applyApprovalUpdate(
@@ -157,7 +158,7 @@ final class DocketApprovalCoordinator {
                 await progress("Checking for existing Simian project...", 0.45)
                 let projectAlreadyExists = try await simianService.projectExists(
                     docketNumber: job.docketNumber,
-                    jobName: job.jobName
+                    jobName: projectJobName
                 )
                 if projectAlreadyExists {
                     simianAlreadyExisted = true
@@ -172,7 +173,7 @@ final class DocketApprovalCoordinator {
                     await progress("Creating Simian project...", 0.7)
                     try await simianService.createJob(
                         docketNumber: job.docketNumber,
-                        jobName: job.jobName,
+                        jobName: projectJobName,
                         projectManager: job.projectManager,
                         projectTemplate: job.template ?? settingsManager.currentSettings.simianProjectTemplate
                     )

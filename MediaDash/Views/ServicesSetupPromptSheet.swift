@@ -8,6 +8,8 @@ struct ServiceSetupStatus {
     let isEnabled: Bool
     let isConnected: Bool
     let needsSetup: Bool
+    /// False when this integration is not part of the current workflow (for example Gmail while detection is Airtable).
+    let isApplicable: Bool
     let disabledFunctions: [String]
 }
 
@@ -24,8 +26,12 @@ struct ServicesSetupPromptSheet: View {
     let asanaStatus: ServiceSetupStatus
     let simianStatus: ServiceSetupStatus
     
+    private var visibleServices: [ServiceSetupStatus] {
+        [gmailStatus, asanaStatus, simianStatus].filter(\.isApplicable)
+    }
+
     private var servicesNeedingSetup: [ServiceSetupStatus] {
-        [gmailStatus, asanaStatus, simianStatus].filter { $0.needsSetup }
+        visibleServices.filter(\.needsSetup)
     }
     
     private var hasAnyNeedingSetup: Bool {
@@ -62,9 +68,9 @@ struct ServicesSetupPromptSheet: View {
             
             // Service list
             VStack(alignment: .leading, spacing: 12) {
-                serviceRow(gmailStatus)
-                serviceRow(asanaStatus)
-                serviceRow(simianStatus)
+                ForEach(visibleServices, id: \.name) { status in
+                    serviceRow(status)
+                }
             }
             .padding(.horizontal, 32)
             .padding(.top, 24)
@@ -172,12 +178,17 @@ enum ServicesSetupPromptBuilder {
         settings: AppSettings,
         simianService: SimianService
     ) -> (gmail: ServiceSetupStatus, asana: ServiceSetupStatus, simian: ServiceSetupStatus) {
+        let gmailToken = SharedKeychainService.getGmailAccessToken() ?? ""
+        let gmailConnected = !gmailToken.isEmpty
+        // Gmail only scans for new dockets when detection mode is Email. Airtable is the default and does not use it.
+        let gmailApplicable = settings.newDocketDetectionMode == .email
         let gmail = ServiceSetupStatus(
             name: "Gmail",
             icon: "envelope.fill",
             isEnabled: settings.gmailEnabled,
-            isConnected: settings.gmailEnabled && (SharedKeychainService.getGmailAccessToken() != nil && !(SharedKeychainService.getGmailAccessToken() ?? "").isEmpty),
-            needsSetup: !settings.gmailEnabled || (settings.gmailEnabled && !(SharedKeychainService.getGmailAccessToken() != nil && !(SharedKeychainService.getGmailAccessToken() ?? "").isEmpty)),
+            isConnected: settings.gmailEnabled && gmailConnected,
+            needsSetup: gmailApplicable && (!settings.gmailEnabled || !gmailConnected),
+            isApplicable: gmailApplicable,
             disabledFunctions: [
                 "Email scanning for new dockets"
             ]
@@ -191,6 +202,7 @@ enum ServicesSetupPromptBuilder {
             isEnabled: asanaEnabled,
             isConnected: asanaEnabled && asanaConnected,
             needsSetup: !asanaEnabled || (asanaEnabled && !asanaConnected),
+            isApplicable: true,
             disabledFunctions: [
                 "Docket and job list sync",
                 "Job info in prep flow",
@@ -208,6 +220,7 @@ enum ServicesSetupPromptBuilder {
             isConnected: settings.simianEnabled && simianHasBaseURL && simianHasCredentials,
             needsSetup: !settings.simianEnabled || 
                 (settings.simianEnabled && (!simianHasBaseURL || !simianHasCredentials)),
+            isApplicable: true,
             disabledFunctions: [
                 "Simian project creation from notifications"
             ]
@@ -218,8 +231,8 @@ enum ServicesSetupPromptBuilder {
     
     /// Returns true if we should show the prompt.
     /// Rules:
-    /// - Always prompt when any integration is disabled (Simian is ignored for producer accounts).
-    /// - Prompt for missing connections unless user selected "Don't show again".
+    /// - Gmail counts only when new-docket detection is Email. Airtable does not use Gmail.
+    /// - "Don't show again" suppresses the prompt, including when an integration is disabled.
     /// - When `isProducer` is true, Simian is not required and won't trigger the prompt.
     static func shouldShowPrompt(
         settings: AppSettings,
@@ -228,13 +241,25 @@ enum ServicesSetupPromptBuilder {
         isProducer: Bool = false
     ) -> Bool {
         let (gmail, asana, simian) = buildStatus(settings: settings, simianService: simianService)
-        let simianMatters = !isProducer
-        let hasDisabledIntegrations = !gmail.isEnabled || !asana.isEnabled || (simianMatters && !simian.isEnabled)
-        if hasDisabledIntegrations {
-            return true
-        }
+        return shouldShowPrompt(
+            gmail: gmail,
+            asana: asana,
+            simian: simian,
+            dontShowAgain: dontShowAgain,
+            isProducer: isProducer
+        )
+    }
 
-        guard !dontShowAgain else { return false }
-        return gmail.needsSetup || asana.needsSetup || (simianMatters && simian.needsSetup)
+    static func shouldShowPrompt(
+        gmail: ServiceSetupStatus,
+        asana: ServiceSetupStatus,
+        simian: ServiceSetupStatus,
+        dontShowAgain: Bool,
+        isProducer: Bool = false
+    ) -> Bool {
+        if dontShowAgain { return false }
+        let simianMatters = !isProducer
+        let applicable = [gmail, asana, simianMatters ? simian : nil].compactMap { $0 }.filter(\.isApplicable)
+        return applicable.contains { !$0.isEnabled || $0.needsSetup }
     }
 }

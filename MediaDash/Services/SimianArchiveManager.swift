@@ -50,16 +50,17 @@ final class SimianArchiveManager: ObservableObject {
     
     private var archiveTask: Task<Void, Never>?
     
-    func startArchive(projects: [SimianProject], destinationURL: URL, simianService: SimianService, estimatedTotalBytes: Int64? = nil) {
+    func startArchive(projects: [SimianProject], destinationURL: URL, simianService: SimianService, estimatedTotalBytes: Int64? = nil, skippedEmptyCount: Int = 0) {
         let map = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, destinationURL) })
-        startArchive(projects: projects, destinationByProjectId: map, simianService: simianService, estimatedTotalBytes: estimatedTotalBytes)
+        startArchive(projects: projects, destinationByProjectId: map, simianService: simianService, estimatedTotalBytes: estimatedTotalBytes, skippedEmptyCount: skippedEmptyCount)
     }
 
     /// Archive projects to per-project destinations (e.g. GM DATA BACKUPS by year). Each project ID must be a key in destinationByProjectId.
     /// - Parameters:
     ///   - estimatedTotalBytes: If known (e.g. from project list), show progress bar from the start.
+    ///   - skippedEmptyCount: Empty jobs left out of this run. Appended to the finished status line.
     ///   - onSuccess: Called on main actor with archived project IDs when the run completes successfully (optional).
-    func startArchive(projects: [SimianProject], destinationByProjectId: [String: URL], simianService: SimianService, estimatedTotalBytes: Int64? = nil, onSuccess: (([String]) -> Void)? = nil) {
+    func startArchive(projects: [SimianProject], destinationByProjectId: [String: URL], simianService: SimianService, estimatedTotalBytes: Int64? = nil, skippedEmptyCount: Int = 0, onSuccess: (([String]) -> Void)? = nil) {
         cancel()
         
         archiveTask = Task {
@@ -87,10 +88,13 @@ final class SimianArchiveManager: ObservableObject {
                 await MainActor.run {
                     isRunning = false
                     if failures.isEmpty {
-                        statusMessage = "Archive complete."
+                        statusMessage = SimianEmptyProjectRules.appendingSkippedEmpty("Archive complete.", count: skippedEmptyCount)
                         lastRunFailures = nil
                     } else {
-                        statusMessage = "Archive complete with \(failures.count) failure(s)."
+                        statusMessage = SimianEmptyProjectRules.appendingSkippedEmpty(
+                            "Archive complete with \(failures.count) failure(s).",
+                            count: skippedEmptyCount
+                        )
                         lastRunFailures = failures
                     }
                     if !successIds.isEmpty {
@@ -104,24 +108,27 @@ final class SimianArchiveManager: ObservableObject {
                     let n = err.successIds.count
                     let total = projects.count
                     if n > 0 {
-                        statusMessage = "Archiving cancelled. \(n) of \(total) projects completed."
+                        statusMessage = SimianEmptyProjectRules.appendingSkippedEmpty(
+                            "Archiving cancelled. \(n) of \(total) projects completed.",
+                            count: skippedEmptyCount
+                        )
                         if !err.successIds.isEmpty {
                             onSuccess?(err.successIds)
                         }
                     } else {
-                        statusMessage = "Archiving cancelled."
+                        statusMessage = SimianEmptyProjectRules.appendingSkippedEmpty("Archiving cancelled.", count: skippedEmptyCount)
                     }
                 }
             } catch is CancellationError {
                 await MainActor.run {
                     isRunning = false
                     errorMessage = nil
-                    statusMessage = "Archiving cancelled."
+                    statusMessage = SimianEmptyProjectRules.appendingSkippedEmpty("Archiving cancelled.", count: skippedEmptyCount)
                 }
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
-                    statusMessage = "Archive failed."
+                    statusMessage = SimianEmptyProjectRules.appendingSkippedEmpty("Archive failed.", count: skippedEmptyCount)
                     isRunning = false
                 }
             }

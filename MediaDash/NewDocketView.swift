@@ -133,7 +133,14 @@ struct NewDocketView: View {
             return
         }
 
-        let docketName = "\(number)_\(jobName)"
+        let safeJobName = FolderNamingService.docketJobTitle(jobName)
+        guard !safeJobName.isEmpty else {
+            validationMessage = "Job name cannot be empty"
+            showValidationError = true
+            return
+        }
+
+        let docketName = "\(number)_\(safeJobName)"
 
         // Check if docket already exists
         if manager.dockets.contains(docketName) {

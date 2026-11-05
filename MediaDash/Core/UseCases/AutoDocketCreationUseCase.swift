@@ -25,7 +25,8 @@ struct AutoDocketCreationUseCase {
             throw DocketCreationError.invalidInput("Docket number cannot be empty")
         }
         
-        guard !trimmedJobName.isEmpty else {
+        let safeJobName = FolderNamingService.docketJobTitle(trimmedJobName)
+        guard !safeJobName.isEmpty else {
             throw DocketCreationError.invalidInput("Job name cannot be empty")
         }
         
@@ -42,7 +43,7 @@ struct AutoDocketCreationUseCase {
             throw DocketCreationError.invalidInput("Docket number must be at least 5 characters (e.g., 25493 or 25493-US)")
         }
         
-        let docketName = "\(trimmedNumber)_\(trimmedJobName)"
+        let docketName = "\(trimmedNumber)_\(safeJobName)"
         
         // Check if docket already exists
         if existingDockets.contains(docketName) {

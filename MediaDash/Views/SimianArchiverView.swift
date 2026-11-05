@@ -39,16 +39,30 @@ struct SimianArchiverView: View {
     /// When non-nil, user must confirm whether to include projects with unclear docket numbers (e.g. 24xxx, 25XXX).
     @State private var ambiguousDocketConfirmation: AmbiguousDocketContext?
     
-    /// Delete from Simian: only available for archived projects; requires typing "DELETE". Can be multiple when multiple are selected.
+    /// Delete from Simian: archived projects, or empty projects last accessed more than 3 months ago. Requires typing "DELETE".
     @State private var projectsToDelete: IdentifiableProjects?
     @State private var deleteProjectError: String?
     @State private var isDeletingFromSimian = false
     /// When non-nil, (completedCount, totalCount) for progress text e.g. "Deleting 2 of 5…"
     @State private var deletionProgress: (Int, Int)?
+
+    @State private var unarchiveScanTask: Task<Void, Never>?
+    @State private var isScanningUnarchive = false
+    @State private var unarchiveStatus: String?
+    @State private var unarchiveStatusIsError = false
+    @State private var showUnarchiveCleanup = false
+    @State private var unarchiveSheetToken = UUID()
+    @State private var unarchiveProjectId: String?
+    @State private var unarchiveDueFolders: [SimianUnarchiveCleanup.DueFolder] = []
+    @State private var unarchiveUndatedCount = 0
+    @State private var isDeletingUnarchiveFolders = false
+    @State private var unarchiveDeleteError: String?
+    @State private var unarchiveDeletionProgress: (Int, Int)?
     
     private struct IdentifiableProjects: Identifiable {
         let id = UUID()
         let projects: [SimianProject]
+        let footnote: String?
     }
 
     /// Context for confirming archive when some projects have unclear docket numbers.
@@ -56,12 +70,14 @@ struct SimianArchiverView: View {
         let id = UUID()
         let allProjects: [SimianProject]
         let flaggedProjects: [SimianProject]
+        let skippedEmptyCount: Int
     }
     
     private enum ArchiveFilter: String, CaseIterable {
         case all = "All"
         case notArchived = "Not archived"
         case archived = "Archived"
+        case empty = "Empty"
         case queue = "Queue"
     }
     
@@ -80,14 +96,18 @@ struct SimianArchiverView: View {
         return listProjectsForDisplay.filter { selectedProjectIds.contains($0.id) }
     }
 
-    /// Total size of projects that would be downloaded (selected, or all in range if none selected). Nil if no sizes known.
+    /// Total size of projects that would be downloaded (selected, or all in range if none selected). Empty jobs are omitted. Nil if no sizes known.
     private var totalDownloadSizeBytes: Int64? {
-        let projs = downloadProjects
+        let projs = downloadProjects.filter { !isEmptyProject($0) }
         guard !projs.isEmpty else { return nil }
         let total = projs.reduce(Int64(0)) { sum, project in
             sum + (projectInfos[project.id]?.projectSizeBytes ?? 0)
         }
         return total > 0 ? total : nil
+    }
+
+    private var skippedEmptyDownloadCount: Int {
+        downloadProjects.filter { isEmptyProject($0) }.count
     }
     
     var body: some View {
@@ -116,6 +136,8 @@ struct SimianArchiverView: View {
         .onDisappear {
             loadTask?.cancel()
             loadTask = nil
+            unarchiveScanTask?.cancel()
+            unarchiveScanTask = nil
         }
         .onChange(of: settingsManager.currentSettings.simianAPIBaseURL) { _, _ in
             updateSimianServiceConfiguration()
@@ -154,13 +176,13 @@ struct SimianArchiverView: View {
                 flaggedProjects: context.flaggedProjects,
                 onIncludeAll: {
                     ambiguousDocketConfirmation = nil
-                    startArchive(with: context.allProjects)
+                    startArchive(with: context.allProjects, alreadySkippedEmptyCount: context.skippedEmptyCount)
                 },
                 onExcludeFlagged: {
                     let flaggedIds = Set(context.flaggedProjects.map(\.id))
                     let rest = context.allProjects.filter { !flaggedIds.contains($0.id) }
                     ambiguousDocketConfirmation = nil
-                    if !rest.isEmpty { startArchive(with: rest) }
+                    startArchive(with: rest, alreadySkippedEmptyCount: context.skippedEmptyCount)
                 },
                 onCancel: {
                     ambiguousDocketConfirmation = nil
@@ -172,6 +194,7 @@ struct SimianArchiverView: View {
         .sheet(item: $projectsToDelete) { item in
             DeleteProjectConfirmationSheet(
                 projects: item.projects,
+                footnote: item.footnote,
                 errorMessage: $deleteProjectError,
                 isDeleting: isDeletingFromSimian,
                 deletionProgress: deletionProgress,
@@ -185,6 +208,24 @@ struct SimianArchiverView: View {
                     }
                 }
             )
+            .compactSheetContent()
+            .sheetBorder()
+        }
+        .sheet(isPresented: $showUnarchiveCleanup) {
+            UnarchiveCleanupSheet(
+                folders: $unarchiveDueFolders,
+                undatedCount: unarchiveUndatedCount,
+                errorMessage: $unarchiveDeleteError,
+                isDeleting: isDeletingUnarchiveFolders,
+                deletionProgress: unarchiveDeletionProgress,
+                onConfirm: confirmUnarchiveFolderDeletion,
+                onCancel: {
+                    if !isDeletingUnarchiveFolders {
+                        showUnarchiveCleanup = false
+                    }
+                }
+            )
+            .id(unarchiveSheetToken)
             .compactSheetContent()
             .sheetBorder()
         }
@@ -226,6 +267,121 @@ struct SimianArchiverView: View {
                 }
             }
         }
+    }
+
+    private func scanUnarchiveFolders() {
+        guard let project = projects.first(where: { $0.name == SimianArchiverExclusions.unarchiveProjectName }) else {
+            unarchiveStatusIsError = true
+            unarchiveStatus = "Couldn't find \(SimianArchiverExclusions.unarchiveProjectName)."
+            return
+        }
+        unarchiveScanTask?.cancel()
+        unarchiveStatusIsError = false
+        unarchiveStatus = "Checking UNARCHIVE folders…"
+        isScanningUnarchive = true
+        let projectId = project.id
+        let now = Date()
+        unarchiveScanTask = Task {
+            do {
+                let folders = try await simianService.getProjectFolders(projectId: projectId, parentFolderId: nil)
+                var topLevel: [SimianUnarchiveCleanup.Folder] = []
+                for folder in folders {
+                    try Task.checkCancellation()
+                    await MainActor.run {
+                        unarchiveStatus = "Checking “\(folder.name)”…"
+                    }
+                    let createdAt = try await createdAtForTopLevelFolder(projectId: projectId, folder: folder)
+                    topLevel.append(SimianUnarchiveCleanup.Folder(id: folder.id, name: folder.name, uploadedAt: createdAt))
+                }
+                let plan = SimianUnarchiveCleanup.removalPlan(topLevel, now: now)
+                await MainActor.run {
+                    isScanningUnarchive = false
+                    unarchiveProjectId = projectId
+                    unarchiveUndatedCount = plan.undatedCount
+                    if plan.due.isEmpty {
+                        unarchiveStatus = Self.unarchiveNothingToRemoveMessage(undatedCount: plan.undatedCount)
+                    } else {
+                        unarchiveDueFolders = plan.due
+                        unarchiveDeleteError = nil
+                        unarchiveDeletionProgress = nil
+                        unarchiveSheetToken = UUID()
+                        showUnarchiveCleanup = true
+                        unarchiveStatus = nil
+                    }
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    isScanningUnarchive = false
+                }
+            } catch {
+                await MainActor.run {
+                    isScanningUnarchive = false
+                    unarchiveStatusIsError = true
+                    unarchiveStatus = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// Oldest file uploaded directly in the folder. Nested folders are not opened.
+    private func createdAtForTopLevelFolder(projectId: String, folder: SimianFolder) async throws -> Date? {
+        if let uploadedAt = folder.uploadedAt { return uploadedAt }
+        let files = try await simianService.getProjectFiles(projectId: projectId, folderId: folder.id)
+        var dates = files.compactMap(\.uploadedAt)
+        for file in files where file.uploadedAt == nil {
+            try Task.checkCancellation()
+            if let info = try? await simianService.getFileInfo(projectId: projectId, fileId: file.id),
+               let uploadedAt = info.uploadedAt {
+                dates.append(uploadedAt)
+            }
+        }
+        return SimianUnarchiveCleanup.createdAt(fromFileUploadDates: dates)
+    }
+
+    private func confirmUnarchiveFolderDeletion() {
+        guard let projectId = unarchiveProjectId else { return }
+        let toDelete = unarchiveDueFolders
+        guard !toDelete.isEmpty else { return }
+        unarchiveDeleteError = nil
+        isDeletingUnarchiveFolders = true
+        unarchiveDeletionProgress = (0, toDelete.count)
+        Task {
+            var failed = false
+            for (index, folder) in toDelete.enumerated() {
+                do {
+                    try await simianService.deleteFolder(projectId: projectId, folderId: folder.id)
+                    await MainActor.run {
+                        unarchiveDueFolders.removeAll { $0.id == folder.id }
+                        unarchiveDeletionProgress = (index + 1, toDelete.count)
+                    }
+                } catch {
+                    await MainActor.run {
+                        unarchiveDeleteError = error.localizedDescription
+                        isDeletingUnarchiveFolders = false
+                        unarchiveDeletionProgress = nil
+                    }
+                    failed = true
+                    break
+                }
+            }
+            if !failed {
+                await MainActor.run {
+                    showUnarchiveCleanup = false
+                    isDeletingUnarchiveFolders = false
+                    unarchiveDeletionProgress = nil
+                    unarchiveStatusIsError = false
+                    unarchiveStatus = "Removed \(toDelete.count) \(toDelete.count == 1 ? "folder" : "folders") from UNARCHIVE."
+                }
+            }
+        }
+    }
+
+    private static func unarchiveNothingToRemoveMessage(undatedCount: Int) -> String {
+        if undatedCount == 0 {
+            return "UNARCHIVE has no folders older than 3 months."
+        }
+        let noun = undatedCount == 1 ? "folder" : "folders"
+        return "UNARCHIVE has no folders older than 3 months. \(undatedCount) \(noun) had no file upload date and \(undatedCount == 1 ? "was" : "were") left in place."
     }
     
     private var header: some View {
@@ -308,6 +464,20 @@ struct SimianArchiverView: View {
                 }
                 .frame(width: 120)
                 Spacer()
+                if isScanningUnarchive {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                }
+                Button("Clean up UNARCHIVE") {
+                    scanUnarchiveFolders()
+                }
+                .disabled(isLoading || archiveManager.isRunning || isScanningUnarchive || isDeletingUnarchiveFolders || !simianService.isConfigured)
+            }
+            if let unarchiveStatus {
+                Text(unarchiveStatus)
+                    .font(.caption)
+                    .foregroundColor(unarchiveStatusIsError ? .red : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let archiveScanError = archiveScanError {
                 Text(archiveScanError)
@@ -386,6 +556,17 @@ struct SimianArchiverView: View {
                         
                         Spacer()
                         
+                        if isEmptyProject(project) {
+                            Text("Empty")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.9))
+                                .cornerRadius(4)
+                        }
+                        
                         archiveStatusBadge(project: project)
                         
                         Text(dateLabel(for: project))
@@ -395,19 +576,20 @@ struct SimianArchiverView: View {
                     .padding(.vertical, 4)
                     .tag(project.id)
                     .contextMenu {
-                        if archivedProjectIds.contains(project.id) {
-                            if archiveLocations[project.id] != nil {
-                                Button("Open archive location") {
-                                    openArchiveLocation(for: project.id)
-                                }
+                        if archivedProjectIds.contains(project.id), archiveLocations[project.id] != nil {
+                            Button("Open archive location") {
+                                openArchiveLocation(for: project.id)
                             }
+                        }
+                        let toDelete = projectsToDeleteFromSelection(including: project)
+                        if !toDelete.isEmpty {
                             Button(role: .destructive) {
-                                let toDelete = projectsToDeleteFromSelection(including: project)
-                                if !toDelete.isEmpty {
-                                    projectsToDelete = IdentifiableProjects(projects: toDelete)
-                                }
+                                projectsToDelete = IdentifiableProjects(
+                                    projects: toDelete,
+                                    footnote: deleteFootnote(for: toDelete)
+                                )
                             } label: {
-                                Text(cheapDeleteContextMenuLabel(including: project))
+                                Text(toDelete.count > 1 ? "Delete selected projects from Simian" : "Delete from Simian")
                             }
                         }
                     }
@@ -503,12 +685,17 @@ struct SimianArchiverView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                    if skippedEmptyDownloadCount > 0 {
+                        Text("\(skippedEmptyDownloadCount) empty \(skippedEmptyDownloadCount == 1 ? "project" : "projects") will be skipped")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 Spacer()
                 Button("Download Project Contents as ZIP Folders") {
                     chooseDestinationAndStartArchive()
                 }
-                .disabled(downloadProjects.isEmpty || archiveManager.isRunning || !simianService.isConfigured)
+                .disabled(downloadProjects.isEmpty || archiveManager.isRunning || !simianService.isConfigured || isScanningUnarchive || isDeletingUnarchiveFolders)
             }
         }
     }
@@ -625,12 +812,17 @@ struct SimianArchiverView: View {
     private func chooseDestinationAndStartArchive() {
         let projs = downloadProjects
         guard !projs.isEmpty else { return }
-        let flagged = projs.filter { hasAmbiguousDocket(projectName: $0.name) }
+        let split = partitionForArchive(projs)
+        let flagged = split.toArchive.filter { hasAmbiguousDocket(projectName: $0.name) }
         if !flagged.isEmpty {
-            ambiguousDocketConfirmation = AmbiguousDocketContext(allProjects: projs, flaggedProjects: flagged)
+            ambiguousDocketConfirmation = AmbiguousDocketContext(
+                allProjects: split.toArchive,
+                flaggedProjects: flagged,
+                skippedEmptyCount: split.skippedEmpty.count
+            )
             return
         }
-        startArchive(with: projs)
+        startArchive(with: split.toArchive, alreadySkippedEmptyCount: split.skippedEmpty.count)
     }
 
     /// True if the name’s docket prefix is not clearly 5 digits or 5 digits + "-US" (e.g. 2xxxx, 24xxx, 25XXX).
@@ -651,8 +843,16 @@ struct SimianArchiverView: View {
         return false
     }
 
-    private func startArchive(with projs: [SimianProject]) {
-        guard !projs.isEmpty else { return }
+    private func startArchive(with projs: [SimianProject], alreadySkippedEmptyCount: Int = 0) {
+        let split = partitionForArchive(projs)
+        let skippedEmptyCount = alreadySkippedEmptyCount + split.skippedEmpty.count
+        guard !split.toArchive.isEmpty else {
+            if skippedEmptyCount > 0 {
+                noteSkippedEmptyOnly(skippedEmptyCount)
+            }
+            return
+        }
+        let projectsToDownload = split.toArchive
         let settings = settingsManager.currentSettings
         let basePath = settings.serverBasePath
         let yearPrefix = settings.yearPrefix
@@ -660,31 +860,68 @@ struct SimianArchiverView: View {
 
         if service.isServerAvailable() {
             var destinationByProjectId: [String: URL] = [:]
-            for project in projs {
+            for project in projectsToDownload {
                 let year = projectYear(for: project)
                 guard let url = service.dataBackupsURL(for: year) else {
-                    showFolderPickerAndArchive(projects: projs)
+                    showFolderPickerAndArchive(projects: projectsToDownload, skippedEmptyCount: skippedEmptyCount)
                     return
                 }
                 destinationByProjectId[project.id] = url
             }
-            projectsInCurrentRun = Set(projs.map(\.id))
+            projectsInCurrentRun = Set(projectsToDownload.map(\.id))
             for (id, url) in destinationByProjectId {
                 archiveLocations[id] = url
             }
-            let estimatedTotal = projs.reduce(Int64(0)) { $0 + (projectInfos[$1.id]?.projectSizeBytes ?? 0) }
+            let estimatedTotal = projectsToDownload.reduce(Int64(0)) { $0 + (projectInfos[$1.id]?.projectSizeBytes ?? 0) }
             archiveManager.startArchive(
-                projects: projs,
+                projects: projectsToDownload,
                 destinationByProjectId: destinationByProjectId,
                 simianService: simianService,
-                estimatedTotalBytes: estimatedTotal > 0 ? estimatedTotal : nil
+                estimatedTotalBytes: estimatedTotal > 0 ? estimatedTotal : nil,
+                skippedEmptyCount: skippedEmptyCount
             ) { ids in
                 archivedProjectIds = archivedProjectIds.union(ids)
             }
             return
         }
 
-        showFolderPickerAndArchive(projects: projs)
+        showFolderPickerAndArchive(projects: projectsToDownload, skippedEmptyCount: skippedEmptyCount)
+    }
+
+    private func partitionForArchive(_ projs: [SimianProject]) -> (toArchive: [SimianProject], skippedEmpty: [SimianProject]) {
+        var sizes: [String: Int64] = [:]
+        for project in projs {
+            if let bytes = projectInfos[project.id]?.projectSizeBytes {
+                sizes[project.id] = bytes
+            }
+        }
+        return SimianEmptyProjectRules.partitionForArchive(projs, reportedSizeBytesById: sizes)
+    }
+
+    private func noteSkippedEmptyOnly(_ count: Int) {
+        archiveManager.errorMessage = nil
+        archiveManager.lastRunFailures = nil
+        archiveManager.statusMessage = SimianEmptyProjectRules.nothingToDownloadMessage(skippedEmptyCount: count)
+    }
+
+    private func isEmptyProject(_ project: SimianProject) -> Bool {
+        SimianEmptyProjectRules.isEmpty(reportedSizeBytes: projectInfos[project.id]?.projectSizeBytes)
+    }
+
+    private func isDeletableProject(_ project: SimianProject, now: Date = Date()) -> Bool {
+        SimianEmptyProjectRules.isDeletable(
+            isArchived: archivedProjectIds.contains(project.id),
+            reportedSizeBytes: projectInfos[project.id]?.projectSizeBytes,
+            lastAccess: projectInfos[project.id]?.dateValue(for: .lastAccess),
+            now: now
+        )
+    }
+
+    private func deleteFootnote(for projects: [SimianProject]) -> String? {
+        let includesUnarchivedEmpty = projects.contains { project in
+            !archivedProjectIds.contains(project.id) && isEmptyProject(project)
+        }
+        return includesUnarchivedEmpty ? SimianEmptyProjectRules.unarchivedEmptyDeletionNote : nil
     }
 
     /// Year for routing to DATA BACKUPS (from project date or current year).
@@ -706,7 +943,7 @@ struct SimianArchiverView: View {
         startArchive(with: toRetry)
     }
 
-    private func showFolderPickerAndArchive(projects: [SimianProject]) {
+    private func showFolderPickerAndArchive(projects: [SimianProject], skippedEmptyCount: Int) {
         let panel = NSOpenPanel()
         panel.title = "Select Destination"
         panel.message = "Choose a folder to save ZIP archives."
@@ -724,7 +961,8 @@ struct SimianArchiverView: View {
                 projects: projects,
                 destinationURL: destinationURL,
                 simianService: simianService,
-                estimatedTotalBytes: estimatedTotal > 0 ? estimatedTotal : nil
+                estimatedTotalBytes: estimatedTotal > 0 ? estimatedTotal : nil,
+                skippedEmptyCount: skippedEmptyCount
             )
         }
     }
@@ -818,6 +1056,9 @@ struct SimianArchiverView: View {
         let field = dateField
         let filter = archiveFilter
         let archived = archivedProjectIds
+        let emptyProjectIds = Set(projs.compactMap { project -> String? in
+            SimianEmptyProjectRules.isEmpty(reportedSizeBytes: infos[project.id]?.projectSizeBytes) ? project.id : nil
+        })
         displayRefreshTask = Task.detached(priority: .userInitiated) {
             let result = Self.computeFilteredProjects(
                 projects: projs,
@@ -827,7 +1068,8 @@ struct SimianArchiverView: View {
                 toDate: to,
                 dateField: field,
                 archiveFilter: filter,
-                archivedProjectIds: archived
+                archivedProjectIds: archived,
+                emptyProjectIds: emptyProjectIds
             )
             await MainActor.run {
                 displayedProjects = result
@@ -844,7 +1086,8 @@ struct SimianArchiverView: View {
         toDate: Date,
         dateField: SimianProjectDateField,
         archiveFilter: ArchiveFilter,
-        archivedProjectIds: Set<String>
+        archivedProjectIds: Set<String>,
+        emptyProjectIds: Set<String>
     ) -> [SimianProject] {
         let normalizedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let calendar = Calendar.current
@@ -853,7 +1096,7 @@ struct SimianArchiverView: View {
         let rangeStart = calendar.startOfDay(for: startDate)
         let rangeEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: endDate) ?? endDate
         var list = projects.filter { project in
-            if project.id == "91" || project.id == "459" || project.name == "Misc/UNARCHIVE_Delete Every 3 Months" {
+            if SimianArchiverExclusions.isHidden(project) {
                 return false
             }
             if !normalizedSearch.isEmpty && !project.name.lowercased().contains(normalizedSearch) {
@@ -876,6 +1119,8 @@ struct SimianArchiverView: View {
             list = list.filter { !archivedProjectIds.contains($0.id) }
         case .archived:
             list = list.filter { archivedProjectIds.contains($0.id) }
+        case .empty:
+            list = list.filter { emptyProjectIds.contains($0.id) }
         }
         return list
     }
@@ -885,20 +1130,16 @@ struct SimianArchiverView: View {
         selectedProjectIds = selectedProjectIds.intersection(filteredIds)
     }
     
-    /// Projects that would be deleted: if the given project is in the current selection, all selected-and-archived; otherwise just this project.
+    /// Highlighted jobs that can be deleted: already archived, or empty and last accessed more than 3 months ago.
     private func projectsToDeleteFromSelection(including project: SimianProject) -> [SimianProject] {
-        if selectedProjectIds.contains(project.id) {
-            return displayedProjects.filter { selectedProjectIds.contains($0.id) && archivedProjectIds.contains($0.id) }
-        }
-        return [project]
-    }
-    
-    /// Label for context menu only. Kept cheap so right-click doesn’t hang.
-    private func cheapDeleteContextMenuLabel(including project: SimianProject) -> String {
-        if selectedProjectIds.contains(project.id), selectedProjectIds.count > 1 {
-            return "Delete selected projects from Simian"
-        }
-        return "Delete from Simian"
+        let deletableIds = Set(displayedProjects.filter { isDeletableProject($0) }.map(\.id))
+        return SimianEmptyProjectRules.deletionTargets(
+            clicked: project,
+            isClickedSelected: selectedProjectIds.contains(project.id),
+            displayedProjects: displayedProjects,
+            selectedIds: selectedProjectIds,
+            deletableIds: deletableIds
+        )
     }
 
 }
@@ -906,6 +1147,7 @@ struct SimianArchiverView: View {
 // MARK: - Delete project confirmation (type "DELETE" to confirm)
 private struct DeleteProjectConfirmationSheet: View {
     let projects: [SimianProject]
+    var footnote: String? = nil
     @Binding var errorMessage: String?
     let isDeleting: Bool
     let deletionProgress: (Int, Int)?
@@ -962,6 +1204,12 @@ private struct DeleteProjectConfirmationSheet: View {
                 }
                 .frame(maxHeight: 120)
             }
+            if let footnote, !isDeleting {
+                Text(footnote)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !isDeleting {
                 Text("To confirm, type DELETE below:")
                     .font(.subheadline)
@@ -994,6 +1242,106 @@ private struct DeleteProjectConfirmationSheet: View {
         }
         .padding(24)
         .frame(minWidth: 360)
+    }
+}
+
+// MARK: - UNARCHIVE folder cleanup (project stays)
+private struct UnarchiveCleanupSheet: View {
+    @Binding var folders: [SimianUnarchiveCleanup.DueFolder]
+    let undatedCount: Int
+    @Binding var errorMessage: String?
+    let isDeleting: Bool
+    let deletionProgress: (Int, Int)?
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    @State private var confirmationText = ""
+
+    private var canConfirm: Bool {
+        !isDeleting && !folders.isEmpty && confirmationText == "DELETE"
+    }
+
+    private var progressLabel: String {
+        guard let (current, total) = deletionProgress else { return "Deleting…" }
+        if total == 1 { return "Deleting…" }
+        return "Deleting \(current) of \(total)…"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Clean up UNARCHIVE")
+                .font(.headline)
+            if isDeleting {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .scaleEffect(0.9)
+                    Text(progressLabel)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 4)
+            } else {
+                Text("This will permanently delete \(folders.count) \(folders.count == 1 ? "folder" : "folders") from \(SimianArchiverExclusions.unarchiveProjectName). The oldest file in each was uploaded more than 3 months ago. The project stays. This cannot be undone.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(folders) { folder in
+                            Text("• \(folder.name) (\(Self.dateLabel(folder.uploadedAt)))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 220)
+                if undatedCount > 0 {
+                    Text("\(undatedCount) \(undatedCount == 1 ? "folder" : "folders") had no file upload date and will be left in place.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if !isDeleting {
+                Text("To confirm, type DELETE below:")
+                    .font(.subheadline)
+                TextField("DELETE", text: $confirmationText)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: confirmationText) { _, _ in
+                        errorMessage = nil
+                    }
+            }
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+            HStack {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .disabled(isDeleting)
+                .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(folders.count == 1 ? "Delete folder from UNARCHIVE" : "Delete \(folders.count) folders from UNARCHIVE") {
+                    onConfirm()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(!canConfirm)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 420)
+    }
+
+    private static func dateLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 }
 
